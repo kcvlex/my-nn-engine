@@ -1,0 +1,9 @@
+[submodule "src/onnx"]
+	path = src/onnx
+	url = https://github.com/onnx/onnx
+[submodule "my-onnx/src/onnx"]
+	path = my-onnx/src/onnx
+	url = https://github.com/onnx/onnx
+[submodule "third-party/onnx"]
+	path = third-party/onnx
+	url = https://github.com/onnx/onnx
