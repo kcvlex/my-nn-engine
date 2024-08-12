@@ -1,9 +1,13 @@
-use crate::model::{Graph, Model, ValueInfo, Values, Nodes, ValueId, Node};
-use crate::types::{DataType, Dimension, TensorShape, TensorType, Tensor, TensorData};
+use crate::model::{Graph, Model, Node, Nodes, ValueId, ValueInfo, Values};
 use crate::operator::Operator;
+use crate::tensor::{
+    dimensions::{Dimension, TensorDims},
+    resolved_dimensions::ResolvedTensorDims,
+    tensor::{DataType, Tensor, TensorData, TensorType},
+};
 use prost::{DecodeError, Message};
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
 type TensorDataTypeProto = tensor_proto::DataType;
@@ -17,6 +21,7 @@ pub enum ModelLoadError {
     UnsupportedElemType(TensorDataTypeProto),
     UnsupportedValueType(type_proto::Value),
     UnsupportedOp(String),
+    NegativeDimension(i64),
     Unexpected(String),
 }
 
@@ -56,17 +61,14 @@ impl GraphLoader {
         let mut res = Vec::new();
         for info in v.into_iter() {
             let name = info.name;
-            let ty = info.
-                r#type
-                .ok_or(ModelLoadError::Unexpected(
-                        "ValueInfo.type must be specified".to_string()))?;
+            let ty = info.r#type.ok_or(ModelLoadError::Unexpected(
+                "ValueInfo.type must be specified".to_string(),
+            ))?;
             let ty = load_type(ty)?;
-            let id = self.entries.entry(name.clone()).or_insert_with(||
-                self.values.alloc(ValueInfo {
-                    name,
-                    ty: Some(ty),
-                })
-            );
+            let id = self
+                .entries
+                .entry(name.clone())
+                .or_insert_with(|| self.values.alloc(ValueInfo { name, ty: Some(ty) }));
             res.push(*id);
         }
         Ok(res)
@@ -91,16 +93,17 @@ impl GraphLoader {
     fn load_nodes(&mut self, nodes: Vec<NodeProto>) -> LoadResult<Nodes> {
         macro_rules! io {
             ($v: expr) => {{
-            $v.into_iter()
-            .map(|x|
-                *self.entries.entry(x.clone()).or_insert_with(|| {
-                    self.values.alloc(ValueInfo {
-                        name: x.clone(),
-                        ty: None,
+                $v.into_iter()
+                    .map(|x| {
+                        *self.entries.entry(x.clone()).or_insert_with(|| {
+                            self.values.alloc(ValueInfo {
+                                name: x.clone(),
+                                ty: None,
+                            })
+                        })
                     })
-                }))
-            .collect()
-            }}
+                    .collect()
+            }};
         }
         let mut res = Nodes::default();
         for node in nodes.into_iter() {
@@ -111,7 +114,12 @@ impl GraphLoader {
                 "Add" => Ok(Operator::Add),
                 x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
             }?;
-            res.alloc(Node { name, inputs, outputs, op, });
+            res.alloc(Node {
+                name,
+                inputs,
+                outputs,
+                op,
+            });
         }
         Ok(res)
     }
@@ -127,15 +135,19 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     } else {
         TensorData::from_raw_data(elem_type, tensor.raw_data)
     };
-    let dims = TensorShape::new(tensor.dims.into_iter().map(Dimension::Const).collect());
+    let mut dims = Vec::new();
+    for dim in tensor.dims.into_iter() {
+        let dim = usize::try_from(dim).map_err(|_| ModelLoadError::NegativeDimension(dim))?;
+        dims.push(dim);
+    }
+    let dims = ResolvedTensorDims::new(dims);
     Ok(Tensor { dims, data })
 }
 
-
 fn load_type(ty: TypeProto) -> LoadResult<TensorType> {
-        let ty = ty.value
-        .ok_or(ModelLoadError::Unexpected(
-                "TypeProto.value must be specified".to_string()))?;
+    let ty = ty.value.ok_or(ModelLoadError::Unexpected(
+        "TypeProto.value must be specified".to_string(),
+    ))?;
     match ty {
         type_proto::Value::TensorType(tensor) => load_tensor_type(tensor),
         x => Err(ModelLoadError::UnsupportedValueType(x)),
@@ -144,15 +156,23 @@ fn load_type(ty: TypeProto) -> LoadResult<TensorType> {
 
 fn load_tensor_type(tensor: type_proto::Tensor) -> LoadResult<TensorType> {
     let elem_type = DataType::try_from(tensor.elem_type)?;
-    let shape = tensor
-        .shape
-        .map(|v|
-            v.dim
-            .into_iter()
-            .map(|v| Dimension::from(v.value.unwrap()))
-            .collect::<Vec<_>>()
-        ).map(TensorShape::new);
-    Ok(TensorType { elem_type, dims: shape })
+    let dims = if let Some(dims) = tensor.shape {
+        let mut shape = Vec::new();
+        for dim in dims.dim.into_iter() {
+            let dim: Dimension = dim
+                .value
+                .ok_or(ModelLoadError::Unexpected(
+                    "Dimension.value must be specified".to_string(),
+                ))?
+                .try_into()?;
+            shape.push(dim);
+        }
+        Ok(Some(shape))
+    } else {
+        Ok(None)
+    }?
+    .map(TensorDims::new);
+    Ok(TensorType { elem_type, dims })
 }
 
 impl TryFrom<i32> for DataType {
@@ -169,11 +189,17 @@ impl TryFrom<i32> for DataType {
     }
 }
 
-impl From<tensor_shape_proto::dimension::Value> for Dimension {
-    fn from(value: tensor_shape_proto::dimension::Value) -> Self {
+impl TryFrom<tensor_shape_proto::dimension::Value> for Dimension {
+    type Error = ModelLoadError;
+    fn try_from(value: tensor_shape_proto::dimension::Value) -> Result<Self, Self::Error> {
         match value {
-            tensor_shape_proto::dimension::Value::DimValue(x) => Dimension::Const(x),
-            tensor_shape_proto::dimension::Value::DimParam(x) => Dimension::Param(x),
+            tensor_shape_proto::dimension::Value::DimValue(x) => {
+                let x = x
+                    .try_into()
+                    .map_err(|_| ModelLoadError::NegativeDimension(x))?;
+                Ok(Dimension::Const(x))
+            }
+            tensor_shape_proto::dimension::Value::DimParam(x) => Ok(Dimension::Param(x)),
         }
     }
 }

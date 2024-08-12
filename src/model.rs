@@ -1,8 +1,8 @@
 use crate::operator::Operator;
-use crate::types::{Tensor, TensorType};
+use crate::tensor::tensor::{Tensor, TensorType};
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
-use std::ops::{Index, IndexMut};
+use std::ops::{Deref, Index, IndexMut};
 
 #[derive(Debug)]
 pub struct Model {
@@ -20,27 +20,11 @@ pub struct Graph {
 }
 
 #[derive(Debug)]
-pub struct ValueInfo {
-    pub name: String,
-    pub ty: Option<TensorType>,
-}
-
-#[derive(Debug)]
 pub struct Node {
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,
     pub name: String,
     pub op: Operator,
-}
-
-#[derive(Default, Debug)]
-pub struct Values(Arena<ValueInfo>);
-pub type ValueId = Id<ValueInfo>;
-
-impl Values {
-    pub fn alloc(&mut self, v: ValueInfo) -> ValueId {
-        self.0.alloc(v)
-    }
 }
 
 #[derive(Default, Debug)]
@@ -52,6 +36,30 @@ impl Nodes {
         self.0.alloc(v)
     }
 }
+
+impl Index<NodeId> for Nodes {
+    type Output = Node;
+    fn index(&self, index: NodeId) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl IndexMut<NodeId> for Nodes {
+    fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValueInfo {
+    pub name: String,
+    pub ty: Option<TensorType>,
+}
+
+#[derive(Default, Debug)]
+pub struct Values(Arena<ValueInfo>);
+
+pub type ValueId = Id<ValueInfo>;
 
 impl Index<ValueId> for Values {
     type Output = ValueInfo;
@@ -66,15 +74,15 @@ impl IndexMut<ValueId> for Values {
     }
 }
 
-impl Index<NodeId> for Nodes {
-    type Output = Node;
-    fn index(&self, index: NodeId) -> &Self::Output {
-        &self.0[index]
+impl Values {
+    pub fn alloc(&mut self, v: ValueInfo) -> ValueId {
+        self.0.alloc(v)
     }
 }
 
-impl IndexMut<NodeId> for Nodes {
-    fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
-        &mut self.0[index]
+impl Deref for Nodes {
+    type Target = Arena<Node>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

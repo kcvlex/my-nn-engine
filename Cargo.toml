@@ -5,7 +5,12 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.7.1"
+cranelift = "0.110.1"
+cranelift-jit = "0.110.1"
+cranelift-module = "0.110.1"
+cranelift-native = "0.110.1"
 id-arena = "2.2.1"
+ndarray = "0.16.0"
 prost = "0.13.1"
 
 [build-dependencies]
