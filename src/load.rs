@@ -3,7 +3,7 @@ use crate::operator::Operator;
 use crate::tensor::{
     dimensions::{Dimension, TensorDims},
     resolved_dimensions::ResolvedTensorDims,
-    tensor::{DataType, Tensor, TensorData, TensorType},
+    tensor::{DataType, Tensor, TensorData, TensorType, TypeError},
 };
 use prost::{DecodeError, Message};
 use std::collections::HashMap;
@@ -22,6 +22,7 @@ pub enum ModelLoadError {
     UnsupportedValueType(type_proto::Value),
     UnsupportedOp(String),
     NegativeDimension(i64),
+    TypeError(TypeError),
     Unexpected(String),
 }
 
@@ -141,7 +142,7 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
         dims.push(dim);
     }
     let dims = ResolvedTensorDims::new(dims);
-    Ok(Tensor { dims, data })
+    Tensor::new(dims, data).map_err(ModelLoadError::TypeError)
 }
 
 fn load_type(ty: TypeProto) -> LoadResult<TensorType> {

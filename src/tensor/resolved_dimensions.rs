@@ -56,4 +56,8 @@ impl ResolvedTensorDims {
     pub fn ndim(&self) -> usize {
         self.0.len()
     }
+
+    pub fn size(&self) -> usize {
+        self.0.iter().product()
+    }
 }

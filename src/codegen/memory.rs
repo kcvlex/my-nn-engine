@@ -30,6 +30,16 @@ impl Block {
         Block { size, free }
     }
 
+    fn new_with_allocated(size: usize, allocated: usize) -> Self {
+        let region = Region {
+            start: allocated as u64,
+            end: size as u64,
+        };
+        let mut free = BTreeSet::new();
+        free.insert(region);
+        Block { size, free }
+    }
+
     fn find_region(&self, size: usize) -> Option<Region> {
         for free in &self.free {
             if size <= free.size() {
@@ -96,23 +106,18 @@ impl Block {
     }
 }
 
+#[derive(Default)]
 pub struct Allocator {
     blocks: HashMap<Value, Block>,
 }
 
 pub struct Fragment {
-    base: Value,
-    offset: u64,
-    size: usize,
+    pub base: Value,
+    pub offset: u64,
+    pub size: usize,
 }
 
 impl Allocator {
-    pub fn new() -> Self {
-        Allocator {
-            blocks: HashMap::new(),
-        }
-    }
-
     pub fn allocate(&mut self, size: usize) -> Option<Fragment> {
         for (value, block) in self.blocks.iter_mut() {
             if let Some(region) = block.allocate(size) {
@@ -134,8 +139,14 @@ impl Allocator {
         });
     }
 
-    pub fn append(&mut self, value: Value, size: usize) {
-        self.blocks.insert(value, Block::new(size));
+    pub fn append_block(&mut self, base: Value, size: usize, allocated: usize) -> Fragment {
+        let block = Block::new_with_allocated(size, allocated);
+        self.blocks.insert(base, block);
+        Fragment {
+            base,
+            offset: 0,
+            size: allocated,
+        }
     }
 }
 

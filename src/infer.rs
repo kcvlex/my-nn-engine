@@ -10,13 +10,7 @@ impl Graph {
         let inputs = node
             .inputs
             .iter()
-            .map(|&id| {
-                self.values[id]
-                    .ty
-                    .clone()
-                    .map(|x| x.to_resolved())
-                    .flatten()
-            })
+            .map(|&id| self.values[id].ty.clone().and_then(|x| x.to_resolved()))
             .collect::<Option<Vec<_>>>()
             .ok_or(TypeError::UnresolvedInput)?;
 
@@ -29,10 +23,7 @@ impl Graph {
                     return Err(TypeError::UnresolvedInput);
                 }
                 let dims = broadcast_shape(&a.dims, &b.dims)?;
-                res.push(ResolvedTensorType {
-                    elem_type: a.elem_type.clone(),
-                    dims,
-                });
+                res.push(ResolvedTensorType::new(a.elem_type.clone(), dims));
             }
         }
         Ok(res)

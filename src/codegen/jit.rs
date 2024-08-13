@@ -1,7 +1,31 @@
+use crate::codegen::memory;
+use crate::tensor::{
+    resolved_dimensions::ResolvedTensorDims,
+    tensor::{DataType, ResolvedTensorType, Tensor, TensorData},
+};
+use cranelift::codegen::ir;
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataDescription, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, Linkage, Module, ModuleError};
+use std::collections::HashMap;
 use std::slice;
+
+#[derive(Debug)]
+pub enum CodegenError {
+    ModuleError(ModuleError),
+    DeallocationError(Value),
+}
+
+type CodegenResult<T> = Result<T, CodegenError>;
+
+impl ResolvedTensorType {
+    fn value_type(&self) -> Type {
+        match self.elem_type {
+            DataType::F32 => types::F32,
+            DataType::F64 => types::F64,
+        }
+    }
+}
 
 pub struct JIT {
     builder_ctx: FunctionBuilderContext,
@@ -34,21 +58,45 @@ impl Default for JIT {
 }
 
 impl JIT {
-    pub fn create_data(&mut self, name: &str, contents: Vec<u8>) -> Result<&[u8], String> {
+    pub fn create_data(&mut self, name: &str, contents: Vec<u8>) -> CodegenResult<DataId> {
         self.data_description.define(contents.into_boxed_slice());
         let id = self
             .module
             .declare_data(name, Linkage::Export, true, false)
-            .map_err(|e| e.to_string())?;
+            .map_err(CodegenError::ModuleError)?;
 
         self.module
             .define_data(id, &self.data_description)
-            .map_err(|e| e.to_string())?;
+            .map_err(CodegenError::ModuleError)?;
         self.data_description.clear();
-        self.module.finalize_definitions().unwrap();
+        self.module
+            .finalize_definitions()
+            .map_err(CodegenError::ModuleError)?;
+        Ok(id)
+        /*
         let buffer = self.module.get_finalized_data(id);
-        // TODO: Can we move the unsafe into cranelift?
         Ok(unsafe { slice::from_raw_parts(buffer.0, buffer.1) })
+        */
+    }
+
+    pub fn create_function(&mut self, name: &str, signature: &Signature) -> CodegenResult<()> {
+        let id = self
+            .module
+            .declare_function(name, Linkage::Export, signature)
+            .map_err(CodegenError::ModuleError)?;
+        self.module
+            .define_function(id, &mut self.ctx)
+            .map_err(CodegenError::ModuleError)?;
+        self.module.clear_context(&mut self.ctx);
+        self.module
+            .finalize_definitions()
+            .map_err(CodegenError::ModuleError)?;
+        Ok(())
+    }
+
+    pub fn get_finalized_data(&self, id: DataId) -> &[u8] {
+        let buffer = self.module.get_finalized_data(id);
+        unsafe { slice::from_raw_parts(buffer.0, buffer.1) }
     }
 }
 
@@ -61,9 +109,123 @@ struct TypedValue {
 struct FunctionTranslator<'a> {
     builder: FunctionBuilder<'a>,
     module: &'a mut JITModule,
+    ptr_ty: Type,
+    malloc: ir::FuncRef,
+    allocator: memory::Allocator,
+    value2fragment: HashMap<Value, memory::Fragment>,
+}
+
+/*
+impl Tensor {
+    fn elem_type(&self) -> Type {
+        match self.ty.elem_type {
+            tensor::DataType::F32 => types::F32,
+            tensor::DataType::F64 => types::F64,
+        }
+    }
+}
+*/
+
+#[repr(usize)]
+enum LoopVar {
+    LHS,
+    RHS,
+    Dst,
+    Induction,
+}
+
+#[derive(Debug, Clone)]
+struct TensorPtr {
+    ptr: Value,
+    ty: ResolvedTensorType,
+}
+
+impl ResolvedTensorType {
+    fn value_bytes(&self) -> usize {
+        self.value_type().bytes() as usize
+    }
+}
+
+#[derive(Debug)]
+struct BinOp {
+    lhs: TensorPtr,
+    rhs: TensorPtr,
+    res: TensorPtr,
 }
 
 impl<'a> FunctionTranslator<'a> {
+    pub fn new(jit: &'a mut JIT) -> CodegenResult<Self> {
+        let ptr_ty = jit.module.target_config().pointer_type();
+        let mut builder = FunctionBuilder::new(&mut jit.ctx.func, &mut jit.builder_ctx);
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
+
+        let malloc = {
+            let mut sig = jit.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_ty));
+            let callee = jit
+                .module
+                .declare_function("malloc", Linkage::Import, &sig)
+                .map_err(CodegenError::ModuleError)?;
+            jit.module.declare_func_in_func(callee, builder.func)
+        };
+
+        // let free = {
+        //     let mut sig = jit.module.make_signature();
+        //     sig.params.push(AbiParam::new(ptr_ty));
+        //     let callee = jit.module
+        //         .declare_function("free", Linkage::Import, &sig)
+        //         .map_err(CodegenError::ModuleError)?;
+        //     jit.module.declare_func_in_func(callee, builder.func)
+        // };
+
+        Ok(Self {
+            builder,
+            module: &mut jit.module,
+            ptr_ty,
+            malloc,
+            allocator: memory::Allocator::default(),
+            value2fragment: HashMap::new(),
+        })
+    }
+
+    // TODO: null check
+    fn malloc(&mut self, size: Value) -> Value {
+        let call = self.builder.ins().call(self.malloc, &[size]);
+        self.builder.inst_results(call)[0]
+    }
+
+    pub fn allocate(&mut self, size: usize) -> Value {
+        let fragment = self.allocator.allocate(size).unwrap_or({
+            let allocated = size;
+            let size = size.div_ceil(1024) * 1024;
+            let ptr = {
+                let size = self.builder.ins().iconst(types::I64, size as i64);
+                self.malloc(size)
+            };
+            self.allocator.append_block(ptr, size, allocated)
+        });
+
+        let ptr = self
+            .builder
+            .ins()
+            .iadd_imm(fragment.base, fragment.offset as i64);
+        self.value2fragment.insert(ptr, fragment);
+        ptr
+    }
+
+    pub fn free(&mut self, ptr: Value) -> CodegenResult<()> {
+        let fragment = self
+            .value2fragment
+            .remove(&ptr)
+            .ok_or(CodegenError::DeallocationError(ptr))?;
+        self.allocator.deallocate(fragment);
+        Ok(())
+    }
+
     pub fn gen_call_ret(&mut self, name: &str, args: &[TypedValue], rt: Type) -> TypedValue {
         let mut sig = self.module.make_signature();
         for arg in args {
@@ -81,24 +243,6 @@ impl<'a> FunctionTranslator<'a> {
         let call = self.builder.ins().call(callee, &args);
         let value = self.builder.inst_results(call)[0];
         TypedValue { ty: rt, value }
-    }
-
-    pub fn gen_call_void(&mut self, name: &str, args: &[TypedValue]) {
-        let mut sig = self.module.make_signature();
-        for arg in args {
-            sig.params.push(AbiParam::new(arg.ty));
-        }
-
-        let callee = self
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .unwrap();
-        println!("{:?}", callee);
-        let callee = self.module.declare_func_in_func(callee, self.builder.func);
-        println!("{:?}", callee);
-        let args: Vec<Value> = args.iter().map(|arg| arg.value).collect();
-        println!("{:?}", args);
-        self.builder.ins().call(callee, &args);
     }
 
     pub fn gen_global_data_addr(&mut self, name: &str) -> TypedValue {
@@ -126,6 +270,115 @@ impl<'a> FunctionTranslator<'a> {
             value,
         }
     }
+
+    pub fn call_memcpy(&mut self, dst: Value, src: Value, len: Value) {
+        self.builder
+            .call_memcpy(self.module.target_config(), dst, src, len)
+    }
+
+    fn gen_simple_add_rec(
+        &mut self,
+        binop: &BinOp,
+        nest: usize,
+        header: ir::Block,
+        next: ir::Block,
+    ) {
+        let exit = self.builder.create_block();
+        self.builder.append_block_param(header, self.ptr_ty);
+        self.builder.append_block_param(header, self.ptr_ty);
+        self.builder.append_block_param(header, self.ptr_ty);
+        self.builder.append_block_param(header, types::I64);
+        self.builder.append_block_param(exit, self.ptr_ty);
+        let params = self.builder.block_params(header).to_vec();
+        let lhs = params[LoopVar::LHS as usize];
+        let rhs = params[LoopVar::RHS as usize];
+        let ind = params[LoopVar::Induction as usize];
+        let dst = params[LoopVar::Dst as usize];
+        println!("nest={nest}");
+
+        let mut params = if nest + 1 == binop.res.ty.dims.ndim() {
+            self.builder.switch_to_block(header);
+            self.builder.ins().brif(ind, exit, &[dst], next, &[dst]);
+            self.builder.switch_to_block(exit);
+
+            let lhs =
+                self.builder
+                    .ins()
+                    .load(binop.lhs.ty.value_type(), MemFlags::trusted(), lhs, 0);
+            let rhs =
+                self.builder
+                    .ins()
+                    .load(binop.rhs.ty.value_type(), MemFlags::trusted(), rhs, 0);
+            let sum = self.builder.ins().fadd(lhs, rhs);
+            self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
+            let dst = self.builder.block_params(exit)[0];
+            let dst = self
+                .builder
+                .ins()
+                .iadd_imm(dst, binop.res.ty.value_bytes() as i64);
+            let mut params = params;
+            params[LoopVar::Dst as usize] = dst;
+            params
+        } else {
+            let inner_loop = self.builder.create_block();
+            self.builder.switch_to_block(header);
+            let inner_ind = self
+                .builder
+                .ins()
+                .iconst(types::I64, binop.res.ty.dims[nest + 1] as i64);
+            {
+                let mut params = params.clone();
+                params[LoopVar::Induction as usize] = inner_ind;
+                self.builder
+                    .ins()
+                    .brif(ind, inner_loop, params.as_slice(), next, &[dst]);
+            }
+
+            self.gen_simple_add_rec(binop, nest + 1, inner_loop, exit);
+            self.builder.switch_to_block(exit);
+            let mut params = params;
+            let dst = self.builder.block_params(exit)[0];
+            params[LoopVar::Dst as usize] = dst;
+            params
+        };
+
+        let lhs = params[LoopVar::LHS as usize];
+        let rhs = params[LoopVar::RHS as usize];
+        let ind = params[LoopVar::Induction as usize];
+
+        let lhs = self.builder.ins().iadd_imm(
+            lhs,
+            binop.lhs.ty.stride(nest) as i64 * binop.lhs.ty.value_bytes() as i64,
+        );
+        let rhs = self.builder.ins().iadd_imm(
+            rhs,
+            binop.rhs.ty.stride(nest) as i64 * binop.rhs.ty.value_bytes() as i64,
+        );
+        let ind = self.builder.ins().iadd_imm(ind, -1);
+        params[LoopVar::LHS as usize] = lhs;
+        params[LoopVar::RHS as usize] = rhs;
+        params[LoopVar::Induction as usize] = ind;
+        self.builder.ins().jump(header, params.as_slice());
+        self.builder.seal_block(header);
+        self.builder.seal_block(exit);
+    }
+
+    pub fn gen_simple_add(&mut self, lhs: &TensorPtr, rhs: &TensorPtr, res: &TensorPtr) {
+        let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
+        let params = vec![lhs.ptr, rhs.ptr, res.ptr, ind];
+        let binop = BinOp {
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+            res: res.clone(),
+        };
+        let header = self.builder.create_block();
+        let exit = self.builder.create_block();
+        self.builder.append_block_param(exit, self.ptr_ty); // dummy
+        self.builder.ins().jump(header, params.as_slice());
+        self.gen_simple_add_rec(&binop, 0, header, exit);
+        self.builder.switch_to_block(exit);
+        self.builder.seal_block(exit);
+    }
 }
 
 pub fn sample(jit: &mut JIT) -> std::io::Result<*const u8> {
@@ -135,49 +388,112 @@ pub fn sample(jit: &mut JIT) -> std::io::Result<*const u8> {
         .unwrap();
     let ptr_type = jit.module.target_config().pointer_type();
     jit.ctx.func.signature.returns.push(AbiParam::new(ptr_type));
+    let id = jit
+        .module
+        .declare_function("hello", Linkage::Export, &jit.ctx.func.signature)
+        .unwrap();
 
-    let mut builder = FunctionBuilder::new(&mut jit.ctx.func, &mut jit.builder_ctx);
-    let entry_block = builder.create_block();
-    builder.append_block_params_for_function_params(entry_block);
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
-    let mut translator = FunctionTranslator {
-        builder,
-        module: &mut jit.module,
-    };
+    let mut translator = FunctionTranslator::new(jit)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
 
-    let size = translator.gen_const(42);
+    let size = 42;
     let data = translator.gen_global_data_addr(literal);
-    let memory = translator.gen_call_ret("malloc", &[size.clone()], ptr_type);
-    let seek = memory.clone();
+    let memory = translator.allocate(size);
+    let seek = memory;
     let memlen = translator.gen_const(contents.len() as i64);
     let memlensub = translator.gen_const(contents.len() as i64 - 1);
-    translator.gen_call_ret(
-        "memcpy",
-        &[seek.clone(), data.clone(), memlensub.clone()],
-        ptr_type,
+    translator.call_memcpy(seek, data.value, memlen.value);
+    let seek = translator.gen_add(
+        TypedValue {
+            value: seek,
+            ty: ptr_type,
+        },
+        memlensub.clone(),
     );
-    let seek = translator.gen_add(seek, memlensub.clone());
-    translator.gen_call_ret(
-        "memcpy",
-        &[seek.clone(), data.clone(), memlen.clone()],
-        ptr_type,
-    );
+    translator.call_memcpy(seek.value, data.value, memlen.value);
+    let memory = TypedValue {
+        ty: ptr_type,
+        value: memory,
+    };
     let res = translator.gen_call_ret("puts", &[memory.clone()], types::I64);
-    translator.gen_call_void("free", &[memory.clone()]);
+    translator
+        .free(memory.value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
     translator.builder.ins().return_(&[res.value]);
     translator.builder.finalize();
 
     println!("{}", jit.ctx.func);
 
-    let id = jit
-        .module
-        .declare_function("hello", Linkage::Export, &jit.ctx.func.signature)
-        .unwrap();
     jit.module.define_function(id, &mut jit.ctx).unwrap();
     jit.module.clear_context(&mut jit.ctx);
     jit.module.finalize_definitions().unwrap();
     let code = jit.module.get_finalized_function(id);
     println!("{:?}", id);
     Ok(code)
+}
+
+pub fn sample2(jit: &mut JIT) -> std::io::Result<(*const u8, DataId)> {
+    let dim = ResolvedTensorDims::new(vec![2, 2, 2]);
+    let input0 = Tensor::new(
+        dim.clone(),
+        TensorData::F32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+    )
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let input1 = Tensor::new(
+        dim.clone(),
+        TensorData::F32(vec![2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+    )
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    jit.create_data("input0", input0.raw_data().to_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    jit.create_data("input1", input1.raw_data().to_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let output_id = jit
+        .create_data("output", vec![0; dim.size() * types::F32.bytes() as usize])
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+
+    jit.ctx.func.signature.params.clear();
+    jit.ctx
+        .func
+        .signature
+        .params
+        .push(AbiParam::new(jit.module.target_config().pointer_type()));
+    let sig = jit.module.make_signature();
+    let id = jit
+        .module
+        .declare_function("hello2", Linkage::Export, &sig)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let mut translator = FunctionTranslator::new(jit)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+
+    let output_ty = input0.ty.clone();
+    let input0_ptr = translator.gen_global_data_addr("input0").value;
+    let input1_ptr = translator.gen_global_data_addr("input1").value;
+    let output_ptr = translator.gen_global_data_addr("output").value;
+
+    let input0 = TensorPtr {
+        ptr: input0_ptr,
+        ty: input0.ty,
+    };
+    let input1 = TensorPtr {
+        ptr: input1_ptr,
+        ty: input1.ty,
+    };
+    let output = TensorPtr {
+        ptr: output_ptr,
+        ty: output_ty,
+    };
+    translator.gen_simple_add(&input0, &input1, &output);
+
+    translator.builder.ins().return_(&[]);
+    translator.builder.finalize();
+
+    println!("{}", jit.ctx.func);
+
+    jit.module.define_function(id, &mut jit.ctx).unwrap();
+    jit.module.clear_context(&mut jit.ctx);
+    jit.module.finalize_definitions().unwrap();
+    let code = jit.module.get_finalized_function(id);
+    println!("{:?}", id);
+    Ok((code, output_id))
 }
