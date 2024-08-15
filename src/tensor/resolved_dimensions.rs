@@ -1,5 +1,5 @@
 use crate::tensor::tensor::TypeError;
-use std::ops::{Deref, DerefMut};
+use std::ops::Index;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTensorDims(Vec<usize>);
@@ -35,22 +35,9 @@ pub fn broadcast_shape(
     }
 }
 
-impl Deref for ResolvedTensorDims {
-    type Target = Vec<usize>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ResolvedTensorDims {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl ResolvedTensorDims {
     pub fn new(v: Vec<usize>) -> Self {
-        Self(v)
+        v.into()
     }
 
     pub fn ndim(&self) -> usize {
@@ -59,5 +46,41 @@ impl ResolvedTensorDims {
 
     pub fn size(&self) -> usize {
         self.0.iter().product()
+    }
+
+    pub fn prefix(&self, len: usize) -> Self {
+        Self(self.0[..len].to_vec())
+    }
+
+    pub fn suffix(&self, len: usize) -> Self {
+        Self(self.0[self.0.len() - len..].to_vec())
+    }
+
+    pub fn push(&mut self, v: usize) {
+        self.0.push(v);
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, usize> {
+        self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, usize> {
+        self.0.iter_mut()
+    }
+}
+
+impl<Idx> Index<Idx> for ResolvedTensorDims
+where
+    Idx: std::slice::SliceIndex<[usize]>,
+{
+    type Output = Idx::Output;
+    fn index(&self, index: Idx) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl From<Vec<usize>> for ResolvedTensorDims {
+    fn from(v: Vec<usize>) -> Self {
+        Self(v)
     }
 }

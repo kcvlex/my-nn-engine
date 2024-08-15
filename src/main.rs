@@ -7,13 +7,25 @@ use my_onnx::{
     },
 };
 use std::env;
-use std::io::{Error, Result};
+use std::fs::File;
+use std::io::{Error, Result, Write};
 
 fn main() -> Result<()> {
-    if false {
+    if true {
         let args: Vec<_> = env::args().collect();
-        let model = load::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
-        println!("{:?}", model);
+        let mut model =
+            load::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
+        model
+            .graph
+            .infer()
+            .map_err(|e| Error::other(format!("{:?}", e)))?;
+        let file = File::options()
+            .truncate(true)
+            .create(true)
+            .write(true)
+            .open("graph.dot")?;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(model.graph.to_dot().as_bytes())?;
     } else {
         let mut jit = jit::JIT::default();
         let code = jit::sample(&mut jit)?;

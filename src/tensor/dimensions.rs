@@ -22,6 +22,10 @@ impl TensorDims {
         Self(v)
     }
 
+    pub fn ndim(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn to_resolved(&self) -> Option<ResolvedTensorDims> {
         let mut resolved = Vec::new();
         for dim in &self.0 {
@@ -31,5 +35,9 @@ impl TensorDims {
             }
         }
         Some(ResolvedTensorDims::new(resolved))
+    }
+
+    pub fn inner(&self) -> &Vec<Dimension> {
+        &self.0
     }
 }

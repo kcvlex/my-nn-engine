@@ -21,6 +21,7 @@ type CodegenResult<T> = Result<T, CodegenError>;
 impl ResolvedTensorType {
     fn value_type(&self) -> Type {
         match self.elem_type {
+            DataType::I64 => types::I64,
             DataType::F32 => types::F32,
             DataType::F64 => types::F64,
         }
@@ -73,10 +74,6 @@ impl JIT {
             .finalize_definitions()
             .map_err(CodegenError::ModuleError)?;
         Ok(id)
-        /*
-        let buffer = self.module.get_finalized_data(id);
-        Ok(unsafe { slice::from_raw_parts(buffer.0, buffer.1) })
-        */
     }
 
     pub fn create_function(&mut self, name: &str, signature: &Signature) -> CodegenResult<()> {
