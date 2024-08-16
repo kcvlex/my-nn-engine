@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{Error, Result, Write};
 
 fn main() -> Result<()> {
-    if true {
+    if false {
         let args: Vec<_> = env::args().collect();
         let mut model =
             load::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;

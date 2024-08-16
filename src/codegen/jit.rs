@@ -123,31 +123,117 @@ impl Tensor {
 }
 */
 
-#[repr(usize)]
-enum LoopVar {
-    LHS,
-    RHS,
-    Dst,
-    Induction,
+#[derive(Debug, Clone)]
+struct TensorPtr<'a> {
+    ptr: Value,
+    ty: &'a ResolvedTensorType,
 }
 
 #[derive(Debug, Clone)]
-struct TensorPtr {
-    ptr: Value,
-    ty: ResolvedTensorType,
+struct UnaryOperand<'a>(&'a ResolvedTensorType);
+#[derive(Debug, Clone)]
+struct BinaryOperands<'a>(&'a ResolvedTensorType, &'a ResolvedTensorType);
+
+#[derive(Debug, Clone)]
+enum ElementwiseOperands<'a> {
+    Unary(UnaryOperand<'a>),
+    Binary(BinaryOperands<'a>),
+}
+
+impl<'a> ElementwiseOperands<'a> {
+    fn block_params_ty(&self, ptr_ty: Type) -> Vec<Type> {
+        let len = 2 + match self {
+            Self::Binary(_) => 2,
+            Self::Unary(_) => 1,
+        };
+        let mut res = vec![ptr_ty; len];
+        res[PARAMS_INDUCTION] = types::I64;
+        res[PARAMS_DST] = ptr_ty;
+        match self {
+            Self::Binary(_) => {
+                res[PARAMS_LHS] = ptr_ty;
+                res[PARAMS_RHS] = ptr_ty;
+            },
+            Self::Unary(_) => {
+                res[PARAMS_DATA] = ptr_ty;
+            },
+        };
+        res
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ElementwiseOp<'a> {
+    Add(BinaryOperands<'a>),
+    Add2(BinaryOperands<'a>),  // for debug
+    ReLU(UnaryOperand<'a>),
+}
+
+impl<'a> ElementwiseOp<'a> {
+    fn operands(&self) -> ElementwiseOperands<'a> {
+        match self {
+            ElementwiseOp::Add(operands) | ElementwiseOp::Add2(operands) => ElementwiseOperands::Binary(operands.clone()),
+            ElementwiseOp::ReLU(operand) => ElementwiseOperands::Unary(operand.clone()),
+        }
+    }
+
+    fn generate(&self, params: &[Value], translator: & mut FunctionTranslator<'_>) -> Value {
+        match self {
+            Self::Add(operands) | Self::Add2(operands) => {
+                let BinaryOperands(lhs, rhs) = operands;
+                let lhs_ty = lhs.value_type();
+                let rhs_ty = rhs.value_type();
+                let lhs = params[PARAMS_LHS];
+                let rhs = params[PARAMS_RHS];
+                let lhs = translator
+                    .builder
+                    .ins()
+                    .load(lhs_ty, MemFlags::trusted(), lhs, 0);
+                let rhs = translator
+                    .builder
+                    .ins()
+                    .load(rhs_ty, MemFlags::trusted(), rhs, 0);
+                translator.builder.ins().fadd(lhs, rhs)
+            },
+            _ => todo!(),
+        }
+    }
+
+    fn update_params(&self, params: &mut [Value], nest: usize, translator: &mut FunctionTranslator<'_>) {
+        match self {
+            Self::Add(operands) | Self::Add2(operands) => {
+                let BinaryOperands(lhs, rhs) = operands;
+                let l_add = lhs.stride(nest) as i64 * lhs.value_bytes() as i64;
+                let r_add = rhs.stride(nest) as i64 * rhs.value_bytes() as i64;
+
+                let lhs = params[PARAMS_LHS];
+                let rhs = params[PARAMS_RHS];
+
+                let lhs = translator.builder.ins().iadd_imm(lhs, l_add);
+                let rhs = translator.builder.ins().iadd_imm(rhs, r_add);
+
+                params[PARAMS_LHS] = lhs;
+                params[PARAMS_RHS] = rhs;
+            },
+            _ => todo!(),
+        }
+    }
+}
+
+const PARAMS_DST: usize = 0;
+const PARAMS_INDUCTION: usize = 1;
+const PARAMS_LHS: usize = 2;
+const PARAMS_RHS: usize = 3;
+const PARAMS_DATA: usize = 2;
+
+struct LoopGenerator<'a> {
+    translator: &'a mut FunctionTranslator<'a>,
 }
 
 impl ResolvedTensorType {
     fn value_bytes(&self) -> usize {
         self.value_type().bytes() as usize
     }
-}
-
-#[derive(Debug)]
-struct BinOp {
-    lhs: TensorPtr,
-    rhs: TensorPtr,
-    res: TensorPtr,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -273,48 +359,83 @@ impl<'a> FunctionTranslator<'a> {
             .call_memcpy(self.module.target_config(), dst, src, len)
     }
 
+    // Example: 3D tensor addition
+    //
+    // ```
+    // lhs0 = pointer of lhs
+    // rhs0 = pointer of rhs
+    // res = pointer of res
+    // i0 = 0;
+    //
+    // loop {
+    //   i1 = 0;
+    //   lhs1 = lhs0;
+    //   rhs1 = rhs0;
+    //   if (i0 == d0) break;
+    //
+    //   loop {
+    //     i2 = 0;
+    //     lhs2 = lhs1;
+    //     rhs2 = rhs1;
+    //     if (i1 == d1) break;
+    //
+    //     loop {
+    //       if (i2 == d2) break;
+    //
+    //       *res = *lhs2 + *rhs2;
+    //       i2++;
+    //       lhs2 += l_stride2;
+    //       rhs2 += r_stride2;
+    //       res++;
+    //     }  // end of loop i2
+    //
+    //     i1++;
+    //     lhs1 += l_stride1;
+    //     rhs1 += r_stride1;
+    //   }  // end of loop i1
+    //   
+    //   i0++;
+    //   lhs0 += l_stride0;
+    //   rhs0 += r_stride0;
+    // }
+    // ```
+    //
+    // Each variable is initialized in the `head`.
+    // Each variable is updated in the `exit`.
     fn gen_simple_add_rec(
         &mut self,
-        binop: &BinOp,
+        op: &mut ElementwiseOp,
+        res: &TensorPtr,
         nest: usize,
         header: ir::Block,
         next: ir::Block,
     ) {
         let exit = self.builder.create_block();
-        self.builder.append_block_param(header, self.ptr_ty);
-        self.builder.append_block_param(header, self.ptr_ty);
-        self.builder.append_block_param(header, self.ptr_ty);
-        self.builder.append_block_param(header, types::I64);
+        for ty in op.operands().block_params_ty(self.ptr_ty) {
+            self.builder.append_block_param(header, ty);
+        }
         self.builder.append_block_param(exit, self.ptr_ty);
         let params = self.builder.block_params(header).to_vec();
-        let lhs = params[LoopVar::LHS as usize];
-        let rhs = params[LoopVar::RHS as usize];
-        let ind = params[LoopVar::Induction as usize];
-        let dst = params[LoopVar::Dst as usize];
+        // let lhs = params[LoopVar::LHS as usize];
+        // let rhs = params[LoopVar::RHS as usize];
+        let ind = params[PARAMS_INDUCTION];
+        let dst = params[PARAMS_DST];
         println!("nest={nest}");
 
-        let mut params = if nest + 1 == binop.res.ty.dims.ndim() {
+        let mut params = if nest + 1 == res.ty.dims.ndim() {
             self.builder.switch_to_block(header);
             self.builder.ins().brif(ind, exit, &[dst], next, &[dst]);
             self.builder.switch_to_block(exit);
 
-            let lhs =
-                self.builder
-                    .ins()
-                    .load(binop.lhs.ty.value_type(), MemFlags::trusted(), lhs, 0);
-            let rhs =
-                self.builder
-                    .ins()
-                    .load(binop.rhs.ty.value_type(), MemFlags::trusted(), rhs, 0);
-            let sum = self.builder.ins().fadd(lhs, rhs);
+            let sum = op.generate(params.as_slice(), self);
             self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
             let dst = self.builder.block_params(exit)[0];
             let dst = self
                 .builder
                 .ins()
-                .iadd_imm(dst, binop.res.ty.value_bytes() as i64);
+                .iadd_imm(dst, res.ty.value_bytes() as i64);
             let mut params = params;
-            params[LoopVar::Dst as usize] = dst;
+            params[PARAMS_DST] = dst;
             params
         } else {
             let inner_loop = self.builder.create_block();
@@ -322,39 +443,27 @@ impl<'a> FunctionTranslator<'a> {
             let inner_ind = self
                 .builder
                 .ins()
-                .iconst(types::I64, binop.res.ty.dims[nest + 1] as i64);
+                .iconst(types::I64, res.ty.dims[nest + 1] as i64);
             {
                 let mut params = params.clone();
-                params[LoopVar::Induction as usize] = inner_ind;
+                params[PARAMS_INDUCTION] = inner_ind;
                 self.builder
                     .ins()
                     .brif(ind, inner_loop, params.as_slice(), next, &[dst]);
             }
 
-            self.gen_simple_add_rec(binop, nest + 1, inner_loop, exit);
+            self.gen_simple_add_rec(op, res, nest + 1, inner_loop, exit);
             self.builder.switch_to_block(exit);
             let mut params = params;
             let dst = self.builder.block_params(exit)[0];
-            params[LoopVar::Dst as usize] = dst;
+            params[PARAMS_DST] = dst;
             params
         };
 
-        let lhs = params[LoopVar::LHS as usize];
-        let rhs = params[LoopVar::RHS as usize];
-        let ind = params[LoopVar::Induction as usize];
-
-        let lhs = self.builder.ins().iadd_imm(
-            lhs,
-            binop.lhs.ty.stride(nest) as i64 * binop.lhs.ty.value_bytes() as i64,
-        );
-        let rhs = self.builder.ins().iadd_imm(
-            rhs,
-            binop.rhs.ty.stride(nest) as i64 * binop.rhs.ty.value_bytes() as i64,
-        );
+        op.update_params(&mut params, nest, self);
+        let ind = params[PARAMS_INDUCTION];
         let ind = self.builder.ins().iadd_imm(ind, -1);
-        params[LoopVar::LHS as usize] = lhs;
-        params[LoopVar::RHS as usize] = rhs;
-        params[LoopVar::Induction as usize] = ind;
+        params[PARAMS_INDUCTION] = ind;
         self.builder.ins().jump(header, params.as_slice());
         self.builder.seal_block(header);
         self.builder.seal_block(exit);
@@ -363,16 +472,12 @@ impl<'a> FunctionTranslator<'a> {
     pub fn gen_simple_add(&mut self, lhs: &TensorPtr, rhs: &TensorPtr, res: &TensorPtr) {
         let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
         let params = vec![lhs.ptr, rhs.ptr, res.ptr, ind];
-        let binop = BinOp {
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-            res: res.clone(),
-        };
+        let mut op = ElementwiseOp::Add(BinaryOperands(lhs.ty, rhs.ty));
         let header = self.builder.create_block();
         let exit = self.builder.create_block();
         self.builder.append_block_param(exit, self.ptr_ty); // dummy
         self.builder.ins().jump(header, params.as_slice());
-        self.gen_simple_add_rec(&binop, 0, header, exit);
+        self.gen_simple_add_rec(&mut op, res, 0, header, exit);
         self.builder.switch_to_block(exit);
         self.builder.seal_block(exit);
     }
@@ -470,15 +575,15 @@ pub fn sample2(jit: &mut JIT) -> std::io::Result<(*const u8, DataId)> {
 
     let input0 = TensorPtr {
         ptr: input0_ptr,
-        ty: input0.ty,
+        ty: &input0.ty,
     };
     let input1 = TensorPtr {
         ptr: input1_ptr,
-        ty: input1.ty,
+        ty: &input1.ty,
     };
     let output = TensorPtr {
         ptr: output_ptr,
-        ty: output_ty,
+        ty: &output_ty,
     };
     translator.gen_simple_add(&input0, &input1, &output);
 
