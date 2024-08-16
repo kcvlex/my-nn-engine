@@ -2,7 +2,7 @@ use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use std::ops::Index;
 
 #[derive(Debug, Clone)]
-pub struct TensorDims(Vec<Dimension>);
+pub struct UnresolvedTensorDims(Vec<Dimension>);
 
 #[derive(Debug, Clone)]
 pub enum Dimension {
@@ -10,14 +10,14 @@ pub enum Dimension {
     Param(String),
 }
 
-impl Index<usize> for TensorDims {
+impl Index<usize> for UnresolvedTensorDims {
     type Output = Dimension;
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
     }
 }
 
-impl TensorDims {
+impl UnresolvedTensorDims {
     pub fn new(v: Vec<Dimension>) -> Self {
         Self(v)
     }

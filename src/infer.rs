@@ -2,7 +2,7 @@ use crate::model::{Graph, Node};
 use crate::operator::*;
 use crate::tensor::{
     resolved_dimensions::{broadcast_shape, ResolvedTensorDims},
-    tensor::{ResolvedTensorType, TensorData, TypeError},
+    tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},
 };
 
 impl Graph {
@@ -15,10 +15,15 @@ impl Graph {
             }};
         }
 
-        let inputs = node
+        let inputs: Vec<&ResolvedTensorType> = node
             .inputs
             .iter()
-            .map(|&id| self.values[id].ty.clone().and_then(|x| x.to_resolved()))
+            .flat_map(|&id| {
+                self.values[id].ty.as_ref().map(|x| match x {
+                    TensorType::Resolved(x) => Some(x),
+                    TensorType::Unresolved(_) => None,
+                })
+            })
             .collect::<Option<Vec<_>>>()
             .ok_or(TypeError::UnresolvedInput)?;
 
@@ -37,8 +42,7 @@ impl Graph {
                 res.push(ResolvedTensorType::new(a.elem_type.clone(), dims));
             }
             Operator::ReLU => {
-                let a = &inputs[args::RELU];
-                res.push(a.clone());
+                res.push(inputs[args::RELU_DATA].clone());
             }
             Operator::Reshape => {
                 let a = &inputs[args::RESHAPE_DATA];

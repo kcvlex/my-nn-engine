@@ -1,9 +1,9 @@
 use crate::model::{Graph, Model, Node, Nodes, ValueId, ValueInfo, Values};
 use crate::operator::*;
 use crate::tensor::{
-    dimensions::{Dimension, TensorDims},
+    dimensions::{Dimension, UnresolvedTensorDims},
     resolved_dimensions::ResolvedTensorDims,
-    tensor::{DataType, Tensor, TensorData, TensorType, TypeError},
+    tensor::{DataType, Tensor, TensorData, TensorType, TypeError, UnresolvedTensorType},
 };
 use prost::{DecodeError, Message};
 use std::collections::HashMap;
@@ -185,7 +185,7 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
             DataType::F64 => TensorData::F64(tensor.double_data),
         }
     } else {
-        TensorData::from_raw_data(elem_type, tensor.raw_data)
+        TensorData::from_bytes(elem_type, tensor.raw_data.as_slice())
     };
     let mut dims = Vec::new();
     for dim in tensor.dims.into_iter() {
@@ -208,7 +208,7 @@ fn load_type(ty: TypeProto) -> LoadResult<TensorType> {
 
 fn load_tensor_type(tensor: type_proto::Tensor) -> LoadResult<TensorType> {
     let elem_type = DataType::try_from(tensor.elem_type)?;
-    let dims = if let Some(dims) = tensor.shape {
+    if let Some(dims) = tensor.shape {
         let mut shape = Vec::new();
         for dim in dims.dim.into_iter() {
             let dim: Dimension = dim
@@ -219,12 +219,18 @@ fn load_tensor_type(tensor: type_proto::Tensor) -> LoadResult<TensorType> {
                 .try_into()?;
             shape.push(dim);
         }
-        Ok(Some(shape))
+        let mut ty = TensorType::Unresolved(UnresolvedTensorType {
+            elem_type,
+            dims: Some(UnresolvedTensorDims::new(shape)),
+        });
+        ty.normalize();
+        Ok(ty)
     } else {
-        Ok(None)
-    }?
-    .map(TensorDims::new);
-    Ok(TensorType { elem_type, dims })
+        Ok(TensorType::Unresolved(UnresolvedTensorType {
+            elem_type,
+            dims: None,
+        }))
+    }
 }
 
 impl TryFrom<i32> for DataType {

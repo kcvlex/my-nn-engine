@@ -83,7 +83,7 @@ pub mod args {
     pub const CONV_WEIGHT: usize = 1;
     pub const CONV_BIAS: usize = 2;
 
-    pub const RELU: usize = 0;
+    pub const RELU_DATA: usize = 0;
 
     pub const MATMUL_LHS: usize = 0;
     pub const MATMUL_RHS: usize = 1;

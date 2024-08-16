@@ -1,12 +1,11 @@
 use crate::codegen::memory;
-use crate::tensor::{
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{DataType, ResolvedTensorType, Tensor, TensorData},
-};
+use crate::model::{Graph, Node, ValueId};
+use crate::operator::*;
+use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor};
 use cranelift::codegen::ir;
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataDescription, DataId, Linkage, Module, ModuleError};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module, ModuleError};
 use std::collections::HashMap;
 use std::slice;
 
@@ -14,6 +13,8 @@ use std::slice;
 pub enum CodegenError {
     ModuleError(ModuleError),
     DeallocationError(Value),
+    ValueNotFound(ValueId),
+    UnresolvedShape,
 }
 
 type CodegenResult<T> = Result<T, CodegenError>;
@@ -112,6 +113,169 @@ struct FunctionTranslator<'a> {
     value2fragment: HashMap<Value, memory::Fragment>,
 }
 
+pub struct GraphCompiler<'a> {
+    func_id: FuncId,
+    translator: FunctionTranslator<'a>,
+    graph: &'a Graph,
+    inputs: Vec<Value>,
+    outputs: Vec<Value>,
+    id2value: HashMap<ValueId, Value>,
+}
+
+impl<'a> GraphCompiler<'a> {
+    fn new(jit: &'a mut JIT, graph: &'a Graph) -> CodegenResult<Self> {
+        let mut initializer = HashMap::new();
+        for (value_id, tensor) in graph.initializer.iter() {
+            let data = tensor.data.raw_vec();
+            let name = &graph.values[*value_id].name;
+            let data_id = jit.create_data(name, data)?;
+            initializer.insert(value_id, (name, data_id));
+        }
+
+        let ptr_type = jit.module.target_config().pointer_type();
+        let sig = {
+            let sig = &mut jit.ctx.func.signature;
+            sig.params.clear();
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            jit.module.make_signature()
+        };
+
+        let func_id = jit
+            .module
+            .declare_function(&graph.name, Linkage::Export, &sig)
+            .map_err(CodegenError::ModuleError)?;
+        let mut translator = FunctionTranslator::new(jit)?;
+
+        let mut id2value: HashMap<ValueId, Value> = HashMap::new();
+        for (value_id, (name, _)) in initializer.iter() {
+            let sym = translator
+                .module
+                .declare_data(name, Linkage::Export, true, false)
+                .map_err(CodegenError::ModuleError)?;
+            let local_id = translator
+                .module
+                .declare_data_in_func(sym, translator.builder.func);
+            let value = translator.builder.ins().symbol_value(ptr_type, local_id);
+            id2value.insert(**value_id, value);
+        }
+
+        let current_block = translator.builder.current_block().unwrap();
+        let input_arg = translator.builder.block_params(current_block)[0];
+        let output_arg = translator.builder.block_params(current_block)[1];
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for (arg, ids, values) in [
+            (input_arg, &graph.inputs, &mut inputs),
+            (output_arg, &graph.outputs, &mut outputs),
+        ] {
+            let mut ptr = arg;
+            for &value_id in ids.iter() {
+                id2value.insert(value_id, ptr);
+                values.push(ptr);
+                let ty = graph
+                    .get_resolved_tensor_type(value_id)
+                    .ok_or(CodegenError::UnresolvedShape)?;
+                let size = ty.mem_size();
+                ptr = translator.builder.ins().iadd_imm(ptr, size as i64);
+            }
+        }
+
+        println!("inputs={:?} outputs={:?}", inputs, outputs);
+
+        Ok(Self {
+            func_id,
+            translator,
+            graph,
+            inputs,
+            outputs,
+            id2value,
+        })
+    }
+
+    fn get_tensor_ptr(&self, id: ValueId) -> CodegenResult<TensorPtr> {
+        let value = self
+            .id2value
+            .get(&id)
+            .cloned()
+            .ok_or(CodegenError::ValueNotFound(id))?;
+        let ty = self
+            .graph
+            .get_resolved_tensor_type(id)
+            .ok_or(CodegenError::UnresolvedShape)?
+            .clone();
+        Ok(TensorPtr { ptr: value, ty })
+    }
+
+    fn allocate_or_get_tensor(&mut self, id: ValueId) -> CodegenResult<TensorPtr> {
+        if let Some(ptr) = self.id2value.get(&id) {
+            // output?
+            let ty = self
+                .graph
+                .get_resolved_tensor_type(id)
+                .ok_or(CodegenError::UnresolvedShape)?
+                .clone();
+            Ok(TensorPtr { ptr: *ptr, ty })
+        } else {
+            let ty = self
+                .graph
+                .get_resolved_tensor_type(id)
+                .ok_or(CodegenError::UnresolvedShape)?
+                .clone();
+            let size = ty.mem_size();
+            let ptr = self.translator.allocate(size);
+            Ok(TensorPtr { ptr, ty })
+        }
+    }
+
+    fn compile_node(&mut self, node: &Node) -> CodegenResult<()> {
+        let inputs = node
+            .inputs
+            .iter()
+            .map(|&id| self.get_tensor_ptr(id))
+            .collect::<CodegenResult<Vec<_>>>()?;
+        match node.op {
+            Operator::Add => {
+                let lhs = &inputs[args::ADD_LHS];
+                let rhs = &inputs[args::ADD_RHS];
+                let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                self.translator
+                    .gen_nested_loop_binop(lhs, rhs, res, ElementwiseOp::Add);
+            }
+            Operator::ReLU => {
+                let input = &inputs[args::RELU_DATA];
+                let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                self.translator
+                    .gen_nested_loop_unaryop(input, res, ElementwiseOp::ReLU);
+            }
+            _ => unimplemented!(),
+        }
+        Ok(())
+    }
+
+    fn finalize(mut self) -> CodegenResult<FuncId> {
+        self.translator.builder.ins().return_(&[]);
+        self.translator.builder.finalize();
+        Ok(self.func_id)
+    }
+
+    pub fn compile(jit: &mut JIT, graph: &Graph) -> CodegenResult<*const u8> {
+        let mut compiler = GraphCompiler::new(jit, graph)?;
+        for (_, node) in graph.nodes.iter() {
+            compiler.compile_node(node)?;
+        }
+        let func_id = compiler.finalize()?;
+        println!("{}", jit.ctx.func);
+        jit.module
+            .define_function(func_id, &mut jit.ctx)
+            .map_err(CodegenError::ModuleError)?;
+        jit.module.clear_context(&mut jit.ctx);
+        jit.module.finalize_definitions().unwrap();
+        let code = jit.module.get_finalized_function(func_id);
+        Ok(code)
+    }
+}
+
 /*
 impl Tensor {
     fn elem_type(&self) -> Type {
@@ -124,20 +288,18 @@ impl Tensor {
 */
 
 #[derive(Debug, Clone)]
-struct TensorPtr<'a> {
+struct TensorPtr {
     ptr: Value,
-    ty: &'a ResolvedTensorType,
+    ty: ResolvedTensorType,
 }
 
-#[derive(Debug, Clone)]
-struct UnaryOperand<'a>(&'a ResolvedTensorType);
-#[derive(Debug, Clone)]
-struct BinaryOperands<'a>(&'a ResolvedTensorType, &'a ResolvedTensorType);
+type UnaryOperand = ResolvedTensorType;
+type BinaryOperands = (ResolvedTensorType, ResolvedTensorType);
 
 #[derive(Debug, Clone)]
 enum ElementwiseOperands<'a> {
-    Unary(UnaryOperand<'a>),
-    Binary(BinaryOperands<'a>),
+    Unary(&'a UnaryOperand),
+    Binary(&'a BinaryOperands),
 }
 
 impl<'a> ElementwiseOperands<'a> {
@@ -153,34 +315,33 @@ impl<'a> ElementwiseOperands<'a> {
             Self::Binary(_) => {
                 res[PARAMS_LHS] = ptr_ty;
                 res[PARAMS_RHS] = ptr_ty;
-            },
+            }
             Self::Unary(_) => {
                 res[PARAMS_DATA] = ptr_ty;
-            },
+            }
         };
         res
     }
 }
 
 #[derive(Debug, Clone)]
-enum ElementwiseOp<'a> {
-    Add(BinaryOperands<'a>),
-    Add2(BinaryOperands<'a>),  // for debug
-    ReLU(UnaryOperand<'a>),
+enum ElementwiseOp {
+    Add(BinaryOperands),
+    ReLU(UnaryOperand),
 }
 
-impl<'a> ElementwiseOp<'a> {
-    fn operands(&self) -> ElementwiseOperands<'a> {
+impl ElementwiseOp {
+    fn operands(&self) -> ElementwiseOperands {
         match self {
-            ElementwiseOp::Add(operands) | ElementwiseOp::Add2(operands) => ElementwiseOperands::Binary(operands.clone()),
-            ElementwiseOp::ReLU(operand) => ElementwiseOperands::Unary(operand.clone()),
+            ElementwiseOp::Add(operands) => ElementwiseOperands::Binary(operands),
+            ElementwiseOp::ReLU(operand) => ElementwiseOperands::Unary(operand),
         }
     }
 
-    fn generate(&self, params: &[Value], translator: & mut FunctionTranslator<'_>) -> Value {
+    fn generate(&self, params: &[Value], translator: &mut FunctionTranslator<'_>) -> Value {
         match self {
-            Self::Add(operands) | Self::Add2(operands) => {
-                let BinaryOperands(lhs, rhs) = operands;
+            Self::Add(operands) => {
+                let (lhs, rhs) = operands;
                 let lhs_ty = lhs.value_type();
                 let rhs_ty = rhs.value_type();
                 let lhs = params[PARAMS_LHS];
@@ -193,16 +354,36 @@ impl<'a> ElementwiseOp<'a> {
                     .builder
                     .ins()
                     .load(rhs_ty, MemFlags::trusted(), rhs, 0);
+                // TODO: integer add
                 translator.builder.ins().fadd(lhs, rhs)
-            },
-            _ => todo!(),
+            }
+            Self::ReLU(data) => {
+                // TODO: type check
+                let data_ty = data.value_type();
+                let data = params[PARAMS_DATA];
+                let data = translator
+                    .builder
+                    .ins()
+                    .load(data_ty, MemFlags::trusted(), data, 0);
+                let zero = match data_ty {
+                    types::F32 => translator.builder.ins().f32const(0.0),
+                    types::F64 => translator.builder.ins().f64const(0.0),
+                    _ => panic!("unsupported type"),
+                };
+                translator.builder.ins().fmax(data, zero)
+            }
         }
     }
 
-    fn update_params(&self, params: &mut [Value], nest: usize, translator: &mut FunctionTranslator<'_>) {
+    fn update_params(
+        &self,
+        params: &mut [Value],
+        nest: usize,
+        translator: &mut FunctionTranslator<'_>,
+    ) {
         match self {
-            Self::Add(operands) | Self::Add2(operands) => {
-                let BinaryOperands(lhs, rhs) = operands;
+            Self::Add(operands) => {
+                let (lhs, rhs) = operands;
                 let l_add = lhs.stride(nest) as i64 * lhs.value_bytes() as i64;
                 let r_add = rhs.stride(nest) as i64 * rhs.value_bytes() as i64;
 
@@ -214,8 +395,13 @@ impl<'a> ElementwiseOp<'a> {
 
                 params[PARAMS_LHS] = lhs;
                 params[PARAMS_RHS] = rhs;
-            },
-            _ => todo!(),
+            }
+            Self::ReLU(data) => {
+                let add = data.stride(nest) as i64 * data.value_bytes() as i64;
+                let data = params[PARAMS_DATA];
+                let data = translator.builder.ins().iadd_imm(data, add);
+                params[PARAMS_DATA] = data;
+            }
         }
     }
 }
@@ -226,13 +412,13 @@ const PARAMS_LHS: usize = 2;
 const PARAMS_RHS: usize = 3;
 const PARAMS_DATA: usize = 2;
 
-struct LoopGenerator<'a> {
-    translator: &'a mut FunctionTranslator<'a>,
-}
-
 impl ResolvedTensorType {
     fn value_bytes(&self) -> usize {
         self.value_type().bytes() as usize
+    }
+
+    fn mem_size(&self) -> usize {
+        self.value_bytes() * self.dims.size()
     }
 }
 
@@ -393,7 +579,7 @@ impl<'a> FunctionTranslator<'a> {
     //     lhs1 += l_stride1;
     //     rhs1 += r_stride1;
     //   }  // end of loop i1
-    //   
+    //
     //   i0++;
     //   lhs0 += l_stride0;
     //   rhs0 += r_stride0;
@@ -402,7 +588,7 @@ impl<'a> FunctionTranslator<'a> {
     //
     // Each variable is initialized in the `head`.
     // Each variable is updated in the `exit`.
-    fn gen_simple_add_rec(
+    fn gen_nested_loop_rec(
         &mut self,
         op: &mut ElementwiseOp,
         res: &TensorPtr,
@@ -416,8 +602,6 @@ impl<'a> FunctionTranslator<'a> {
         }
         self.builder.append_block_param(exit, self.ptr_ty);
         let params = self.builder.block_params(header).to_vec();
-        // let lhs = params[LoopVar::LHS as usize];
-        // let rhs = params[LoopVar::RHS as usize];
         let ind = params[PARAMS_INDUCTION];
         let dst = params[PARAMS_DST];
         println!("nest={nest}");
@@ -427,9 +611,9 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.ins().brif(ind, exit, &[dst], next, &[dst]);
             self.builder.switch_to_block(exit);
 
+            let dst = self.builder.block_params(exit)[PARAMS_DST];
             let sum = op.generate(params.as_slice(), self);
             self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
-            let dst = self.builder.block_params(exit)[0];
             let dst = self
                 .builder
                 .ins()
@@ -452,7 +636,7 @@ impl<'a> FunctionTranslator<'a> {
                     .brif(ind, inner_loop, params.as_slice(), next, &[dst]);
             }
 
-            self.gen_simple_add_rec(op, res, nest + 1, inner_loop, exit);
+            self.gen_nested_loop_rec(op, res, nest + 1, inner_loop, exit);
             self.builder.switch_to_block(exit);
             let mut params = params;
             let dst = self.builder.block_params(exit)[0];
@@ -469,17 +653,53 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.seal_block(exit);
     }
 
-    pub fn gen_simple_add(&mut self, lhs: &TensorPtr, rhs: &TensorPtr, res: &TensorPtr) {
-        let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
-        let params = vec![lhs.ptr, rhs.ptr, res.ptr, ind];
-        let mut op = ElementwiseOp::Add(BinaryOperands(lhs.ty, rhs.ty));
+    fn gen_nested_loop(&mut self, op: &mut ElementwiseOp, res: &TensorPtr, params: &[Value]) {
         let header = self.builder.create_block();
         let exit = self.builder.create_block();
         self.builder.append_block_param(exit, self.ptr_ty); // dummy
-        self.builder.ins().jump(header, params.as_slice());
-        self.gen_simple_add_rec(&mut op, res, 0, header, exit);
+        self.builder.ins().jump(header, params);
+        self.gen_nested_loop_rec(op, res, 0, header, exit);
         self.builder.switch_to_block(exit);
         self.builder.seal_block(exit);
+    }
+
+    pub fn gen_nested_loop_unaryop<T>(&mut self, input: &TensorPtr, res: &TensorPtr, op: T)
+    where
+        T: FnOnce(UnaryOperand) -> ElementwiseOp,
+    {
+        println!("dims={:?}", res.ty.dims);
+        let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
+        let params = {
+            let mut params = vec![ind; 3];
+            params[PARAMS_DST] = res.ptr;
+            params[PARAMS_DATA] = input.ptr;
+            params[PARAMS_INDUCTION] = ind;
+            params
+        };
+        let mut op = op(input.ty.clone());
+        self.gen_nested_loop(&mut op, res, params.as_slice());
+    }
+
+    pub fn gen_nested_loop_binop<'b, T>(
+        &mut self,
+        lhs: &'b TensorPtr,
+        rhs: &'b TensorPtr,
+        res: &TensorPtr,
+        op: T,
+    ) where
+        T: FnOnce(BinaryOperands) -> ElementwiseOp,
+    {
+        let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
+        let params = {
+            let mut params = vec![ind; 4];
+            params[PARAMS_DST] = res.ptr;
+            params[PARAMS_LHS] = lhs.ptr;
+            params[PARAMS_RHS] = rhs.ptr;
+            params[PARAMS_INDUCTION] = ind;
+            params
+        };
+        let mut op = op((lhs.ty.clone(), rhs.ty.clone()));
+        self.gen_nested_loop(&mut op, res, params.as_slice());
     }
 }
 
@@ -524,34 +744,27 @@ pub fn sample(jit: &mut JIT) -> std::io::Result<*const u8> {
     translator.builder.ins().return_(&[res.value]);
     translator.builder.finalize();
 
-    println!("{}", jit.ctx.func);
-
     jit.module.define_function(id, &mut jit.ctx).unwrap();
     jit.module.clear_context(&mut jit.ctx);
     jit.module.finalize_definitions().unwrap();
     let code = jit.module.get_finalized_function(id);
-    println!("{:?}", id);
     Ok(code)
 }
 
 pub fn sample2(jit: &mut JIT) -> std::io::Result<(*const u8, DataId)> {
-    let dim = ResolvedTensorDims::new(vec![2, 2, 2]);
-    let input0 = Tensor::new(
-        dim.clone(),
-        TensorData::F32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-    let input1 = Tensor::new(
-        dim.clone(),
-        TensorData::F32(vec![2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-    jit.create_data("input0", input0.raw_data().to_vec())
+    let input0: Tensor = ndarray::array!([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]],])
+        .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-    jit.create_data("input1", input1.raw_data().to_vec())
+    let input1: Tensor = ndarray::array!([[[2.0, 3.0], [4.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]],])
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let output = Tensor::zeros(input1.ty.elem_type.clone(), input1.ty.dims.clone());
+    jit.create_data("input0", input0.data.raw_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    jit.create_data("input1", input1.data.raw_vec())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
     let output_id = jit
-        .create_data("output", vec![0; dim.size() * types::F32.bytes() as usize])
+        .create_data("output", output.data.raw_vec())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
 
     jit.ctx.func.signature.params.clear();
@@ -575,17 +788,69 @@ pub fn sample2(jit: &mut JIT) -> std::io::Result<(*const u8, DataId)> {
 
     let input0 = TensorPtr {
         ptr: input0_ptr,
-        ty: &input0.ty,
+        ty: input0.ty,
     };
     let input1 = TensorPtr {
         ptr: input1_ptr,
-        ty: &input1.ty,
+        ty: input1.ty,
     };
     let output = TensorPtr {
         ptr: output_ptr,
-        ty: &output_ty,
+        ty: output_ty,
     };
-    translator.gen_simple_add(&input0, &input1, &output);
+    translator.gen_nested_loop_binop(&input0, &input1, &output, ElementwiseOp::Add);
+
+    translator.builder.ins().return_(&[]);
+    translator.builder.finalize();
+
+    println!("{}", jit.ctx.func);
+
+    jit.module.define_function(id, &mut jit.ctx).unwrap();
+    jit.module.clear_context(&mut jit.ctx);
+    jit.module.finalize_definitions().unwrap();
+    let code = jit.module.get_finalized_function(id);
+    println!("{:?}", id);
+    Ok((code, output_id))
+}
+
+pub fn sample3(jit: &mut JIT) -> std::io::Result<(*const u8, DataId)> {
+    let input: Tensor = ndarray::array!([[[1.0, -2.0], [3.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],])
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let output = Tensor::zeros(input.ty.elem_type.clone(), input.ty.dims.clone());
+    jit.create_data("input", input.data.raw_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let output_id = jit
+        .create_data("output", output.data.raw_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+
+    jit.ctx.func.signature.params.clear();
+    jit.ctx
+        .func
+        .signature
+        .params
+        .push(AbiParam::new(jit.module.target_config().pointer_type()));
+    let sig = jit.module.make_signature();
+    let id = jit
+        .module
+        .declare_function("hello2", Linkage::Export, &sig)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let mut translator = FunctionTranslator::new(jit)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+
+    let output_ty = input.ty.clone();
+    let input_ptr = translator.gen_global_data_addr("input").value;
+    let output_ptr = translator.gen_global_data_addr("output").value;
+
+    let input = TensorPtr {
+        ptr: input_ptr,
+        ty: input.ty,
+    };
+    let output = TensorPtr {
+        ptr: output_ptr,
+        ty: output_ty,
+    };
+    translator.gen_nested_loop_unaryop(&input, &output, ElementwiseOp::ReLU);
 
     translator.builder.ins().return_(&[]);
     translator.builder.finalize();

@@ -1,7 +1,7 @@
 use crate::operator::Operator;
 use crate::tensor::{
     dimensions::Dimension,
-    tensor::{Tensor, TensorType},
+    tensor::{ResolvedTensorType, Tensor, TensorType, UnresolvedTensorType},
 };
 use id_arena::{Arena, Id};
 use std::collections::{HashMap, HashSet};
@@ -20,6 +20,12 @@ pub struct Graph {
     pub outputs: Vec<ValueId>,
     pub values: Values,
     pub initializer: HashMap<ValueId, Tensor>,
+}
+
+impl Graph {
+    pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {
+        (&self.values[id].ty).as_ref()?.as_resolved()
+    }
 }
 
 #[derive(Debug)]
@@ -107,20 +113,21 @@ struct GraphizGraph {
 
 impl TensorType {
     fn to_dot(&self) -> String {
-        if let Some(ref dims) = self.dims {
-            let tmp = dims
+        let vec = match &self {
+            Self::Resolved(ty) => ty.dims.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
+            Self::Unresolved(UnresolvedTensorType {
+                dims: Some(dims), ..
+            }) => dims
                 .inner()
                 .iter()
                 .map(|d| match d {
                     Dimension::Const(x) => x.to_string(),
                     Dimension::Param(x) => x.clone(),
                 })
-                .collect::<Vec<_>>()
-                .join(" x ");
-            format!("[{}]", tmp)
-        } else {
-            "[?]".to_string()
-        }
+                .collect::<Vec<_>>(),
+            Self::Unresolved(_) => vec!["?".to_string()],
+        };
+        format!("[{}]", vec.join(" x "))
     }
 }
 
@@ -203,7 +210,6 @@ impl GraphizGraph {
 impl GraphizGraph {
     fn to_dot(&self) -> String {
         let mut res = "digraph {\n".to_string();
-        let outputs: HashSet<_> = self.outputs.iter().map(|(name, _)| name.clone()).collect();
         for input in self.inputs.iter() {
             res.push_str(&format!("  {} [label=\"{}\"];\n", input.0, input.0));
         }

@@ -1,4 +1,4 @@
-use crate::tensor::dimensions::{Dimension, TensorDims};
+use crate::tensor::dimensions::{Dimension, UnresolvedTensorDims};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 
 #[derive(Debug, Clone)]
@@ -50,12 +50,43 @@ impl TensorData {
             TensorData::F64(_) => DataType::F64,
         }
     }
+
+    pub fn raw_vec(&self) -> Vec<u8> {
+        macro_rules! convert {
+            ($v: expr) => {{
+                $v.iter().map(|x| x.to_le_bytes()).flatten().collect()
+            }};
+        }
+
+        match self {
+            TensorData::I64(v) => convert!(v),
+            TensorData::F32(v) => convert!(v),
+            TensorData::F64(v) => convert!(v),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct TensorType {
+pub enum TensorType {
+    Unresolved(UnresolvedTensorType),
+    Resolved(ResolvedTensorType),
+}
+
+#[derive(Debug, Clone)]
+pub struct UnresolvedTensorType {
     pub elem_type: DataType,
-    pub dims: Option<TensorDims>,
+    pub dims: Option<UnresolvedTensorDims>,
+}
+
+impl TensorType {
+    pub fn normalize(&mut self) {
+        if let TensorType::Unresolved(ref ty) = self {
+            if let Some(resolved) = ty.dims.as_ref().and_then(|x| x.to_resolved()) {
+                *self =
+                    TensorType::Resolved(ResolvedTensorType::new(ty.elem_type.clone(), resolved));
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -81,24 +112,17 @@ impl ResolvedTensorType {
 }
 
 impl TensorType {
-    pub fn to_resolved(&self) -> Option<ResolvedTensorType> {
-        let dims = self.dims.as_ref()?.to_resolved()?;
-        Some(ResolvedTensorType {
-            elem_type: self.elem_type.clone(),
-            stride: calc_stride_reshape(&dims),
-            dims,
-        })
+    pub fn as_resolved(&self) -> Option<&ResolvedTensorType> {
+        match self {
+            TensorType::Resolved(ty) => Some(ty),
+            TensorType::Unresolved(_) => None,
+        }
     }
 }
 
 impl From<ResolvedTensorType> for TensorType {
     fn from(ty: ResolvedTensorType) -> Self {
-        let dims = ty.dims.iter().map(|x| Dimension::Const(*x)).collect();
-        let dims = Some(TensorDims::new(dims));
-        Self {
-            elem_type: ty.elem_type,
-            dims,
-        }
+        TensorType::Resolved(ty)
     }
 }
 
@@ -151,32 +175,64 @@ impl Tensor {
         Some(TensorIndex(index))
     }
 
-    pub fn raw_data(&self) -> &[u8] {
-        match &self.data {
-            TensorData::I64(v) => unsafe {
-                std::slice::from_raw_parts(
-                    v.as_ptr() as *const u8,
-                    v.len() * std::mem::size_of::<i64>(),
-                )
-            },
-            TensorData::F32(v) => unsafe {
-                std::slice::from_raw_parts(
-                    v.as_ptr() as *const u8,
-                    v.len() * std::mem::size_of::<f32>(),
-                )
-            },
-            TensorData::F64(v) => unsafe {
-                std::slice::from_raw_parts(
-                    v.as_ptr() as *const u8,
-                    v.len() * std::mem::size_of::<f64>(),
-                )
-            },
-        }
+    pub fn zeros(ty: DataType, dims: ResolvedTensorDims) -> Self {
+        let data = TensorData::zeros(ty, &dims);
+        Self::new(dims, data).unwrap()
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.data.raw_vec()
+    }
+
+    pub fn from_bytes(ty: ResolvedTensorType, raw: &[u8]) -> Result<Self, TypeError> {
+        let data = TensorData::from_bytes(ty.elem_type, raw);
+        Self::new(ty.dims, data)
     }
 }
 
+macro_rules! define_try_from {
+    ($ty: ty, $data: ident) => {
+        impl<D: ndarray::Dimension> TryFrom<ndarray::Array<$ty, D>> for Tensor {
+            type Error = TypeError;
+            fn try_from(array: ndarray::Array<$ty, D>) -> Result<Self, Self::Error> {
+                let dim = ResolvedTensorDims::new(array.shape().to_vec());
+                let data = TensorData::$data(array.into_raw_vec_and_offset().0);
+                Self::new(dim, data)
+            }
+        }
+    };
+}
+
+define_try_from!(f32, F32);
+define_try_from!(f64, F64);
+define_try_from!(i64, I64);
+
 impl TensorData {
-    pub fn from_raw_data(ty: DataType, raw: Vec<u8>) -> Self {
-        todo!("impl")
+    pub fn from_bytes(ty: DataType, raw: &[u8]) -> Self {
+        macro_rules! convert {
+            ($v: expr, $ty: ty) => {{
+                raw.chunks_exact(std::mem::size_of::<$ty>())
+                    .map(|x| {
+                        let mut bytes = [0; std::mem::size_of::<$ty>()];
+                        bytes.copy_from_slice(x);
+                        <$ty>::from_le_bytes(bytes)
+                    })
+                    .collect()
+            }};
+        }
+        match ty {
+            DataType::I64 => TensorData::I64(convert!(raw, i64)),
+            DataType::F32 => TensorData::F32(convert!(raw, f32)),
+            DataType::F64 => TensorData::F64(convert!(raw, f64)),
+        }
+    }
+
+    pub fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
+        let size = dims.size();
+        match ty {
+            DataType::I64 => TensorData::I64(vec![0; size]),
+            DataType::F32 => TensorData::F32(vec![0.0; size]),
+            DataType::F64 => TensorData::F64(vec![0.0; size]),
+        }
     }
 }
