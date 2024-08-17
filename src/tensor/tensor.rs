@@ -17,7 +17,7 @@ pub enum DataType {
     F64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tensor {
     pub data: TensorData,
     pub ty: ResolvedTensorType,
@@ -32,6 +32,19 @@ pub enum TensorData {
     I64(Vec<i64>),
     F32(Vec<f32>),
     F64(Vec<f64>),
+}
+
+impl Eq for TensorData {}
+
+impl PartialEq for TensorData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TensorData::I64(a), TensorData::I64(b)) => a == b,
+            (TensorData::F32(a), TensorData::F32(b)) => a == b,
+            (TensorData::F64(a), TensorData::F64(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl TensorData {
@@ -66,13 +79,13 @@ impl TensorData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TensorType {
     Unresolved(UnresolvedTensorType),
     Resolved(ResolvedTensorType),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedTensorType {
     pub elem_type: DataType,
     pub dims: Option<UnresolvedTensorDims>,
@@ -89,7 +102,7 @@ impl TensorType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTensorType {
     pub elem_type: DataType,
     pub dims: ResolvedTensorDims,

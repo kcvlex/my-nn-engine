@@ -417,7 +417,7 @@ impl ResolvedTensorType {
         self.value_type().bytes() as usize
     }
 
-    fn mem_size(&self) -> usize {
+    pub fn mem_size(&self) -> usize {
         self.value_bytes() * self.dims.size()
     }
 }

@@ -1,7 +1,7 @@
 use crate::tensor::tensor::TypeError;
 use std::ops::Index;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTensorDims(Vec<usize>);
 
 fn broadcast_shape_body(

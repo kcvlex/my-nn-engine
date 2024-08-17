@@ -24,7 +24,7 @@ pub struct Graph {
 
 impl Graph {
     pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {
-        (&self.values[id].ty).as_ref()?.as_resolved()
+        self.values[id].ty.as_ref()?.as_resolved()
     }
 }
 

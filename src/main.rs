@@ -1,6 +1,6 @@
 use my_onnx::codegen::jit;
 use my_onnx::{
-    load,
+    model::Model,
     tensor::{
         resolved_dimensions::ResolvedTensorDims,
         tensor::{Tensor, TensorData},
@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let args: Vec<_> = env::args().collect();
     if false {
         let mut model =
-            load::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
+            Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
         model
             .graph
             .infer()
@@ -60,7 +60,7 @@ fn main() -> Result<()> {
             println!("{:?}", output);
         } else {
             let mut model =
-                load::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
+                Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
             model
                 .graph
                 .infer()

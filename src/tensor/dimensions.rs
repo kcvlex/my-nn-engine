@@ -1,10 +1,10 @@
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use std::ops::Index;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedTensorDims(Vec<Dimension>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dimension {
     Const(usize),
     Param(String),

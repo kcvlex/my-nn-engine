@@ -29,12 +29,14 @@ pub enum ModelLoadError {
 
 type LoadResult<T> = Result<T, ModelLoadError>;
 
-pub fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Model> {
-    let model = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
-    let model = ModelProto::decode(&*model).map_err(ModelLoadError::Decode)?;
-    let graph = model.graph.ok_or(ModelLoadError::NoGraph)?;
-    let graph = GraphLoader::default().load_graph(graph)?;
-    Ok(Model { graph })
+impl Model {
+    pub fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Model> {
+        let model = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
+        let model = ModelProto::decode(&*model).map_err(ModelLoadError::Decode)?;
+        let graph = model.graph.ok_or(ModelLoadError::NoGraph)?;
+        let graph = GraphLoader::default().load_graph(graph)?;
+        Ok(Model { graph })
+    }
 }
 
 #[derive(Default)]
