@@ -12,7 +12,7 @@ use std::io::{Error, Result, Write};
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args().collect();
-    if true {
+    if false {
         let mut model =
             Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
         model
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
         writer.write_all(model.graph.to_dot().as_bytes())?;
     } else {
         let mut jit = jit::JIT::default();
-        if false {
+        if true {
             let code = jit::sample(&mut jit)?;
             let code = unsafe { core::mem::transmute::<*const u8, fn(()) -> isize>(code) };
             let res = code(());

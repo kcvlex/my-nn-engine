@@ -2,7 +2,7 @@ use crate::codegen::memory;
 use crate::model::{Graph, Node, ValueId};
 use crate::operator::*;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor};
-use cranelift::codegen::ir;
+use cranelift::codegen::{ir, isa::OwnedTargetIsa};
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module, ModuleError};
@@ -31,6 +31,7 @@ impl ResolvedTensorType {
 
 pub struct JIT {
     builder_ctx: FunctionBuilderContext,
+    isa: OwnedTargetIsa,
     ctx: codegen::Context,
     data_description: DataDescription,
     module: JITModule,
@@ -47,11 +48,12 @@ impl Default for JIT {
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
             .unwrap();
-        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        let builder = JITBuilder::with_isa(isa.clone(), cranelift_module::default_libcall_names());
 
         let module = JITModule::new(builder);
         Self {
             builder_ctx: FunctionBuilderContext::new(),
+            isa,
             ctx: module.make_context(),
             data_description: DataDescription::new(),
             module,
@@ -107,6 +109,7 @@ struct TypedValue {
 struct FunctionTranslator<'a> {
     builder: FunctionBuilder<'a>,
     module: &'a mut JITModule,
+    isa: OwnedTargetIsa,
     ptr_ty: Type,
     malloc: ir::FuncRef,
     allocator: memory::Allocator,
@@ -237,13 +240,39 @@ impl<'a> GraphCompiler<'a> {
             .collect::<CodegenResult<Vec<_>>>()?;
         match node.op {
             Operator::Add => {
-                let mut lhs = inputs[args::ADD_LHS].clone();
-                let mut rhs = inputs[args::ADD_RHS].clone();
-                let res = &self.allocate_or_get_tensor(node.outputs[0])?;
-                lhs.ty = lhs.ty.broadcast(&res.ty.dims);
-                rhs.ty = rhs.ty.broadcast(&res.ty.dims);
-                self.translator
-                    .gen_nested_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
+                if false {
+                    let mut lhs = inputs[args::ADD_LHS].clone();
+                    let mut rhs = inputs[args::ADD_RHS].clone();
+                    let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                    lhs.ty = lhs.ty.broadcast(&res.ty.dims);
+                    rhs.ty = rhs.ty.broadcast(&res.ty.dims);
+                    self.translator
+                        .gen_nested_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
+                } else {
+                    let lhs = &inputs[args::ADD_LHS];
+                    let rhs = &inputs[args::ADD_RHS];
+                    let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                    let (lhs, casted) = if lhs.ty.dims != res.ty.dims {
+                        let lhs = self.translator.gen_im2col(res, lhs);
+                        (lhs, true)
+                    } else {
+                        (lhs.clone(), false)
+                    };
+                    let rhs = if rhs.ty.dims != res.ty.dims {
+                        let dst = if !casted {
+                            res.clone()
+                        } else {
+                            let ty = res.ty.clone();
+                            let ptr = self.translator.allocate(ty.mem_size());
+                            TensorPtr { ptr, ty }
+                        };
+                        self.translator.gen_im2col(&dst, rhs)
+                    } else {
+                        rhs.clone()
+                    };
+
+                    self.translator.gen_single_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
+                }
             }
             Operator::ReLU => {
                 let input = &inputs[args::RELU_DATA];
@@ -296,8 +325,44 @@ struct TensorPtr {
     ty: ResolvedTensorType,
 }
 
-type UnaryOperand = ResolvedTensorType;
-type BinaryOperands = (ResolvedTensorType, ResolvedTensorType);
+#[derive(Debug, Clone)]
+struct TensorOperand {
+    tensor: TensorPtr,
+    op_type: Type,  // for SIMD
+}
+
+impl TensorOperand {
+    fn new(tensor: TensorPtr, lane_count: u32) -> Self {
+        let ty = tensor.ty.value_type();
+        Self {
+            tensor,
+            op_type: Self::calc_op_type(ty, lane_count)
+        }
+    }
+
+    fn new_scalar(tensor: TensorPtr) -> Self {
+        let op_type = tensor.ty.value_type();
+        Self {
+            tensor,
+            op_type,
+        }
+    }
+
+    fn lane_count(&self) -> u32 {
+        self.op_type.lane_count()
+    }
+
+    fn calc_op_type(ty: Type, lane_count: u32) -> Type {
+        ty.by(lane_count).unwrap_or(ty)
+    }
+
+    fn change_lane_count(&mut self, lane_count: u32) {
+        self.op_type = Self::calc_op_type(self.tensor.ty.value_type(), lane_count);
+    }
+}
+
+type UnaryOperand = TensorOperand;
+type BinaryOperands = (TensorOperand, TensorOperand);
 
 #[derive(Debug, Clone)]
 enum ElementwiseOperands<'a> {
@@ -331,50 +396,79 @@ impl<'a> ElementwiseOperands<'a> {
 enum ElementwiseOp {
     Add(BinaryOperands),
     ReLU(UnaryOperand),
+    Im2Col(UnaryOperand),
 }
 
 impl ElementwiseOp {
     fn operands(&self) -> ElementwiseOperands {
         match self {
-            ElementwiseOp::Add(operands) => ElementwiseOperands::Binary(operands),
-            ElementwiseOp::ReLU(operand) => ElementwiseOperands::Unary(operand),
+            Self::Add(operands) => ElementwiseOperands::Binary(operands),
+            Self::ReLU(operand) | Self::Im2Col(operand) => ElementwiseOperands::Unary(operand),
         }
     }
 
-    fn generate(&self, params: &[Value], translator: &mut FunctionTranslator<'_>) -> Value {
+    fn set_operands(&mut self, params: &[Value]) {
+        match self {
+            Self::Add(operands) => {
+                let lhs = params[PARAMS_LHS];
+                let rhs = params[PARAMS_RHS];
+                operands.0.tensor.ptr = lhs;
+                operands.1.tensor.ptr = rhs;
+            }
+            Self::ReLU(operand) | Self::Im2Col(operand) => {
+                let data = params[PARAMS_DATA];
+                operand.tensor.ptr = data;
+            },
+        }
+    }
+
+    fn change_lane_count(&mut self, lane_count: u32) {
+        match self {
+            Self::Add(operands) => {
+                operands.0.change_lane_count(lane_count);
+                operands.1.change_lane_count(lane_count);
+            }
+            Self::ReLU(operand) | Self::Im2Col(operand) => {
+                operand.change_lane_count(lane_count);
+            }
+        }
+    }
+
+    fn generate(&self, translator: &mut FunctionTranslator<'_>, offset: i32) -> Value {
         match self {
             Self::Add(operands) => {
                 let (lhs, rhs) = operands;
-                let lhs_ty = lhs.value_type();
-                let rhs_ty = rhs.value_type();
-                let lhs = params[PARAMS_LHS];
-                let rhs = params[PARAMS_RHS];
                 let lhs = translator
                     .builder
                     .ins()
-                    .load(lhs_ty, MemFlags::trusted(), lhs, 0);
+                    .load(lhs.op_type, MemFlags::trusted(), lhs.tensor.ptr, offset);
                 let rhs = translator
                     .builder
                     .ins()
-                    .load(rhs_ty, MemFlags::trusted(), rhs, 0);
+                    .load(rhs.op_type, MemFlags::trusted(), rhs.tensor.ptr, offset);
                 // TODO: integer add
                 translator.builder.ins().fadd(lhs, rhs)
             }
             Self::ReLU(data) => {
                 // TODO: type check
-                let data_ty = data.value_type();
-                let data = params[PARAMS_DATA];
+                let data_ty = data.op_type;
                 let data = translator
                     .builder
                     .ins()
-                    .load(data_ty, MemFlags::trusted(), data, 0);
+                    .load(data.op_type, MemFlags::trusted(), data.tensor.ptr, offset);
                 let zero = match data_ty {
                     types::F32 => translator.builder.ins().f32const(0.0),
                     types::F64 => translator.builder.ins().f64const(0.0),
                     _ => panic!("unsupported type"),
                 };
                 translator.builder.ins().fmax(data, zero)
-            }
+            },
+            Self::Im2Col(data) => {
+                translator
+                    .builder
+                    .ins()
+                    .load(data.op_type, MemFlags::trusted(), data.tensor.ptr, offset)
+            },
         }
     }
 
@@ -387,8 +481,8 @@ impl ElementwiseOp {
         match self {
             Self::Add(operands) => {
                 let (lhs, rhs) = operands;
-                let l_add = lhs.stride(nest) as i64 * lhs.value_bytes() as i64;
-                let r_add = rhs.stride(nest) as i64 * rhs.value_bytes() as i64;
+                let l_add = lhs.tensor.ty.stride(nest) as i64 * lhs.op_type.bytes() as i64;
+                let r_add = rhs.tensor.ty.stride(nest) as i64 * rhs.op_type.bytes() as i64;
 
                 let lhs = params[PARAMS_LHS];
                 let rhs = params[PARAMS_RHS];
@@ -399,8 +493,8 @@ impl ElementwiseOp {
                 params[PARAMS_LHS] = lhs;
                 params[PARAMS_RHS] = rhs;
             }
-            Self::ReLU(data) => {
-                let add = data.stride(nest) as i64 * data.value_bytes() as i64;
+            Self::ReLU(data) | Self::Im2Col(data) => {
+                let add = data.tensor.ty.stride(nest) as i64 * data.op_type.bytes() as i64;
                 let data = params[PARAMS_DATA];
                 let data = translator.builder.ins().iadd_imm(data, add);
                 params[PARAMS_DATA] = data;
@@ -445,6 +539,8 @@ impl<'a> FunctionTranslator<'a> {
             jit.module.declare_func_in_func(callee, builder.func)
         };
 
+        let isa = jit.isa.clone();
+
         // let free = {
         //     let mut sig = jit.module.make_signature();
         //     sig.params.push(AbiParam::new(ptr_ty));
@@ -457,6 +553,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(Self {
             builder,
             module: &mut jit.module,
+            isa,
             ptr_ty,
             malloc,
             allocator: memory::Allocator::default(),
@@ -614,8 +711,9 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.ins().brif(ind, exit, &[dst], next, &[dst]);
             self.builder.switch_to_block(exit);
 
+            op.set_operands(params.as_slice());
             let dst = self.builder.block_params(exit)[PARAMS_DST];
-            let sum = op.generate(params.as_slice(), self);
+            let sum = op.generate(self, 0);
             self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
             let dst = self
                 .builder
@@ -666,9 +764,16 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.seal_block(exit);
     }
 
+    pub fn gen_im2col(&mut self, dst: &TensorPtr, src: &TensorPtr) -> TensorPtr {
+        let mut src = src.clone();
+        src.ty = src.ty.broadcast(&dst.ty.dims);
+        self.gen_nested_loop_unaryop(&src, dst, ElementwiseOp::Im2Col);
+        dst.clone()
+    }
+
     pub fn gen_nested_loop_unaryop<T>(&mut self, input: &TensorPtr, res: &TensorPtr, op: T)
     where
-        T: FnOnce(UnaryOperand) -> ElementwiseOp,
+        T: Fn(UnaryOperand) -> ElementwiseOp,
     {
         println!("dims={:?}", res.ty.dims);
         let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
@@ -679,7 +784,7 @@ impl<'a> FunctionTranslator<'a> {
             params[PARAMS_INDUCTION] = ind;
             params
         };
-        let mut op = op(input.ty.clone());
+        let mut op = op(TensorOperand::new_scalar(input.clone()));
         self.gen_nested_loop(&mut op, res, params.as_slice());
     }
 
@@ -690,7 +795,7 @@ impl<'a> FunctionTranslator<'a> {
         res: &TensorPtr,
         op: T,
     ) where
-        T: FnOnce(BinaryOperands) -> ElementwiseOp,
+        T: Fn(BinaryOperands) -> ElementwiseOp,
     {
         let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
         let params = {
@@ -701,8 +806,93 @@ impl<'a> FunctionTranslator<'a> {
             params[PARAMS_INDUCTION] = ind;
             params
         };
-        let mut op = op((lhs.ty.clone(), rhs.ty.clone()));
+        let lhs = TensorOperand::new_scalar(lhs.clone());
+        let rhs = TensorOperand::new_scalar(rhs.clone());
+        let mut op = op((lhs, rhs));
         self.gen_nested_loop(&mut op, res, params.as_slice());
+    }
+
+    pub fn gen_single_loop_binop<'b, T>(
+        &mut self,
+        lhs: &'b TensorPtr,
+        rhs: &'b TensorPtr,
+        res: &TensorPtr,
+        op: T,
+    ) where
+        T: Fn(BinaryOperands) -> ElementwiseOp,
+    {
+        let max_bytes = self.isa.dynamic_vector_bytes(lhs.ty.value_type());
+        let max_lane_count = max_bytes / lhs.ty.value_bytes() as u32;
+        println!("max_bytes={max_bytes}");
+        let lhs = TensorOperand::new(lhs.clone(), max_lane_count);
+        let rhs = TensorOperand::new(rhs.clone(), max_lane_count);
+        let lane_count = lhs.lane_count() as i64;
+        let trip_count = res.ty.dims.size() as i64;
+        let main_trip_count = trip_count / lane_count;
+        let rem_trip_count = trip_count - main_trip_count * lane_count;
+
+        let ind = self.builder.ins().iconst(types::I64, main_trip_count);
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let exit = self.builder.create_block();
+        let lhs_bytes = lhs.op_type.bytes() as i64;
+        let rhs_bytes = rhs.op_type.bytes() as i64;
+        let dst_bytes = res.ty.value_bytes() as i64 * lane_count;
+        let lhs_ptr = lhs.tensor.ptr;
+        let rhs_ptr = rhs.tensor.ptr;
+        let mut op = op((lhs, rhs));
+
+        for ty in op.operands().block_params_ty(self.ptr_ty) {
+            self.builder.append_block_param(header, ty);
+            self.builder.append_block_param(exit, ty);
+        }
+
+        let params = {
+            let mut params = vec![ind; 4];
+            params[PARAMS_DST] = res.ptr;
+            params[PARAMS_LHS] = lhs_ptr;
+            params[PARAMS_RHS] = rhs_ptr;
+            params[PARAMS_INDUCTION] = ind;
+            params
+        };
+        self.builder.ins().jump(header, params.as_slice());
+        self.builder.switch_to_block(header);
+        let params = self.builder.block_params(header).to_owned();
+        let ind = params[PARAMS_INDUCTION];
+        let lhs = params[PARAMS_LHS];
+        let rhs = params[PARAMS_RHS];
+        let dst = params[PARAMS_DST];
+        self.builder.ins().brif(ind, body, &[], exit, &params);
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+        op.set_operands(&params);
+        let sum = op.generate(self, 0);
+        self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
+        let ind = self.builder.ins().iadd_imm(ind, -1);
+        let lhs = self.builder.ins().iadd_imm(lhs, lhs_bytes);
+        let rhs = self.builder.ins().iadd_imm(rhs, rhs_bytes);
+        let dst = self.builder.ins().iadd_imm(dst, dst_bytes);
+        let params = {
+            let mut params = vec![ind; 4];
+            params[PARAMS_DST] = dst;
+            params[PARAMS_LHS] = lhs;
+            params[PARAMS_RHS] = rhs;
+            params[PARAMS_INDUCTION] = ind;
+            params
+        };
+        self.builder.ins().jump(header, params.as_slice());
+        self.builder.seal_block(header);
+
+        self.builder.switch_to_block(exit);
+        self.builder.seal_block(exit);
+        op.change_lane_count(1);
+        op.set_operands(self.builder.block_params(exit));
+        let dst = self.builder.block_params(exit)[PARAMS_DST];
+        for i in 0..rem_trip_count {
+            let offset = i as i32 * res.ty.value_bytes() as i32;
+            let sum = op.generate(self, offset);
+            self.builder.ins().store(MemFlags::trusted(), sum, dst, offset);
+        }
     }
 }
 
@@ -746,6 +936,8 @@ pub fn sample(jit: &mut JIT) -> std::io::Result<*const u8> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
     translator.builder.ins().return_(&[res.value]);
     translator.builder.finalize();
+    
+    println!("{}", jit.ctx.func);
 
     jit.module.define_function(id, &mut jit.ctx).unwrap();
     jit.module.clear_context(&mut jit.ctx);
