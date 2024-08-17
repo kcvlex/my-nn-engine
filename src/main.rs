@@ -12,7 +12,7 @@ use std::io::{Error, Result, Write};
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args().collect();
-    if false {
+    if true {
         let mut model =
             Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
         model

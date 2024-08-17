@@ -105,9 +105,13 @@ mod test {
     use std::path::PathBuf;
 
     macro_rules! make_tensor {
-        ($ty: ty, $($expr: expr),*) => {{
-            let res: ndarray::Array<$ty, _> = ndarray::array!($($expr),*);
-            let res: Result<Tensor, _> = res.try_into().map_err(SessionError::TypeError);
+        ($ty: ty, $($expr: expr,)*) => {{
+            let orig: ndarray::Array<$ty, _> = ndarray::array!($($expr,)*);
+            let res: Result<(Tensor, _), _> = orig
+                .clone()
+                .try_into()
+                .map(|t| (t, orig.clone()))
+                .map_err(SessionError::TypeError);
             res
         }};
     }
@@ -120,9 +124,11 @@ mod test {
     #[test]
     fn run_relu() -> Result<(), SessionError> {
         let session = make_session("models/test/relu.onnx")?;
-        let input = make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]])?;
+        let (input, _) =
+            make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
         let output = session.run(&[input])?;
-        let expected = make_tensor!(f32, [[1.0, 0.0], [42.0, 4.0]], [[0.0, 6.0], [0.0, 0.0]])?;
+        let (expected, _) =
+            make_tensor!(f32, [[1.0, 0.0], [42.0, 4.0]], [[0.0, 6.0], [0.0, 0.0]],)?;
         assert_eq!(output[0], expected);
         Ok(())
     }
@@ -130,11 +136,48 @@ mod test {
     #[test]
     fn run_add() -> Result<(), SessionError> {
         let session = make_session("models/test/add.onnx")?;
-        let input0 = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0])?;
-        let input1 = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0])?;
+        let (input0, _) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
+        let (input1, _) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
         let output = session.run(&[input0, input1])?;
-        let expected = make_tensor!(f32, [2.0, 4.0, 6.0], [0.0, 0.0, 0.0])?;
+        let (expected, _) = make_tensor!(f32, [2.0, 4.0, 6.0], [0.0, 0.0, 0.0],)?;
         assert_eq!(output[0], expected);
+        Ok(())
+    }
+
+    #[test]
+    fn run_add_broaccst() -> Result<(), SessionError> {
+        let session = make_session("models/test/add_broadcast.onnx")?;
+        // (1 x 4 x 5)
+        let (input0, orig0) = make_tensor!(
+            f32,
+            [
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+                [2.0, 3.0, 4.0, 5.0, 6.0],
+                [3.0, 4.0, 5.0, 6.0, 7.0],
+                [4.0, 5.0, 6.0, 7.0, 8.0],
+            ],
+        )?;
+
+        // (2 x 3 x 1 x 1)
+        let (input1, orig1) = make_tensor!(
+            f32,
+            [[[1.0]], [[2.0]], [[3.0]]],
+            [[[1.0]], [[2.0]], [[3.0]]],
+        )?;
+
+        // (4 x 5)
+        let (input2, orig2) = make_tensor!(
+            f32,
+            [10.0, 11.0, 12.0, 13.0, 14.0],
+            [20.0, 21.0, 22.0, 23.0, 24.0],
+            [30.0, 31.0, 32.0, 33.0, 34.0],
+            [40.0, 41.0, 42.0, 43.0, 44.0],
+        )?;
+
+        let output = session.run(&[input0, input1, input2])?;
+        let expected = orig0 + orig1 + orig2;
+        let exptected = Tensor::try_from(expected).map_err(SessionError::TypeError)?;
+        assert_eq!(output[0], exptected);
         Ok(())
     }
 }

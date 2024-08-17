@@ -1,5 +1,6 @@
 use crate::tensor::dimensions::{Dimension, UnresolvedTensorDims};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
+use itertools::izip;
 
 #[derive(Debug, Clone)]
 pub enum TypeError {
@@ -122,6 +123,17 @@ impl ResolvedTensorType {
     pub fn stride(&self, i: usize) -> usize {
         self.stride[i]
     }
+
+    pub fn broadcast(&self, target: &ResolvedTensorDims) -> Self {
+        let elem_type = self.elem_type.clone();
+        let dims = target.clone();
+        let stride = calc_stride_broadcast(&self.dims, target);
+        Self {
+            elem_type,
+            dims,
+            stride,
+        }
+    }
 }
 
 impl TensorType {
@@ -145,10 +157,14 @@ fn calc_stride_broadcast(
 ) -> ResolvedTensorDims {
     let mut acc = 1;
     let mut stride = vec![0; target.ndim()];
-    for i in (0..orig.ndim()).rev() {
-        if orig[i] == target[i] {
-            stride[i] = acc;
-            acc *= orig[i];
+    for (stride, orig, target) in izip!(
+        stride.iter_mut().rev(),
+        orig.iter().rev(),
+        target.iter().rev()
+    ) {
+        if *orig == *target {
+            *stride = acc;
+            acc *= *orig;
         }
     }
     ResolvedTensorDims::new(stride)

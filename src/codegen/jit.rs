@@ -224,6 +224,7 @@ impl<'a> GraphCompiler<'a> {
                 .clone();
             let size = ty.mem_size();
             let ptr = self.translator.allocate(size);
+            self.id2value.insert(id, ptr);
             Ok(TensorPtr { ptr, ty })
         }
     }
@@ -236,11 +237,13 @@ impl<'a> GraphCompiler<'a> {
             .collect::<CodegenResult<Vec<_>>>()?;
         match node.op {
             Operator::Add => {
-                let lhs = &inputs[args::ADD_LHS];
-                let rhs = &inputs[args::ADD_RHS];
+                let mut lhs = inputs[args::ADD_LHS].clone();
+                let mut rhs = inputs[args::ADD_RHS].clone();
                 let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                lhs.ty = lhs.ty.broadcast(&res.ty.dims);
+                rhs.ty = rhs.ty.broadcast(&res.ty.dims);
                 self.translator
-                    .gen_nested_loop_binop(lhs, rhs, res, ElementwiseOp::Add);
+                    .gen_nested_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
             }
             Operator::ReLU => {
                 let input = &inputs[args::RELU_DATA];
