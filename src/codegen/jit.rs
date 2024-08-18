@@ -120,8 +120,6 @@ pub struct GraphCompiler<'a> {
     func_id: FuncId,
     translator: FunctionTranslator<'a>,
     graph: &'a Graph,
-    inputs: Vec<Value>,
-    outputs: Vec<Value>,
     id2value: HashMap<ValueId, Value>,
 }
 
@@ -166,16 +164,10 @@ impl<'a> GraphCompiler<'a> {
         let current_block = translator.builder.current_block().unwrap();
         let input_arg = translator.builder.block_params(current_block)[0];
         let output_arg = translator.builder.block_params(current_block)[1];
-        let mut inputs = Vec::new();
-        let mut outputs = Vec::new();
-        for (arg, ids, values) in [
-            (input_arg, &graph.inputs, &mut inputs),
-            (output_arg, &graph.outputs, &mut outputs),
-        ] {
+        for (arg, ids) in [(input_arg, &graph.inputs), (output_arg, &graph.outputs)] {
             let mut ptr = arg;
             for &value_id in ids.iter() {
                 id2value.insert(value_id, ptr);
-                values.push(ptr);
                 let ty = graph
                     .get_resolved_tensor_type(value_id)
                     .ok_or(CodegenError::UnresolvedShape)?;
@@ -184,14 +176,10 @@ impl<'a> GraphCompiler<'a> {
             }
         }
 
-        println!("inputs={:?} outputs={:?}", inputs, outputs);
-
         Ok(Self {
             func_id,
             translator,
             graph,
-            inputs,
-            outputs,
             id2value,
         })
     }
@@ -271,7 +259,8 @@ impl<'a> GraphCompiler<'a> {
                         rhs.clone()
                     };
 
-                    self.translator.gen_single_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
+                    self.translator
+                        .gen_single_loop_binop(&lhs, &rhs, res, ElementwiseOp::Add);
                 }
             }
             Operator::ReLU => {
@@ -308,17 +297,6 @@ impl<'a> GraphCompiler<'a> {
     }
 }
 
-/*
-impl Tensor {
-    fn elem_type(&self) -> Type {
-        match self.ty.elem_type {
-            tensor::DataType::F32 => types::F32,
-            tensor::DataType::F64 => types::F64,
-        }
-    }
-}
-*/
-
 #[derive(Debug, Clone)]
 struct TensorPtr {
     ptr: Value,
@@ -328,7 +306,7 @@ struct TensorPtr {
 #[derive(Debug, Clone)]
 struct TensorOperand {
     tensor: TensorPtr,
-    op_type: Type,  // for SIMD
+    op_type: Type, // for SIMD
 }
 
 impl TensorOperand {
@@ -336,16 +314,13 @@ impl TensorOperand {
         let ty = tensor.ty.value_type();
         Self {
             tensor,
-            op_type: Self::calc_op_type(ty, lane_count)
+            op_type: Self::calc_op_type(ty, lane_count),
         }
     }
 
     fn new_scalar(tensor: TensorPtr) -> Self {
         let op_type = tensor.ty.value_type();
-        Self {
-            tensor,
-            op_type,
-        }
+        Self { tensor, op_type }
     }
 
     fn lane_count(&self) -> u32 {
@@ -364,6 +339,7 @@ impl TensorOperand {
 type UnaryOperand = TensorOperand;
 type BinaryOperands = (TensorOperand, TensorOperand);
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum ElementwiseOperands<'a> {
     Unary(&'a UnaryOperand),
@@ -418,7 +394,7 @@ impl ElementwiseOp {
             Self::ReLU(operand) | Self::Im2Col(operand) => {
                 let data = params[PARAMS_DATA];
                 operand.tensor.ptr = data;
-            },
+            }
         }
     }
 
@@ -438,37 +414,43 @@ impl ElementwiseOp {
         match self {
             Self::Add(operands) => {
                 let (lhs, rhs) = operands;
-                let lhs = translator
-                    .builder
-                    .ins()
-                    .load(lhs.op_type, MemFlags::trusted(), lhs.tensor.ptr, offset);
-                let rhs = translator
-                    .builder
-                    .ins()
-                    .load(rhs.op_type, MemFlags::trusted(), rhs.tensor.ptr, offset);
+                let lhs = translator.builder.ins().load(
+                    lhs.op_type,
+                    MemFlags::trusted(),
+                    lhs.tensor.ptr,
+                    offset,
+                );
+                let rhs = translator.builder.ins().load(
+                    rhs.op_type,
+                    MemFlags::trusted(),
+                    rhs.tensor.ptr,
+                    offset,
+                );
                 // TODO: integer add
                 translator.builder.ins().fadd(lhs, rhs)
             }
             Self::ReLU(data) => {
                 // TODO: type check
                 let data_ty = data.op_type;
-                let data = translator
-                    .builder
-                    .ins()
-                    .load(data.op_type, MemFlags::trusted(), data.tensor.ptr, offset);
+                let data = translator.builder.ins().load(
+                    data.op_type,
+                    MemFlags::trusted(),
+                    data.tensor.ptr,
+                    offset,
+                );
                 let zero = match data_ty {
                     types::F32 => translator.builder.ins().f32const(0.0),
                     types::F64 => translator.builder.ins().f64const(0.0),
                     _ => panic!("unsupported type"),
                 };
                 translator.builder.ins().fmax(data, zero)
-            },
-            Self::Im2Col(data) => {
-                translator
-                    .builder
-                    .ins()
-                    .load(data.op_type, MemFlags::trusted(), data.tensor.ptr, offset)
-            },
+            }
+            Self::Im2Col(data) => translator.builder.ins().load(
+                data.op_type,
+                MemFlags::trusted(),
+                data.tensor.ptr,
+                offset,
+            ),
         }
     }
 
@@ -891,7 +873,9 @@ impl<'a> FunctionTranslator<'a> {
         for i in 0..rem_trip_count {
             let offset = i as i32 * res.ty.value_bytes() as i32;
             let sum = op.generate(self, offset);
-            self.builder.ins().store(MemFlags::trusted(), sum, dst, offset);
+            self.builder
+                .ins()
+                .store(MemFlags::trusted(), sum, dst, offset);
         }
     }
 }
@@ -936,7 +920,7 @@ pub fn sample(jit: &mut JIT) -> std::io::Result<*const u8> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
     translator.builder.ins().return_(&[res.value]);
     translator.builder.finalize();
-    
+
     println!("{}", jit.ctx.func);
 
     jit.module.define_function(id, &mut jit.ctx).unwrap();

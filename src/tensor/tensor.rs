@@ -1,4 +1,4 @@
-use crate::tensor::dimensions::{Dimension, UnresolvedTensorDims};
+use crate::tensor::dimensions::UnresolvedTensorDims;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use itertools::izip;
 
@@ -23,9 +23,6 @@ pub struct Tensor {
     pub data: TensorData,
     pub ty: ResolvedTensorType,
 }
-
-#[derive(Debug, Clone)]
-pub struct TensorIndex(usize);
 
 // TODO: Complex
 #[derive(Debug, Clone)]
@@ -191,17 +188,6 @@ impl Tensor {
 
     pub fn tensor_type(&self) -> TensorType {
         self.ty.clone().into()
-    }
-
-    pub fn get_index(&self, indexes: &[usize]) -> Option<TensorIndex> {
-        if indexes.len() != self.ty.dims.ndim() {
-            return None;
-        }
-        let mut index = 0;
-        for i in 0..indexes.len() {
-            index += indexes[i] * self.ty.stride[i];
-        }
-        Some(TensorIndex(index))
     }
 
     pub fn zeros(ty: DataType, dims: ResolvedTensorDims) -> Self {

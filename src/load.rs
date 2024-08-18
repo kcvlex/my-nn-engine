@@ -45,6 +45,7 @@ struct GraphLoader {
     values: Values,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Attribute {
     Float(f32),
@@ -54,12 +55,12 @@ enum Attribute {
 }
 
 impl Attribute {
-    fn float(&self) -> LoadResult<f32> {
-        match self {
-            Attribute::Float(x) => Ok(*x),
-            x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
-        }
-    }
+    // fn float(&self) -> LoadResult<f32> {
+    //     match self {
+    //         Attribute::Float(x) => Ok(*x),
+    //         x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
+    //     }
+    // }
 
     fn int(&self) -> LoadResult<i64> {
         match self {

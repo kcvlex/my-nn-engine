@@ -15,11 +15,11 @@ impl Region {
 }
 
 struct Block {
-    size: usize,
     free: BTreeSet<Region>,
 }
 
 impl Block {
+    #[cfg(test)]
     fn new(size: usize) -> Self {
         let region = Region {
             start: 0,
@@ -27,7 +27,7 @@ impl Block {
         };
         let mut free = BTreeSet::new();
         free.insert(region);
-        Block { size, free }
+        Block { free }
     }
 
     fn new_with_allocated(size: usize, allocated: usize) -> Self {
@@ -37,7 +37,7 @@ impl Block {
         };
         let mut free = BTreeSet::new();
         free.insert(region);
-        Block { size, free }
+        Block { free }
     }
 
     fn find_region(&self, size: usize) -> Option<Region> {
