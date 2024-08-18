@@ -131,6 +131,14 @@ impl ResolvedTensorType {
             stride,
         }
     }
+
+    pub fn is_fully_expanded(&self) -> bool {
+        self.stride[0] == self.dims.size()
+    }
+
+    pub fn is_broadcast_required(&self, target: &ResolvedTensorDims) -> bool {
+        !(self.is_fully_expanded() && self.dims == *target)
+    }
 }
 
 impl TensorType {

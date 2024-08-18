@@ -240,13 +240,13 @@ impl<'a> GraphCompiler<'a> {
                     let lhs = &inputs[args::ADD_LHS];
                     let rhs = &inputs[args::ADD_RHS];
                     let res = &self.allocate_or_get_tensor(node.outputs[0])?;
-                    let (lhs, casted) = if lhs.ty.dims != res.ty.dims {
+                    let (lhs, casted) = if lhs.ty.is_broadcast_required(&res.ty.dims) {
                         let lhs = self.translator.gen_im2col(res, lhs);
                         (lhs, true)
                     } else {
                         (lhs.clone(), false)
                     };
-                    let rhs = if rhs.ty.dims != res.ty.dims {
+                    let rhs = if rhs.ty.is_broadcast_required(&res.ty.dims) {
                         let dst = if !casted {
                             res.clone()
                         } else {
@@ -268,6 +268,27 @@ impl<'a> GraphCompiler<'a> {
                 let res = &self.allocate_or_get_tensor(node.outputs[0])?;
                 self.translator
                     .gen_nested_loop_unaryop(input, res, ElementwiseOp::ReLU);
+            }
+            Operator::Reshape => {
+                let input = &inputs[args::RESHAPE_DATA].ptr;
+                let output_id = node.outputs[0];
+                self.id2value.insert(output_id, *input);
+            }
+            Operator::MatMul => {
+                let lhs = &inputs[args::MATMUL_LHS];
+                let rhs = &inputs[args::MATMUL_RHS];
+                if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
+                    let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                    self.translator.gen_matmul(
+                        res.ty.value_type(),
+                        res.ptr,
+                        lhs.ptr,
+                        rhs.ptr,
+                        [res.ty.dims[0], res.ty.dims[1], lhs.ty.dims[1]],
+                    );
+                } else {
+                    todo!("MatMul");
+                }
             }
             _ => unimplemented!(),
         }
@@ -310,11 +331,11 @@ struct TensorOperand {
 }
 
 impl TensorOperand {
-    fn new(tensor: TensorPtr, lane_count: u32) -> Self {
+    fn new(tensor: TensorPtr, isa: &OwnedTargetIsa) -> Self {
         let ty = tensor.ty.value_type();
         Self {
             tensor,
-            op_type: Self::calc_op_type(ty, lane_count),
+            op_type: Self::dynamic_vector_op_type(ty, isa),
         }
     }
 
@@ -327,8 +348,15 @@ impl TensorOperand {
         self.op_type.lane_count()
     }
 
-    fn calc_op_type(ty: Type, lane_count: u32) -> Type {
-        ty.by(lane_count).unwrap_or(ty)
+    fn calc_op_type(ty: Type, max_lane_count: u32) -> Type {
+        ty.by(max_lane_count).unwrap_or(ty)
+    }
+
+    fn dynamic_vector_op_type(ty: Type, isa: &OwnedTargetIsa) -> Type {
+        let max_bytes = isa.dynamic_vector_bytes(ty);
+        let max_lane_count = max_bytes / ty.bytes();
+        println!("max_bytes={max_bytes}");
+        Self::calc_op_type(ty, max_lane_count)
     }
 
     fn change_lane_count(&mut self, lane_count: u32) {
@@ -803,11 +831,8 @@ impl<'a> FunctionTranslator<'a> {
     ) where
         T: Fn(BinaryOperands) -> ElementwiseOp,
     {
-        let max_bytes = self.isa.dynamic_vector_bytes(lhs.ty.value_type());
-        let max_lane_count = max_bytes / lhs.ty.value_bytes() as u32;
-        println!("max_bytes={max_bytes}");
-        let lhs = TensorOperand::new(lhs.clone(), max_lane_count);
-        let rhs = TensorOperand::new(rhs.clone(), max_lane_count);
+        let lhs = TensorOperand::new(lhs.clone(), &self.isa);
+        let rhs = TensorOperand::new(rhs.clone(), &self.isa);
         let lane_count = lhs.lane_count() as i64;
         let trip_count = res.ty.dims.size() as i64;
         let main_trip_count = trip_count / lane_count;
@@ -876,6 +901,161 @@ impl<'a> FunctionTranslator<'a> {
             self.builder
                 .ins()
                 .store(MemFlags::trusted(), sum, dst, offset);
+        }
+    }
+
+    fn gen_matmul(&mut self, ty: Type, dst: Value, lhs: Value, rhs: Value, dims: [usize; 3]) {
+        let block_i0 = self.builder.create_block();
+        let block_i1 = self.builder.create_block();
+        let block_j0 = self.builder.create_block();
+        let block_j1 = self.builder.create_block();
+        let block_k0 = self.builder.create_block();
+        let block_k1 = self.builder.create_block();
+        let block_exit = self.builder.create_block();
+
+        const INDUCTION: usize = 0;
+        const DST: usize = 1;
+        const LHS: usize = 2;
+        const RHS: usize = 3;
+        const ACC: usize = 4;
+
+        let [for_i, for_j, for_k] = dims;
+
+        for block in [block_i0, block_j0, block_k0] {
+            self.builder.append_block_param(block, types::I64);
+            self.builder.append_block_param(block, self.ptr_ty);
+            self.builder.append_block_param(block, self.ptr_ty);
+            self.builder.append_block_param(block, self.ptr_ty);
+        }
+        self.builder.append_block_param(block_k0, ty);
+        self.builder.append_block_param(block_j1, ty);
+
+        let ind_i = self.builder.ins().iconst(types::I64, for_i as i64);
+        let params = {
+            let mut params = vec![ind_i; 4];
+            params[DST] = dst;
+            params[LHS] = lhs;
+            params[RHS] = rhs;
+            params
+        };
+        self.builder.ins().jump(block_i0, params.as_slice());
+
+        {
+            self.builder.switch_to_block(block_i0);
+            let ind_i = self.builder.block_params(block_i0)[INDUCTION];
+            let ind_j = self.builder.ins().iconst(types::I64, for_j as i64);
+            let mut params_j = self.builder.block_params(block_i0).to_vec();
+            params_j[INDUCTION] = ind_j;
+            self.builder
+                .ins()
+                .brif(ind_i, block_j0, params_j.as_slice(), block_exit, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_j0);
+            let ind_j = self.builder.block_params(block_j0)[INDUCTION];
+            let ind_k = self.builder.ins().iconst(types::I64, for_k as i64);
+            let acc = match ty {
+                types::F32 => self.builder.ins().f32const(0.0),
+                types::F64 => self.builder.ins().f64const(0.0),
+                _ => panic!("unsupported type"),
+            };
+            let mut params_k = self.builder.block_params(block_j0).to_vec();
+            params_k[INDUCTION] = ind_k;
+            params_k.push(acc);
+            self.builder
+                .ins()
+                .brif(ind_j, block_k0, params_k.as_slice(), block_i1, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_k0);
+            let ind_k = self.builder.block_params(block_k0)[INDUCTION];
+            let acc = self.builder.block_params(block_k0)[ACC];
+            self.builder
+                .ins()
+                .brif(ind_k, block_k1, &[], block_j1, &[acc]);
+        }
+
+        {
+            self.builder.switch_to_block(block_k1);
+            let lhs = self.builder.block_params(block_k0)[LHS];
+            let rhs = self.builder.block_params(block_k0)[RHS];
+            let acc = self.builder.block_params(block_k0)[ACC];
+            let ind_k = self.builder.block_params(block_k0)[INDUCTION];
+
+            let acc = {
+                let lhs = self.builder.ins().load(ty, MemFlags::trusted(), lhs, 0);
+                let rhs = self.builder.ins().load(ty, MemFlags::trusted(), rhs, 0);
+                let mul = self.builder.ins().fmul(lhs, rhs);
+                self.builder.ins().fadd(acc, mul)
+            };
+            let ind_k = self.builder.ins().iadd_imm(ind_k, -1);
+            let lhs = self.builder.ins().iadd_imm(lhs, ty.bytes() as i64);
+            let rhs = self
+                .builder
+                .ins()
+                .iadd_imm(rhs, ty.bytes() as i64 * for_j as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_k0).to_vec();
+                params[INDUCTION] = ind_k;
+                params[LHS] = lhs;
+                params[RHS] = rhs;
+                params[ACC] = acc;
+                params
+            };
+            self.builder.ins().jump(block_k0, params.as_slice());
+        }
+
+        {
+            self.builder.switch_to_block(block_j1);
+            let acc = self.builder.block_params(block_j1)[0];
+            let rhs = self.builder.block_params(block_j0)[RHS];
+            let dst = self.builder.block_params(block_j0)[DST];
+            let ind_j = self.builder.block_params(block_j0)[INDUCTION];
+            self.builder.ins().store(MemFlags::trusted(), acc, dst, 0);
+            let ind_j = self.builder.ins().iadd_imm(ind_j, -1);
+            let rhs = self.builder.ins().iadd_imm(rhs, ty.bytes() as i64);
+            let dst = self.builder.ins().iadd_imm(dst, ty.bytes() as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_j0).to_vec();
+                params[INDUCTION] = ind_j;
+                params[RHS] = rhs;
+                params[DST] = dst;
+                params
+            };
+            self.builder.ins().jump(block_j0, params.as_slice());
+        }
+
+        {
+            self.builder.switch_to_block(block_i1);
+            let ind_i = self.builder.block_params(block_i0)[INDUCTION];
+            let lhs = self.builder.block_params(block_i0)[LHS];
+            let dst = self.builder.block_params(block_i0)[DST];
+            let ind_i = self.builder.ins().iadd_imm(ind_i, -1);
+            let lhs = self
+                .builder
+                .ins()
+                .iadd_imm(lhs, ty.bytes() as i64 * for_k as i64);
+            let dst = self
+                .builder
+                .ins()
+                .iadd_imm(dst, ty.bytes() as i64 * for_j as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_i0).to_vec();
+                params[INDUCTION] = ind_i;
+                params[LHS] = lhs;
+                params[DST] = dst;
+                params
+            };
+            self.builder.ins().jump(block_i0, params.as_slice());
+        }
+
+        self.builder.switch_to_block(block_exit);
+        for block in [
+            block_i0, block_i1, block_j0, block_j1, block_k0, block_k1, block_exit,
+        ] {
+            self.builder.seal_block(block);
         }
     }
 }

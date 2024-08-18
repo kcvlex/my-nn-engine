@@ -67,6 +67,10 @@ impl ResolvedTensorDims {
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, usize> {
         self.0.iter_mut()
     }
+
+    pub fn last(&self) -> Option<&usize> {
+        self.0.last()
+    }
 }
 
 impl<Idx> Index<Idx> for ResolvedTensorDims

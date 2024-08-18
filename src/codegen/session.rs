@@ -19,6 +19,7 @@ pub enum SessionError {
         expected: ResolvedTensorType,
         got: ResolvedTensorType,
     },
+    OtherError(String),
 }
 
 pub struct Session {
@@ -121,31 +122,37 @@ mod test {
         Session::new(path)
     }
 
+    type TestResult = Result<(), SessionError>;
+
+    macro_rules! tensor_assert_eq {
+        ($left: expr, $right: expr) => {{
+            let right = Tensor::try_from($right).map_err(SessionError::TypeError)?;
+            assert_eq!($left, right);
+        }};
+    }
+
     #[test]
-    fn run_relu() -> Result<(), SessionError> {
+    fn relu() -> TestResult {
         let session = make_session("models/test/relu.onnx")?;
-        let (input, _) =
+        let (input, orig) =
             make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
         let output = session.run(&[input])?;
-        let (expected, _) =
-            make_tensor!(f32, [[1.0, 0.0], [42.0, 4.0]], [[0.0, 6.0], [0.0, 0.0]],)?;
-        assert_eq!(output[0], expected);
+        tensor_assert_eq!(output[0], orig.mapv(|x| x.max(0.0)));
         Ok(())
     }
 
     #[test]
-    fn run_add() -> Result<(), SessionError> {
+    fn add() -> TestResult {
         let session = make_session("models/test/add.onnx")?;
-        let (input0, _) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
-        let (input1, _) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
+        let (input0, orig0) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
+        let (input1, orig1) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
         let output = session.run(&[input0, input1])?;
-        let (expected, _) = make_tensor!(f32, [2.0, 4.0, 6.0], [0.0, 0.0, 0.0],)?;
-        assert_eq!(output[0], expected);
+        tensor_assert_eq!(output[0], orig0 + orig1);
         Ok(())
     }
 
     #[test]
-    fn run_add_broaccst() -> Result<(), SessionError> {
+    fn add_broaccst() -> TestResult {
         let session = make_session("models/test/add_broadcast.onnx")?;
         // (1 x 4 x 5)
         let (input0, orig0) = make_tensor!(
@@ -175,9 +182,47 @@ mod test {
         )?;
 
         let output = session.run(&[input0, input1, input2])?;
-        let expected = orig0 + orig1 + orig2;
-        let exptected = Tensor::try_from(expected).map_err(SessionError::TypeError)?;
-        assert_eq!(output[0], exptected);
+        tensor_assert_eq!(output[0], orig0 + orig1 + orig2);
+        Ok(())
+    }
+
+    #[ignore]
+    #[test]
+    fn run_reshape() -> TestResult {
+        let session = make_session("models/test/reshape.onnx")?;
+
+        let (input, orig) = make_tensor!(
+            f32,
+            [[[1.0, 10.0]], [[2.0, 10.0]]],
+            [[[1.1, 10.1]], [[3.0, 10.1]]],
+            [[[1.2, 10.2]], [[4.0, 10.2]]],
+            [[[1.3, 10.3]], [[5.0, 10.3]]],
+            [[[1.4, 10.4]], [[6.0, 10.4]]],
+            [[[1.5, 10.5]], [[7.0, 10.5]]],
+        )?;
+        let output = session.run(&[input])?;
+        let expected = orig
+            .to_shape((3, 1, 1, 2, 4))
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+            .to_owned();
+        tensor_assert_eq!(output[0], expected);
+        Ok(())
+    }
+
+    #[test]
+    fn matmul() -> TestResult {
+        let session = make_session("models/test/matmul.onnx")?;
+
+        let (input0, orig0) = make_tensor!(
+            f32,
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        )?;
+        let (input1, orig1) = make_tensor!(f32, [1.0, 2.0], [3.0, 4.0], [5.0, 6.0],)?;
+        let output = session.run(&[input0, input1])?;
+        tensor_assert_eq!(output[0], orig0.dot(&orig1));
         Ok(())
     }
 }
