@@ -284,8 +284,9 @@ impl<'a> GraphCompiler<'a> {
             Operator::ReLU => {
                 let input = &inputs[args::RELU_DATA];
                 let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                // TODO: why?
                 self.translator
-                    .gen_nested_loop_unaryop(input, res, ElementwiseOp::ReLU);
+                    .gen_single_loop_unaryop(input, res, ElementwiseOp::ReLU, true);
             }
             Operator::Reshape => {
                 let input = &inputs[args::RESHAPE_DATA].ptr;
@@ -501,12 +502,17 @@ impl ElementwiseOp {
                     data.tensor.ptr,
                     offset,
                 );
-                let zero = match data_ty {
+                let zero = match data_ty.lane_of() {
                     types::F32 => translator.builder.ins().f32const(0.0),
                     types::F64 => translator.builder.ins().f64const(0.0),
                     _ => panic!("unsupported type"),
                 };
-                translator.builder.ins().fmax(data, zero)
+                let zero = if data_ty.is_vector() {
+                    translator.builder.ins().splat(data_ty, zero)
+                } else {
+                    zero
+                };
+                translator.builder.ins().fmax(zero, data)
             }
             Self::Im2Col(data) => translator.builder.ins().load(
                 data.op_type,
@@ -540,6 +546,31 @@ impl ElementwiseOp {
             }
             Self::ReLU(data) | Self::Im2Col(data) => {
                 let add = data.tensor.ty.stride(nest) as i64 * data.op_type.bytes() as i64;
+                let data = params[PARAMS_DATA];
+                let data = translator.builder.ins().iadd_imm(data, add);
+                params[PARAMS_DATA] = data;
+            }
+        }
+    }
+
+    fn update_params_flatten(&self, params: &mut [Value], translator: &mut FunctionTranslator<'_>) {
+        match self {
+            Self::Add(operands) => {
+                let (lhs, rhs) = operands;
+                let l_add = lhs.op_type.bytes() as i64;
+                let r_add = rhs.op_type.bytes() as i64;
+
+                let lhs = params[PARAMS_LHS];
+                let rhs = params[PARAMS_RHS];
+
+                let lhs = translator.builder.ins().iadd_imm(lhs, l_add);
+                let rhs = translator.builder.ins().iadd_imm(rhs, r_add);
+
+                params[PARAMS_LHS] = lhs;
+                params[PARAMS_RHS] = rhs;
+            }
+            Self::ReLU(data) | Self::Im2Col(data) => {
+                let add = data.op_type.bytes() as i64;
                 let data = params[PARAMS_DATA];
                 let data = translator.builder.ins().iadd_imm(data, add);
                 params[PARAMS_DATA] = data;
@@ -857,10 +888,76 @@ impl<'a> FunctionTranslator<'a> {
         self.gen_nested_loop(&mut op, res, params.as_slice());
     }
 
-    pub fn gen_single_loop_binop<'b, T>(
+    pub fn gen_single_loop(
         &mut self,
-        lhs: &'b TensorPtr,
-        rhs: &'b TensorPtr,
+        res: TensorOperand,
+        op: &mut ElementwiseOp,
+        params: &[TypedValue],
+    ) {
+        let lane_count = res.lane_count() as i64;
+        let trip_count = res.tensor.ty.dims.size() as i64;
+        let main_trip_count = trip_count / lane_count;
+        let rem_trip_count = trip_count - main_trip_count * lane_count;
+
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let exit = self.builder.create_block();
+        for ty in params.iter().map(|p| p.ty) {
+            self.builder.append_block_param(header, ty);
+            if rem_trip_count != 0 {
+                self.builder.append_block_param(exit, ty);
+            }
+        }
+
+        let params: Vec<_> = params.iter().map(|p| p.value).collect();
+        self.builder.ins().jump(header, params.as_slice());
+
+        self.builder.switch_to_block(header);
+        let mut params = self.builder.block_params(header).to_owned();
+        let ind = params[PARAMS_INDUCTION];
+        let dst = params[PARAMS_DST];
+        self.builder.ins().brif(
+            ind,
+            body,
+            &[],
+            exit,
+            if rem_trip_count != 0 { &params } else { &[] },
+        );
+
+        self.builder.switch_to_block(body);
+        op.set_operands(&params);
+        let sum = op.generate(self, 0);
+        self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
+        let ind = self.builder.ins().iadd_imm(ind, -1);
+        let dst = self.builder.ins().iadd_imm(dst, res.op_type.bytes() as i64);
+        params[PARAMS_INDUCTION] = ind;
+        params[PARAMS_DST] = dst;
+        op.update_params_flatten(&mut params, self);
+        self.builder.ins().jump(header, params.as_slice());
+
+        self.builder.switch_to_block(exit);
+        if rem_trip_count != 0 {
+            op.change_lane_count(1);
+            op.set_operands(self.builder.block_params(exit));
+            let dst = self.builder.block_params(exit)[PARAMS_DST];
+            for i in 0..rem_trip_count {
+                let offset = i as i32 * res.op_type.lane_of().bytes() as i32;
+                let sum = op.generate(self, offset);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), sum, dst, offset);
+            }
+        }
+
+        self.builder.seal_block(header);
+        self.builder.seal_block(body);
+        self.builder.seal_block(exit);
+    }
+
+    pub fn gen_single_loop_binop<T>(
+        &mut self,
+        lhs: &TensorPtr,
+        rhs: &TensorPtr,
         res: &TensorPtr,
         op: T,
     ) where
@@ -868,75 +965,85 @@ impl<'a> FunctionTranslator<'a> {
     {
         let lhs = TensorOperand::new(lhs.clone(), &self.isa);
         let rhs = TensorOperand::new(rhs.clone(), &self.isa);
+        let res = TensorOperand::new(res.clone(), &self.isa);
         let lane_count = lhs.lane_count() as i64;
-        let trip_count = res.ty.dims.size() as i64;
+        let trip_count = res.tensor.ty.dims.size() as i64;
         let main_trip_count = trip_count / lane_count;
-        let rem_trip_count = trip_count - main_trip_count * lane_count;
 
         let ind = self.builder.ins().iconst(types::I64, main_trip_count);
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let exit = self.builder.create_block();
-        let lhs_bytes = lhs.op_type.bytes() as i64;
-        let rhs_bytes = rhs.op_type.bytes() as i64;
-        let dst_bytes = res.ty.value_bytes() as i64 * lane_count;
-        let lhs_ptr = lhs.tensor.ptr;
-        let rhs_ptr = rhs.tensor.ptr;
+        let params = {
+            let mut params = vec![
+                TypedValue {
+                    ty: types::I64,
+                    value: ind
+                };
+                4
+            ];
+            params[PARAMS_DST] = TypedValue {
+                ty: self.ptr_ty,
+                value: res.tensor.ptr,
+            };
+            params[PARAMS_LHS] = TypedValue {
+                ty: self.ptr_ty,
+                value: lhs.tensor.ptr,
+            };
+            params[PARAMS_RHS] = TypedValue {
+                ty: self.ptr_ty,
+                value: rhs.tensor.ptr,
+            };
+            params
+        };
+
         let mut op = op((lhs, rhs));
+        self.gen_single_loop(res, &mut op, params.as_slice());
+    }
 
-        for ty in op.operands().block_params_ty(self.ptr_ty) {
-            self.builder.append_block_param(header, ty);
-            self.builder.append_block_param(exit, ty);
-        }
+    pub fn gen_single_loop_unaryop<T>(
+        &mut self,
+        data: &TensorPtr,
+        res: &TensorPtr,
+        op: T,
+        scalar: bool,
+    ) where
+        T: Fn(UnaryOperand) -> ElementwiseOp,
+    {
+        let (data, res) = if !scalar {
+            (
+                TensorOperand::new(data.clone(), &self.isa),
+                TensorOperand::new(res.clone(), &self.isa),
+            )
+        } else {
+            (
+                TensorOperand::new_scalar(data.clone()),
+                TensorOperand::new_scalar(res.clone()),
+            )
+        };
+        let lane_count = res.lane_count() as i64;
+        let trip_count = res.tensor.ty.dims.size() as i64;
+        let main_trip_count = trip_count / lane_count;
 
+        let ind = self.builder.ins().iconst(types::I64, main_trip_count);
         let params = {
-            let mut params = vec![ind; 4];
-            params[PARAMS_DST] = res.ptr;
-            params[PARAMS_LHS] = lhs_ptr;
-            params[PARAMS_RHS] = rhs_ptr;
-            params[PARAMS_INDUCTION] = ind;
+            let mut params = vec![
+                TypedValue {
+                    ty: types::I64,
+                    value: ind
+                };
+                3
+            ];
+            params[PARAMS_DST] = TypedValue {
+                ty: self.ptr_ty,
+                value: res.tensor.ptr,
+            };
+            params[PARAMS_DATA] = TypedValue {
+                ty: self.ptr_ty,
+                value: data.tensor.ptr,
+            };
             params
         };
-        self.builder.ins().jump(header, params.as_slice());
-        self.builder.switch_to_block(header);
-        let params = self.builder.block_params(header).to_owned();
-        let ind = params[PARAMS_INDUCTION];
-        let lhs = params[PARAMS_LHS];
-        let rhs = params[PARAMS_RHS];
-        let dst = params[PARAMS_DST];
-        self.builder.ins().brif(ind, body, &[], exit, &params);
-        self.builder.switch_to_block(body);
-        self.builder.seal_block(body);
-        op.set_operands(&params);
-        let sum = op.generate(self, 0);
-        self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
-        let ind = self.builder.ins().iadd_imm(ind, -1);
-        let lhs = self.builder.ins().iadd_imm(lhs, lhs_bytes);
-        let rhs = self.builder.ins().iadd_imm(rhs, rhs_bytes);
-        let dst = self.builder.ins().iadd_imm(dst, dst_bytes);
-        let params = {
-            let mut params = vec![ind; 4];
-            params[PARAMS_DST] = dst;
-            params[PARAMS_LHS] = lhs;
-            params[PARAMS_RHS] = rhs;
-            params[PARAMS_INDUCTION] = ind;
-            params
-        };
-        self.builder.ins().jump(header, params.as_slice());
-        self.builder.seal_block(header);
 
-        self.builder.switch_to_block(exit);
-        self.builder.seal_block(exit);
-        op.change_lane_count(1);
-        op.set_operands(self.builder.block_params(exit));
-        let dst = self.builder.block_params(exit)[PARAMS_DST];
-        for i in 0..rem_trip_count {
-            let offset = i as i32 * res.ty.value_bytes() as i32;
-            let sum = op.generate(self, offset);
-            self.builder
-                .ins()
-                .store(MemFlags::trusted(), sum, dst, offset);
-        }
+        let mut op = op(data);
+        self.gen_single_loop(res, &mut op, params.as_slice());
     }
 
     fn gen_matmul_a_b(
