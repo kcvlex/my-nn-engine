@@ -28,12 +28,13 @@ impl Graph {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,
     pub name: String,
     pub op: Operator,
+    pub mark_as_deleted: bool,
 }
 
 #[derive(Default, Debug)]

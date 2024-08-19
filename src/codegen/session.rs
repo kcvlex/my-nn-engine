@@ -1,5 +1,6 @@
 use crate::codegen::jit::{CodegenError, GraphCompiler, JIT};
 use crate::model::{Graph, Model, ValueId};
+use crate::optimize::optimizer::Optimizer;
 use crate::tensor::tensor::{ResolvedTensorType, Tensor, TypeError};
 use itertools::izip;
 use std::path::Path;
@@ -40,9 +41,10 @@ fn get_argument_types(
 }
 
 impl Session {
-    pub fn new<P: AsRef<Path>>(p: P) -> Result<Self, SessionError> {
+    pub fn new<P: AsRef<Path>>(p: P, pass: Optimizer) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         model.graph.infer().map_err(SessionError::TypeError)?;
+        pass.run(&mut model.graph);
         let inputs_ty = get_argument_types(&model.graph, &model.graph.inputs)?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.outputs)?;
         let mut jit = JIT::default();
@@ -102,6 +104,7 @@ impl Session {
 #[cfg(test)]
 mod test {
     use crate::codegen::session::{Session, SessionError};
+    use crate::optimize::{matmul_a_tb::MatMulAxTB, optimizer::Optimizer};
     use crate::tensor::tensor::Tensor;
     use std::path::PathBuf;
 
@@ -119,7 +122,9 @@ mod test {
 
     fn make_session(path: &str) -> Result<Session, SessionError> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-        Session::new(path)
+        let mut optimizer = Optimizer::new(String::from("test pass"));
+        optimizer.passes.push(Box::new(MatMulAxTB::default()));
+        Session::new(path, optimizer)
     }
 
     type TestResult = Result<(), SessionError>;
@@ -223,6 +228,35 @@ mod test {
         let (input1, orig1) = make_tensor!(f32, [1.0, 2.0], [3.0, 4.0], [5.0, 6.0],)?;
         let output = session.run(&[input0, input1])?;
         tensor_assert_eq!(output[0], orig0.dot(&orig1));
+        Ok(())
+    }
+
+    #[test]
+    fn matmul_a_x_tb() -> TestResult {
+        let session = make_session("models/test/matmul_a_x_tb.onnx")?;
+
+        // (5 x 7)
+        let (input0, orig0) = make_tensor!(
+            f32,
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+            [15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0],
+            [22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0],
+            [29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0],
+        )?;
+
+        // (6 x 7)
+        let (input1, orig1) = make_tensor!(
+            f32,
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+            [15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0],
+            [22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0],
+            [29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0],
+            [36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0],
+        )?;
+        let output = session.run(&[input0, input1])?;
+        tensor_assert_eq!(output[0], orig0.dot(&orig1.t()));
         Ok(())
     }
 }

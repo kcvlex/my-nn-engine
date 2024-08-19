@@ -5,6 +5,24 @@ use crate::tensor::{
     tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},
 };
 
+struct ConvShape<'a> {
+    kernel_shape: &'a [usize],
+    input_shape: &'a [usize],
+    pad: &'a OptionalVec<(usize, usize)>,
+    dilations: &'a OptionalVec<usize>,
+}
+
+impl<'a> ConvShape<'a> {
+    fn padded_input_size(&self, i: usize) -> usize {
+        self.input_shape[i] + self.pad[i].0 + self.pad[i].1
+    }
+
+    // Number of elements between first and last element (inclusive)
+    fn distance_per_conv(&self, i: usize) -> usize {
+        self.dilations[i] * (self.kernel_shape[i] - 1) + 1
+    }
+}
+
 impl Graph {
     fn infer_node_output(&self, node: &Node) -> Result<Vec<ResolvedTensorType>, TypeError> {
         macro_rules! cond_error {
@@ -27,10 +45,6 @@ impl Graph {
             .collect::<Option<Vec<_>>>()
             .ok_or(TypeError::UnresolvedInput)?;
 
-        // Number of elements between first and last element (inclusive)
-        let elements_per_conv = |kernel: usize, dilation: usize| dilation * (kernel - 1) + 1;
-        let padded_input = |input: usize, pad: (usize, usize)| input + pad.0 + pad.1;
-
         let mut res: Vec<ResolvedTensorType> = Vec::new();
         match &node.op {
             Operator::Add => {
@@ -43,6 +57,10 @@ impl Graph {
             }
             Operator::ReLU => {
                 res.push(inputs[args::RELU_DATA].clone());
+            }
+            Operator::Transpose => {
+                let data = &inputs[args::TRANSPOSE_DATA];
+                res.push(data.transpose());
             }
             Operator::Reshape => {
                 let a = &inputs[args::RESHAPE_DATA];
@@ -95,15 +113,17 @@ impl Graph {
                 let mut dims = Vec::with_capacity(ndim + 2);
                 dims.push(batch_size);
                 dims.push(feature_map_size);
+                let conv_shape = pad.map(|pad| ConvShape {
+                    kernel_shape,
+                    input_shape: input,
+                    pad,
+                    dilations,
+                });
                 for i in 0..ndim {
                     let stride = strides[i];
-                    let dim = if let Some(pad) = &pad {
-                        let dilation = dilations[i];
-                        let pad = pad[i];
-
+                    let dim = if let Some(ref conv_shape) = &conv_shape {
                         let (q, rem) = num_integer::div_rem(
-                            padded_input(input[i], pad)
-                                - elements_per_conv(kernel_shape[i], dilation),
+                            conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i),
                             stride,
                         );
                         if rem != 0 {
@@ -176,11 +196,15 @@ impl Graph {
                         ))
                     }
                 };
+                let conv_shape = ConvShape {
+                    kernel_shape: &kernel_shape[..],
+                    input_shape: input,
+                    pad,
+                    dilations,
+                };
                 for i in 0..input.len() {
                     let stride = strides[i];
-                    let dilation = dilations[i];
-                    let kernel = kernel_shape[i];
-                    let num = padded_input(input[i], pad[i]) - elements_per_conv(kernel, dilation);
+                    let num = conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i);
                     let dim = if !ceil_mode {
                         // Floor div
                         num / stride + 1
@@ -198,6 +222,9 @@ impl Graph {
                     ResolvedTensorDims::new(dims),
                 ));
             }
+
+            // Custom
+            Operator::MatMulRightTransposed => unreachable!(),
         }
         Ok(res)
     }

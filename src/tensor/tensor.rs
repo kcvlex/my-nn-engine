@@ -109,7 +109,7 @@ pub struct ResolvedTensorType {
 
 impl ResolvedTensorType {
     pub fn new(elem_type: DataType, dims: ResolvedTensorDims) -> Self {
-        let stride = calc_stride_reshape(&dims);
+        let stride = calc_stride(&dims);
         Self {
             elem_type,
             dims,
@@ -138,6 +138,17 @@ impl ResolvedTensorType {
 
     pub fn is_broadcast_required(&self, target: &ResolvedTensorDims) -> bool {
         !(self.is_fully_expanded() && self.dims == *target)
+    }
+
+    pub fn transpose(&self) -> Self {
+        let elem_type = self.elem_type.clone();
+        let dims = self.dims.transpose();
+        let stride = calc_stride(&dims);
+        Self {
+            elem_type,
+            dims,
+            stride,
+        }
     }
 }
 
@@ -175,7 +186,7 @@ fn calc_stride_broadcast(
     ResolvedTensorDims::new(stride)
 }
 
-fn calc_stride_reshape(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
+fn calc_stride(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
     let mut acc = 1;
     let mut stride = vec![0; dims.ndim()];
     for i in (0..dims.ndim()).rev() {

@@ -106,6 +106,24 @@ struct TypedValue {
     value: Value,
 }
 
+// (M, K) * (K, N) = (M, N)
+#[derive(Debug, Clone)]
+struct MatMulShape {
+    m: usize,
+    k: usize,
+    n: usize,
+}
+
+impl MatMulShape {
+    fn new(lhs: &ResolvedTensorType, rhs: &ResolvedTensorType) -> Self {
+        Self {
+            m: lhs.dims[0],
+            k: lhs.dims[1],
+            n: rhs.dims[1],
+        }
+    }
+}
+
 struct FunctionTranslator<'a> {
     builder: FunctionBuilder<'a>,
     module: &'a mut JITModule,
@@ -241,7 +259,7 @@ impl<'a> GraphCompiler<'a> {
                     let rhs = &inputs[args::ADD_RHS];
                     let res = &self.allocate_or_get_tensor(node.outputs[0])?;
                     let (lhs, casted) = if lhs.ty.is_broadcast_required(&res.ty.dims) {
-                        let lhs = self.translator.gen_im2col(res, lhs);
+                        let lhs = self.translator.gen_broadcast(res, lhs);
                         (lhs, true)
                     } else {
                         (lhs.clone(), false)
@@ -254,7 +272,7 @@ impl<'a> GraphCompiler<'a> {
                             let ptr = self.translator.allocate(ty.mem_size());
                             TensorPtr { ptr, ty }
                         };
-                        self.translator.gen_im2col(&dst, rhs)
+                        self.translator.gen_broadcast(&dst, rhs)
                     } else {
                         rhs.clone()
                     };
@@ -279,18 +297,35 @@ impl<'a> GraphCompiler<'a> {
                 let rhs = &inputs[args::MATMUL_RHS];
                 if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
                     let res = &self.allocate_or_get_tensor(node.outputs[0])?;
-                    self.translator.gen_matmul(
+                    let shape = MatMulShape::new(&lhs.ty, &rhs.ty);
+                    self.translator.gen_matmul_a_b(
                         res.ty.value_type(),
                         res.ptr,
                         lhs.ptr,
                         rhs.ptr,
-                        [res.ty.dims[0], res.ty.dims[1], lhs.ty.dims[1]],
+                        &shape,
                     );
                 } else {
                     todo!("MatMul");
                 }
             }
-            _ => unimplemented!(),
+            Operator::MatMulRightTransposed => {
+                let lhs = &inputs[args::MATMUL_LHS];
+                let rhs = &inputs[args::MATMUL_RHS];
+                if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
+                    let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                    let shape = MatMulShape::new(&lhs.ty, &rhs.ty.transpose());
+                    let ty = TensorOperand::dynamic_vector_op_type(
+                        res.ty.value_type(),
+                        &self.translator.isa,
+                    );
+                    self.translator
+                        .gen_matmul_a_tb(ty, res.ptr, lhs.ptr, rhs.ptr, &shape);
+                } else {
+                    todo!("MatMulRightTransposed");
+                }
+            }
+            Operator::Conv(_) | Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
         }
         Ok(())
     }
@@ -774,7 +809,7 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.seal_block(exit);
     }
 
-    pub fn gen_im2col(&mut self, dst: &TensorPtr, src: &TensorPtr) -> TensorPtr {
+    pub fn gen_broadcast(&mut self, dst: &TensorPtr, src: &TensorPtr) -> TensorPtr {
         let mut src = src.clone();
         src.ty = src.ty.broadcast(&dst.ty.dims);
         self.gen_nested_loop_unaryop(&src, dst, ElementwiseOp::Im2Col);
@@ -904,7 +939,14 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    fn gen_matmul(&mut self, ty: Type, dst: Value, lhs: Value, rhs: Value, dims: [usize; 3]) {
+    fn gen_matmul_a_b(
+        &mut self,
+        ty: Type,
+        dst: Value,
+        lhs: Value,
+        rhs: Value,
+        shape: &MatMulShape,
+    ) {
         let block_i0 = self.builder.create_block();
         let block_i1 = self.builder.create_block();
         let block_j0 = self.builder.create_block();
@@ -919,7 +961,11 @@ impl<'a> FunctionTranslator<'a> {
         const RHS: usize = 3;
         const ACC: usize = 4;
 
-        let [for_i, for_j, for_k] = dims;
+        let &MatMulShape {
+            m: for_i,
+            n: for_j,
+            k: for_k,
+        } = shape;
 
         for block in [block_i0, block_j0, block_k0] {
             self.builder.append_block_param(block, types::I64);
@@ -987,8 +1033,7 @@ impl<'a> FunctionTranslator<'a> {
             let acc = {
                 let lhs = self.builder.ins().load(ty, MemFlags::trusted(), lhs, 0);
                 let rhs = self.builder.ins().load(ty, MemFlags::trusted(), rhs, 0);
-                let mul = self.builder.ins().fmul(lhs, rhs);
-                self.builder.ins().fadd(acc, mul)
+                self.builder.ins().fma(lhs, rhs, acc)
             };
             let ind_k = self.builder.ins().iadd_imm(ind_k, -1);
             let lhs = self.builder.ins().iadd_imm(lhs, ty.bytes() as i64);
@@ -1054,6 +1099,207 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.switch_to_block(block_exit);
         for block in [
             block_i0, block_i1, block_j0, block_j1, block_k0, block_k1, block_exit,
+        ] {
+            self.builder.seal_block(block);
+        }
+    }
+
+    fn gen_matmul_a_tb(
+        &mut self,
+        ty: Type,
+        dst: Value,
+        lhs: Value,
+        rhs: Value,
+        shape: &MatMulShape,
+    ) {
+        let block_i0 = self.builder.create_block();
+        let block_i1 = self.builder.create_block();
+        let block_j0 = self.builder.create_block();
+        let block_j1 = self.builder.create_block();
+        let block_k0 = self.builder.create_block();
+        let block_k1 = self.builder.create_block();
+        let block_acc = self.builder.create_block();
+        let block_exit = self.builder.create_block();
+
+        let &MatMulShape {
+            m: for_i,
+            n: for_j,
+            k: for_k,
+        } = shape;
+        const INDUCTION: usize = 0;
+        const DST: usize = 1;
+        const LHS: usize = 2;
+        const RHS: usize = 3;
+        const ACC: usize = 4;
+
+        let lane_count = ty.lane_count() as usize;
+        let main_trip_count = for_k / lane_count;
+        let rem_trip_count = for_k - main_trip_count * lane_count;
+        let for_k = main_trip_count;
+        let zero = match ty.lane_type() {
+            types::F32 => self.builder.ins().f32const(0.0),
+            types::F64 => self.builder.ins().f64const(0.0),
+            _ => panic!("unsupported type"),
+        };
+
+        for block in [block_i0, block_j0, block_k0] {
+            self.builder.append_block_param(block, types::I64);
+            self.builder.append_block_param(block, self.ptr_ty);
+            self.builder.append_block_param(block, self.ptr_ty);
+            self.builder.append_block_param(block, self.ptr_ty);
+        }
+        self.builder.append_block_param(block_k0, ty);
+        self.builder.append_block_param(block_acc, ty);
+        self.builder.append_block_param(block_j1, ty.lane_type());
+
+        let ind_i = self.builder.ins().iconst(types::I64, for_i as i64);
+        let params = {
+            let mut params = vec![ind_i; 4];
+            params[DST] = dst;
+            params[LHS] = lhs;
+            params[RHS] = rhs;
+            params
+        };
+        self.builder.ins().jump(block_i0, params.as_slice());
+
+        {
+            self.builder.switch_to_block(block_i0);
+            let ind_i = self.builder.block_params(block_i0)[INDUCTION];
+            let ind_j = self.builder.ins().iconst(types::I64, for_j as i64);
+            let mut params_j = self.builder.block_params(block_i0).to_vec();
+            params_j[INDUCTION] = ind_j;
+            self.builder
+                .ins()
+                .brif(ind_i, block_j0, params_j.as_slice(), block_exit, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_j0);
+            let ind_j = self.builder.block_params(block_j0)[INDUCTION];
+            let ind_k = self.builder.ins().iconst(types::I64, for_k as i64);
+            let acc = self.builder.ins().splat(ty, zero);
+            let mut params_k = self.builder.block_params(block_j0).to_vec();
+            params_k[INDUCTION] = ind_k;
+            params_k.push(acc);
+            self.builder
+                .ins()
+                .brif(ind_j, block_k0, params_k.as_slice(), block_i1, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_k0);
+            let ind_k = self.builder.block_params(block_k0)[INDUCTION];
+            let acc = self.builder.block_params(block_k0)[ACC];
+            self.builder
+                .ins()
+                .brif(ind_k, block_k1, &[], block_acc, &[acc]);
+        }
+
+        {
+            self.builder.switch_to_block(block_k1);
+            let lhs = self.builder.block_params(block_k0)[LHS];
+            let rhs = self.builder.block_params(block_k0)[RHS];
+            let acc = self.builder.block_params(block_k0)[ACC];
+            let ind_k = self.builder.block_params(block_k0)[INDUCTION];
+
+            let acc = {
+                let lhs = self.builder.ins().load(ty, MemFlags::trusted(), lhs, 0);
+                let rhs = self.builder.ins().load(ty, MemFlags::trusted(), rhs, 0);
+                self.builder.ins().fma(lhs, rhs, acc)
+            };
+            let ind_k = self.builder.ins().iadd_imm(ind_k, -1);
+            let lhs = self.builder.ins().iadd_imm(lhs, ty.bytes() as i64);
+            let rhs = self.builder.ins().iadd_imm(rhs, ty.bytes() as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_k0).to_vec();
+                params[INDUCTION] = ind_k;
+                params[LHS] = lhs;
+                params[RHS] = rhs;
+                params[ACC] = acc;
+                params
+            };
+            self.builder.ins().jump(block_k0, params.as_slice());
+        }
+
+        // NOTE: The addition order isn't preserved
+        {
+            self.builder.switch_to_block(block_acc);
+            let acc_v = self.builder.block_params(block_acc)[0];
+            let mut acc = self.builder.ins().extractlane(acc_v, 0);
+            for i in 1..lane_count {
+                let tmp = self.builder.ins().extractlane(acc_v, i as u8);
+                acc = self.builder.ins().fadd(acc, tmp);
+            }
+            for i in 0..rem_trip_count {
+                let offset = i as i32 * ty.lane_type().bytes() as i32;
+                let lhs = self.builder.block_params(block_k0)[LHS];
+                let rhs = self.builder.block_params(block_k0)[RHS];
+                let lhs = self
+                    .builder
+                    .ins()
+                    .load(ty.lane_type(), MemFlags::trusted(), lhs, offset);
+                let rhs = self
+                    .builder
+                    .ins()
+                    .load(ty.lane_type(), MemFlags::trusted(), rhs, offset);
+                acc = self.builder.ins().fma(lhs, rhs, acc);
+            }
+            self.builder.ins().jump(block_j1, &[acc]);
+        }
+
+        {
+            self.builder.switch_to_block(block_j1);
+            let acc = self.builder.block_params(block_j1)[0];
+            let rhs = self.builder.block_params(block_j0)[RHS];
+            let dst = self.builder.block_params(block_j0)[DST];
+            let ind_j = self.builder.block_params(block_j0)[INDUCTION];
+            self.builder.ins().store(MemFlags::trusted(), acc, dst, 0);
+            let ind_j = self.builder.ins().iadd_imm(ind_j, -1);
+            let rhs = self
+                .builder
+                .ins()
+                .iadd_imm(rhs, ty.lane_type().bytes() as i64 * shape.k as i64);
+            let dst = self
+                .builder
+                .ins()
+                .iadd_imm(dst, ty.lane_type().bytes() as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_j0).to_vec();
+                params[INDUCTION] = ind_j;
+                params[RHS] = rhs;
+                params[DST] = dst;
+                params
+            };
+            self.builder.ins().jump(block_j0, params.as_slice());
+        }
+
+        {
+            self.builder.switch_to_block(block_i1);
+            let ind_i = self.builder.block_params(block_i0)[INDUCTION];
+            let lhs = self.builder.block_params(block_i0)[LHS];
+            let dst = self.builder.block_params(block_i0)[DST];
+            let ind_i = self.builder.ins().iadd_imm(ind_i, -1);
+            let lhs = self
+                .builder
+                .ins()
+                .iadd_imm(lhs, ty.lane_type().bytes() as i64 * shape.k as i64);
+            let dst = self
+                .builder
+                .ins()
+                .iadd_imm(dst, ty.lane_type().bytes() as i64 * for_j as i64);
+            let params = {
+                let mut params = self.builder.block_params(block_i0).to_vec();
+                params[INDUCTION] = ind_i;
+                params[LHS] = lhs;
+                params[DST] = dst;
+                params
+            };
+            self.builder.ins().jump(block_i0, params.as_slice());
+        }
+
+        self.builder.switch_to_block(block_exit);
+        for block in [
+            block_i0, block_i1, block_j0, block_j1, block_k0, block_k1, block_acc, block_exit,
         ] {
             self.builder.seal_block(block);
         }

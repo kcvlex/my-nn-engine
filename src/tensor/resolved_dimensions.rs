@@ -71,6 +71,12 @@ impl ResolvedTensorDims {
     pub fn last(&self) -> Option<&usize> {
         self.0.last()
     }
+
+    pub fn transpose(&self) -> Self {
+        let mut res = self.clone();
+        res.0.reverse();
+        res
+    }
 }
 
 impl<Idx> Index<Idx> for ResolvedTensorDims

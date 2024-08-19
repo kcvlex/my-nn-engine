@@ -173,6 +173,7 @@ impl GraphLoader {
                 inputs,
                 outputs,
                 op,
+                mark_as_deleted: false,
             });
         }
         Ok(res)
@@ -326,6 +327,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Relu" => Ok(Operator::ReLU),
         "MatMul" => Ok(Operator::MatMul),
         "Reshape" => Ok(Operator::Reshape),
+        "Transpose" => Ok(Operator::Transpose),
         "Conv" => {
             let dilations = attributes
                 .get("dilations")
