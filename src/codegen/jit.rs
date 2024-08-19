@@ -284,9 +284,10 @@ impl<'a> GraphCompiler<'a> {
             Operator::ReLU => {
                 let input = &inputs[args::RELU_DATA];
                 let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                // self.translator
+                //     .gen_nested_loop_unaryop(input, res, ElementwiseOp::ReLU);
                 // TODO: why?
-                self.translator
-                    .gen_single_loop_unaryop(input, res, ElementwiseOp::ReLU, true);
+                self.translator.gen_single_loop_unaryop(input, res, ElementwiseOp::ReLU, true);
             }
             Operator::Reshape => {
                 let input = &inputs[args::RESHAPE_DATA].ptr;
@@ -326,7 +327,9 @@ impl<'a> GraphCompiler<'a> {
                     todo!("MatMulRightTransposed");
                 }
             }
-            Operator::Conv(_) | Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
+            Operator::Conv(ref conv) => {
+            }
+            Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
         }
         Ok(())
     }
@@ -436,14 +439,14 @@ impl<'a> ElementwiseOperands<'a> {
 enum ElementwiseOp {
     Add(BinaryOperands),
     ReLU(UnaryOperand),
-    Im2Col(UnaryOperand),
+    Broadcast(UnaryOperand),
 }
 
 impl ElementwiseOp {
     fn operands(&self) -> ElementwiseOperands {
         match self {
             Self::Add(operands) => ElementwiseOperands::Binary(operands),
-            Self::ReLU(operand) | Self::Im2Col(operand) => ElementwiseOperands::Unary(operand),
+            Self::ReLU(operand) | Self::Broadcast(operand) => ElementwiseOperands::Unary(operand),
         }
     }
 
@@ -455,7 +458,7 @@ impl ElementwiseOp {
                 operands.0.tensor.ptr = lhs;
                 operands.1.tensor.ptr = rhs;
             }
-            Self::ReLU(operand) | Self::Im2Col(operand) => {
+            Self::ReLU(operand) | Self::Broadcast(operand) => {
                 let data = params[PARAMS_DATA];
                 operand.tensor.ptr = data;
             }
@@ -468,7 +471,7 @@ impl ElementwiseOp {
                 operands.0.change_lane_count(lane_count);
                 operands.1.change_lane_count(lane_count);
             }
-            Self::ReLU(operand) | Self::Im2Col(operand) => {
+            Self::ReLU(operand) | Self::Broadcast(operand) => {
                 operand.change_lane_count(lane_count);
             }
         }
@@ -494,6 +497,7 @@ impl ElementwiseOp {
                 translator.builder.ins().fadd(lhs, rhs)
             }
             Self::ReLU(data) => {
+                // TODO: Panic when vectorized. Why?
                 // TODO: type check
                 let data_ty = data.op_type;
                 let data = translator.builder.ins().load(
@@ -514,7 +518,7 @@ impl ElementwiseOp {
                 };
                 translator.builder.ins().fmax(zero, data)
             }
-            Self::Im2Col(data) => translator.builder.ins().load(
+            Self::Broadcast(data) => translator.builder.ins().load(
                 data.op_type,
                 MemFlags::trusted(),
                 data.tensor.ptr,
@@ -544,7 +548,7 @@ impl ElementwiseOp {
                 params[PARAMS_LHS] = lhs;
                 params[PARAMS_RHS] = rhs;
             }
-            Self::ReLU(data) | Self::Im2Col(data) => {
+            Self::ReLU(data) | Self::Broadcast(data) => {
                 let add = data.tensor.ty.stride(nest) as i64 * data.op_type.bytes() as i64;
                 let data = params[PARAMS_DATA];
                 let data = translator.builder.ins().iadd_imm(data, add);
@@ -552,8 +556,12 @@ impl ElementwiseOp {
             }
         }
     }
-
-    fn update_params_flatten(&self, params: &mut [Value], translator: &mut FunctionTranslator<'_>) {
+    
+    fn update_params_flatten(
+        &self,
+        params: &mut [Value],
+        translator: &mut FunctionTranslator<'_>,
+    ) {
         match self {
             Self::Add(operands) => {
                 let (lhs, rhs) = operands;
@@ -569,7 +577,7 @@ impl ElementwiseOp {
                 params[PARAMS_LHS] = lhs;
                 params[PARAMS_RHS] = rhs;
             }
-            Self::ReLU(data) | Self::Im2Col(data) => {
+            Self::ReLU(data) | Self::Broadcast(data) => {
                 let add = data.op_type.bytes() as i64;
                 let data = params[PARAMS_DATA];
                 let data = translator.builder.ins().iadd_imm(data, add);
@@ -843,7 +851,7 @@ impl<'a> FunctionTranslator<'a> {
     pub fn gen_broadcast(&mut self, dst: &TensorPtr, src: &TensorPtr) -> TensorPtr {
         let mut src = src.clone();
         src.ty = src.ty.broadcast(&dst.ty.dims);
-        self.gen_nested_loop_unaryop(&src, dst, ElementwiseOp::Im2Col);
+        self.gen_nested_loop_unaryop(&src, dst, ElementwiseOp::Broadcast);
         dst.clone()
     }
 
@@ -908,7 +916,7 @@ impl<'a> FunctionTranslator<'a> {
                 self.builder.append_block_param(exit, ty);
             }
         }
-
+        
         let params: Vec<_> = params.iter().map(|p| p.value).collect();
         self.builder.ins().jump(header, params.as_slice());
 
@@ -916,13 +924,8 @@ impl<'a> FunctionTranslator<'a> {
         let mut params = self.builder.block_params(header).to_owned();
         let ind = params[PARAMS_INDUCTION];
         let dst = params[PARAMS_DST];
-        self.builder.ins().brif(
-            ind,
-            body,
-            &[],
-            exit,
-            if rem_trip_count != 0 { &params } else { &[] },
-        );
+        self.builder.ins().brif(ind, body, &[], exit, 
+            if rem_trip_count != 0 { &params } else { &[] });
 
         self.builder.switch_to_block(body);
         op.set_operands(&params);
@@ -972,24 +975,18 @@ impl<'a> FunctionTranslator<'a> {
 
         let ind = self.builder.ins().iconst(types::I64, main_trip_count);
         let params = {
-            let mut params = vec![
-                TypedValue {
-                    ty: types::I64,
-                    value: ind
-                };
-                4
-            ];
+            let mut params = vec![TypedValue { ty: types::I64, value: ind }; 4];
             params[PARAMS_DST] = TypedValue {
                 ty: self.ptr_ty,
-                value: res.tensor.ptr,
+                value: res.tensor.ptr
             };
             params[PARAMS_LHS] = TypedValue {
                 ty: self.ptr_ty,
-                value: lhs.tensor.ptr,
+                value: lhs.tensor.ptr
             };
             params[PARAMS_RHS] = TypedValue {
                 ty: self.ptr_ty,
-                value: rhs.tensor.ptr,
+                value: rhs.tensor.ptr
             };
             params
         };
@@ -1004,19 +1001,13 @@ impl<'a> FunctionTranslator<'a> {
         res: &TensorPtr,
         op: T,
         scalar: bool,
-    ) where
-        T: Fn(UnaryOperand) -> ElementwiseOp,
-    {
+    ) where T: Fn(UnaryOperand) -> ElementwiseOp {
         let (data, res) = if !scalar {
-            (
-                TensorOperand::new(data.clone(), &self.isa),
-                TensorOperand::new(res.clone(), &self.isa),
-            )
+        (TensorOperand::new(data.clone(), &self.isa),
+         TensorOperand::new(res.clone(), &self.isa))
         } else {
-            (
-                TensorOperand::new_scalar(data.clone()),
-                TensorOperand::new_scalar(res.clone()),
-            )
+        (TensorOperand::new_scalar(data.clone()),
+         TensorOperand::new_scalar(res.clone()))
         };
         let lane_count = res.lane_count() as i64;
         let trip_count = res.tensor.ty.dims.size() as i64;
@@ -1024,20 +1015,14 @@ impl<'a> FunctionTranslator<'a> {
 
         let ind = self.builder.ins().iconst(types::I64, main_trip_count);
         let params = {
-            let mut params = vec![
-                TypedValue {
-                    ty: types::I64,
-                    value: ind
-                };
-                3
-            ];
+            let mut params = vec![TypedValue { ty: types::I64, value: ind }; 3];
             params[PARAMS_DST] = TypedValue {
                 ty: self.ptr_ty,
-                value: res.tensor.ptr,
+                value: res.tensor.ptr
             };
             params[PARAMS_DATA] = TypedValue {
                 ty: self.ptr_ty,
-                value: data.tensor.ptr,
+                value: data.tensor.ptr
             };
             params
         };
