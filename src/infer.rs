@@ -77,7 +77,7 @@ impl Graph {
                     })??;
 
                 cond_error!(a.dims.size() != shape.size());
-                res.push(ResolvedTensorType::new(a.elem_type.clone(), shape));
+                res.push(ResolvedTensorType::new(a.elem_type, shape));
             }
             Operator::Conv(Conv {
                 pad,

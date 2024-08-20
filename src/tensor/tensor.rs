@@ -11,7 +11,7 @@ pub enum TypeError {
     UnresolvedInput,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum DataType {
     I64,
     F32,
@@ -122,7 +122,7 @@ impl ResolvedTensorType {
     }
 
     pub fn broadcast(&self, target: &ResolvedTensorDims) -> Self {
-        let elem_type = self.elem_type.clone();
+        let elem_type = self.elem_type;
         let dims = target.clone();
         let stride = calc_stride_broadcast(&self.dims, target);
         Self {
@@ -141,7 +141,7 @@ impl ResolvedTensorType {
     }
 
     pub fn transpose(&self) -> Self {
-        let elem_type = self.elem_type.clone();
+        let elem_type = self.elem_type;
         let dims = self.dims.transpose();
         let stride = calc_stride(&dims);
         Self {
@@ -149,6 +149,16 @@ impl ResolvedTensorType {
             dims,
             stride,
         }
+    }
+
+    pub fn drop_head(&mut self) {
+        self.dims = self.dims[1..].to_vec().into();
+        self.stride = self.stride[1..].to_vec().into();
+    }
+
+    pub fn reshape(&self, dims: ResolvedTensorDims) -> Self {
+        assert!(dims.size() == self.dims.size());
+        Self::new(self.elem_type, dims)
     }
 }
 
