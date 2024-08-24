@@ -322,7 +322,7 @@ impl<'a> GraphCompiler<'a> {
                 let rhs = &inputs[args::MATMUL_RHS];
                 if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
                     let res = &self.allocate_or_get_tensor(node.outputs[0])?;
-                    let shape = MatMulShape::new(&lhs.ty, &rhs.ty.transpose());
+                    let shape = MatMulShape::new(&lhs.ty, &rhs.ty.transpose(&[1, 0]));
                     let ty = TensorOperand::dynamic_vector_op_type(
                         res.ty.value_type(),
                         &self.translator.isa,
@@ -356,12 +356,13 @@ impl<'a> GraphCompiler<'a> {
                     kernel.ty.elem_type,
                     ResolvedTensorDims::new(vec![one_kernel_size, feature_map_count]),
                 )
-                .transpose();
+                .transpose(&[1, 0]);
                 let buffer = self.translator.allocate_tensor(ResolvedTensorType::new(
                     input.ty.elem_type,
                     ResolvedTensorDims::new(vec![result_size, feature_map_count]),
                 ));
-                let shape = MatMulShape::new(&im2col_input_ty, &im2col_kernel_ty.transpose());
+                let shape =
+                    MatMulShape::new(&im2col_input_ty, &im2col_kernel_ty.transpose(&[1, 0]));
                 let im2col_input = self.translator.allocate_tensor(im2col_input_ty);
 
                 let kernel_shape = kernel.ty.dims[2..].to_vec().into();
@@ -412,7 +413,7 @@ impl<'a> GraphCompiler<'a> {
                     self.translator.call_memcpy(dst.ptr, src_ptr, len);
                 }
             }
-            Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
+            Operator::MaxPool(_) | Operator::Transpose(_) => unimplemented!(),
 
             Operator::Input(_) | Operator::Output(_) => (), // nothing to do
         }

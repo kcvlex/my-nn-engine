@@ -156,7 +156,7 @@ impl GraphModifier {
         }
         self.makred_as_deleted.insert(node_id);
         for value in graph.nodes[node_id].inputs.iter() {
-            if let Some((defined, _)) = self.value2defined.get(&value).cloned() {
+            if let Some((defined, _)) = self.value2defined.get(value).cloned() {
                 let deg = self.outdegrees.get_mut(&defined).unwrap();
                 *deg -= 1;
                 if *deg == 0 {

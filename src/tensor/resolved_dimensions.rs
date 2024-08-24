@@ -72,9 +72,11 @@ impl ResolvedTensorDims {
         self.0.last()
     }
 
-    pub fn transpose(&self) -> Self {
+    pub fn transpose(&self, perms: &[usize]) -> Self {
         let mut res = self.clone();
-        res.0.reverse();
+        for i in 0..perms.len() {
+            res.0[i] = self.0[perms[i]];
+        }
         res
     }
 }

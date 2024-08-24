@@ -140,9 +140,9 @@ impl ResolvedTensorType {
         !(self.is_fully_expanded() && self.dims == *target)
     }
 
-    pub fn transpose(&self) -> Self {
+    pub fn transpose(&self, perms: &[usize]) -> Self {
         let elem_type = self.elem_type;
-        let dims = self.dims.transpose();
+        let dims = self.dims.transpose(perms);
         let stride = calc_stride(&dims);
         Self {
             elem_type,

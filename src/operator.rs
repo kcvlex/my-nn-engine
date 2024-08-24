@@ -11,7 +11,7 @@ pub enum Operator {
     MatMul,
     MaxPool(MaxPool),
     Reshape,
-    Transpose,
+    Transpose(Vec<usize>),
 
     // Custom
     MatMulRightTransposed,
@@ -19,34 +19,6 @@ pub enum Operator {
     // Dummy
     Input(ValueId),
     Output(ValueId),
-}
-
-impl PartialEq for Operator {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Operator::Add, Operator::Add)
-            | (Operator::ReLU, Operator::ReLU)
-            | (Operator::MatMul, Operator::MatMul)
-            | (Operator::Reshape, Operator::Reshape)
-            | (Operator::Transpose, Operator::Transpose)
-            | (Operator::MatMulRightTransposed, Operator::MatMulRightTransposed) => true,
-
-            (Operator::Conv(_), _)
-            | (_, Operator::Conv(_))
-            | (Operator::MaxPool(_), _)
-            | (_, Operator::MaxPool(_))
-            | (Operator::Input(_), _)
-            | (_, Operator::Input(_))
-            | (Operator::Output(_), _)
-            | (_, Operator::Output(_))
-            | (Operator::Add, _)
-            | (Operator::ReLU, _)
-            | (Operator::MatMul, _)
-            | (Operator::Reshape, _)
-            | (Operator::Transpose, _)
-            | (Operator::MatMulRightTransposed, _) => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +77,7 @@ impl Operator {
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
             Operator::Reshape => "Reshape",
-            Operator::Transpose => "Transpose",
+            Operator::Transpose(_) => "Transpose",
 
             // Custom
             Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",

@@ -57,7 +57,7 @@ impl Graph {
             if to_delete && v.1.is_dummy() {
                 panic!("cannot delete input/output node");
             }
-            !to_delete
+            !to_delete && !v.1.is_dummy()
         }) {
             nodes.alloc(node.clone());
         }

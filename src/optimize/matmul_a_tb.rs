@@ -2,41 +2,6 @@ use crate::model::{Graph, Node, NodeId};
 use crate::operator::*;
 use crate::optimize::optimizer;
 
-fn find_all_patterns(
-    graph: &Graph,
-    pattern: &[(Operator, usize)],
-    modifier: &optimizer::GraphModifier,
-) -> Vec<(NodeId, NodeId)> {
-    let mut vec = Vec::new();
-    for (index, _) in graph.nodes.iter() {
-        let mut cur = Some(index);
-        let mut prev = None;
-        let mut found = true;
-        for pat in pattern.iter().rev() {
-            let index = if let Some(x) = cur {
-                x
-            } else {
-                found = false;
-                break;
-            };
-            let (op, value_idx) = pat;
-            let node = &graph.nodes[index];
-            if node.op != *op {
-                found = false;
-                break;
-            }
-
-            prev = cur;
-            cur = modifier.defined_node(node.inputs[*value_idx]).map(|x| x.0);
-        }
-
-        if found {
-            vec.push((prev.unwrap(), index));
-        }
-    }
-    vec
-}
-
 #[derive(Default)]
 pub struct MatMulAxTB {}
 
@@ -46,16 +11,27 @@ impl optimizer::Pass for MatMulAxTB {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut optimizer::GraphModifier) {
-        let patterns = find_all_patterns(
-            graph,
-            &[
-                (Operator::Transpose, args::TRANSPOSE_DATA),
-                (Operator::MatMul, args::MATMUL_RHS),
-            ],
-            modifier,
-        );
+        #[derive(Debug)]
+        struct Pattern {
+            transpose: NodeId,
+            matmul: NodeId,
+        }
+        let mut res = Vec::new();
+        for (id, node) in graph.nodes.iter() {
+            let (matmul, rhs) = if matches!(node.op, Operator::MatMul) {
+                (id, node.inputs[args::MATMUL_RHS])
+            } else {
+                continue;
+            };
 
-        for (index, (transpose, matmul)) in patterns.into_iter().enumerate() {
+            let rhs = modifier.defined_node(rhs).unwrap().0;
+            let transpose = match &graph.nodes[rhs].op {
+                Operator::Transpose(perms) if perms.len() == 2 && perms.as_slice() == [1, 0] => rhs,
+                _ => continue,
+            };
+            res.push(Pattern { transpose, matmul });
+        }
+        for (index, Pattern { transpose, matmul }) in res.into_iter().enumerate() {
             let lhs = graph.nodes[matmul].inputs[args::MATMUL_LHS];
             let rhs = graph.nodes[transpose].inputs[args::TRANSPOSE_DATA];
             let old_output = graph.nodes[matmul].outputs[0];

@@ -1,9 +1,10 @@
-use crate::model::{Graph, Node};
+use crate::model::{Graph, NodeId};
 use crate::operator::*;
 use crate::tensor::{
     resolved_dimensions::{broadcast_shape, ResolvedTensorDims},
     tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},
 };
+use itertools::zip_eq;
 
 struct ConvShape<'a> {
     kernel_shape: &'a [usize],
@@ -24,7 +25,7 @@ impl<'a> ConvShape<'a> {
 }
 
 impl Graph {
-    fn infer_node_output(&self, node: &Node) -> Result<Vec<ResolvedTensorType>, TypeError> {
+    fn infer_node_output(&mut self, node_id: NodeId) -> Result<Vec<ResolvedTensorType>, TypeError> {
         macro_rules! cond_error {
             ($cond: expr) => {{
                 if $cond {
@@ -32,6 +33,8 @@ impl Graph {
                 }
             }};
         }
+
+        let node = &mut self.nodes[node_id];
 
         let inputs: Vec<&ResolvedTensorType> = node
             .inputs
@@ -46,7 +49,7 @@ impl Graph {
             .ok_or(TypeError::UnresolvedInput)?;
 
         let mut res: Vec<ResolvedTensorType> = Vec::new();
-        match &node.op {
+        match &mut node.op {
             Operator::Add => {
                 let a = &inputs[args::ADD_LHS];
                 let b = &inputs[args::ADD_RHS];
@@ -58,9 +61,19 @@ impl Graph {
             Operator::ReLU => {
                 res.push(inputs[args::RELU_DATA].clone());
             }
-            Operator::Transpose => {
+            Operator::Transpose(perms) => {
                 let data = &inputs[args::TRANSPOSE_DATA];
-                res.push(data.transpose());
+                if perms.is_empty() {
+                    *perms = (0..data.dims.ndim()).rev().collect();
+                }
+                let mut flags = vec![false; perms.len()];
+                for p in perms.iter() {
+                    if perms.len() <= *p || flags[*p] {
+                        return Err(TypeError::InferError("Invalid permutation".to_string()));
+                    }
+                    flags[*p] = true;
+                }
+                res.push(data.transpose(perms.as_slice()));
             }
             Operator::Reshape => {
                 let a = &inputs[args::RESHAPE_DATA];
@@ -99,8 +112,8 @@ impl Graph {
                 let kernel_shape = &w.dims;
                 let feature_map_size = kernel_shape[0];
 
-                cond_error!(feature_map_size % groups != 0);
-                cond_error!(channels != kernel_shape[1] * groups);
+                cond_error!(feature_map_size % *groups != 0);
+                cond_error!(channels != kernel_shape[1] * *groups);
                 cond_error!(x.dims.ndim() != kernel_shape.ndim());
                 let kernel_shape = &kernel_shape[2..];
                 let default_pad = OptionalVec::new(None, (0, 0));
@@ -172,7 +185,7 @@ impl Graph {
                 if !r_prepended {
                     output.push(r_suffix[1]);
                 }
-                res.push(ResolvedTensorType::new(a.elem_type.clone(), output));
+                res.push(ResolvedTensorType::new(a.elem_type, output));
             }
             Operator::MaxPool(MaxPool {
                 kernel_shape,
@@ -205,7 +218,7 @@ impl Graph {
                 for i in 0..input.len() {
                     let stride = strides[i];
                     let num = conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i);
-                    let dim = if !ceil_mode {
+                    let dim = if !*ceil_mode {
                         // Floor div
                         num / stride + 1
                     } else {
@@ -218,45 +231,40 @@ impl Graph {
                     dims.push(dim);
                 }
                 res.push(ResolvedTensorType::new(
-                    x.elem_type.clone(),
+                    x.elem_type,
                     ResolvedTensorDims::new(dims),
                 ));
             }
 
-            Operator::Input(v) | Operator::Output(v) => {
-                let ty = self.values[*v]
-                    .ty
-                    .as_ref()
-                    .ok_or(TypeError::UnresolvedInput)?;
-                if let TensorType::Resolved(ty) = ty {
-                    res.push(ty.clone());
-                } else {
-                    return Err(TypeError::UnresolvedInput);
-                }
-            }
-
             // Custom
-            Operator::MatMulRightTransposed => unreachable!(),
+            Operator::Input(_) | Operator::Output(_) | Operator::MatMulRightTransposed => {
+                unreachable!()
+            }
         }
         Ok(res)
     }
 
     pub fn infer(&mut self) -> Result<(), TypeError> {
-        for (_, node) in self.nodes.iter() {
-            let types = self.infer_node_output(node)?;
-            for i in 0..node.outputs.len() {
-                let value_id = node.outputs[i];
-                let cur_ty = &mut self.values[value_id].ty;
-                let inferred_ty = types[i].clone();
+        let ids = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| !node.is_dummy())
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        for id in ids {
+            let types = self.infer_node_output(id)?;
+            let node = &self.nodes[id];
+            for (value_id, inferred) in zip_eq(node.outputs.iter(), types.into_iter()) {
+                let cur_ty = &mut self.values[*value_id].ty;
                 if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
-                    if *cur_ty != inferred_ty {
+                    if *cur_ty != inferred {
                         return Err(TypeError::InferError(format!(
                             "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
-                            node.name, cur_ty, inferred_ty
+                            node.name, cur_ty, inferred
                         )));
                     }
                 } else {
-                    *cur_ty = Some(inferred_ty.into());
+                    *cur_ty = Some(inferred.into());
                 }
             }
         }

@@ -356,7 +356,13 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Relu" => Ok(Operator::ReLU),
         "MatMul" => Ok(Operator::MatMul),
         "Reshape" => Ok(Operator::Reshape),
-        "Transpose" => Ok(Operator::Transpose),
+        "Transpose" => {
+            let perm = attributes
+                .get("perm")
+                .map(|x| x.ints())
+                .unwrap_or(Ok(Vec::new()))?;
+            Ok(Operator::Transpose(perm))
+        }
         "Conv" => {
             let dilations = attributes
                 .get("dilations")
