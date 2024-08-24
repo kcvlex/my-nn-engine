@@ -8,7 +8,7 @@ fn find_all_patterns(
     modifier: &optimizer::GraphModifier,
 ) -> Vec<(NodeId, NodeId)> {
     let mut vec = Vec::new();
-    for (index, _) in graph.nodes.iter().filter(|(_, node)| !node.mark_as_deleted) {
+    for (index, _) in graph.nodes.iter() {
         let mut cur = Some(index);
         let mut prev = None;
         let mut found = true;
@@ -21,7 +21,7 @@ fn find_all_patterns(
             };
             let (op, value_idx) = pat;
             let node = &graph.nodes[index];
-            if node.op != *op || node.mark_as_deleted {
+            if node.op != *op {
                 found = false;
                 break;
             }
@@ -70,7 +70,6 @@ impl optimizer::Pass for MatMulAxTB {
                 outputs: vec![new_output],
                 name: format!("MatMulRightTransposed_{index}"),
                 op: Operator::MatMulRightTransposed,
-                mark_as_deleted: false,
             };
             modifier.register_new_node(graph, new_node);
             modifier.replace_input_value(graph, old_output, new_output);

@@ -1,4 +1,4 @@
-use crate::model::{Graph, Node, NodeId, Nodes, ValueId, ValueInfo};
+use crate::model::{Graph, Node, NodeId, ValueId, ValueInfo};
 use crate::operator::Operator;
 use crate::tensor::tensor::{ResolvedTensorType, TensorType};
 use std::collections::{HashMap, HashSet};
@@ -29,25 +29,7 @@ impl Optimizer {
             modifier.delete_nodes(graph);
         }
 
-        let mut nodes = Nodes::default();
-        for (_, node) in graph.nodes.iter().filter(|(_, node)| {
-            !(node.mark_as_deleted || matches!(node.op, Operator::Input(_) | Operator::Output(_)))
-        }) {
-            nodes.alloc(node.clone());
-        }
-        graph.inputs = graph
-            .inputs
-            .iter()
-            .map(|&n| graph.nodes[n].clone())
-            .map(|x| nodes.alloc(x))
-            .collect();
-        graph.outputs = graph
-            .outputs
-            .iter()
-            .map(|&n| graph.nodes[n].clone())
-            .map(|x| nodes.alloc(x))
-            .collect();
-        graph.nodes = nodes;
+        graph.delete_nodes(|&(id, _)| modifier.makred_as_deleted.contains(&id));
     }
 }
 
@@ -57,6 +39,7 @@ pub struct GraphModifier {
     value2used: HashMap<ValueId, HashSet<(NodeId, usize)>>,
 
     to_delete_nodes: Vec<NodeId>,
+    makred_as_deleted: HashSet<NodeId>,
     outdegrees: HashMap<NodeId, usize>,
 }
 
@@ -164,14 +147,15 @@ impl GraphModifier {
         self.value2used.get(&value)
     }
 
-    fn delete_nodes_dfs(&mut self, node_id: NodeId, graph: &mut Graph) {
-        let node = &mut graph.nodes[node_id];
-        if node.mark_as_deleted {
+    fn delete_nodes_dfs(&mut self, node_id: NodeId, graph: &Graph) {
+        if self.makred_as_deleted.contains(&node_id) {
             return;
         }
-        node.mark_as_deleted = true;
-        let inputs = node.inputs.clone();
-        for value in inputs {
+        if graph.nodes[node_id].is_dummy() {
+            return;
+        }
+        self.makred_as_deleted.insert(node_id);
+        for value in graph.nodes[node_id].inputs.iter() {
             if let Some((defined, _)) = self.value2defined.get(&value).cloned() {
                 let deg = self.outdegrees.get_mut(&defined).unwrap();
                 *deg -= 1;

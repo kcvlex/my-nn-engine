@@ -427,7 +427,8 @@ impl<'a> GraphCompiler<'a> {
 
     pub fn compile(jit: &mut JIT, graph: &Graph) -> CodegenResult<*const u8> {
         let mut compiler = GraphCompiler::new(jit, graph)?;
-        for (_, node) in graph.nodes.iter() {
+        for node_id in graph.topological_order() {
+            let node = &graph.nodes[node_id];
             compiler.compile_node(node)?;
         }
         let func_id = compiler.finalize()?;

@@ -46,6 +46,78 @@ impl Graph {
             })
             .collect()
     }
+
+    pub fn delete_nodes<T>(&mut self, pred: T)
+    where
+        T: Fn(&(NodeId, &Node)) -> bool,
+    {
+        let mut nodes = Nodes::default();
+        for (_, node) in self.nodes.iter().filter(|v| {
+            let to_delete = pred(v);
+            if to_delete && v.1.is_dummy() {
+                panic!("cannot delete input/output node");
+            }
+            !to_delete
+        }) {
+            nodes.alloc(node.clone());
+        }
+        for vec in [&mut self.inputs, &mut self.outputs] {
+            *vec = vec
+                .iter()
+                .map(|&n| self.nodes[n].clone())
+                .map(|x| nodes.alloc(x))
+                .collect();
+        }
+        self.nodes = nodes;
+    }
+
+    pub fn topological_order(&self) -> Vec<NodeId> {
+        fn dfs(
+            node: NodeId,
+            res: &mut Vec<NodeId>,
+            visited: &mut HashSet<NodeId>,
+            adj: &HashMap<NodeId, HashSet<NodeId>>,
+            nodes: &Nodes,
+        ) {
+            if visited.contains(&node) {
+                return;
+            }
+            visited.insert(node);
+            if let Some(neighbors) = adj.get(&node) {
+                for &next in neighbors.iter() {
+                    dfs(next, res, visited, adj, nodes);
+                }
+            }
+            if !nodes[node].is_dummy() {
+                res.push(node);
+            }
+        }
+
+        let mut res = Vec::new();
+        let mut visited = HashSet::new();
+        let mut defined = HashMap::new();
+        for (id, node) in self.nodes.iter() {
+            for value in node.outputs.iter() {
+                defined.insert(value, id);
+            }
+        }
+        let mut adj = HashMap::new();
+        for (id, node) in self.nodes.iter() {
+            for value in node.inputs.iter() {
+                let defines = defined.get(value).unwrap();
+                adj.entry(*defines).or_insert(HashSet::new()).insert(id);
+            }
+        }
+
+        println!("{:?}", adj);
+        for (id, _) in self.nodes.iter().filter(|(_, node)| !node.is_dummy()) {
+            if !visited.contains(&id) {
+                dfs(id, &mut res, &mut visited, &adj, &self.nodes);
+            }
+        }
+        res.reverse();
+        res
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +126,12 @@ pub struct Node {
     pub outputs: Vec<ValueId>,
     pub name: String,
     pub op: Operator,
-    pub mark_as_deleted: bool,
+}
+
+impl Node {
+    pub fn is_dummy(&self) -> bool {
+        matches!(self.op, Operator::Input(_) | Operator::Output(_))
+    }
 }
 
 #[derive(Default, Debug)]

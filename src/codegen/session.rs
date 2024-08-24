@@ -157,7 +157,7 @@ mod test {
     }
 
     #[test]
-    fn add_broaccst() -> TestResult {
+    fn add_broadcast() -> TestResult {
         let session = make_session("models/test/add_broadcast.onnx")?;
         // (1 x 4 x 5)
         let (input0, orig0) = make_tensor!(
