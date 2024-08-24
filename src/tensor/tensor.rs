@@ -160,6 +160,12 @@ impl ResolvedTensorType {
         assert!(dims.size() == self.dims.size());
         Self::new(self.elem_type, dims)
     }
+
+    pub fn pushed(&self, dim: usize) -> Self {
+        let mut dims = self.dims.clone();
+        dims.push(dim);
+        Self::new(self.elem_type, dims)
+    }
 }
 
 impl TensorType {
@@ -240,7 +246,7 @@ macro_rules! define_try_from {
             type Error = TypeError;
             fn try_from(array: ndarray::Array<$ty, D>) -> Result<Self, Self::Error> {
                 let dim = ResolvedTensorDims::new(array.shape().to_vec());
-                let data = TensorData::$data(array.into_raw_vec_and_offset().0);
+                let data = TensorData::$data(array.flatten().to_vec());
                 Self::new(dim, data)
             }
         }
