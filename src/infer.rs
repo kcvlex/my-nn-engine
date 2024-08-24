@@ -53,7 +53,7 @@ impl Graph {
 
                 cond_error!(a.elem_type != b.elem_type);
                 let dims = broadcast_shape(&a.dims, &b.dims)?;
-                res.push(ResolvedTensorType::new(a.elem_type.clone(), dims));
+                res.push(ResolvedTensorType::new(a.elem_type, dims));
             }
             Operator::ReLU => {
                 res.push(inputs[args::RELU_DATA].clone());
@@ -136,7 +136,7 @@ impl Graph {
                     dims.push(dim);
                 }
                 res.push(ResolvedTensorType::new(
-                    x.elem_type.clone(),
+                    x.elem_type,
                     ResolvedTensorDims::new(dims),
                 ));
             }
@@ -234,7 +234,18 @@ impl Graph {
             let types = self.infer_node_output(node)?;
             for i in 0..node.outputs.len() {
                 let value_id = node.outputs[i];
-                self.values[value_id].ty = Some(types[i].clone().into());
+                let cur_ty = &mut self.values[value_id].ty;
+                let inferred_ty = types[i].clone();
+                if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
+                    if *cur_ty != inferred_ty {
+                        return Err(TypeError::InferError(format!(
+                            "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
+                            node.name, cur_ty, inferred_ty
+                        )));
+                    }
+                } else {
+                    *cur_ty = Some(inferred_ty.into());
+                }
             }
         }
         Ok(())

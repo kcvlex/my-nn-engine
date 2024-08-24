@@ -378,20 +378,36 @@ impl<'a> GraphCompiler<'a> {
                     res.ty.value_type().lane_type(),
                     &self.translator.isa,
                 );
-                self.translator.gen_matmul_a_tb(
-                    ty,
-                    buffer.ptr,
-                    im2col_input.tensor.ptr,
-                    kernel.ptr,
-                    &shape,
-                );
-                // TODO: reshape
-                let len = self
-                    .translator
-                    .builder
-                    .ins()
-                    .iconst(types::I64, res.ty.mem_size() as i64);
-                self.translator.call_memcpy(res.ptr, buffer.ptr, len);
+                if true {
+                    self.translator.gen_matmul_a_tb(
+                        ty,
+                        buffer.ptr,
+                        im2col_input.tensor.ptr,
+                        kernel.ptr,
+                        &shape,
+                    );
+                    // TODO: reshape
+                    let len = self
+                        .translator
+                        .builder
+                        .ins()
+                        .iconst(types::I64, res.ty.mem_size() as i64);
+                    self.translator.call_memcpy(res.ptr, buffer.ptr, len);
+                } else {
+                    // Debug
+                    // TODO: remove
+                    let src = im2col_input.tensor;
+                    let dst = res;
+                    let len = dst.ty.mem_size().min(src.ty.mem_size());
+                    let len = self.translator.builder.ins().iconst(types::I64, len as i64);
+                    let kernel_size = kernel.ty.mem_size();
+                    let src_ptr = self
+                        .translator
+                        .builder
+                        .ins()
+                        .iadd_imm(src.ptr, kernel_size as i64 * 3);
+                    self.translator.call_memcpy(dst.ptr, src_ptr, len);
+                }
             }
             Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
         }
@@ -410,6 +426,7 @@ impl<'a> GraphCompiler<'a> {
             compiler.compile_node(node)?;
         }
         let func_id = compiler.finalize()?;
+        println!("{}", jit.ctx.func);
         jit.module
             .define_function(func_id, &mut jit.ctx)
             .map_err(CodegenError::ModuleError)?;
@@ -1507,14 +1524,16 @@ impl<'a> FunctionTranslator<'a> {
             ConvPad::NotSet(_) | ConvPad::Valid => self.builder.ins().f32const(0.0), // TODO: type
             ConvPad::SameLower | ConvPad::SameUpper => todo!(),
         };
+
+        #[derive(Debug)]
         struct OuterLoop {
             head: ir::Block,
             body: ir::Block,
             exit: ir::Block,
-            bound: usize,
             stride: usize,
         }
 
+        #[derive(Debug)]
         struct InnerLoop {
             head: ir::Block,
             body: ir::Block,
@@ -1528,7 +1547,7 @@ impl<'a> FunctionTranslator<'a> {
         let outer_loops = {
             let mut outer_loops = Vec::new();
             let mut next = exit;
-            for (i, img) in im2col.result_shape.iter().enumerate() {
+            for i in 0..im2col.result_shape.ndim() {
                 let head = self.builder.create_block();
                 let body = self.builder.create_block();
 
@@ -1546,7 +1565,6 @@ impl<'a> FunctionTranslator<'a> {
                     head,
                     body,
                     exit,
-                    bound: *img,
                     stride: im2col.strides[i],
                 });
             }
@@ -1593,15 +1611,19 @@ impl<'a> FunctionTranslator<'a> {
         let mut is_pad = self.builder.ins().iconst(types::I8, 0);
         // Dummy
         self.builder.append_block_param(exit, self.ptr_ty);
+
+        // Example of 2D:
+        // padded_src[i0][i1] = src[i0-pad_left0][i1-pad_left1]
+        // padded_src + i0*stride0 + i1*stride1 = src + (i0-pad_left0)*stride0 + (i1-pad_left1)*stride1
+        // padded_src = src - pad_left0*stride0 - pad_left1*stride1
         let src = {
-            let mut src = img_src.tensor.ptr;
+            let mut offset = 0;
             for (i, inner) in inner_loops.iter().enumerate() {
-                let offset = inner.pad_left as i64
+                offset += inner.pad_left as i64
                     * img_src.tensor.ty.stride(i) as i64
                     * img_src.op_type.bytes() as i64;
-                src = self.builder.ins().iadd_imm(src, -offset);
             }
-            src
+            self.builder.ins().iadd_imm(img_src.tensor.ptr, -offset)
         };
         self.builder
             .ins()
@@ -1609,16 +1631,21 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, (outer, inner)) in izip!(outer_loops.iter(), inner_loops.iter()).enumerate() {
             let shift_amount = img_src.op_type.bytes() as i64 * img_src.tensor.ty.stride(i) as i64;
+            let orig_img_size = img_src.tensor.ty.dims[i];
+            let padded_img_size = orig_img_size + inner.pad_left + inner.pad_right;
             // Outer
             {
                 self.builder.switch_to_block(outer.head);
                 let dst = self.builder.block_params(outer.head)[0];
                 let ind = self.builder.block_params(outer.head)[1];
                 let src = self.builder.block_params(outer.head)[2];
-                let cond =
-                    self.builder
-                        .ins()
-                        .icmp_imm(IntCC::UnsignedLessThan, ind, outer.bound as i64);
+                // ind, ind + dilation, ind + 2*dilation, ..., ind + (kernel_size-1)*dilation
+                // ind + (kernel_size-1)*dilation < padded_img_size
+                let cond = self.builder.ins().icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    ind,
+                    padded_img_size as i64 - (inner.kernel_size - 1) as i64 * inner.dilation as i64,
+                );
                 let next = if i + 1 == outer_loops.len() {
                     inner_loops[0].head
                 } else {
@@ -1657,12 +1684,7 @@ impl<'a> FunctionTranslator<'a> {
                 // <=> src_idx < pad_left || pad_left + orig_img_size <= src_idx
                 let src_idx = self.builder.ins().imul_imm(ind, inner.dilation as i64);
                 let outer_idx = self.builder.block_params(outer_loops[i].head)[1];
-                let outer_idx = self
-                    .builder
-                    .ins()
-                    .imul_imm(outer_idx, outer_loops[i].stride as i64);
                 let src_idx = self.builder.ins().iadd(src_idx, outer_idx);
-                let orig_img_size = img_src.tensor.ty.dims[i];
                 let pad_cond_left = self.builder.ins().icmp_imm(
                     IntCC::UnsignedLessThan,
                     src_idx,
@@ -1779,7 +1801,10 @@ impl<'a> FunctionTranslator<'a> {
             dst,
             img_dst.op_type.bytes() as i64 * im2col.result_shape.size() as i64,
         );
-        let src = self.builder.ins().iadd_imm(src, channel_stride);
+        let src = self
+            .builder
+            .ins()
+            .iadd_imm(src, channel_stride * img_src.op_type.bytes() as i64);
         self.builder
             .ins()
             .brif(trip_count, head, &[dst, trip_count, src], new_entry, &[]);

@@ -297,7 +297,12 @@ fn load_pad(attrs: &Attributes) -> LoadResult<ConvPad> {
             if v.len() % 2 != 0 {
                 Err(ModelLoadError::Unexpected("Invalid pads".to_string()))
             } else {
-                Ok(v.chunks(2).map(|x| (x[0], x[1])).collect())
+                let half = v.len() / 2;
+                let mut res = Vec::with_capacity(half);
+                for i in 0..half {
+                    res.push((v[i], v[i + half]));
+                }
+                Ok(res)
             }
         })
         .transpose()?;
