@@ -16,8 +16,8 @@ pub struct Model {
 pub struct Graph {
     pub nodes: Nodes,
     pub name: String,
-    pub inputs: Vec<ValueId>,
-    pub outputs: Vec<ValueId>,
+    pub inputs: Vec<NodeId>,
+    pub outputs: Vec<NodeId>,
     pub values: Values,
     pub initializer: HashMap<ValueId, Tensor>,
 }
@@ -25,6 +25,26 @@ pub struct Graph {
 impl Graph {
     pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {
         self.values[id].ty.as_ref()?.as_resolved()
+    }
+
+    pub fn input_values(&self) -> Vec<ValueId> {
+        self.inputs
+            .iter()
+            .map(|&n| match self.nodes[n].op {
+                Operator::Input(v) => v,
+                _ => unreachable!("not input"),
+            })
+            .collect()
+    }
+
+    pub fn output_values(&self) -> Vec<ValueId> {
+        self.outputs
+            .iter()
+            .map(|&n| match self.nodes[n].op {
+                Operator::Output(v) => v,
+                _ => unreachable!("not input"),
+            })
+            .collect()
     }
 }
 
@@ -103,13 +123,10 @@ struct GraphvizNode {
     name: String,
     op: String,
     inputs: Vec<GraphvizValue>,
-    outputs: Vec<GraphvizValue>, // Only deal with output of the graph
 }
 
-struct GraphizGraph {
+struct GraphvizGraph {
     nodes: Vec<GraphvizNode>,
-    inputs: Vec<GraphvizValue>,
-    outputs: Vec<GraphvizValue>,
 }
 
 impl TensorType {
@@ -132,38 +149,17 @@ impl TensorType {
     }
 }
 
-impl GraphizGraph {
+impl GraphvizGraph {
     fn new(graph: &Graph) -> Self {
-        let inputs = graph
-            .inputs
-            .iter()
-            .map(|&v| (graph.values[v].name.clone(), graph.values[v].ty.clone()))
-            .collect();
-        let outputs: Vec<_> = graph
-            .outputs
-            .iter()
-            .map(|&v| (graph.values[v].name.clone(), graph.values[v].ty.clone()))
-            .collect();
-
-        let output_names: HashSet<_> = outputs.iter().map(|(name, _)| name.clone()).collect();
-
         let mut value2node = HashMap::new();
         for (_, node) in graph.nodes.iter() {
-            for &output in node.outputs.iter() {
-                let name = graph.values[output].name.clone();
+            for defined in &node.outputs {
+                let name = graph.values[*defined].name.clone();
                 value2node.insert(name, node.name.clone());
             }
         }
         for name in graph.initializer.keys() {
             let name = graph.values[*name].name.clone();
-            value2node.insert(name.clone(), name.clone());
-        }
-        for input in graph.inputs.iter() {
-            let name = graph.values[*input].name.clone();
-            value2node.insert(name.clone(), name.clone());
-        }
-        for output in graph.outputs.iter() {
-            let name = graph.values[*output].name.clone();
             value2node.insert(name.clone(), name.clone());
         }
 
@@ -181,44 +177,22 @@ impl GraphizGraph {
                         (from, ty)
                     })
                     .collect();
-                let outputs = node
-                    .outputs
-                    .iter()
-                    .map(|&v| {
-                        let value = &graph.values[v];
-                        let from = value2node.get(&value.name).expect("not found").clone();
-                        let ty = value.ty.clone();
-                        (from, ty)
-                    })
-                    .filter(|(name, _)| output_names.contains(name))
-                    .collect();
                 GraphvizNode {
                     name: node.name.clone(),
                     op: node.op.name().to_string(),
                     inputs,
-                    outputs,
                 }
             })
             .collect();
-        Self {
-            nodes,
-            inputs,
-            outputs,
-        }
+        Self { nodes }
     }
 }
 
-impl GraphizGraph {
+impl GraphvizGraph {
     fn to_dot(&self) -> String {
         let mut res = "digraph {\n".to_string();
-        for input in self.inputs.iter() {
-            res.push_str(&format!("  {} [label=\"{}\"];\n", input.0, input.0));
-        }
         for node in self.nodes.iter() {
             res.push_str(&format!("  {} [label=\"{}\"];\n", node.name, node.op));
-        }
-        for output in self.outputs.iter() {
-            res.push_str(&format!("  {} [label=\"{}\"];\n", output.0, output.0));
         }
         for node in self.nodes.iter() {
             for input in node.inputs.iter() {
@@ -226,13 +200,6 @@ impl GraphizGraph {
                 res.push_str(&format!(
                     "  {} -> {} [label=\"{}\"];\n",
                     input.0, node.name, shape
-                ));
-            }
-            for output in node.outputs.iter() {
-                let shape = output.1.as_ref().map_or(String::from("?"), |x| x.to_dot());
-                res.push_str(&format!(
-                    "  {} -> {} [label=\"{}\"];\n",
-                    node.name, output.0, shape
                 ));
             }
         }
@@ -243,6 +210,6 @@ impl GraphizGraph {
 
 impl Graph {
     pub fn to_dot(&self) -> String {
-        GraphizGraph::new(self).to_dot()
+        GraphvizGraph::new(self).to_dot()
     }
 }

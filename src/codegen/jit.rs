@@ -184,7 +184,10 @@ impl<'a> GraphCompiler<'a> {
         let current_block = translator.builder.current_block().unwrap();
         let input_arg = translator.builder.block_params(current_block)[0];
         let output_arg = translator.builder.block_params(current_block)[1];
-        for (arg, ids) in [(input_arg, &graph.inputs), (output_arg, &graph.outputs)] {
+        for (arg, ids) in [
+            (input_arg, graph.input_values()),
+            (output_arg, graph.output_values()),
+        ] {
             let mut ptr = arg;
             for &value_id in ids.iter() {
                 id2value.insert(value_id, ptr);
@@ -410,6 +413,8 @@ impl<'a> GraphCompiler<'a> {
                 }
             }
             Operator::MaxPool(_) | Operator::Transpose => unimplemented!(),
+
+            Operator::Input(_) | Operator::Output(_) => (), // nothing to do
         }
         Ok(())
     }

@@ -1,4 +1,5 @@
 use crate::model::{Graph, Node, NodeId, Nodes, ValueId, ValueInfo};
+use crate::operator::Operator;
 use crate::tensor::tensor::{ResolvedTensorType, TensorType};
 use std::collections::{HashMap, HashSet};
 
@@ -29,9 +30,23 @@ impl Optimizer {
         }
 
         let mut nodes = Nodes::default();
-        for (_, node) in graph.nodes.iter().filter(|(_, node)| !node.mark_as_deleted) {
+        for (_, node) in graph.nodes.iter().filter(|(_, node)| {
+            !(node.mark_as_deleted || matches!(node.op, Operator::Input(_) | Operator::Output(_)))
+        }) {
             nodes.alloc(node.clone());
         }
+        graph.inputs = graph
+            .inputs
+            .iter()
+            .map(|&n| graph.nodes[n].clone())
+            .map(|x| nodes.alloc(x))
+            .collect();
+        graph.outputs = graph
+            .outputs
+            .iter()
+            .map(|&n| graph.nodes[n].clone())
+            .map(|x| nodes.alloc(x))
+            .collect();
         graph.nodes = nodes;
     }
 }
@@ -63,11 +78,6 @@ impl GraphModifier {
         for (value, (node, _)) in modifier.value2defined.iter() {
             *modifier.outdegrees.entry(*node).or_insert(0) +=
                 modifier.value2used.get(value).map_or(0, |x| x.len());
-        }
-        for value in graph.outputs.iter() {
-            if let Some(node) = modifier.value2defined.get(value) {
-                *modifier.outdegrees.entry(node.0).or_insert(0) += 1;
-            }
         }
         modifier
     }
@@ -121,20 +131,19 @@ impl GraphModifier {
         old_value: ValueId,
         new_value: ValueId,
     ) {
-        for v in &mut graph.outputs {
-            if *v == old_value {
-                *v = new_value;
-                let defines = *self.value2defined.get(&old_value).unwrap();
-                self.decr_outdegree(defines.0, 1);
-            }
-        }
-
         let old_defines = self.value2defined.remove(&old_value);
         let new_defines = self.value2defined.get(&new_value).cloned();
 
         if let Some(used) = self.value2used.remove(&old_value) {
             for &(node, index) in used.iter() {
-                graph.nodes[node].inputs[index] = new_value;
+                let node = &mut graph.nodes[node];
+                if let Operator::Output(v) = node.op {
+                    assert!(index == 0);
+                    if v == old_value {
+                        node.op = Operator::Output(new_value);
+                    }
+                }
+                node.inputs[index] = new_value;
             }
             let len = used.len();
             self.value2used.insert(new_value, used);

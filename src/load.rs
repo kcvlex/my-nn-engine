@@ -102,7 +102,34 @@ impl GraphLoader {
         let initializer = self.load_initializer(graph.initializer)?;
         let inputs = self.load_value_info_vec(graph.input)?;
         let outputs = self.load_value_info_vec(graph.output)?;
-        let nodes = self.load_nodes(graph.node)?;
+        let mut nodes = self.load_nodes(graph.node)?;
+        let inputs = {
+            let mut res = Vec::with_capacity(inputs.len());
+            for &x in inputs.iter() {
+                let node = Node {
+                    name: self.values[x].name.clone(),
+                    inputs: Vec::new(),
+                    outputs: vec![x],
+                    op: Operator::Input(x),
+                    mark_as_deleted: false,
+                };
+                res.push(nodes.alloc(node));
+            }
+            res
+        };
+        let outputs = outputs
+            .into_iter()
+            .map(|x| {
+                let node = Node {
+                    name: self.values[x].name.clone(),
+                    inputs: vec![x],
+                    outputs: Vec::new(),
+                    op: Operator::Output(x),
+                    mark_as_deleted: false,
+                };
+                nodes.alloc(node)
+            })
+            .collect();
         Ok(Graph {
             name: graph.name,
             initializer,

@@ -1,3 +1,4 @@
+use crate::model::ValueId;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use std::ops::Index;
 //use strum_macros::EnumString;
@@ -14,6 +15,10 @@ pub enum Operator {
 
     // Custom
     MatMulRightTransposed,
+
+    // Dummy
+    Input(ValueId),
+    Output(ValueId),
 }
 
 impl PartialEq for Operator {
@@ -30,6 +35,10 @@ impl PartialEq for Operator {
             | (_, Operator::Conv(_))
             | (Operator::MaxPool(_), _)
             | (_, Operator::MaxPool(_))
+            | (Operator::Input(_), _)
+            | (_, Operator::Input(_))
+            | (Operator::Output(_), _)
+            | (_, Operator::Output(_))
             | (Operator::Add, _)
             | (Operator::ReLU, _)
             | (Operator::MatMul, _)
@@ -100,6 +109,10 @@ impl Operator {
 
             // Custom
             Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",
+
+            // Dummy
+            Operator::Input(_) => "Input",
+            Operator::Output(_) => "Output",
         }
     }
 }

@@ -45,8 +45,8 @@ impl Session {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         model.graph.infer().map_err(SessionError::TypeError)?;
         pass.run(&mut model.graph);
-        let inputs_ty = get_argument_types(&model.graph, &model.graph.inputs)?;
-        let outputs_ty = get_argument_types(&model.graph, &model.graph.outputs)?;
+        let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
+        let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let mut jit = JIT::default();
         let code =
             GraphCompiler::compile(&mut jit, &model.graph).map_err(SessionError::CodegenError)?;

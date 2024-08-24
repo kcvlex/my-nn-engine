@@ -223,6 +223,18 @@ impl Graph {
                 ));
             }
 
+            Operator::Input(v) | Operator::Output(v) => {
+                let ty = self.values[*v]
+                    .ty
+                    .as_ref()
+                    .ok_or(TypeError::UnresolvedInput)?;
+                if let TensorType::Resolved(ty) = ty {
+                    res.push(ty.clone());
+                } else {
+                    return Err(TypeError::UnresolvedInput);
+                }
+            }
+
             // Custom
             Operator::MatMulRightTransposed => unreachable!(),
         }
