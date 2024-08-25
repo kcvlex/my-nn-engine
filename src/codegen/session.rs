@@ -120,6 +120,21 @@ mod test {
         }};
     }
 
+    macro_rules! make_range_tensor {
+        ($ty: ty, $($dim: expr),*) => {{
+            let len = [$($dim),*].iter().product();
+            let orig = ndarray::Array::from_iter((0..len).map(|x| x as $ty))
+                .into_shape_with_order(($($dim),*))
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+            let res: Result<(Tensor, _), _> = orig
+                .clone()
+                .try_into()
+                .map(|t| (t, orig.clone()))
+                .map_err(SessionError::TypeError);
+            res
+        }};
+    }
+
     fn make_session(path: &str) -> Result<Session, SessionError> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
         let mut optimizer = Optimizer::new(String::from("test pass"));
@@ -191,7 +206,6 @@ mod test {
         Ok(())
     }
 
-    #[ignore]
     #[test]
     fn run_reshape() -> TestResult {
         let session = make_session("models/test/reshape.onnx")?;
@@ -235,26 +249,9 @@ mod test {
     fn matmul_a_x_tb() -> TestResult {
         let session = make_session("models/test/matmul_a_x_tb.onnx")?;
 
-        // (5 x 7)
-        let (input0, orig0) = make_tensor!(
-            f32,
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
-            [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
-            [15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0],
-            [22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0],
-            [29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0],
-        )?;
+        let (input0, orig0) = make_range_tensor!(f32, 5, 7)?;
+        let (input1, orig1) = make_range_tensor!(f32, 6, 7)?;
 
-        // (6 x 7)
-        let (input1, orig1) = make_tensor!(
-            f32,
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
-            [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
-            [15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0],
-            [22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0],
-            [29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0],
-            [36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0],
-        )?;
         let output = session.run(&[input0, input1])?;
         tensor_assert_eq!(output[0], orig0.dot(&orig1.t()));
         Ok(())
@@ -452,19 +449,7 @@ mod test {
     fn transpose() -> TestResult {
         let session = make_session("models/test/transpose.onnx")?;
 
-        // (1 x 7 x 5 x 1)
-        let (input, orig) = make_tensor!(
-            f32,
-            [
-                [[0.0], [1.0], [2.0], [3.0], [4.0]],
-                [[5.0], [6.0], [7.0], [8.0], [9.0]],
-                [[10.0], [11.0], [12.0], [13.0], [14.0]],
-                [[15.0], [16.0], [17.0], [18.0], [19.0]],
-                [[20.0], [21.0], [22.0], [23.0], [24.0]],
-                [[25.0], [26.0], [27.0], [28.0], [29.0]],
-                [[30.0], [31.0], [32.0], [33.0], [34.0]],
-            ],
-        )?;
+        let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
 
         let output = session.run(&[input])?;
         let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned();
@@ -476,11 +461,7 @@ mod test {
     fn maxpool() -> TestResult {
         let session = make_session("models/test/maxpool.onnx")?;
 
-        // (1 x 3 x 8 x 8)
-        let orig = ndarray::Array::from_shape_fn((1, 3, 8, 8), |(i, j, k, l)| {
-            (i * 3 * 8 * 8 + j * 8 * 8 + k * 8 + l) as f32
-        });
-        let input = Tensor::try_from(orig.clone()).map_err(SessionError::TypeError)?;
+        let (input, orig) = make_range_tensor!(f32, 1, 3, 8, 8)?;
         let output = session.run(&[input])?;
 
         let expected = orig

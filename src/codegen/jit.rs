@@ -298,7 +298,17 @@ impl<'a> GraphCompiler<'a> {
             Operator::Reshape => {
                 let input = &inputs[args::RESHAPE_DATA].ptr;
                 let output_id = node.outputs[0];
-                self.id2value.insert(output_id, *input);
+                if self.graph.is_output_value(output_id) {
+                    let res = &self.allocate_or_get_tensor(output_id)?;
+                    let len = self
+                        .translator
+                        .builder
+                        .ins()
+                        .iconst(types::I64, res.ty.mem_size() as i64);
+                    self.translator.call_memcpy(res.ptr, *input, len);
+                } else {
+                    self.id2value.insert(output_id, *input);
+                }
             }
             Operator::MatMul => {
                 let lhs = &inputs[args::MATMUL_LHS];

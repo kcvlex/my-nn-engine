@@ -104,12 +104,14 @@ impl Graph {
         let mut adj = HashMap::new();
         for (id, node) in self.nodes.iter() {
             for value in node.inputs.iter() {
-                let defines = defined.get(value).unwrap();
-                adj.entry(*defines).or_insert(HashSet::new()).insert(id);
+                if let Some(defines) = defined.get(value) {
+                    adj.entry(*defines).or_insert(HashSet::new()).insert(id);
+                } else {
+                    assert!(self.initializer.contains_key(value));
+                }
             }
         }
 
-        println!("{:?}", adj);
         for (id, _) in self.nodes.iter().filter(|(_, node)| !node.is_dummy()) {
             if !visited.contains(&id) {
                 dfs(id, &mut res, &mut visited, &adj, &self.nodes);
@@ -117,6 +119,13 @@ impl Graph {
         }
         res.reverse();
         res
+    }
+
+    pub fn is_output_value(&self, id: ValueId) -> bool {
+        self.outputs.iter().any(|&n| match self.nodes[n].op {
+            Operator::Output(v) => v == id,
+            _ => false,
+        })
     }
 }
 
