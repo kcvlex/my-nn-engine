@@ -409,7 +409,6 @@ impl<'a> GraphCompiler<'a> {
                         kernel.ptr,
                         &shape,
                     );
-                    println!("shape={:?}", shape);
                     // TODO: perhaps buggy
                     if is_reshape_required {
                         let buffer = {
@@ -434,9 +433,6 @@ impl<'a> GraphCompiler<'a> {
                         for i in 0..ndim - 1 {
                             perms.push(i);
                         }
-                        println!("perms={:?}", perms);
-                        println!("buffer_shape={:?}", buffer.ty.dims);
-                        println!("result_shape={:?}", res.ty.dims);
                         self.translator
                             .gen_nested_loop_unaryop(&buffer, &res, |operand| {
                                 ElementwiseOp::Transpose(operand, perms)
@@ -568,7 +564,6 @@ impl TensorOperand {
     fn dynamic_vector_op_type(ty: Type, isa: &OwnedTargetIsa) -> Type {
         let max_bytes = isa.dynamic_vector_bytes(ty);
         let max_lane_count = max_bytes / ty.bytes();
-        println!("max_bytes={max_bytes}");
         Self::calc_op_type(ty, max_lane_count)
     }
 
@@ -887,6 +882,7 @@ impl<'a> FunctionTranslator<'a> {
         TensorPtr { ptr, ty }
     }
 
+    #[allow(dead_code)]
     pub fn free(&mut self, ptr: Value) -> CodegenResult<()> {
         let fragment = self
             .value2fragment
@@ -896,13 +892,13 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn gen_call_ret(&mut self, name: &str, args: &[TypedValue], rt: Type) -> TypedValue {
         let mut sig = self.module.make_signature();
         for arg in args {
             sig.params.push(AbiParam::new(arg.ty));
         }
         sig.returns.push(AbiParam::new(rt));
-        println!("name={:?} sig={:?}", name, sig);
 
         let callee = self
             .module
@@ -913,32 +909,6 @@ impl<'a> FunctionTranslator<'a> {
         let call = self.builder.ins().call(callee, &args);
         let value = self.builder.inst_results(call)[0];
         TypedValue { ty: rt, value }
-    }
-
-    pub fn gen_global_data_addr(&mut self, name: &str) -> TypedValue {
-        let sym = self
-            .module
-            .declare_data(name, Linkage::Export, true, false)
-            .expect("problem declaring data object");
-        let local_id = self.module.declare_data_in_func(sym, self.builder.func);
-
-        let ty = self.module.target_config().pointer_type();
-        let value = self.builder.ins().symbol_value(ty, local_id);
-        TypedValue { ty, value }
-    }
-
-    // TODO: Check type
-    pub fn gen_add(&mut self, lhs: TypedValue, rhs: TypedValue) -> TypedValue {
-        let value = self.builder.ins().iadd(lhs.value, rhs.value);
-        TypedValue { ty: lhs.ty, value }
-    }
-
-    pub fn gen_const(&mut self, imm: i64) -> TypedValue {
-        let value = self.builder.ins().iconst(types::I64, imm);
-        TypedValue {
-            ty: types::I64,
-            value,
-        }
     }
 
     pub fn call_memcpy(&mut self, dst: Value, src: Value, len: Value) {
@@ -1005,7 +975,6 @@ impl<'a> FunctionTranslator<'a> {
         let params = self.builder.block_params(header).to_vec();
         let ind = params[PARAMS_INDUCTION];
         let dst = params[PARAMS_DST];
-        println!("nest={nest}");
 
         let mut params = if nest + 1 == res.ty.dims.ndim() {
             self.builder.switch_to_block(header);
@@ -1076,7 +1045,6 @@ impl<'a> FunctionTranslator<'a> {
     where
         T: FnOnce(UnaryOperand) -> ElementwiseOp,
     {
-        println!("dims={:?}", res.ty.dims);
         let ind = self.builder.ins().iconst(types::I64, res.ty.dims[0] as i64);
         let params = {
             let mut params = vec![ind; 3];
@@ -1645,12 +1613,11 @@ impl<'a> FunctionTranslator<'a> {
     ) {
         let zero = self.builder.ins().iconst(types::I64, 0);
         let exit = self.builder.create_block();
-        let pad_const = match im2col.pad {
-            ConvPad::NotSet(_) | ConvPad::Valid => self.builder.ins().f32const(0.0), // TODO: type
-            ConvPad::SameLower | ConvPad::SameUpper => todo!(),
+        let pad_const = match img_src.op_type.lane_of() {
+            types::F32 => self.builder.ins().f32const(0.0),
+            types::F64 => self.builder.ins().f64const(0.0),
+            _ => panic!("unsupported type"),
         };
-
-        println!("im2col={:?}", im2col);
 
         #[derive(Debug)]
         struct OuterLoop {
@@ -1713,10 +1680,22 @@ impl<'a> FunctionTranslator<'a> {
                 // Destination
                 self.builder.append_block_param(body, self.ptr_ty);
 
+                let dilation = im2col.dilations[i];
                 let (pad_left, pad_right) = match &im2col.pad {
                     ConvPad::NotSet(pad) => pad[i],
                     ConvPad::Valid => (0, 0),
-                    ConvPad::SameLower | ConvPad::SameUpper => todo!(),
+                    ConvPad::SameLower | ConvPad::SameUpper => {
+                        let extended_img_len = (im2col.result_shape[i] - 1) * im2col.strides[i]
+                            + (kernel_size - 1) * dilation
+                            + 1;
+                        let pad_len = extended_img_len - img_src.tensor.ty.dims[i];
+                        let pad_left = pad_len / 2;
+                        let pad_right = pad_len / 2;
+                        let add_left = pad_len % 2 == 1 && matches!(im2col.pad, ConvPad::SameLower);
+                        let add_right =
+                            pad_len % 2 == 1 && matches!(im2col.pad, ConvPad::SameUpper);
+                        (pad_left + add_left as usize, pad_right + add_right as usize)
+                    }
                 };
 
                 let exit = next;
@@ -1728,22 +1707,12 @@ impl<'a> FunctionTranslator<'a> {
                     kernel_size: *kernel_size,
                     pad_left,
                     pad_right,
-                    dilation: im2col.dilations[i],
+                    dilation,
                 });
             }
 
             inner_loops
         };
-
-        // Debug
-        {
-            for outer in outer_loops.iter() {
-                println!("outer={:?}", outer);
-            }
-            for inner in inner_loops.iter() {
-                println!("inner={:?}", inner);
-            }
-        }
 
         let mut is_pad = self.builder.ins().iconst(types::I8, 0);
         // Dummy
@@ -1800,7 +1769,6 @@ impl<'a> FunctionTranslator<'a> {
                 let dst = if i + 1 == outer_loops.len() {
                     if let Channel::Meld(channel) = im2col.channel {
                         let offset = im2col.kernel_shape.size() * (channel - 1);
-                        println!("offset={}", offset);
                         self.builder
                             .ins()
                             .iadd_imm(dst, img_dst.op_type.bytes() as i64 * offset as i64)
@@ -1982,7 +1950,6 @@ impl<'a> FunctionTranslator<'a> {
         let block_col_rem = self.builder.create_block();
         let exit = self.builder.create_block();
 
-        println!("row={}, col={}", row, col);
         // Destination, Trip Count, Source
         self.builder.append_block_param(block_row_head, self.ptr_ty);
         self.builder.append_block_param(block_row_head, types::I64);

@@ -1,0 +1,27 @@
+
+:Å
+S
+x
+Wy"Conv*
+auto_pad"
+SAME_LOWER *
+kernel_shape@@ *
+strides@@ Test (Conv, SAME_LOWER)Z
+x
+
+
+
+
+Z
+W
+
+
+
+
+b
+y
+
+
+
+
+B

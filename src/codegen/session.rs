@@ -446,6 +446,36 @@ mod test {
     }
 
     #[test]
+    fn conv_with_autopad_same() -> TestResult {
+        let session = make_session("models/test/conv_with_autopad_same.onnx")?;
+
+        // (1 x 1 x 5 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+
+        let output = session.run(&[input0, input1])?;
+
+        let (expected, _) = make_tensor!(
+            f32,
+            [[[12.0, 27.0, 24.0], [63.0, 108.0, 81.0], [72.0, 117.0, 84.0],]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    }
+
+    #[test]
     fn transpose() -> TestResult {
         let session = make_session("models/test/transpose.onnx")?;
 
