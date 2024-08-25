@@ -375,6 +375,7 @@ impl<'a> GraphCompiler<'a> {
 
                 let kernel_shape = kernel.ty.dims[2..].to_vec().into();
 
+                let channel = Channel::Meld(channel);
                 let im2col = Im2Col {
                     result_shape,
                     pad: conv.pad.clone(),
@@ -438,7 +439,7 @@ impl<'a> GraphCompiler<'a> {
                     let dst = res;
                     let len = dst.ty.mem_size().min(src.ty.mem_size());
                     let len = self.translator.builder.ins().iconst(types::I64, len as i64);
-                    let one_kernel_size = kernel.ty.mem_size() / channel;
+                    let one_kernel_size = kernel.ty.mem_size() / channel.val();
                     println!("kernel_size={:?}", one_kernel_size);
                     let src_ptr = self
                         .translator
@@ -454,7 +455,42 @@ impl<'a> GraphCompiler<'a> {
                 let op = |operand: UnaryOperand| ElementwiseOp::Transpose(operand, perm.clone());
                 self.translator.gen_nested_loop_unaryop(src, res, op);
             }
-            Operator::MaxPool(_) => unimplemented!(),
+            Operator::MaxPool(ref maxpool) => {
+                let input = &inputs[args::MAXPOOL_DATA];
+                let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+                let channel = res.ty.dims[1];
+                let result_shape = &res.ty.dims[2..]; // Drop batch and channel
+                let result_shape = ResolvedTensorDims::new(result_shape.to_vec());
+                let kernel_shape = maxpool.kernel_shape.clone();
+
+                let row = res.ty.dims.size();
+                let col = kernel_shape.size();
+                let im2col_input_ty = ResolvedTensorType::new(
+                    input.ty.elem_type,
+                    ResolvedTensorDims::new(vec![row, col]),
+                );
+
+                let channel = Channel::Split(channel);
+                let im2col = Im2Col {
+                    result_shape,
+                    pad: maxpool.pad.clone(),
+                    dilations: maxpool.dilations.clone(),
+                    kernel_shape,
+                    channel,
+                    strides: maxpool.strides.clone(),
+                };
+
+                let im2col_input = self.translator.allocate_tensor(im2col_input_ty);
+                let input = TensorOperand::new_scalar(input.clone());
+                let im2col_input = TensorOperand::new_scalar(im2col_input);
+                self.translator.gen_im2col(&im2col_input, &input, &im2col);
+                self.translator.gen_maxpool(
+                    res.ptr,
+                    im2col_input.tensor.ptr,
+                    res.ty.value_type(),
+                    (row, col),
+                );
+            }
 
             Operator::Input(_) | Operator::Output(_) => (), // nothing to do
         }
@@ -575,10 +611,24 @@ enum ElementwiseOp {
 struct Im2Col {
     result_shape: ResolvedTensorDims, // convolution of one image and one kernel
     pad: ConvPad,
-    channel: usize,
+    channel: Channel,
     dilations: OptionalVec<usize>,
     kernel_shape: ResolvedTensorDims,
     strides: OptionalVec<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Channel {
+    Meld(usize),  // Conv
+    Split(usize), // MaxPool
+}
+
+impl Channel {
+    fn val(&self) -> usize {
+        match self {
+            Self::Meld(v) | Self::Split(v) => *v,
+        }
+    }
 }
 
 impl ElementwiseOp {
@@ -1738,11 +1788,15 @@ impl<'a> FunctionTranslator<'a> {
                 let src = self.builder.ins().iadd_imm(src, imm);
                 let dst = self.builder.block_params(outer.body)[0];
                 let dst = if i + 1 == outer_loops.len() {
-                    let offset = im2col.kernel_shape.size() * (im2col.channel - 1);
-                    println!("offset={}", offset);
-                    self.builder
-                        .ins()
-                        .iadd_imm(dst, img_dst.op_type.bytes() as i64 * offset as i64)
+                    if let Channel::Meld(channel) = im2col.channel {
+                        let offset = im2col.kernel_shape.size() * (channel - 1);
+                        println!("offset={}", offset);
+                        self.builder
+                            .ins()
+                            .iadd_imm(dst, img_dst.op_type.bytes() as i64 * offset as i64)
+                    } else {
+                        dst
+                    }
                 } else {
                     dst
                 };
@@ -1874,10 +1928,18 @@ impl<'a> FunctionTranslator<'a> {
         let trip_count = self.builder.block_params(head)[1];
         let src = self.builder.block_params(head)[2];
         let trip_count = self.builder.ins().iadd_imm(trip_count, -1);
-        let dst = self.builder.ins().iadd_imm(
-            dst,
-            img_dst.op_type.bytes() as i64 * im2col.kernel_shape.size() as i64,
-        );
+        let dst = match im2col.channel {
+            Channel::Meld(_) => self.builder.ins().iadd_imm(
+                dst,
+                img_dst.op_type.bytes() as i64 * im2col.kernel_shape.size() as i64,
+            ),
+            Channel::Split(_) => self.builder.ins().iadd_imm(
+                dst,
+                im2col.result_shape.size() as i64
+                    * im2col.kernel_shape.size() as i64
+                    * img_dst.op_type.bytes() as i64,
+            ),
+        };
         let src = self
             .builder
             .ins()
@@ -1888,5 +1950,141 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.switch_to_block(new_entry);
         self.builder.seal_block(head);
         self.builder.seal_block(new_entry);
+    }
+
+    fn gen_maxpool(&mut self, dst: Value, src: Value, ty: Type, shape: (usize, usize)) {
+        let (row, col) = shape;
+        let op_type = TensorOperand::dynamic_vector_op_type(ty, &self.isa);
+        let lane_count = op_type.lane_count() as usize;
+        let min = match ty {
+            types::F32 => self.builder.ins().f32const(f32::MIN),
+            types::F64 => self.builder.ins().f64const(f64::MIN),
+            _ => panic!("unsupported type"),
+        };
+        let min_vec = self.builder.ins().splat(op_type, min);
+
+        let block_row_head = self.builder.create_block();
+        let block_row_epilog = self.builder.create_block();
+        let block_col_head = self.builder.create_block();
+        let block_col_main = self.builder.create_block();
+        // TODO: fixed by https://github.com/bytecodealliance/wasmtime/pull/9144
+        let block_col_workaround = self.builder.create_block();
+        let block_col_rem = self.builder.create_block();
+        let exit = self.builder.create_block();
+
+        println!("row={}, col={}", row, col);
+        // Destination, Trip Count, Source
+        self.builder.append_block_param(block_row_head, self.ptr_ty);
+        self.builder.append_block_param(block_row_head, types::I64);
+        self.builder.append_block_param(block_row_head, self.ptr_ty);
+
+        // Accumulate, Trip Count, Source
+        self.builder.append_block_param(block_col_head, op_type);
+        self.builder.append_block_param(block_col_head, types::I64);
+        self.builder.append_block_param(block_col_head, self.ptr_ty);
+
+        self.builder
+            .append_block_param(block_col_workaround, op_type);
+
+        let row_trip_count = self.builder.ins().iconst(types::I64, row as i64);
+        self.builder
+            .ins()
+            .jump(block_row_head, &[dst, row_trip_count, src]);
+
+        let col_trip_count_main = col / lane_count;
+        let col_trip_count_rem = col - col_trip_count_main * lane_count;
+
+        {
+            self.builder.switch_to_block(block_row_head);
+            let rem = self.builder.block_params(block_row_head)[1];
+            let src = self.builder.block_params(block_row_head)[2];
+            let col_trip_count_main = self
+                .builder
+                .ins()
+                .iconst(types::I64, col_trip_count_main as i64);
+            self.builder.ins().brif(
+                rem,
+                block_col_head,
+                &[min_vec, col_trip_count_main, src],
+                block_row_epilog,
+                &[],
+            );
+        }
+
+        {
+            self.builder.switch_to_block(block_col_head);
+            let rem = self.builder.block_params(block_col_head)[1];
+            self.builder
+                .ins()
+                .brif(rem, block_col_main, &[], block_col_rem, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_col_main);
+            let src = self.builder.block_params(block_col_head)[2];
+            let val = self
+                .builder
+                .ins()
+                .load(op_type, MemFlags::trusted(), src, 0);
+            self.builder.ins().jump(block_col_workaround, &[val]);
+        }
+
+        // TODO: Merge to above block after cranelift's bug is fixed
+        {
+            self.builder.switch_to_block(block_col_workaround);
+            let acc = self.builder.block_params(block_col_head)[0];
+            let rem = self.builder.block_params(block_col_head)[1];
+            let val = self.builder.block_params(block_col_workaround)[0];
+            let acc = self.builder.ins().fmax(val, acc);
+            let rem = self.builder.ins().iadd_imm(rem, -1);
+            let src = self.builder.ins().iadd_imm(src, op_type.bytes() as i64);
+            self.builder.ins().jump(block_col_head, &[acc, rem, src]);
+        }
+
+        {
+            self.builder.switch_to_block(block_col_rem);
+            let dst = self.builder.block_params(block_row_head)[0];
+            let acc = self.builder.block_params(block_col_head)[0];
+            let mut res = self.builder.ins().extractlane(acc, 0);
+            for i in 1..lane_count {
+                let tmp = self.builder.ins().extractlane(acc, i as u8);
+                res = self.builder.ins().fmax(res, tmp);
+            }
+            for i in 0..col_trip_count_rem {
+                let offset = i as i32 * op_type.lane_type().bytes() as i32;
+                let v =
+                    self.builder
+                        .ins()
+                        .load(op_type.lane_type(), MemFlags::trusted(), src, offset);
+                res = self.builder.ins().fmax(res, v);
+            }
+            self.builder.ins().store(MemFlags::trusted(), res, dst, 0);
+            self.builder.ins().jump(block_row_epilog, &[]);
+        }
+
+        {
+            self.builder.switch_to_block(block_row_epilog);
+            let dst = self.builder.block_params(block_row_head)[0];
+            let rem = self.builder.block_params(block_row_head)[1];
+            let src = self.builder.block_params(block_row_head)[2];
+            let dst = self.builder.ins().iadd_imm(dst, ty.bytes() as i64);
+            let rem = self.builder.ins().iadd_imm(rem, -1);
+            let src = self
+                .builder
+                .ins()
+                .iadd_imm(src, col as i64 * ty.bytes() as i64);
+            self.builder
+                .ins()
+                .brif(rem, block_row_head, &[dst, rem, src], exit, &[]);
+        }
+
+        self.builder.switch_to_block(exit);
+        self.builder.seal_block(block_row_head);
+        self.builder.seal_block(block_row_epilog);
+        self.builder.seal_block(block_col_head);
+        self.builder.seal_block(block_col_main);
+        self.builder.seal_block(block_col_workaround);
+        self.builder.seal_block(block_col_rem);
+        self.builder.seal_block(exit);
     }
 }

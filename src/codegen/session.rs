@@ -471,4 +471,28 @@ mod test {
         tensor_assert_eq!(output[0], expected);
         Ok(())
     }
+
+    #[test]
+    fn maxpool() -> TestResult {
+        let session = make_session("models/test/maxpool.onnx")?;
+
+        // (1 x 3 x 8 x 8)
+        let orig = ndarray::Array::from_shape_fn((1, 3, 8, 8), |(i, j, k, l)| {
+            (i * 3 * 8 * 8 + j * 8 * 8 + k * 8 + l) as f32
+        });
+        let input = Tensor::try_from(orig.clone()).map_err(SessionError::TypeError)?;
+        let output = session.run(&[input])?;
+
+        let expected = orig
+            .windows((1, 1, 2, 2))
+            .into_iter()
+            .map(|w| w.iter().cloned().fold(f32::NEG_INFINITY, f32::max))
+            .collect::<ndarray::Array<f32, _>>()
+            .to_shape((1, 3, 7, 7))
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+            .to_owned();
+        let expected = Tensor::try_from(expected).map_err(SessionError::TypeError)?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    }
 }
