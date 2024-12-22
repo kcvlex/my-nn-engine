@@ -86,7 +86,7 @@ impl Session {
             .iter()
             .map(|ty| ty.mem_size())
             .sum::<usize>();
-        let mut raw_output = vec![0u8; outputs];
+        let mut raw_output = vec![42u8; outputs];
         (self.code)(inputs.as_ptr(), raw_output.as_mut_ptr());
         let mut outputs = Vec::new();
         let mut offset = 0;

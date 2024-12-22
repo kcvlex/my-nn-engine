@@ -6,6 +6,7 @@ use crate::tensor::{
 };
 use itertools::zip_eq;
 
+#[derive(Debug)]
 struct ConvShape<'a> {
     kernel_shape: &'a [usize],
     input_shape: &'a [usize],

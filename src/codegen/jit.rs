@@ -11,6 +11,8 @@ use itertools::izip;
 use std::collections::HashMap;
 use std::slice;
 
+use std::ffi::CString;
+
 #[derive(Debug)]
 pub enum CodegenError {
     ModuleError(ModuleError),
@@ -358,7 +360,7 @@ impl<'a> GraphCompiler<'a> {
 
                 let result_shape = result_shape.dims;
                 let result_size = result_shape.size();
-                let one_kernel_size = kernel.ty.dims.size() / channel;
+                let one_kernel_size = kernel.ty.dims.size() / channel / feature_map_count;
                 let im2col_input_ty = ResolvedTensorType::new(
                     input.ty.elem_type,
                     ResolvedTensorDims::new(vec![result_size, one_kernel_size * channel]),
@@ -441,7 +443,8 @@ impl<'a> GraphCompiler<'a> {
                 } else {
                     // Debug
                     // TODO: remove
-                    let src = im2col_input.tensor;
+                    //let src = im2col_input.tensor;
+                    let src = kernel;
                     let dst = res;
                     let len = dst.ty.mem_size().min(src.ty.mem_size());
                     let len = self.translator.builder.ins().iconst(types::I64, len as i64);
@@ -451,7 +454,8 @@ impl<'a> GraphCompiler<'a> {
                         .translator
                         .builder
                         .ins()
-                        .iadd_imm(src.ptr, one_kernel_size as i64 * 3);
+                        //.iadd_imm(src.ptr, one_kernel_size as i64 * 3);
+                        .iadd_imm(src.ptr, 0);
                     self.translator.call_memcpy(dst.ptr, src_ptr, len);
                 }
             }
@@ -680,13 +684,13 @@ impl ElementwiseOp {
                 let (lhs, rhs) = operands;
                 let lhs = translator.builder.ins().load(
                     lhs.op_type,
-                    MemFlags::trusted(),
+                    MemFlags::new(),
                     lhs.tensor.ptr,
                     offset,
                 );
                 let rhs = translator.builder.ins().load(
                     rhs.op_type,
-                    MemFlags::trusted(),
+                    MemFlags::new(),
                     rhs.tensor.ptr,
                     offset,
                 );
@@ -699,7 +703,7 @@ impl ElementwiseOp {
                 let data_ty = data.op_type;
                 let data = translator.builder.ins().load(
                     data.op_type,
-                    MemFlags::trusted(),
+                    MemFlags::new(),
                     data.tensor.ptr,
                     offset,
                 );
@@ -717,13 +721,13 @@ impl ElementwiseOp {
             }
             Self::Broadcast(data) => translator.builder.ins().load(
                 data.op_type,
-                MemFlags::trusted(),
+                MemFlags::new(),
                 data.tensor.ptr,
                 offset,
             ),
             Self::Transpose(data, _) => translator.builder.ins().load(
                 data.op_type,
-                MemFlags::trusted(),
+                MemFlags::new(),
                 data.tensor.ptr,
                 offset,
             ),
@@ -812,6 +816,7 @@ impl ResolvedTensorType {
 impl<'a> FunctionTranslator<'a> {
     pub fn new(jit: &'a mut JIT) -> CodegenResult<Self> {
         let ptr_ty = jit.module.target_config().pointer_type();
+
         let mut builder = FunctionBuilder::new(&mut jit.ctx.func, &mut jit.builder_ctx);
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
@@ -857,6 +862,18 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.inst_results(call)[0]
     }
 
+    pub fn gen_global_data_addr(&mut self, name: &str) -> TypedValue {
+        let sym = self
+            .module
+            .declare_data(name, Linkage::Export, true, false)
+            .expect("problem declaring data object");
+        let local_id = self.module.declare_data_in_func(sym, self.builder.func);
+
+        let ty = self.module.target_config().pointer_type();
+        let value = self.builder.ins().symbol_value(ty, local_id);
+        TypedValue { ty, value }
+    }
+
     pub fn allocate(&mut self, size: usize) -> Value {
         let fragment = self.allocator.allocate(size).unwrap_or({
             let allocated = size;
@@ -865,6 +882,7 @@ impl<'a> FunctionTranslator<'a> {
                 let size = self.builder.ins().iconst(types::I64, size as i64);
                 self.malloc(size)
             };
+
             self.allocator.append_block(ptr, size, allocated)
         });
 
@@ -984,7 +1002,7 @@ impl<'a> FunctionTranslator<'a> {
             op.set_operands(params.as_slice());
             let dst = self.builder.block_params(exit)[PARAMS_DST];
             let sum = op.generate(self, 0);
-            self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
+            self.builder.ins().store(MemFlags::new(), sum, dst, 0);
             let dst = self
                 .builder
                 .ins()
@@ -1120,7 +1138,7 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.switch_to_block(body);
         op.set_operands(&params);
         let sum = op.generate(self, 0);
-        self.builder.ins().store(MemFlags::trusted(), sum, dst, 0);
+        self.builder.ins().store(MemFlags::new(), sum, dst, 0);
         let ind = self.builder.ins().iadd_imm(ind, -1);
         let dst = self.builder.ins().iadd_imm(dst, res.op_type.bytes() as i64);
         params[PARAMS_INDUCTION] = ind;
@@ -1136,9 +1154,7 @@ impl<'a> FunctionTranslator<'a> {
             for i in 0..rem_trip_count {
                 let offset = i as i32 * res.op_type.lane_of().bytes() as i32;
                 let sum = op.generate(self, offset);
-                self.builder
-                    .ins()
-                    .store(MemFlags::trusted(), sum, dst, offset);
+                self.builder.ins().store(MemFlags::new(), sum, dst, offset);
             }
         }
 
@@ -1331,8 +1347,8 @@ impl<'a> FunctionTranslator<'a> {
             let ind_k = self.builder.block_params(block_k0)[INDUCTION];
 
             let acc = {
-                let lhs = self.builder.ins().load(ty, MemFlags::trusted(), lhs, 0);
-                let rhs = self.builder.ins().load(ty, MemFlags::trusted(), rhs, 0);
+                let lhs = self.builder.ins().load(ty, MemFlags::new(), lhs, 0);
+                let rhs = self.builder.ins().load(ty, MemFlags::new(), rhs, 0);
                 self.builder.ins().fma(lhs, rhs, acc)
             };
             let ind_k = self.builder.ins().iadd_imm(ind_k, -1);
@@ -1358,7 +1374,7 @@ impl<'a> FunctionTranslator<'a> {
             let rhs = self.builder.block_params(block_j0)[RHS];
             let dst = self.builder.block_params(block_j0)[DST];
             let ind_j = self.builder.block_params(block_j0)[INDUCTION];
-            self.builder.ins().store(MemFlags::trusted(), acc, dst, 0);
+            self.builder.ins().store(MemFlags::new(), acc, dst, 0);
             let ind_j = self.builder.ins().iadd_imm(ind_j, -1);
             let rhs = self.builder.ins().iadd_imm(rhs, ty.bytes() as i64);
             let dst = self.builder.ins().iadd_imm(dst, ty.bytes() as i64);
@@ -1442,6 +1458,11 @@ impl<'a> FunctionTranslator<'a> {
             _ => panic!("unsupported type"),
         };
 
+        println!(
+            "main_trip_count: {}, rem_trip_count: {}, block_i0={}, shape={:?}",
+            main_trip_count, rem_trip_count, block_i0, shape
+        );
+
         for block in [block_i0, block_j0, block_k0] {
             self.builder.append_block_param(block, types::I64);
             self.builder.append_block_param(block, self.ptr_ty);
@@ -1503,8 +1524,8 @@ impl<'a> FunctionTranslator<'a> {
             let ind_k = self.builder.block_params(block_k0)[INDUCTION];
 
             let acc = {
-                let lhs = self.builder.ins().load(ty, MemFlags::trusted(), lhs, 0);
-                let rhs = self.builder.ins().load(ty, MemFlags::trusted(), rhs, 0);
+                let lhs = self.builder.ins().load(ty, MemFlags::new(), lhs, 0);
+                let rhs = self.builder.ins().load(ty, MemFlags::new(), rhs, 0);
                 self.builder.ins().fma(lhs, rhs, acc)
             };
             let ind_k = self.builder.ins().iadd_imm(ind_k, -1);
@@ -1537,11 +1558,11 @@ impl<'a> FunctionTranslator<'a> {
                 let lhs = self
                     .builder
                     .ins()
-                    .load(ty.lane_type(), MemFlags::trusted(), lhs, offset);
+                    .load(ty.lane_type(), MemFlags::new(), lhs, offset);
                 let rhs = self
                     .builder
                     .ins()
-                    .load(ty.lane_type(), MemFlags::trusted(), rhs, offset);
+                    .load(ty.lane_type(), MemFlags::new(), rhs, offset);
                 acc = self.builder.ins().fma(lhs, rhs, acc);
             }
             self.builder.ins().jump(block_j1, &[acc]);
@@ -1553,7 +1574,7 @@ impl<'a> FunctionTranslator<'a> {
             let rhs = self.builder.block_params(block_j0)[RHS];
             let dst = self.builder.block_params(block_j0)[DST];
             let ind_j = self.builder.block_params(block_j0)[INDUCTION];
-            self.builder.ins().store(MemFlags::trusted(), acc, dst, 0);
+            self.builder.ins().store(MemFlags::new(), acc, dst, 0);
             let ind_j = self.builder.ins().iadd_imm(ind_j, -1);
             let rhs = self
                 .builder
@@ -1843,13 +1864,13 @@ impl<'a> FunctionTranslator<'a> {
                     let val = self
                         .builder
                         .ins()
-                        .load(img_src.op_type, MemFlags::trusted(), src, 0);
+                        .load(img_src.op_type, MemFlags::new(), src, 0);
                     self.builder.ins().jump(store_block, &[val]);
 
                     self.builder.switch_to_block(store_block);
                     self.builder.seal_block(store_block);
                     let val = self.builder.block_params(store_block)[0];
-                    self.builder.ins().store(MemFlags::trusted(), val, dst, 0);
+                    self.builder.ins().store(MemFlags::new(), val, dst, 0);
                     dst = self
                         .builder
                         .ins()
@@ -1999,10 +2020,7 @@ impl<'a> FunctionTranslator<'a> {
         {
             self.builder.switch_to_block(block_col_main);
             let src = self.builder.block_params(block_col_head)[2];
-            let val = self
-                .builder
-                .ins()
-                .load(op_type, MemFlags::trusted(), src, 0);
+            let val = self.builder.ins().load(op_type, MemFlags::new(), src, 0);
             self.builder.ins().jump(block_col_workaround, &[val]);
         }
 
@@ -2029,13 +2047,13 @@ impl<'a> FunctionTranslator<'a> {
             }
             for i in 0..col_trip_count_rem {
                 let offset = i as i32 * op_type.lane_type().bytes() as i32;
-                let v =
-                    self.builder
-                        .ins()
-                        .load(op_type.lane_type(), MemFlags::trusted(), src, offset);
+                let v = self
+                    .builder
+                    .ins()
+                    .load(op_type.lane_type(), MemFlags::new(), src, offset);
                 res = self.builder.ins().fmax(res, v);
             }
-            self.builder.ins().store(MemFlags::trusted(), res, dst, 0);
+            self.builder.ins().store(MemFlags::new(), res, dst, 0);
             self.builder.ins().jump(block_row_epilog, &[]);
         }
 
