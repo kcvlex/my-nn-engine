@@ -178,6 +178,7 @@ fn main() -> Result<()> {
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
             let output = session.run(&[input]);
             println!("{:?}", output);
+            //println!("{:?}", output.unwrap()[0].data.raw_vec());
         }
     }
     Ok(())

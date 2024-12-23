@@ -111,6 +111,7 @@ pub struct Allocator {
     blocks: HashMap<Value, Block>,
 }
 
+#[derive(Debug)]
 pub struct Fragment {
     pub base: Value,
     pub offset: u64,
