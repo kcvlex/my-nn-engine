@@ -647,6 +647,13 @@ struct Im2Col {
     strides: OptionalVec<usize>,
 }
 
+impl Im2Col {
+    fn padded_len(&self, dim: usize) -> usize {
+        let unit = self.dilations[dim] * (self.kernel_shape[dim] - 1) + 1;
+        self.strides[dim] * (self.result_shape[dim] - 1) + unit
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Channel {
     Meld(usize),  // Conv
@@ -1669,6 +1676,8 @@ impl<'a> FunctionTranslator<'a> {
             _ => panic!("unsupported type"),
         };
 
+        println!("im2col: {:?}", im2col);
+
         #[derive(Debug)]
         struct OuterLoop {
             head: ir::Block,
@@ -1788,7 +1797,9 @@ impl<'a> FunctionTranslator<'a> {
         for (i, (outer, inner)) in izip!(outer_loops.iter(), inner_loops.iter()).enumerate() {
             let shift_amount = img_src.op_type.bytes() as i64 * img_src.tensor.ty.stride(i) as i64;
             let orig_img_size = img_src.tensor.ty.dims[i];
-            let padded_img_size = orig_img_size + inner.pad_left + inner.pad_right;
+            // let padded_img_size = orig_img_size + inner.pad_left + inner.pad_right;
+            let padded_img_size = im2col.padded_len(i);
+            println!("padded_img_size: {}", padded_img_size);
             // Outer
             {
                 self.builder.switch_to_block(outer.head);
@@ -1946,6 +1957,7 @@ impl<'a> FunctionTranslator<'a> {
             .jump(head, &[img_dst.tensor.ptr, trip_count, img_src.tensor.ptr]);
 
         self.builder.switch_to_block(head);
+        println!("head: {:?}", head);
         img_src.tensor.ptr = self.builder.block_params(head)[2];
         img_dst.tensor.ptr = self.builder.block_params(head)[0];
         self.gen_im2col_by_channel(&img_dst, &img_src, im2col);
@@ -2055,6 +2067,7 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.switch_to_block(block_col_workaround);
             let acc = self.builder.block_params(block_col_head)[0];
             let rem = self.builder.block_params(block_col_head)[1];
+            let src = self.builder.block_params(block_col_head)[2];
             let val = self.builder.block_params(block_col_workaround)[0];
             let acc = self.builder.ins().fmax(val, acc);
             let rem = self.builder.ins().iadd_imm(rem, -1);
@@ -2065,6 +2078,7 @@ impl<'a> FunctionTranslator<'a> {
         {
             self.builder.switch_to_block(block_col_rem);
             let dst = self.builder.block_params(block_row_head)[0];
+            let src = self.builder.block_params(block_col_head)[2];
             let acc = self.builder.block_params(block_col_head)[0];
             let mut res = self.builder.ins().extractlane(acc, 0);
             for i in 1..lane_count {
