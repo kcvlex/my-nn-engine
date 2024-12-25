@@ -14,7 +14,7 @@ struct ConvShape<'a> {
     dilations: &'a OptionalVec<usize>,
 }
 
-impl<'a> ConvShape<'a> {
+impl ConvShape<'_> {
     fn padded_input_size(&self, i: usize) -> usize {
         self.input_shape[i] + self.pad[i].0 + self.pad[i].1
     }
