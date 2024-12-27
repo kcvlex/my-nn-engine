@@ -10,6 +10,7 @@ cranelift-jit = "0.110.1"
 cranelift-module = "0.110.1"
 cranelift-native = "0.110.1"
 id-arena = "2.2.1"
+inkwell = { version = "0.5.0", features = ["llvm18-0-prefer-static"] }
 itertools = "0.13.0"
 ndarray = "0.16.0"
 num-integer = "0.1.46"

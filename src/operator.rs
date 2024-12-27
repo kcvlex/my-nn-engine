@@ -68,6 +68,22 @@ pub struct MaxPool {
     pub strides: OptionalVec<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Channel {
+    Meld(usize),  // Conv
+    Split(usize), // MaxPool
+}
+
+#[derive(Debug, Clone)]
+pub struct Im2Col {
+    pub result_shape: ResolvedTensorDims, // convolution of one image and one kernel
+    pub pad: ConvPad,
+    pub channel: Channel,
+    pub dilations: OptionalVec<usize>,
+    pub kernel_shape: ResolvedTensorDims,
+    pub strides: OptionalVec<usize>,
+}
+
 impl Operator {
     pub fn name(&self) -> &str {
         match self {

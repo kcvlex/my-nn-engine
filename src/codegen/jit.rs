@@ -567,7 +567,7 @@ enum ElementwiseOperands<'a> {
     Binary(&'a BinaryOperands),
 }
 
-impl<'a> ElementwiseOperands<'a> {
+impl ElementwiseOperands<'_> {
     fn block_params_ty(&self, ptr_ty: Type) -> Vec<Type> {
         let len = 2 + match self {
             Self::Binary(_) => 2,
@@ -597,34 +597,10 @@ enum ElementwiseOp {
     Transpose(UnaryOperand, Vec<usize>),
 }
 
-#[derive(Debug, Clone)]
-struct Im2Col {
-    result_shape: ResolvedTensorDims, // convolution of one image and one kernel
-    pad: ConvPad,
-    channel: Channel,
-    dilations: OptionalVec<usize>,
-    kernel_shape: ResolvedTensorDims,
-    strides: OptionalVec<usize>,
-}
-
 impl Im2Col {
     fn padded_len(&self, dim: usize) -> usize {
         let unit = self.dilations[dim] * (self.kernel_shape[dim] - 1) + 1;
         self.strides[dim] * (self.result_shape[dim] - 1) + unit
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Channel {
-    Meld(usize),  // Conv
-    Split(usize), // MaxPool
-}
-
-impl Channel {
-    fn val(&self) -> usize {
-        match self {
-            Self::Meld(v) | Self::Split(v) => *v,
-        }
     }
 }
 
