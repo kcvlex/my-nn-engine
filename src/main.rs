@@ -185,12 +185,14 @@ fn main_cranelift() -> Result<()> {
 }
 
 fn main_inkwell() -> Result<()> {
+    use inkwell::attributes::*;
     use inkwell::builder::Builder;
     use inkwell::context::Context;
     use inkwell::execution_engine::{ExecutionEngine, JitFunction};
     use inkwell::module::Module;
-    use inkwell::OptimizationLevel;
+    use inkwell::types::*;
     use inkwell::values::*;
+    use inkwell::OptimizationLevel;
 
     /// Convenience type alias for the `sum` function.
     ///
@@ -206,11 +208,12 @@ fn main_inkwell() -> Result<()> {
     }
 
     impl<'ctx> CodeGen<'ctx> {
-        fn jit_compile_sum(&self) -> Option<JitFunction<SumFunc>> {
+        fn jit_compile_sum(&self) -> Option<()> {
             let i64_type = self.context.i64_type();
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
             let f32_type = self.context.f32_type();
-            let fn_type = i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+            let fn_type =
+                i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
             let function = self.module.add_function("pow2", fn_type, None);
 
             let arr = {
@@ -226,11 +229,9 @@ fn main_inkwell() -> Result<()> {
 
             let entry = self.context.append_basic_block(function, "entry");
             let body = self.context.append_basic_block(function, "body");
-            let remainder_entry = self.context.append_basic_block(function, "remainder.entry");
-            let remainder = self.context.append_basic_block(function, "remainder");
             let exit = self.context.append_basic_block(function, "exit");
 
-            let vec_ty = f32_type.vec_type(4);
+            // let vec_ty = f32_type;
             // let vscale_i64 = inkwell::intrinsics::Intrinsic::find("llvm.vscale.i64").unwrap();
             // let vscale_i64 = vscale_i64.get_declaration(&self.module, &[]).unwrap();
 
@@ -240,80 +241,141 @@ fn main_inkwell() -> Result<()> {
             //     call.set_tail_call(true);
             //     call.try_as_basic_value().left().unwrap().into_int_value()
             // };
-            let vscale = i64_type.const_int(4, false);
             let len = function.get_nth_param(2)?.into_int_value();
-            let cond = self.builder.build_int_compare(inkwell::IntPredicate::ULE, vscale, len, "cond").unwrap();
-            let _ = self.builder.build_conditional_branch(cond, body, remainder_entry).unwrap();
+            let _ = self.builder.build_unconditional_branch(body).unwrap();
 
             self.builder.position_at_end(body);
-            let ind_vec = self.builder.build_phi(i64_type, "ind.vec").unwrap();
-            let ind_vec_int = ind_vec.as_basic_value().into_int_value();
+            let ind = self.builder.build_phi(i64_type, "ind").unwrap();
+            let ind_int = ind.as_basic_value().into_int_value();
 
             let dst = function.get_nth_param(0)?.into_pointer_value();
             let src = function.get_nth_param(1)?.into_pointer_value();
 
-            let gep = unsafe { self.builder.build_in_bounds_gep(f32_type, src, &[ind_vec_int], "gep.src").unwrap() };
-            let val = {
-                let tmp = self.builder.build_load(vec_ty, gep, "val").unwrap();
-                tmp.as_instruction_value().unwrap().set_alignment(4).unwrap();
-                tmp.into_vector_value()
+            let gep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(f32_type, src, &[ind_int], "gep.src")
+                    .unwrap()
             };
+            let val = self
+                .builder
+                .build_load(f32_type, gep, "val")
+                .unwrap()
+                .into_float_value();
             let val = self.builder.build_float_mul(val, val, "val2").unwrap();
-            let gep = unsafe { self.builder.build_in_bounds_gep(f32_type, dst, &[ind_vec_int], "gep.dst").unwrap() };
-            self.builder.build_store(gep, val).unwrap().set_alignment(4).unwrap();
-            let ind_vec_next = self.builder.build_int_add(ind_vec_int, vscale, "ind.vec.next").unwrap();
-            let next_end = self.builder.build_int_add(ind_vec_next, vscale, "next.end").unwrap();
-            let cond = self.builder.build_int_compare(inkwell::IntPredicate::ULE, next_end, len, "cond").unwrap();
-            let _ = self.builder.build_conditional_branch(cond, body, remainder_entry).unwrap();
-            ind_vec.add_incoming(&[(&i64_type.const_int(0, false), entry), (&ind_vec_next, body)]);
-
-            self.builder.position_at_end(remainder_entry);
-            let ind_init = self.builder.build_phi(i64_type, "ind.init").unwrap();
-            let ind_init_int = ind_init.as_basic_value().into_int_value();
-            let cond = self.builder.build_int_compare(inkwell::IntPredicate::ULT, ind_init_int, len, "cond").unwrap();
-            let _ = self.builder.build_conditional_branch(cond, remainder, exit).unwrap();
-            ind_init.add_incoming(&[(&i64_type.const_int(0, false), entry), (&ind_vec_next, body)]);
-
-            self.builder.position_at_end(remainder);
-            let ind = self.builder.build_phi(i64_type, "ind").unwrap();
-            let ind_int = ind.as_basic_value().into_int_value();
-            let gep = unsafe { self.builder.build_in_bounds_gep(f32_type, src, &[ind_int], "gep.src").unwrap() };
-            let val = self.builder.build_load(f32_type, gep, "val").unwrap().into_float_value();
-            let val = self.builder.build_float_mul(val, val, "val2").unwrap();
-            let gep = unsafe { self.builder.build_in_bounds_gep(f32_type, dst, &[ind_int], "gep.dst").unwrap() };
-            let _ = self.builder.build_store(gep, val).unwrap();
-            let ind_next = self.builder.build_int_add(ind_int, i64_type.const_int(1, false), "ind.next").unwrap();
-            let cond = self.builder.build_int_compare(inkwell::IntPredicate::ULT, ind_next, len, "cond").unwrap();
-            let _ = self.builder.build_conditional_branch(cond, remainder, exit).unwrap();
-            ind.add_incoming(&[(&ind_init_int, remainder_entry), (&ind_next, remainder)]);
+            let gep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(f32_type, dst, &[ind_int], "gep.dst")
+                    .unwrap()
+            };
+            self.builder
+                .build_store(gep, val)
+                .unwrap()
+                .set_alignment(4)
+                .unwrap();
+            let ind_next = self
+                .builder
+                .build_int_add(ind_int, i64_type.const_int(1, false), "ind.next")
+                .unwrap();
+            let cond = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, ind_next, len, "cond")
+                .unwrap();
+            let _ = self
+                .builder
+                .build_conditional_branch(cond, body, exit)
+                .unwrap();
+            ind.add_incoming(&[(&i64_type.const_int(0, false), entry), (&ind_next, body)]);
 
             self.builder.position_at_end(exit);
             self.builder.build_return(None).unwrap();
 
-            unsafe { self.execution_engine.get_function("pow2").ok() }
+            for name in ["noalias", "nocapture", "noundef"].iter() {
+                let attr = {
+                    let kind_id = Attribute::get_named_enum_kind_id(name);
+                    self.context.create_enum_attribute(kind_id, 0)
+                };
+                function.add_attribute(AttributeLoc::Param(0), attr);
+                function.add_attribute(AttributeLoc::Param(1), attr);
+            }
+
+            function.print_to_stderr();
+
+            Some(())
         }
     }
 
+    use inkwell::targets::*;
+    Target::initialize_all(&InitializationConfig::default());
+    let target_triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&target_triple).unwrap();
+    let target_machine = target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::Aggressive,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .unwrap();
+
     let context = Context::create();
     let module = context.create_module("pow2");
-    let execution_engine = module.create_jit_execution_engine(OptimizationLevel::None).map_err(|e| Error::other(format!("{:?}", e)))?;
+    let execution_engine = module
+        .create_jit_execution_engine(OptimizationLevel::Default)
+        .map_err(|e| Error::other(format!("{:?}", e)))?;
     let codegen = CodeGen {
         context: &context,
         module,
         builder: context.create_builder(),
         execution_engine,
     };
+    codegen.jit_compile_sum();
+    let passes: &[&str] = &[
+        "instcombine",
+        "reassociate",
+        "gvn",
+        "simplifycfg",
+        // "basic-aa",
+        "mem2reg",
+        "loop-vectorize",
+        "slp-vectorizer",
+    ];
 
-    let pow2 = codegen.jit_compile_sum()
+    codegen
+        .module
+        .run_passes(
+            passes.join(",").as_str(),
+            &target_machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .unwrap();
+    {
+        let function = codegen
+            .module
+            .get_function("pow2")
+            .ok_or(Error::other("Unable to find `sum` function"))?;
+        function.print_to_stderr();
+    }
+
+    let pow2: JitFunction<SumFunc> = unsafe { codegen.execution_engine.get_function("pow2").ok() }
         .ok_or(Error::other("Unable to JIT compile `sum` function"))?;
 
-    println!("{}", codegen.module.to_string());
-    
+    codegen
+        .execution_engine
+        .get_function_value("pow2")
+        .unwrap()
+        .print_to_stderr();
+
     let src = [3f32, 1f32, 4f32, 1f32, 5f32, 9f32];
     let mut dst = vec![0f32; src.len()];
 
     unsafe {
-        pow2.call(dst.as_mut_ptr() as *const u8, src.as_ptr() as *const u8, src.len() as u64);
+        pow2.call(
+            dst.as_mut_ptr() as *const u8,
+            src.as_ptr() as *const u8,
+            src.len() as u64,
+        );
         println!("src={:?}", src);
         println!("dst={:?}", dst);
     }

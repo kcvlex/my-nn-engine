@@ -1515,7 +1515,7 @@ impl<'a> FunctionTranslator<'a> {
             for i in 1..lane_count {
                 let tmp = self.builder.ins().extractlane(acc_v, i as u8);
                 acc = self.builder.ins().fadd(acc, tmp);
-                }
+            }
             for i in 0..rem_trip_count {
                 let offset = i as i32 * ty.lane_type().bytes() as i32;
                 let lhs = self.builder.block_params(block_k0)[LHS];
@@ -1529,7 +1529,7 @@ impl<'a> FunctionTranslator<'a> {
                     .ins()
                     .load(ty.lane_type(), memflags(), rhs, offset);
                 acc = self.builder.ins().fma(lhs, rhs, acc)
-                }
+            }
             self.builder.ins().jump(block_j1, &[acc]);
         }
 
