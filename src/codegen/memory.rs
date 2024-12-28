@@ -1,6 +1,7 @@
 use cranelift::prelude::*;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Bound;
+use std::hash::Hash;
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Debug)]
 struct Region {
@@ -106,24 +107,29 @@ impl Block {
     }
 }
 
-#[derive(Default)]
-pub struct Allocator {
-    blocks: HashMap<Value, Block>,
+pub struct Allocator<T: Clone + Eq + Hash> {
+    blocks: HashMap<T, Block>,
 }
 
 #[derive(Debug)]
-pub struct Fragment {
-    pub base: Value,
+pub struct Fragment<T: Clone + Eq + Hash> {
+    pub base: T,
     pub offset: u64,
     pub size: usize,
 }
 
-impl Allocator {
-    pub fn allocate(&mut self, size: usize) -> Option<Fragment> {
+impl<T: Clone + Eq + Hash> Allocator<T> {
+    pub fn new() -> Self {
+        Allocator {
+            blocks: HashMap::new(),
+        }
+    }
+    
+    pub fn allocate(&mut self, size: usize) -> Option<Fragment<T>> {
         for (value, block) in self.blocks.iter_mut() {
             if let Some(region) = block.allocate(size) {
                 return Some(Fragment {
-                    base: *value,
+                    base: value.clone(),
                     offset: region.start,
                     size,
                 });
@@ -132,7 +138,7 @@ impl Allocator {
         None
     }
 
-    pub fn deallocate(&mut self, fragment: Fragment) {
+    pub fn deallocate(&mut self, fragment: Fragment<T>) {
         let block = self.blocks.get_mut(&fragment.base).unwrap();
         block.deallocate(Region {
             start: fragment.offset,
@@ -140,9 +146,9 @@ impl Allocator {
         });
     }
 
-    pub fn append_block(&mut self, base: Value, size: usize, allocated: usize) -> Fragment {
+    pub fn append_block(&mut self, base: T, size: usize, allocated: usize) -> Fragment<T> {
         let block = Block::new_with_allocated(size, allocated);
-        self.blocks.insert(base, block);
+        self.blocks.insert(base.clone(), block);
         Fragment {
             base,
             offset: 0,

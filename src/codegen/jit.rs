@@ -135,8 +135,8 @@ struct FunctionTranslator<'a> {
     isa: OwnedTargetIsa,
     ptr_ty: Type,
     malloc: ir::FuncRef,
-    allocator: memory::Allocator,
-    value2fragment: HashMap<Value, memory::Fragment>,
+    allocator: memory::Allocator<Value>,
+    value2fragment: HashMap<Value, memory::Fragment<Value>>,
 }
 
 pub struct GraphCompiler<'a> {
@@ -819,7 +819,7 @@ impl<'a> FunctionTranslator<'a> {
             isa,
             ptr_ty,
             malloc,
-            allocator: memory::Allocator::default(),
+            allocator: memory::Allocator::new(),
             value2fragment: HashMap::new(),
         })
     }

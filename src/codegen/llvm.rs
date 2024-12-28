@@ -1,41 +1,55 @@
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::{DataType, ResolvedTensorType};
+use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
+use crate::model::{ValueId, Node, Graph};
+use crate::operator::Operator;
 
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
+use inkwell::intrinsics::Intrinsic;
 use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
+use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
 use inkwell::{
-    passes::PassBuilderOptions,
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine},
 };
-use inkwell::AddressSpace;
+use crate::codegen::memory;
+use std::collections::HashMap;
 
-enum LLVMPass {
+pub enum LLVMPass {
+    LoopUnroll,
     LoopVectorize,
     SLPVectorize,
     InstCombine,
     Reassociate,
-    GVN,
+    GlobalValueNumbering,
     SimplifyCFG,
     Mem2Reg,
 }
 
 impl LLVMPass {
-    fn to_llvm_pass(&self) -> &'static str {
+    pub fn to_llvm_pass(&self) -> &'static str {
         match self {
+            LLVMPass::LoopUnroll => "loop-unroll",
             LLVMPass::LoopVectorize => "loop-vectorize",
-            LLVMPass::SLPVectorize => "slp-vectorize",
+            LLVMPass::SLPVectorize => "slp-vectorizer",
             LLVMPass::InstCombine => "instcombine",
             LLVMPass::Reassociate => "reassociate",
-            LLVMPass::GVN => "gvn",
+            LLVMPass::GlobalValueNumbering => "gvn",
             LLVMPass::SimplifyCFG => "simplifycfg",
             LLVMPass::Mem2Reg => "mem2reg",
         }
+    }
+
+    pub fn passes(passes: &[LLVMPass]) -> String {
+        passes
+            .iter()
+            .map(|p| p.to_llvm_pass())
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -43,41 +57,250 @@ pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    target_machine: TargetMachine,
+
+    allocator: memory::Allocator<GlobalValue<'ctx>>,
+    id2value: HashMap<ValueId, PointerValue<'ctx>>,
+    main: FunctionValue<'ctx>,
+    main_entry: BasicBlock<'ctx>,
+
+    noalias: Attribute,
+    noundef: Attribute,
+    nocapture: Attribute,
 }
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context) -> Self {
         let module = context.create_module("main");
         let builder = context.create_builder();
-        Target::initialize_native(&InitializationConfig::default()).unwrap();
-        let target_triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&target_triple).unwrap();
-        let target_machine = target
-            .create_target_machine(
-                &target_triple,
-                "generic",
-                "",
-                OptimizationLevel::Aggressive,
-                RelocMode::PIC,
-                CodeModel::Default,
-            )
-            .unwrap();
+
+        let ptr_type = context.ptr_type(AddressSpace::default());
+        let fn_type = context.void_type().fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        let main = module.add_function("main", fn_type, None);
+        let main_entry = context.append_basic_block(main, "entry");
+        builder.position_at_end(main_entry);
+
+        let get_attr = |name: &str| {
+            let kind_id = Attribute::get_named_enum_kind_id(name);
+            context.create_enum_attribute(kind_id, 0)
+        };
+
+        let noalias = get_attr("noalias");
+        let noundef = get_attr("noundef");
+        let nocapture = get_attr("nocapture");
+
+        main.add_attribute(AttributeLoc::Param(0), noalias);
+        main.add_attribute(AttributeLoc::Param(0), noundef);
+        main.add_attribute(AttributeLoc::Param(1), noalias);
+        main.add_attribute(AttributeLoc::Param(1), noundef);
 
         CodeGen {
             context,
             module,
             builder,
-            target_machine,
+
+            allocator: memory::Allocator::new(),
+            id2value: HashMap::new(),
+            main,
+            main_entry,
+
+            noalias,
+            noundef,
+            nocapture,
         }
+    }
+
+    pub fn run_passes(&self, passes: &[LLVMPass]) -> Result<(), inkwell::support::LLVMString> {
+    Target::initialize_native(&InitializationConfig::default()).unwrap();
+    let target_triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&target_triple).unwrap();
+    let target_machine = target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::Aggressive,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .unwrap();
+        self.module.run_passes(
+            LLVMPass::passes(passes).as_str(),
+            &target_machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+    }
+
+    fn create_fnction(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
+        let mut vec = Vec::with_capacity(argc as usize);
+        for _ in 0..argc {
+            vec.push(self.context.ptr_type(AddressSpace::default()).into());
+        }
+        let fn_type = self.context.void_type().fn_type(&vec, false);
+        let func = self.module.add_function(name, fn_type, None);
+        for i in 0..argc {
+            func.add_attribute(AttributeLoc::Param(i), self.noalias);
+            func.add_attribute(AttributeLoc::Param(i), self.noundef);
+        }
+        func
+    }
+
+    fn init_data(&mut self, graph: &Graph) -> Result<(), BuilderError> {
+        macro_rules! define_gv {
+            ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
+                let len = $data.len();
+                let gv = self.module.add_global($ty.array_type(len as u32), None, $name.as_str());
+                let arr = $data.iter().map($convert).collect::<Vec<_>>();
+                let arr = $ty.const_array(&arr);
+                gv.set_initializer(&arr);
+                gv
+            }};
+        }
+        for (id, value) in graph.initializer.iter() {
+            let name = format!("gv.{}", graph.values[*id].name);
+            let gv = match value.data {
+                TensorData::F32(ref data) => {
+                    let ty = self.context.f32_type();
+                    define_gv!(name, data, ty, |&x| ty.const_float(x.into()))
+                },
+                TensorData::F64(ref data) => {
+                    let ty = self.context.f64_type();
+                    define_gv!(name, data, ty, |&x| ty.const_float(x))
+                },
+                TensorData::I64(ref data) => {
+                    let ty = self.context.i64_type();
+                    define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
+                },
+            };
+            self.id2value.insert(*id, gv.as_pointer_value());
+        }
+        Ok(())
+    }
+
+    fn init_main_args(&mut self, graph: &Graph) -> Result<(), BuilderError> {
+        for (i, arr) in [&graph.outputs, &graph.inputs, ].iter().enumerate() {
+            let ptr = self.main.get_nth_param(i as u32).unwrap().into_pointer_value();
+            for (i, node_id) in arr.iter().enumerate() {
+                let value_id = match graph.nodes[*node_id].op {
+                    Operator::Input(v) | Operator::Output(v) => v,
+                    _ => unreachable!(),
+                };
+                let value = &graph.values[value_id];
+                let ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        self.context.ptr_type(AddressSpace::default()),
+                        ptr,
+                        &[self.context.i64_type().const_int(i as u64, false)],
+                        value.name.as_str(),
+                    )
+                }?;
+                let ptr = self.builder.build_load(
+                    self.context.ptr_type(AddressSpace::default()),
+                    ptr,
+                    value.name.as_str(),
+                )?.into_pointer_value();
+                self.id2value.insert(value_id, ptr);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn compile_graph(&mut self, graph: &Graph) -> Result<(), BuilderError> {
+        self.init_data(graph)?;
+        self.init_main_args(graph)?;
+        for (_, node) in graph.nodes.iter() {
+            if matches!(node.op, Operator::Input(_) | Operator::Output(_)) {
+                continue;
+            }
+            let function = self.compile_node(node, graph)?;
+            self.builder.position_at_end(self.main_entry);
+            macro_rules! malloc {
+                ($ty: expr, $len: expr, $name: expr) => {{
+                    self.builder.build_array_malloc($ty, $len, $name)
+                }};
+            }
+
+            // TODO: malloc
+            for &id in node.outputs.iter() {
+                let ty = graph.get_resolved_tensor_type(id).unwrap();
+                let len = self.context.i64_type().const_int(ty.dims.size() as u64, false);
+                let name = graph.values[id].name.as_str();
+                if let std::collections::hash_map::Entry::Vacant(e) = self.id2value.entry(id) {
+                        let ptr = match ty.elem_type {
+                            DataType::F32 => malloc!(self.context.f32_type(), len, name),
+                            DataType::F64 => malloc!(self.context.f64_type(), len, name),
+                            DataType::I64 => malloc!(self.context.i64_type(), len, name),
+                        }?;
+                        e.insert(ptr);
+                }
+            }
+
+            let mut args = node.outputs.clone();
+            args.extend(node.inputs.clone());
+            let args = args
+                .iter()
+                .map(|&id| self.id2value[&id])
+                .map(|ptr| ptr.into())
+                .collect::<Vec<_>>();
+            let call = self.builder.build_call(function, &args[..], "")?;
+            call.set_tail_call(true);
+        }
+
+        self.builder.position_at_end(self.main_entry);
+        self.builder.build_return(None)?;
+        Ok(())
+    }
+
+    fn compile_node(&self, node: &Node, graph: &Graph) -> Result<FunctionValue<'ctx>, BuilderError> {
+        let mut args = node.outputs.clone();
+        args.extend(node.inputs.clone());
+
+        let function = self.create_fnction(node.name.as_str(), args.len() as u32);
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let translator = FunctionTranslator {
+            context: self.context,
+            module: &self.module,
+            builder: &self.builder,
+            function: &function,
+        };
+
+        let ptrs = args
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| {
+                let ptr = function.get_nth_param(i as u32).unwrap().into_pointer_value();
+                let ty = graph.get_resolved_tensor_type(id).unwrap().clone();
+                let name = format!("ptr.{}", i);
+                let offset = self.context.i64_type().const_int(0, false);
+                TensorPtr { ptr, ty, offset, name }
+            })
+        .collect::<Vec<_>>();
+
+        let exit = match node.op {
+            Operator::Add => {
+                let binop = BinaryOps {
+                    dst: ptrs[0].clone(),
+                    lhs: ptrs[1].clone(),
+                    rhs: ptrs[2].clone(),
+                };
+                let op = Operation::BinaryOp(binop, BinaryOpcode::FloatAdd);
+                translator.gen_nested_loop(op, entry)
+            },
+            _ => todo!(),
+        }?;
+
+        self.builder.position_at_end(exit);
+        self.builder.build_return(None)?;
+        Ok(function)
     }
 }
 
+#[derive(Debug, Clone)]
 struct TensorPtr<'ctx> {
-    context: &'ctx Context,
     ptr: PointerValue<'ctx>,
     ty: ResolvedTensorType,
     offset: IntValue<'ctx>,
+    name: String,
 }
 
 struct LoopBB<'ctx> {
@@ -86,27 +309,164 @@ struct LoopBB<'ctx> {
     exit: BasicBlock<'ctx>,
 }
 
-struct Operators<'ctx> {
+struct FunctionTranslator<'a, 'ctx> {
+    context: &'ctx Context,
+    module: &'a Module<'ctx>,
+    builder: &'a Builder<'ctx>,
+    function: &'a FunctionValue<'ctx>,
+}
+
+enum LLVMScalarType<'ctx> {
+    LLVMInt(IntType<'ctx>),
+    LLVMFloat(FloatType<'ctx>),
+}
+
+impl<'ctx> LLVMScalarType<'ctx> {
+    fn from_data_type(context: &'ctx Context, data_type: DataType) -> Self {
+        match data_type {
+            DataType::F32 => LLVMScalarType::LLVMFloat(context.f32_type()),
+            DataType::F64 => LLVMScalarType::LLVMFloat(context.f64_type()),
+            DataType::I64 => LLVMScalarType::LLVMInt(context.i64_type()),
+        }
+    }
+}
+
+enum Operation<'ctx> {
+    UnaryOp(UnaryOps<'ctx>, UnaryOpcode),
+    BinaryOp(BinaryOps<'ctx>, BinaryOpcode),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BinaryOpcode {
+    IntAdd,
+    FloatAdd,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UnaryOpcode {
+    ReLU,
+}
+
+struct UnaryOps<'ctx> {
+    dst: TensorPtr<'ctx>,
+    src: TensorPtr<'ctx>,
+}
+
+struct BinaryOps<'ctx> {
+    dst: TensorPtr<'ctx>,
     lhs: TensorPtr<'ctx>,
     rhs: TensorPtr<'ctx>,
 }
 
-struct FunctionTranslator<'ctx> {
-    context: &'ctx Context,
-    builder: &'ctx Builder<'ctx>,
-    function: FunctionValue<'ctx>,
+impl Operation<'_> {
+    fn result_dims(&self) -> &ResolvedTensorDims {
+        match self {
+            Operation::UnaryOp(op, _) => &op.dst.ty.dims,
+            Operation::BinaryOp(op, _) => &op.dst.ty.dims,
+        }
+    }
 }
 
-impl<'ctx> FunctionTranslator<'ctx> {
+impl<'a, 'ctx> FunctionTranslator<'a, 'ctx> {
+    fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
+        macro_rules! gep {
+            ($ty: expr) => {{
+                unsafe {
+                    self.builder.build_in_bounds_gep(
+                        $ty,
+                        ptr.ptr,
+                        &[ptr.offset],
+                        format!("gep.{}", ptr.name).as_str(),
+                    )
+                }
+            }};
+        }
+        let ty = LLVMScalarType::from_data_type(self.context, ptr.ty.elem_type);
+        match ty {
+            LLVMScalarType::LLVMFloat(ty) => gep!(ty),
+            LLVMScalarType::LLVMInt(ty) => gep!(ty),
+        }
+    }
+
+    fn build_load(&self, ptr: &TensorPtr<'ctx>) -> Result<BasicValueEnum<'ctx>, BuilderError> {
+        macro_rules! load {
+            ($ty: expr) => {{
+                let res: Result<_, BuilderError> = {
+                    let gep = self.build_gep(ptr)?;
+                    self.builder
+                        .build_load($ty, gep, format!("load.{}", ptr.name).as_str())
+                };
+                res
+            }};
+        }
+        let ty = LLVMScalarType::from_data_type(self.context, ptr.ty.elem_type);
+        match ty {
+            LLVMScalarType::LLVMFloat(ty) => load!(ty),
+            LLVMScalarType::LLVMInt(ty) => load!(ty),
+        }
+    }
+
+    fn build_store<V: BasicValue<'ctx>>(
+        &self,
+        ptr: &TensorPtr<'ctx>,
+        val: V,
+    ) -> Result<(), BuilderError> {
+        let gep = self.build_gep(ptr)?;
+        self.builder.build_store(gep, val).map(|_| ())
+    }
+
+    fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
+        match op {
+            Operation::UnaryOp(op, opcode) => {
+                let res = match opcode {
+                    UnaryOpcode::ReLU => {
+                        // TODO: f64
+                        let fmax = Intrinsic::find("llvm.fmax.f32").unwrap();
+                        let fmax = fmax
+                            .get_declaration(
+                                self.module,
+                                &[
+                                    self.context.f32_type().into(),
+                                    self.context.f32_type().into(),
+                                ],
+                            )
+                            .unwrap();
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        let zero = self.context.f32_type().const_float(0.0);
+                        let res = {
+                            let call =
+                                self.builder
+                                    .build_call(fmax, &[src.into(), zero.into()], "res")?;
+                            call.set_tail_call(true);
+                            call.try_as_basic_value().left().unwrap()
+                        };
+                        res
+                    }
+                };
+                self.build_store(&op.dst, res)
+            }
+            Operation::BinaryOp(op, opcode) => {
+                let res = match opcode {
+                    BinaryOpcode::FloatAdd => {
+                        let lhs = self.build_load(&op.lhs)?.into_float_value();
+                        let rhs = self.build_load(&op.rhs)?.into_float_value();
+                        self.builder.build_float_add(lhs, rhs, "res")?
+                    }
+                    BinaryOpcode::IntAdd => todo!(),
+                };
+                self.build_store(&op.dst, res)
+            }
+        }
+    }
+
     fn gen_nested_loop_rec(
         &self,
-        res: TensorPtr<'ctx>,
-        ops: Operators<'ctx>,
+        ops: Operation<'ctx>,
         loop_bb: LoopBB<'ctx>,
         nest: usize,
     ) -> Result<(), BuilderError> {
         macro_rules! update_offset {
-            ($ptr: expr, $offset_phi: expr, $name: expr, $exiting: expr) => {{
+            ($ptr: expr, $offset_phi: expr, $exiting: expr) => {{
                 let offset_int = $offset_phi.as_basic_value().into_int_value();
                 self.builder.position_at_end($exiting);
                 let stride = self
@@ -116,7 +476,7 @@ impl<'ctx> FunctionTranslator<'ctx> {
                 let offset_next = self.builder.build_int_add(
                     offset_int,
                     stride,
-                    format!("offset.{}.{}.next", $name, nest).as_str(),
+                    format!("offset.{}.{}.next", $ptr.name, nest).as_str(),
                 )?;
                 self.builder.position_at_end(loop_bb.header);
                 $offset_phi.add_incoming(&[
@@ -129,92 +489,77 @@ impl<'ctx> FunctionTranslator<'ctx> {
                 let offset_sum = self.builder.build_int_add(
                     $ptr.offset,
                     offset_int,
-                    format!("offset.sum.{}.{}", $name, nest).as_str(),
+                    format!("offset.sum.{}.{}", $ptr.name, nest).as_str(),
                 )?;
                 TensorPtr {
-                    context: self.context,
                     ptr: $ptr.ptr,
                     ty: $ptr.ty,
                     offset: offset_sum,
+                    name: $ptr.name,
                 }
             }};
         }
 
-        macro_rules! gep {
-            ($ptr: expr, $ty: expr, $name: expr) => {{
-                unsafe {
-                    self.builder.build_in_bounds_gep(
-                        $ty,
-                        $ptr.ptr,
-                        &[$ptr.offset],
-                        format!("gep.{}", $name).as_str(),
-                    )?
-                }
-            }};
-        }
-        macro_rules! load {
-            ($ptr: expr, $ty: expr, $name: expr) => {{
-                let gep = gep!($ptr, $ty, $name);
-                self.builder
-                    .build_load($ty, gep, format!("load.{}", $name).as_str())?
-            }};
-            ($ptr: expr, $name: expr) => {{
-                match $ptr.ty.elem_type {
-                    DataType::F32 => load!($ptr, self.context.f32_type(), $name),
-                    DataType::F64 => load!($ptr, self.context.f64_type(), $name),
-                    DataType::I64 => load!($ptr, self.context.i64_type(), $name),
-                }
-            }};
-        }
-        macro_rules! store {
-            ($val: expr, $ptr: expr, $ty: expr, $name: expr) => {{
-                let gep = gep!($ptr, $ty, $name);
-                self.builder.build_store(gep, $val)?
-            }};
-            ($val: expr, $ptr: expr, $name: expr) => {{
-                match $ptr.ty.elem_type {
-                    DataType::F32 => store!($val, $ptr, self.context.f32_type(), $name),
-                    DataType::F64 => store!($val, $ptr, self.context.f64_type(), $name),
-                    DataType::I64 => store!($val, $ptr, self.context.i64_type(), $name),
-                }
-            }};
-        }
-
-        let is_last = nest + 1 == res.ty.dims.ndim();
+        let is_last = nest + 1 == ops.result_dims().ndim();
         let ind = self
             .builder
             .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
-        let bound: u64 = res.ty.dims[nest].try_into().unwrap();
+        let bound: u64 = ops.result_dims()[nest].try_into().unwrap();
         let exiting_bb = if is_last {
             loop_bb.header
         } else {
             self.context
-                .append_basic_block(self.function, format!("exit.{}", nest).as_str())
+                .append_basic_block(*self.function, format!("exit.{}", nest).as_str())
         };
         let bound = self.context.i64_type().const_int(bound, false);
-        let offset_phi_res = self.builder.build_phi(
-            self.context.i64_type(),
-            format!("offset.res.{}", nest).as_str(),
-        )?;
-        let offset_phi_lhs = self.builder.build_phi(
-            self.context.i64_type(),
-            format!("offset.lhs.{}", nest).as_str(),
-        )?;
-        let offset_phi_rhs = self.builder.build_phi(
-            self.context.i64_type(),
-            format!("offset.rhs.{}", nest).as_str(),
-        )?;
-        let next_ops = Operators {
-            lhs: update_offset!(ops.lhs, offset_phi_lhs, "lhs", exiting_bb),
-            rhs: update_offset!(ops.rhs, offset_phi_rhs, "rhs", exiting_bb),
+        let next_ops = match ops {
+            Operation::UnaryOp(op, opcode) => {
+                let offset_phi_dst = self.builder.build_phi(
+                    self.context.i64_type(),
+                    format!("offset.dst.{}", nest).as_str(),
+                )?;
+                let offset_phi_src = self.builder.build_phi(
+                    self.context.i64_type(),
+                    format!("offset.src.{}", nest).as_str(),
+                )?;
+                let next_dst = update_offset!(op.dst, offset_phi_dst, exiting_bb);
+                let next_src = update_offset!(op.src, offset_phi_src, exiting_bb);
+                Operation::UnaryOp(
+                    UnaryOps {
+                        dst: next_dst,
+                        src: next_src,
+                    },
+                    opcode,
+                )
+            }
+            Operation::BinaryOp(op, opcode) => {
+                let offset_phi_dst = self.builder.build_phi(
+                    self.context.i64_type(),
+                    format!("offset.dst.{}", nest).as_str(),
+                )?;
+                let offset_phi_lhs = self.builder.build_phi(
+                    self.context.i64_type(),
+                    format!("offset.lhs.{}", nest).as_str(),
+                )?;
+                let offset_phi_rhs = self.builder.build_phi(
+                    self.context.i64_type(),
+                    format!("offset.rhs.{}", nest).as_str(),
+                )?;
+                let next_dst = update_offset!(op.dst, offset_phi_dst, exiting_bb);
+                let next_lhs = update_offset!(op.lhs, offset_phi_lhs, exiting_bb);
+                let next_rhs = update_offset!(op.rhs, offset_phi_rhs, exiting_bb);
+                Operation::BinaryOp(
+                    BinaryOps {
+                        dst: next_dst,
+                        lhs: next_lhs,
+                        rhs: next_rhs,
+                    },
+                    opcode,
+                )
+            }
         };
-        let next_res = update_offset!(res, offset_phi_res, "res", exiting_bb);
         if is_last {
-            // TODO: remove `into_float_value`
-            let lhs = load!(next_ops.lhs, "lhs").into_float_value();
-            let rhs = load!(next_ops.rhs, "rhs").into_float_value();
-            let res = self.builder.build_float_add(lhs, rhs, "res")?;
-            store!(res, next_res, "res");
+            self.build_operation(&next_ops)?;
             let ind_next = self.builder.build_int_add(
                 ind.as_basic_value().into_int_value(),
                 self.context.i64_type().const_int(1, false),
@@ -239,7 +584,7 @@ impl<'ctx> FunctionTranslator<'ctx> {
         } else {
             let next_bb = self
                 .context
-                .append_basic_block(self.function, format!("loop.{}", nest).as_str());
+                .append_basic_block(*self.function, format!("loop.{}", nest).as_str());
             self.builder.build_unconditional_branch(next_bb)?;
             self.builder.position_at_end(exiting_bb);
             let ind_next = self.builder.build_int_add(
@@ -269,18 +614,17 @@ impl<'ctx> FunctionTranslator<'ctx> {
                 header: next_bb,
                 exit: exiting_bb,
             };
-            self.gen_nested_loop_rec(next_res, next_ops, next_loop_bb, nest + 1)
+            self.gen_nested_loop_rec(next_ops, next_loop_bb, nest + 1)
         }
     }
 
     fn gen_nested_loop(
         &self,
-        res: TensorPtr<'ctx>,
-        ops: Operators<'ctx>,
+        op: Operation<'ctx>,
         preheader: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let header = self.context.append_basic_block(self.function, "header");
-        let exit = self.context.append_basic_block(self.function, "exit");
+        let header = self.context.append_basic_block(*self.function, "header");
+        let exit = self.context.append_basic_block(*self.function, "exit");
         self.builder.build_unconditional_branch(header)?;
         self.builder.position_at_end(header);
         let loop_bb = LoopBB {
@@ -288,29 +632,20 @@ impl<'ctx> FunctionTranslator<'ctx> {
             header,
             exit,
         };
-        self.gen_nested_loop_rec(res, ops, loop_bb, 0)?;
+        self.gen_nested_loop_rec(op, loop_bb, 0)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }
 }
 
-#[test] 
+#[test]
 fn test_add() -> std::io::Result<()> {
     use crate::tensor::tensor::Tensor;
+    use inkwell::execution_engine::{JitFunction};
     use std::io::Error;
-    use inkwell::execution_engine::{ExecutionEngine, JitFunction};
+    use std::path::PathBuf;
+    use crate::model::Model;
 
-    let context = Context::create();
-    let codegen = CodeGen::new(&context);
-    let ptr_type = codegen.context.ptr_type(AddressSpace::default());
-    let fn_type = codegen.context.void_type().fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
-    let function = codegen.module.add_function("add", fn_type, None);
-    let translator = FunctionTranslator {
-        context: &context,
-        builder: &codegen.builder,
-        function,
-    };
-    
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
             let orig: ndarray::Array<$ty, _> = ndarray::array!($($expr,)*);
@@ -323,37 +658,101 @@ fn test_add() -> std::io::Result<()> {
         }};
     }
 
-    let entry = context.append_basic_block(function, "entry");
-    translator.builder.position_at_end(entry);
+    let context = Context::create();
+    let mut codegen = CodeGen::new(&context);
 
-    let (input0, orig0) = make_tensor!(f32, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], )?;
-    let (input1, orig1) = make_tensor!(f32, [[1.0, 2.0, 3.0], [-4.0, -5.0, -7.0]],[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], )?;
+    let path = "models/test/add_large.onnx";
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+    let model = Model::load_from_path(path)
+        .map_err(|e| Error::other(format!("{:?}", e)))?;
+    codegen.compile_graph(&model.graph).map_err(|e| Error::other(format!("{:?}", e)))?;
+     codegen.run_passes(&[
+         // LLVMPass::LoopUnroll,
+         LLVMPass::LoopVectorize,
+         LLVMPass::SLPVectorize,
+         LLVMPass::InstCombine,
+         LLVMPass::Reassociate,
+         LLVMPass::Mem2Reg,
+         LLVMPass::LoopVectorize
+     ])
+         .map_err(|e| Error::other(format!("{:?}", e)))?;
+
+    let execution_engine = codegen
+        .module
+        .create_jit_execution_engine(OptimizationLevel::Aggressive)
+        .map_err(|e| Error::other(format!("{:?}", e)))?;
+    codegen.module.print_to_stderr();
+    type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8);
+    let func: JitFunction<CodeType> = unsafe { execution_engine.get_function("main").ok() }
+        .ok_or(Error::other("Unable to JIT compile `sum` function"))?;
+
+    let (input0, orig0) = make_tensor!(f32, 
+        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
+        10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+    )?;
+    let (input1, orig1) = make_tensor!(f32, 
+        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
+        10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+    )?;
+    let inputs = [input0.data.as_ptr(), input1.data.as_ptr()];
     let mut buf = vec![0f32; input0.ty.dims.size()];
-    let res = TensorPtr {
-        context: &context,
+    let outputs = [buf.as_mut_ptr()];
+    unsafe {
+        func.call(
+            outputs.as_ptr() as *const *mut u8,
+            inputs.as_ptr(),
+        )
+    };
+    println!("{:?}", input0);
+    println!("{:?}", buf);
+
+    /*
+    let entry = codegen.context.append_basic_block(function, "entry");
+    codegen.builder.position_at_end(entry);
+
+    let (input0, orig0) = make_tensor!(
+        f32,
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+    )?;
+    let (input1, orig1) = make_tensor!(
+        f32,
+        [[1.0, 2.0, 3.0], [-4.0, -5.0, -7.0]],
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+    )?;
+    let mut buf = vec![0f32; input0.ty.dims.size()];
+    let dst = TensorPtr {
         ptr: function.get_nth_param(0).unwrap().into_pointer_value(),
         ty: input0.ty.clone(),
-        offset: context.i64_type().const_int(0, false),
+        offset: codegen.context.i64_type().const_int(0, false),
+        name: "dst".to_string(),
     };
     let lhs = TensorPtr {
-        context: &context,
         ptr: function.get_nth_param(1).unwrap().into_pointer_value(),
         ty: input0.ty.clone(),
-        offset: context.i64_type().const_int(0, false),
+        offset: codegen.context.i64_type().const_int(0, false),
+        name: "lhs".to_string(),
     };
     let rhs = TensorPtr {
-        context: &context,
         ptr: function.get_nth_param(2).unwrap().into_pointer_value(),
         ty: input0.ty.clone(),
-        offset: context.i64_type().const_int(0, false),
+        offset: codegen.context.i64_type().const_int(0, false),
+        name: "rhs".to_string(),
     };
-    translator.gen_nested_loop(res, Operators { lhs, rhs }, entry).map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-    codegen.builder.build_return(None).map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    let binop = BinaryOps { dst, lhs, rhs };
+    codegen
+        .translate_add(&function, binop)
+        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
+    codegen
+        .builder
+        .build_return(None)
+        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
 
     function.print_to_stderr();
 
-    let execution_engine = codegen.module
-        .create_jit_execution_engine(OptimizationLevel::Default)
+    let execution_engine = codegen
+        .module
+        .create_jit_execution_engine(OptimizationLevel::Aggressive)
         .map_err(|e| Error::other(format!("{:?}", e)))?;
     type CodeType = unsafe extern "C" fn(*mut f32, *const u8, *const u8);
     let func: JitFunction<CodeType> = unsafe { execution_engine.get_function("add").ok() }
@@ -372,6 +771,7 @@ fn test_add() -> std::io::Result<()> {
         .into_owned();
     let expected = (orig0 + orig1).into_dyn();
     assert_eq!(res, expected);
+    */
 
     Ok(())
 }

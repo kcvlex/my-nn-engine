@@ -75,6 +75,14 @@ impl TensorData {
             TensorData::F64(v) => convert!(v),
         }
     }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            TensorData::I64(v) => v.as_ptr() as *const u8,
+            TensorData::F32(v) => v.as_ptr() as *const u8,
+            TensorData::F64(v) => v.as_ptr() as *const u8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
