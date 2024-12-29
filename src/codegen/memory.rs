@@ -1,7 +1,7 @@
 use cranelift::prelude::*;
 use std::collections::{BTreeSet, HashMap};
-use std::ops::Bound;
 use std::hash::Hash;
+use std::ops::Bound;
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Debug)]
 struct Region {
@@ -124,7 +124,7 @@ impl<T: Clone + Eq + Hash> Allocator<T> {
             blocks: HashMap::new(),
         }
     }
-    
+
     pub fn allocate(&mut self, size: usize) -> Option<Fragment<T>> {
         for (value, block) in self.blocks.iter_mut() {
             if let Some(region) = block.allocate(size) {

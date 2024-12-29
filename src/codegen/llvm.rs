@@ -1,23 +1,31 @@
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
-use crate::model::{ValueId, Node, Graph};
+use crate::load::ModelLoadError;
+use crate::model::{Graph, Model, Node, ValueId};
 use crate::operator::Operator;
+use crate::tensor::resolved_dimensions::ResolvedTensorDims;
+use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor, TensorData, TypeError};
 
+use crate::codegen::memory;
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
+use inkwell::execution_engine::{ExecutionEngine, FunctionLookupError, JitFunction};
 use inkwell::intrinsics::Intrinsic;
 use inkwell::module::Module;
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
-use inkwell::{
-    targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine},
-};
-use crate::codegen::memory;
 use std::collections::HashMap;
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum CodeGenError {
+    BuilderError(BuilderError),
+    LLVMError(inkwell::support::LLVMString),
+    TargetMachineError(String),
+}
 
 pub enum LLVMPass {
     LoopUnroll,
@@ -53,6 +61,10 @@ impl LLVMPass {
     }
 }
 
+struct Intrinsics<'ctx> {
+    fmax_f32: FunctionValue<'ctx>,
+}
+
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -63,18 +75,50 @@ pub struct CodeGen<'ctx> {
     main: FunctionValue<'ctx>,
     main_entry: BasicBlock<'ctx>,
 
+    target_machine: TargetMachine,
+
     noalias: Attribute,
     noundef: Attribute,
-    nocapture: Attribute,
+
+    intrinsics: Intrinsics<'ctx>,
+}
+
+struct FunctionTranslator<'a, 'ctx> {
+    context: &'ctx Context,
+    module: &'a Module<'ctx>,
+    builder: &'a Builder<'ctx>,
+    function: &'a FunctionValue<'ctx>,
+    intrinsics: &'a Intrinsics<'ctx>,
+}
+
+fn target_machine() -> Result<TargetMachine, CodeGenError> {
+    Target::initialize_native(&InitializationConfig::default())
+        .map_err(CodeGenError::TargetMachineError)?;
+    let target_triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&target_triple).map_err(CodeGenError::LLVMError)?;
+    target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::Aggressive,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| {
+            CodeGenError::TargetMachineError("Unable to create target machine".to_string())
+        })
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context) -> Self {
+    pub fn new(context: &'ctx Context) -> Result<Self, CodeGenError> {
         let module = context.create_module("main");
         let builder = context.create_builder();
 
         let ptr_type = context.ptr_type(AddressSpace::default());
-        let fn_type = context.void_type().fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        let fn_type = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
         let main = module.add_function("main", fn_type, None);
         let main_entry = context.append_basic_block(main, "entry");
         builder.position_at_end(main_entry);
@@ -86,14 +130,29 @@ impl<'ctx> CodeGen<'ctx> {
 
         let noalias = get_attr("noalias");
         let noundef = get_attr("noundef");
-        let nocapture = get_attr("nocapture");
 
         main.add_attribute(AttributeLoc::Param(0), noalias);
         main.add_attribute(AttributeLoc::Param(0), noundef);
         main.add_attribute(AttributeLoc::Param(1), noalias);
         main.add_attribute(AttributeLoc::Param(1), noundef);
 
-        CodeGen {
+        let target_machine = target_machine()?;
+
+        macro_rules! get_intrinsic {
+            ($name: expr, $args: expr) => {{
+                Intrinsic::find($name)
+                    .and_then(|intrinsic| intrinsic.get_declaration(&module, $args))
+            }};
+        }
+
+        let fmax_f32 = get_intrinsic!(
+            "llvm.maximum.f32",
+            &[context.f32_type().into(), context.f32_type().into()]
+        )
+        .unwrap();
+        let intrinsics = Intrinsics { fmax_f32 };
+
+        Ok(CodeGen {
             context,
             module,
             builder,
@@ -103,31 +162,28 @@ impl<'ctx> CodeGen<'ctx> {
             main,
             main_entry,
 
+            target_machine,
+
             noalias,
             noundef,
-            nocapture,
-        }
+
+            intrinsics,
+        })
     }
 
-    pub fn run_passes(&self, passes: &[LLVMPass]) -> Result<(), inkwell::support::LLVMString> {
-    Target::initialize_native(&InitializationConfig::default()).unwrap();
-    let target_triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&target_triple).unwrap();
-    let target_machine = target
-        .create_target_machine(
-            &target_triple,
-            "generic",
-            "",
-            OptimizationLevel::Aggressive,
-            RelocMode::PIC,
-            CodeModel::Default,
-        )
-        .unwrap();
-        self.module.run_passes(
-            LLVMPass::passes(passes).as_str(),
-            &target_machine,
-            inkwell::passes::PassBuilderOptions::create(),
-        )
+    pub fn compile(&mut self, graph: &Graph, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
+        self.compile_graph(graph)
+            .map_err(CodeGenError::BuilderError)?;
+        if !passes.is_empty() {
+            self.module
+                .run_passes(
+                    LLVMPass::passes(passes).as_str(),
+                    &self.target_machine,
+                    inkwell::passes::PassBuilderOptions::create(),
+                )
+                .map_err(CodeGenError::LLVMError)?;
+        }
+        Ok(())
     }
 
     fn create_fnction(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
@@ -148,7 +204,9 @@ impl<'ctx> CodeGen<'ctx> {
         macro_rules! define_gv {
             ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
                 let len = $data.len();
-                let gv = self.module.add_global($ty.array_type(len as u32), None, $name.as_str());
+                let gv = self
+                    .module
+                    .add_global($ty.array_type(len as u32), None, $name.as_str());
                 let arr = $data.iter().map($convert).collect::<Vec<_>>();
                 let arr = $ty.const_array(&arr);
                 gv.set_initializer(&arr);
@@ -161,15 +219,15 @@ impl<'ctx> CodeGen<'ctx> {
                 TensorData::F32(ref data) => {
                     let ty = self.context.f32_type();
                     define_gv!(name, data, ty, |&x| ty.const_float(x.into()))
-                },
+                }
                 TensorData::F64(ref data) => {
                     let ty = self.context.f64_type();
                     define_gv!(name, data, ty, |&x| ty.const_float(x))
-                },
+                }
                 TensorData::I64(ref data) => {
                     let ty = self.context.i64_type();
                     define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
-                },
+                }
             };
             self.id2value.insert(*id, gv.as_pointer_value());
         }
@@ -177,8 +235,12 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn init_main_args(&mut self, graph: &Graph) -> Result<(), BuilderError> {
-        for (i, arr) in [&graph.outputs, &graph.inputs, ].iter().enumerate() {
-            let ptr = self.main.get_nth_param(i as u32).unwrap().into_pointer_value();
+        for (i, arr) in [&graph.outputs, &graph.inputs].iter().enumerate() {
+            let ptr = self
+                .main
+                .get_nth_param(i as u32)
+                .unwrap()
+                .into_pointer_value();
             for (i, node_id) in arr.iter().enumerate() {
                 let value_id = match graph.nodes[*node_id].op {
                     Operator::Input(v) | Operator::Output(v) => v,
@@ -193,11 +255,14 @@ impl<'ctx> CodeGen<'ctx> {
                         value.name.as_str(),
                     )
                 }?;
-                let ptr = self.builder.build_load(
-                    self.context.ptr_type(AddressSpace::default()),
-                    ptr,
-                    value.name.as_str(),
-                )?.into_pointer_value();
+                let ptr = self
+                    .builder
+                    .build_load(
+                        self.context.ptr_type(AddressSpace::default()),
+                        ptr,
+                        value.name.as_str(),
+                    )?
+                    .into_pointer_value();
                 self.id2value.insert(value_id, ptr);
             }
         }
@@ -222,15 +287,18 @@ impl<'ctx> CodeGen<'ctx> {
             // TODO: malloc
             for &id in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(id).unwrap();
-                let len = self.context.i64_type().const_int(ty.dims.size() as u64, false);
+                let len = self
+                    .context
+                    .i64_type()
+                    .const_int(ty.dims.size() as u64, false);
                 let name = graph.values[id].name.as_str();
                 if let std::collections::hash_map::Entry::Vacant(e) = self.id2value.entry(id) {
-                        let ptr = match ty.elem_type {
-                            DataType::F32 => malloc!(self.context.f32_type(), len, name),
-                            DataType::F64 => malloc!(self.context.f64_type(), len, name),
-                            DataType::I64 => malloc!(self.context.i64_type(), len, name),
-                        }?;
-                        e.insert(ptr);
+                    let ptr = match ty.elem_type {
+                        DataType::F32 => malloc!(self.context.f32_type(), len, name),
+                        DataType::F64 => malloc!(self.context.f64_type(), len, name),
+                        DataType::I64 => malloc!(self.context.i64_type(), len, name),
+                    }?;
+                    e.insert(ptr);
                 }
             }
 
@@ -250,7 +318,11 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn compile_node(&self, node: &Node, graph: &Graph) -> Result<FunctionValue<'ctx>, BuilderError> {
+    fn compile_node(
+        &self,
+        node: &Node,
+        graph: &Graph,
+    ) -> Result<FunctionValue<'ctx>, BuilderError> {
         let mut args = node.outputs.clone();
         args.extend(node.inputs.clone());
 
@@ -262,19 +334,28 @@ impl<'ctx> CodeGen<'ctx> {
             module: &self.module,
             builder: &self.builder,
             function: &function,
+            intrinsics: &self.intrinsics,
         };
 
         let ptrs = args
             .iter()
             .enumerate()
             .map(|(i, &id)| {
-                let ptr = function.get_nth_param(i as u32).unwrap().into_pointer_value();
+                let ptr = function
+                    .get_nth_param(i as u32)
+                    .unwrap()
+                    .into_pointer_value();
                 let ty = graph.get_resolved_tensor_type(id).unwrap().clone();
                 let name = format!("ptr.{}", i);
                 let offset = self.context.i64_type().const_int(0, false);
-                TensorPtr { ptr, ty, offset, name }
+                TensorPtr {
+                    ptr,
+                    ty,
+                    offset,
+                    name,
+                }
             })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
         let exit = match node.op {
             Operator::Add => {
@@ -285,7 +366,7 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 let op = Operation::BinaryOp(binop, BinaryOpcode::FloatAdd);
                 translator.gen_nested_loop(op, entry)
-            },
+            }
             _ => todo!(),
         }?;
 
@@ -307,13 +388,6 @@ struct LoopBB<'ctx> {
     preheader: BasicBlock<'ctx>,
     header: BasicBlock<'ctx>,
     exit: BasicBlock<'ctx>,
-}
-
-struct FunctionTranslator<'a, 'ctx> {
-    context: &'ctx Context,
-    module: &'a Module<'ctx>,
-    builder: &'a Builder<'ctx>,
-    function: &'a FunctionValue<'ctx>,
 }
 
 enum LLVMScalarType<'ctx> {
@@ -367,7 +441,7 @@ impl Operation<'_> {
     }
 }
 
-impl<'a, 'ctx> FunctionTranslator<'a, 'ctx> {
+impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
         macro_rules! gep {
             ($ty: expr) => {{
@@ -415,32 +489,30 @@ impl<'a, 'ctx> FunctionTranslator<'a, 'ctx> {
         self.builder.build_store(gep, val).map(|_| ())
     }
 
+    fn build_tail_call(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> Result<CallSiteValue<'ctx>, BuilderError> {
+        let call = self.builder.build_call(function, args, name)?;
+        call.set_tail_call(true);
+        Ok(call)
+    }
+
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         match op {
             Operation::UnaryOp(op, opcode) => {
                 let res = match opcode {
                     UnaryOpcode::ReLU => {
                         // TODO: f64
-                        let fmax = Intrinsic::find("llvm.fmax.f32").unwrap();
-                        let fmax = fmax
-                            .get_declaration(
-                                self.module,
-                                &[
-                                    self.context.f32_type().into(),
-                                    self.context.f32_type().into(),
-                                ],
-                            )
-                            .unwrap();
+                        let fmax = self.intrinsics.fmax_f32;
                         let src = self.build_load(&op.src)?.into_float_value();
                         let zero = self.context.f32_type().const_float(0.0);
-                        let res = {
-                            let call =
-                                self.builder
-                                    .build_call(fmax, &[src.into(), zero.into()], "res")?;
-                            call.set_tail_call(true);
-                            call.try_as_basic_value().left().unwrap()
-                        };
-                        res
+                        self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
                     }
                 };
                 self.build_store(&op.dst, res)
@@ -638,140 +710,156 @@ impl<'a, 'ctx> FunctionTranslator<'a, 'ctx> {
     }
 }
 
-#[test]
-fn test_add() -> std::io::Result<()> {
-    use crate::tensor::tensor::Tensor;
-    use inkwell::execution_engine::{JitFunction};
-    use std::io::Error;
-    use std::path::PathBuf;
-    use crate::model::Model;
+type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8);
 
-    macro_rules! make_tensor {
-        ($ty: ty, $($expr: expr,)*) => {{
-            let orig: ndarray::Array<$ty, _> = ndarray::array!($($expr,)*);
-            let res: Result<(Tensor, _), _> = orig
-                .clone()
-                .try_into()
-                .map(|t| (t, orig.clone()))
-                .map_err(|e| Error::other(format!("{:?}", e)));
-            res
-        }};
+#[derive(Debug)]
+pub enum LLVMSessionError {
+    CodeGenError(CodeGenError),
+    ModelLoadError(ModelLoadError),
+    TypeError(TypeError),
+    FunctionLookupError(FunctionLookupError),
+}
+
+pub struct LLVMSession<'ctx> {
+    input_ty: Vec<ResolvedTensorType>,
+    output_ty: Vec<ResolvedTensorType>,
+
+    llvm_ctx: &'ctx Context,
+    codegen: CodeGen<'ctx>,
+    execution_engine: ExecutionEngine<'ctx>,
+}
+
+fn get_argument_types(
+    graph: &Graph,
+    values: &[ValueId],
+) -> Result<Vec<ResolvedTensorType>, LLVMSessionError> {
+    values
+        .iter()
+        .map(|&id| graph.get_resolved_tensor_type(id).cloned())
+        .collect::<Option<Vec<_>>>()
+        .ok_or(LLVMSessionError::TypeError(TypeError::UnresolvedInput))
+}
+
+impl<'ctx> LLVMSession<'ctx> {
+    pub fn new<P: AsRef<Path>>(
+        ctx: &'ctx Context,
+        p: P,
+        llvm_passes: &[LLVMPass],
+    ) -> Result<Self, LLVMSessionError> {
+        let mut model = Model::load_from_path(p).map_err(LLVMSessionError::ModelLoadError)?;
+        model.graph.infer().map_err(LLVMSessionError::TypeError)?;
+        let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
+        let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
+        let mut codegen = CodeGen::new(ctx).map_err(LLVMSessionError::CodeGenError)?;
+        codegen
+            .compile(&model.graph, llvm_passes)
+            .map_err(LLVMSessionError::CodeGenError)?;
+
+        let execution_engine = codegen
+            .module
+            .create_jit_execution_engine(OptimizationLevel::Aggressive)
+            .map_err(CodeGenError::LLVMError)
+            .map_err(LLVMSessionError::CodeGenError)?;
+
+        Ok(LLVMSession {
+            input_ty: inputs_ty,
+            output_ty: outputs_ty,
+            llvm_ctx: ctx,
+            codegen,
+            execution_engine,
+        })
     }
 
-    let context = Context::create();
-    let mut codegen = CodeGen::new(&context);
+    // TODO: Type check
+    pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, LLVMSessionError> {
+        let mut outputs = self
+            .output_ty
+            .iter()
+            .map(|ty| Tensor::zeros(ty.elem_type, ty.dims.clone()))
+            .collect::<Vec<_>>();
+        let output_ptrs = outputs
+            .iter_mut()
+            .map(|t| t.data.as_mut_ptr())
+            .collect::<Vec<_>>();
+        let input_ptrs = inputs.iter().map(|t| t.data.as_ptr()).collect::<Vec<_>>();
+        let func: JitFunction<CodeType> = unsafe { self.execution_engine.get_function("main") }
+            .map_err(LLVMSessionError::FunctionLookupError)?;
+        unsafe { func.call(output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
+        Ok(outputs)
+    }
+}
 
-    let path = "models/test/add_large.onnx";
+#[cfg(test)]
+macro_rules! make_tensor {
+    ($ty: ty, $($expr: expr,)*) => {{
+        let orig: ndarray::Array<$ty, _> = ndarray::array!($($expr,)*);
+        let res: Result<(Tensor, _), _> = orig
+            .clone()
+            .try_into()
+            .map(|t| (t, orig.clone()))
+            .map_err(LLVMSessionError::TypeError);
+        res
+    }};
+}
+
+#[cfg(test)]
+macro_rules! tensor_assert_eq {
+    ($left: expr, $right: expr) => {{
+        let right = Tensor::try_from($right).map_err(LLVMSessionError::TypeError)?;
+        assert_eq!($left, right);
+    }};
+}
+
+#[cfg(test)]
+fn make_session<'ctx, P: AsRef<std::path::Path>>(
+    ctx: &'ctx Context,
+    path: P,
+    passes: &[LLVMPass],
+) -> Result<LLVMSession<'ctx>, LLVMSessionError> {
+    use std::path::PathBuf;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    let model = Model::load_from_path(path)
-        .map_err(|e| Error::other(format!("{:?}", e)))?;
-    codegen.compile_graph(&model.graph).map_err(|e| Error::other(format!("{:?}", e)))?;
-     codegen.run_passes(&[
-         // LLVMPass::LoopUnroll,
-         LLVMPass::LoopVectorize,
-         LLVMPass::SLPVectorize,
-         LLVMPass::InstCombine,
-         LLVMPass::Reassociate,
-         LLVMPass::Mem2Reg,
-         LLVMPass::LoopVectorize
-     ])
-         .map_err(|e| Error::other(format!("{:?}", e)))?;
+    LLVMSession::new(ctx, path, passes)
+}
 
-    let execution_engine = codegen
-        .module
-        .create_jit_execution_engine(OptimizationLevel::Aggressive)
-        .map_err(|e| Error::other(format!("{:?}", e)))?;
-    codegen.module.print_to_stderr();
-    type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8);
-    let func: JitFunction<CodeType> = unsafe { execution_engine.get_function("main").ok() }
-        .ok_or(Error::other("Unable to JIT compile `sum` function"))?;
-
-    let (input0, orig0) = make_tensor!(f32, 
-        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
-        10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-    )?;
-    let (input1, orig1) = make_tensor!(f32, 
-        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
-        10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-    )?;
-    let inputs = [input0.data.as_ptr(), input1.data.as_ptr()];
-    let mut buf = vec![0f32; input0.ty.dims.size()];
-    let outputs = [buf.as_mut_ptr()];
-    unsafe {
-        func.call(
-            outputs.as_ptr() as *const *mut u8,
-            inputs.as_ptr(),
-        )
-    };
-    println!("{:?}", input0);
-    println!("{:?}", buf);
-
-    /*
-    let entry = codegen.context.append_basic_block(function, "entry");
-    codegen.builder.position_at_end(entry);
-
-    let (input0, orig0) = make_tensor!(
-        f32,
-        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-    )?;
-    let (input1, orig1) = make_tensor!(
-        f32,
-        [[1.0, 2.0, 3.0], [-4.0, -5.0, -7.0]],
-        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-    )?;
-    let mut buf = vec![0f32; input0.ty.dims.size()];
-    let dst = TensorPtr {
-        ptr: function.get_nth_param(0).unwrap().into_pointer_value(),
-        ty: input0.ty.clone(),
-        offset: codegen.context.i64_type().const_int(0, false),
-        name: "dst".to_string(),
-    };
-    let lhs = TensorPtr {
-        ptr: function.get_nth_param(1).unwrap().into_pointer_value(),
-        ty: input0.ty.clone(),
-        offset: codegen.context.i64_type().const_int(0, false),
-        name: "lhs".to_string(),
-    };
-    let rhs = TensorPtr {
-        ptr: function.get_nth_param(2).unwrap().into_pointer_value(),
-        ty: input0.ty.clone(),
-        offset: codegen.context.i64_type().const_int(0, false),
-        name: "rhs".to_string(),
-    };
-    let binop = BinaryOps { dst, lhs, rhs };
-    codegen
-        .translate_add(&function, binop)
-        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-    codegen
-        .builder
-        .build_return(None)
-        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
-
-    function.print_to_stderr();
-
-    let execution_engine = codegen
-        .module
-        .create_jit_execution_engine(OptimizationLevel::Aggressive)
-        .map_err(|e| Error::other(format!("{:?}", e)))?;
-    type CodeType = unsafe extern "C" fn(*mut f32, *const u8, *const u8);
-    let func: JitFunction<CodeType> = unsafe { execution_engine.get_function("add").ok() }
-        .ok_or(Error::other("Unable to JIT compile `sum` function"))?;
-    unsafe {
-        func.call(
-            buf.as_mut_ptr(),
-            input0.data.raw_vec().as_ptr(),
-            input1.data.raw_vec().as_ptr(),
-        )
-    };
-
-    let res = ndarray::Array::from_vec(buf)
-        .to_shape(orig0.shape())
-        .map_err(|e| Error::other(format!("{:?}", e)))?
-        .into_owned();
-    let expected = (orig0 + orig1).into_dyn();
-    assert_eq!(res, expected);
-    */
-
+#[cfg(test)]
+fn with_session<P, F>(path: P, f: F) -> TestResult
+where
+    P: AsRef<std::path::Path>,
+    F: FnOnce(LLVMSession) -> TestResult,
+{
+    let context = Context::create();
+    let session = make_session(&context, path, &[])?;
+    f(session)?;
     Ok(())
+}
+
+#[cfg(test)]
+type TestResult = Result<(), LLVMSessionError>;
+
+#[test]
+fn test_add() -> TestResult {
+    with_session("models/test/add.onnx", |session| {
+        let (input0, orig0) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
+        let (input1, orig1) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
+        let output = session.run(&[input0, input1])?;
+        tensor_assert_eq!(output[0], orig0 + orig1);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_add_large() -> TestResult {
+    with_session("models/test/add_large.onnx", |session| {
+        let (input0, orig0) = make_tensor!(
+            f32, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+            15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
+        )?;
+        let (input1, orig1) = make_tensor!(
+            f32, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+            15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
+        )?;
+        let outputs = session.run(&[input0, input1])?;
+        tensor_assert_eq!(outputs[0], orig0 + orig1);
+        Ok(())
+    })
 }
