@@ -25,6 +25,7 @@ pub enum CodeGenError {
     BuilderError(BuilderError),
     LLVMError(inkwell::support::LLVMString),
     TargetMachineError(String),
+    IntrinsicNotFound(String),
 }
 
 pub enum LLVMPass {
@@ -63,6 +64,7 @@ impl LLVMPass {
 
 struct Intrinsics<'ctx> {
     fmax_f32: FunctionValue<'ctx>,
+    fmax_f64: FunctionValue<'ctx>,
 }
 
 pub struct CodeGen<'ctx> {
@@ -95,12 +97,14 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(CodeGenError::TargetMachineError)?;
     let target_triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&target_triple).map_err(CodeGenError::LLVMError)?;
-    target
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    Target::from_triple(&target_triple)
+        .map_err(CodeGenError::LLVMError)?
         .create_target_machine(
             &target_triple,
-            "generic",
-            "",
+            &cpu,
+            &features,
             OptimizationLevel::Aggressive,
             RelocMode::PIC,
             CodeModel::Default,
@@ -142,15 +146,17 @@ impl<'ctx> CodeGen<'ctx> {
             ($name: expr, $args: expr) => {{
                 Intrinsic::find($name)
                     .and_then(|intrinsic| intrinsic.get_declaration(&module, $args))
+                    .ok_or_else(|| CodeGenError::IntrinsicNotFound($name.to_string()))
             }};
         }
 
-        let fmax_f32 = get_intrinsic!(
-            "llvm.maximum.f32",
-            &[context.f32_type().into(), context.f32_type().into()]
-        )
-        .unwrap();
-        let intrinsics = Intrinsics { fmax_f32 };
+        let f32_ty = context.f32_type().into();
+        let f64_ty = context.f64_type().into();
+
+        let fmax_f32 = get_intrinsic!("llvm.maximum.f32", &[f32_ty, f32_ty])?;
+        let fmax_f64 = get_intrinsic!("llvm.maximum.f64", &[f64_ty, f64_ty])?;
+
+        let intrinsics = Intrinsics { fmax_f32, fmax_f64 };
 
         Ok(CodeGen {
             context,
@@ -186,7 +192,8 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn create_fnction(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
+    // TODO: Adjust attributes
+    fn create_function(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
         let mut vec = Vec::with_capacity(argc as usize);
         for _ in 0..argc {
             vec.push(self.context.ptr_type(AddressSpace::default()).into());
@@ -326,7 +333,7 @@ impl<'ctx> CodeGen<'ctx> {
         let mut args = node.outputs.clone();
         args.extend(node.inputs.clone());
 
-        let function = self.create_fnction(node.name.as_str(), args.len() as u32);
+        let function = self.create_function(node.name.as_str(), args.len() as u32);
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
         let translator = FunctionTranslator {
@@ -337,7 +344,7 @@ impl<'ctx> CodeGen<'ctx> {
             intrinsics: &self.intrinsics,
         };
 
-        let ptrs = args
+        let mut ptrs = args
             .iter()
             .enumerate()
             .map(|(i, &id)| {
@@ -353,19 +360,42 @@ impl<'ctx> CodeGen<'ctx> {
                     ty,
                     offset,
                     name,
+                    perms: None,
                 }
             })
             .collect::<Vec<_>>();
 
-        let exit = match node.op {
-            Operator::Add => {
+        macro_rules! gen_binaryop {
+            ($op: expr) => {{
                 let binop = BinaryOps {
                     dst: ptrs[0].clone(),
                     lhs: ptrs[1].clone(),
                     rhs: ptrs[2].clone(),
                 };
-                let op = Operation::BinaryOp(binop, BinaryOpcode::FloatAdd);
+                let op = Operation::BinaryOp(binop, $op);
                 translator.gen_nested_loop(op, entry)
+            }};
+        }
+
+        macro_rules! gen_unaryop {
+            ($op: expr) => {{
+                let op = Operation::UnaryOp(
+                    UnaryOps {
+                        dst: ptrs[0].clone(),
+                        src: ptrs[1].clone(),
+                    },
+                    $op,
+                );
+                translator.gen_nested_loop(op, entry)
+            }};
+        }
+
+        let exit = match node.op {
+            Operator::Add => gen_binaryop!(BinaryOpcode::FloatAdd),
+            Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
+            Operator::Transpose(ref perm) => {
+                ptrs[1].perms = Some(perm.clone());
+                gen_unaryop!(UnaryOpcode::Transpose)
             }
             _ => todo!(),
         }?;
@@ -382,6 +412,17 @@ struct TensorPtr<'ctx> {
     ty: ResolvedTensorType,
     offset: IntValue<'ctx>,
     name: String,
+    perms: Option<Vec<usize>>,
+}
+
+impl TensorPtr<'_> {
+    fn stride(&self, i: usize) -> usize {
+        let i = match self.perms {
+            Some(ref perms) => perms[i],
+            None => i,
+        };
+        self.ty.stride(i)
+    }
 }
 
 struct LoopBB<'ctx> {
@@ -419,6 +460,7 @@ enum BinaryOpcode {
 #[derive(Debug, Clone, Copy)]
 enum UnaryOpcode {
     ReLU,
+    Transpose,
 }
 
 struct UnaryOps<'ctx> {
@@ -505,15 +547,24 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             Operation::UnaryOp(op, opcode) => {
                 let res = match opcode {
                     UnaryOpcode::ReLU => {
-                        // TODO: f64
-                        let fmax = self.intrinsics.fmax_f32;
+                        let (fmax, zero) = match op.dst.ty.elem_type {
+                            DataType::F32 => (
+                                self.intrinsics.fmax_f32,
+                                self.context.f32_type().const_float(0.0),
+                            ),
+                            DataType::F64 => (
+                                self.intrinsics.fmax_f64,
+                                self.context.f64_type().const_float(0.0),
+                            ),
+                            _ => todo!(),
+                        };
                         let src = self.build_load(&op.src)?.into_float_value();
-                        let zero = self.context.f32_type().const_float(0.0);
                         self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                             .try_as_basic_value()
                             .left()
                             .unwrap()
                     }
+                    UnaryOpcode::Transpose => self.build_load(&op.src)?,
                 };
                 self.build_store(&op.dst, res)
             }
@@ -544,7 +595,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let stride = self
                     .context
                     .i64_type()
-                    .const_int($ptr.ty.stride(nest).try_into().unwrap(), false);
+                    .const_int($ptr.stride(nest).try_into().unwrap(), false);
                 let offset_next = self.builder.build_int_add(
                     offset_int,
                     stride,
@@ -568,6 +619,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     ty: $ptr.ty,
                     offset: offset_sum,
                     name: $ptr.name,
+                    perms: $ptr.perms.clone(),
                 }
             }};
         }
@@ -718,6 +770,7 @@ pub enum LLVMSessionError {
     ModelLoadError(ModelLoadError),
     TypeError(TypeError),
     FunctionLookupError(FunctionLookupError),
+    OtherError(String),
 }
 
 pub struct LLVMSession<'ctx> {
@@ -803,6 +856,22 @@ macro_rules! make_tensor {
 }
 
 #[cfg(test)]
+macro_rules! make_range_tensor {
+    ($ty: ty, $($dim: expr),*) => {{
+        let len = [$($dim),*].iter().product();
+        let orig = ndarray::Array::from_iter((0..len).map(|x| x as $ty))
+            .into_shape_with_order(($($dim),*))
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?;
+        let res: Result<(Tensor, _), _> = orig
+            .clone()
+            .try_into()
+            .map(|t| (t, orig.clone()))
+            .map_err(LLVMSessionError::TypeError);
+        res
+    }};
+}
+
+#[cfg(test)]
 macro_rules! tensor_assert_eq {
     ($left: expr, $right: expr) => {{
         let right = Tensor::try_from($right).map_err(LLVMSessionError::TypeError)?;
@@ -859,7 +928,34 @@ fn test_add_large() -> TestResult {
             15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
         )?;
         let outputs = session.run(&[input0, input1])?;
+        // session.codegen.target_machine.write_to_file(
+        //     &session.codegen.module,
+        //     inkwell::targets::FileType::Object,
+        //     "test_add_large.o".as_ref(),
+        // ).unwrap();
         tensor_assert_eq!(outputs[0], orig0 + orig1);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_relu() -> TestResult {
+    with_session("models/test/relu.onnx", |session| {
+        let (input, orig) =
+            make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
+        let output = session.run(&[input])?;
+        tensor_assert_eq!(output[0], orig.mapv(|x| x.max(0.0)));
+        Ok(())
+    })
+}
+
+#[test]
+fn transpose() -> TestResult {
+    with_session("models/test/transpose.onnx", |session| {
+        let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
+        let output = session.run(&[input])?;
+        let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned();
+        tensor_assert_eq!(output[0], expected);
         Ok(())
     })
 }
