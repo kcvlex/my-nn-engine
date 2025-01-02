@@ -25,6 +25,7 @@ impl Optimizer {
     pub fn run(&self, graph: &mut Graph) {
         let mut modifier = GraphModifier::new(graph);
         for opt in self.passes.iter() {
+            // println!("Running pass: {}", opt.summary());
             opt.run(graph, &mut modifier);
             modifier.delete_nodes(graph);
         }
@@ -47,15 +48,19 @@ impl GraphModifier {
     fn new(graph: &Graph) -> Self {
         let mut modifier = GraphModifier::default();
         for (node_id, node) in graph.nodes.iter() {
-            for (index, &value) in node.inputs.iter().enumerate() {
-                modifier
-                    .value2used
-                    .entry(value)
-                    .or_insert_with(HashSet::new)
-                    .insert((node_id, index));
+            if !matches!(node.op, Operator::Input(_)) {
+                for (index, &value) in node.inputs.iter().enumerate() {
+                    modifier
+                        .value2used
+                        .entry(value)
+                        .or_insert_with(HashSet::new)
+                        .insert((node_id, index));
+                }
             }
-            for (index, &value) in node.outputs.iter().enumerate() {
-                modifier.value2defined.insert(value, (node_id, index));
+            if !node.is_dummy() {
+                for (index, &value) in node.outputs.iter().enumerate() {
+                    modifier.value2defined.insert(value, (node_id, index));
+                }
             }
         }
         for (value, (node, _)) in modifier.value2defined.iter() {
@@ -114,11 +119,28 @@ impl GraphModifier {
         old_value: ValueId,
         new_value: ValueId,
     ) {
-        let old_defines = self.value2defined.remove(&old_value);
+        self.replace_input_value_if(graph, old_value, new_value, |_, _| true);
+    }
+
+    pub fn replace_input_value_if<P>(
+        &mut self,
+        graph: &mut Graph,
+        old_value: ValueId,
+        new_value: ValueId,
+        pred: P,
+    ) where
+        P: Fn(NodeId, &Node) -> bool,
+    {
+        let old_defines = self.value2defined.get(&old_value).cloned();
         let new_defines = self.value2defined.get(&new_value).cloned();
 
-        if let Some(used) = self.value2used.remove(&old_value) {
+        if let Some(used) = self.value2used.get(&old_value).cloned() {
+            let mut replaced = HashSet::new();
             for &(node, index) in used.iter() {
+                if !pred(node, &graph.nodes[node]) {
+                    continue;
+                }
+                replaced.insert((node, index));
                 let node = &mut graph.nodes[node];
                 if let Operator::Output(v) = node.op {
                     assert!(index == 0);
@@ -128,8 +150,8 @@ impl GraphModifier {
                 }
                 node.inputs[index] = new_value;
             }
-            let len = used.len();
-            self.value2used.insert(new_value, used);
+            let len = replaced.len();
+            self.value2used.insert(new_value, replaced);
             if let Some((defines, _)) = old_defines {
                 self.decr_outdegree(defines, len);
             }
@@ -155,6 +177,10 @@ impl GraphModifier {
             return;
         }
         self.makred_as_deleted.insert(node_id);
+        for value in graph.nodes[node_id].outputs.iter() {
+            self.value2defined.remove(value);
+            self.value2used.remove(value);
+        }
         for value in graph.nodes[node_id].inputs.iter() {
             if let Some((defined, _)) = self.value2defined.get(value).cloned() {
                 let deg = self.outdegrees.get_mut(&defined).unwrap();

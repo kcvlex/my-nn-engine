@@ -1,4 +1,5 @@
 use crate::tensor::tensor::TypeError;
+use std::iter::FromIterator;
 use std::ops::Index;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,5 +95,11 @@ where
 impl From<Vec<usize>> for ResolvedTensorDims {
     fn from(v: Vec<usize>) -> Self {
         Self(v)
+    }
+}
+
+impl FromIterator<usize> for ResolvedTensorDims {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
     }
 }

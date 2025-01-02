@@ -188,7 +188,7 @@ impl Graph {
                 }
                 res.push(ResolvedTensorType::new(a.elem_type, output));
             }
-            Operator::MaxPool(MaxPool {
+            Operator::MaxPool(Pooling {
                 kernel_shape,
                 pad,
                 ceil_mode,
@@ -237,8 +237,36 @@ impl Graph {
                 ));
             }
 
+            Operator::Gemm(Gemm {
+                trans_a,
+                trans_b,
+                trans_c,
+                ..
+            }) => {
+                let a = &inputs[args::GEMM_A];
+                let b = &inputs[args::GEMM_B];
+
+                let m = a.dims[if !*trans_a { 0 } else { 1 }];
+                let n = b.dims[if !*trans_b { 1 } else { 0 }];
+                // let a_k = a.dims[1 - a_idx];
+                // let b_k = b.dims[b_idx];
+                // assert!(a_k == b_k);
+                let mut dims = [m, n];
+                if *trans_c {
+                    dims.reverse();
+                }
+                res.push(ResolvedTensorType::new(
+                    a.elem_type,
+                    ResolvedTensorDims::new(dims.to_vec()),
+                ));
+            }
+
             // Custom
-            Operator::Input(_) | Operator::Output(_) | Operator::MatMulRightTransposed => {
+            Operator::Input(_)
+            | Operator::Output(_)
+            | Operator::Im2Col(_)
+            | Operator::ReduceMatrix(_)
+            | Operator::ForceReshape => {
                 unreachable!()
             }
         }

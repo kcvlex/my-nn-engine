@@ -1,6 +1,7 @@
 use my_onnx::codegen::session::Session;
+use my_onnx::codegen::llvm::LLVMSession;
 use my_onnx::model::Model;
-use my_onnx::optimize::{matmul_a_tb::MatMulAxTB, optimizer::Optimizer};
+use my_onnx::optimize::optimizer::Optimizer;
 use my_onnx::tensor::tensor::Tensor;
 use std::env;
 use std::fs::File;
@@ -9,7 +10,7 @@ use std::io::{Error, Result, Write};
 fn main_cranelift() -> Result<()> {
     let args: Vec<_> = env::args().collect();
     let mut optimizer = Optimizer::new(String::from("test pass"));
-    optimizer.passes.push(Box::new(MatMulAxTB::default()));
+    //optimizer.passes.push(Box::new(MatMulAxTB::default()));
     if false {
         let mut model =
             Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
@@ -26,8 +27,6 @@ fn main_cranelift() -> Result<()> {
         let mut writer = std::io::BufWriter::new(file);
         writer.write_all(model.graph.to_dot().as_bytes())?;
     } else {
-        let session =
-            Session::new(&args[1], optimizer).map_err(|e| Error::other(format!("{:?}", e)))?;
 
         {
             // 7
@@ -176,7 +175,19 @@ fn main_cranelift() -> Result<()> {
             let input: Tensor = input
                 .try_into()
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
-            let output = session.run(&[input]);
+            let output = if false {
+                let session =
+                    Session::new(&args[1], optimizer).map_err(|e| Error::other(format!("{:?}", e)))?;
+                session.run(&[input])
+                    .map_err(|e| Error::other(format!("{:?}", e)))
+            } else {
+                use inkwell::context::Context;
+                let context = Context::create();
+                let session =
+                    LLVMSession::new(&context, &args[1], &[]).map_err(|e| Error::other(format!("{:?}", e)))?;
+                session.run(&[input])
+                    .map_err(|e| Error::other(format!("{:?}", e)))
+            }?;
             println!("{:?}", output);
             //println!("{:?}", output.unwrap()[0].data.raw_vec());
         }
@@ -208,49 +219,67 @@ fn main_inkwell() -> Result<()> {
     }
 
     impl<'ctx> CodeGen<'ctx> {
-        fn jit_compile_sum(&self) -> Option<()> {
-            let i64_type = self.context.i64_type();
+        fn build_outlined(&self) -> Option<FunctionValue<'ctx>> {
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+            let function_outlined = self.module.add_function(
+                "pow2.outlined",
+                self.context.void_type().fn_type(
+                    &[
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        ptr_type.into(),
+                    ],
+                    false,
+                ),
+                None,
+            );
+
+            let i32_type = self.context.i32_type();
             let f32_type = self.context.f32_type();
-            let fn_type =
-                i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
-            let function = self.module.add_function("pow2", fn_type, None);
-
-            let arr = {
-                let gv = self.module.add_global(i64_type.array_type(3), None, "arr");
-                let v0 = i64_type.const_int(3, false);
-                let v1 = i64_type.const_int(1, false);
-                let v2 = i64_type.const_int(4, false);
-                let arr = i64_type.const_array(&[v0, v1, v2]);
-                gv.set_initializer(&arr);
-                gv
-            };
-            // let _ = unsafe { self.builder.build_global_string("Hello, World!", "hello_world").unwrap() };
-
-            let entry = self.context.append_basic_block(function, "entry");
-            let body = self.context.append_basic_block(function, "body");
-            let exit = self.context.append_basic_block(function, "exit");
-
-            // let vec_ty = f32_type;
-            // let vscale_i64 = inkwell::intrinsics::Intrinsic::find("llvm.vscale.i64").unwrap();
-            // let vscale_i64 = vscale_i64.get_declaration(&self.module, &[]).unwrap();
+            let entry = self.context.append_basic_block(function_outlined, "entry");
+            let body = self.context.append_basic_block(function_outlined, "body");
+            let exit = self.context.append_basic_block(function_outlined, "exit");
 
             self.builder.position_at_end(entry);
-            // let vscale = {
-            //     let call = self.builder.build_call(vscale_i64, &[], "vscale").unwrap();
-            //     call.set_tail_call(true);
-            //     call.try_as_basic_value().left().unwrap().into_int_value()
-            // };
-            let len = function.get_nth_param(2)?.into_int_value();
-            let _ = self.builder.build_unconditional_branch(body).unwrap();
+
+            let len = function_outlined.get_nth_param(2)?.into_pointer_value();
+            let len = self
+                .builder
+                .build_load(i32_type, len, "len")
+                .unwrap()
+                .into_int_value();
+            let dst = function_outlined.get_nth_param(3)?.into_pointer_value();
+            let dst = self
+                .builder
+                .build_load(ptr_type, dst, "dst")
+                .unwrap()
+                .into_pointer_value();
+            let src = function_outlined.get_nth_param(4)?.into_pointer_value();
+            let src = self
+                .builder
+                .build_load(ptr_type, src, "src")
+                .unwrap()
+                .into_pointer_value();
+            let cond = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::SLT,
+                    len,
+                    i32_type.const_int(0, false),
+                    "cond",
+                )
+                .unwrap();
+            let _ = self
+                .builder
+                .build_conditional_branch(cond, exit, body)
+                .unwrap();
 
             self.builder.position_at_end(body);
-            let ind = self.builder.build_phi(i64_type, "ind").unwrap();
+            let ind = self.builder.build_phi(i32_type, "ind").unwrap();
             let ind_int = ind.as_basic_value().into_int_value();
-
-            let dst = function.get_nth_param(0)?.into_pointer_value();
-            let src = function.get_nth_param(1)?.into_pointer_value();
-
             let gep = unsafe {
                 self.builder
                     .build_in_bounds_gep(f32_type, src, &[ind_int], "gep.src")
@@ -267,14 +296,10 @@ fn main_inkwell() -> Result<()> {
                     .build_in_bounds_gep(f32_type, dst, &[ind_int], "gep.dst")
                     .unwrap()
             };
-            self.builder
-                .build_store(gep, val)
-                .unwrap()
-                .set_alignment(4)
-                .unwrap();
+            self.builder.build_store(gep, val).unwrap();
             let ind_next = self
                 .builder
-                .build_int_add(ind_int, i64_type.const_int(1, false), "ind.next")
+                .build_int_add(ind_int, i32_type.const_int(1, false), "ind.next")
                 .unwrap();
             let cond = self
                 .builder
@@ -284,35 +309,155 @@ fn main_inkwell() -> Result<()> {
                 .builder
                 .build_conditional_branch(cond, body, exit)
                 .unwrap();
-            ind.add_incoming(&[(&i64_type.const_int(0, false), entry), (&ind_next, body)]);
+            ind.add_incoming(&[(&i32_type.const_int(0, false), entry), (&ind_next, body)]);
 
             self.builder.position_at_end(exit);
+            let printf = i32_type.fn_type(&[ptr_type.into()], true);
+            let printf = self.module.add_function(
+                "printf",
+                printf,
+                Some(inkwell::module::Linkage::External),
+            );
+            let omp_get_thread_num = i32_type.fn_type(&[], false);
+            let omp_get_thread_num = self.module.add_function(
+                "omp_get_thread_num",
+                omp_get_thread_num,
+                Some(inkwell::module::Linkage::External),
+            );
+            let printf_fmt = unsafe {
+                self.builder
+                    .build_global_string("TID=%d\n", "printf_fmt")
+                    .unwrap()
+            };
+            let tid = self
+                .builder
+                .build_call(omp_get_thread_num, &[], "tid")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+            let _ = self
+                .builder
+                .build_call(
+                    printf,
+                    &[printf_fmt.as_pointer_value().into(), tid.into()],
+                    "",
+                )
+                .unwrap();
             self.builder.build_return(None).unwrap();
 
-            for name in ["noalias", "nocapture", "noundef"].iter() {
-                let attr = {
-                    let kind_id = Attribute::get_named_enum_kind_id(name);
-                    self.context.create_enum_attribute(kind_id, 0)
-                };
-                function.add_attribute(AttributeLoc::Param(0), attr);
-                function.add_attribute(AttributeLoc::Param(1), attr);
-            }
+            Some(function_outlined)
+        }
 
-            function.print_to_stderr();
+        fn jit_compile_sum(&self) -> Option<()> {
+            let i32_type = self.context.i32_type();
+            let i64_type = self.context.i64_type();
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+            let f32_type = self.context.f32_type();
+            let void_type = self.context.void_type();
+            let fn_type =
+                void_type.fn_type(&[ptr_type.into(), ptr_type.into(), i32_type.into()], false);
+            let function = self.module.add_function("pow2", fn_type, None);
+
+            let function_outlined = self.build_outlined()?;
+            let entry = self.context.append_basic_block(function, "entry");
+
+            self.builder.position_at_end(entry);
+            let len_alloca = self.builder.build_alloca(i32_type, "len").unwrap();
+            let dst_alloca = self.builder.build_alloca(ptr_type, "dst").unwrap();
+            let src_alloca = self.builder.build_alloca(ptr_type, "src").unwrap();
+            self.builder
+                .build_store(len_alloca, function.get_nth_param(2)?.into_int_value())
+                .unwrap();
+            self.builder
+                .build_store(dst_alloca, function.get_nth_param(0)?.into_pointer_value())
+                .unwrap();
+            self.builder
+                .build_store(src_alloca, function.get_nth_param(1)?.into_pointer_value())
+                .unwrap();
+            let kmpc_fork_call =
+                void_type.fn_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], true);
+            let kmpc_fork_call = self.module.add_function(
+                "__kmpc_fork_call",
+                kmpc_fork_call,
+                Some(inkwell::module::Linkage::External),
+            );
+            let dummy = unsafe {
+                self.builder
+                    .build_global_string("wn;unknown;0;0;;", "dummy")
+                    .unwrap()
+            };
+            let ident = {
+                let ident = self.context.const_struct(
+                    &[
+                        i32_type.const_int(0, false).into(),
+                        i32_type.const_int(0, false).into(),
+                        i32_type.const_int(0, false).into(),
+                        i32_type.const_int(0, false).into(),
+                        dummy.as_pointer_value().into(),
+                    ],
+                    false,
+                );
+                let ident_ty = self.context.struct_type(
+                    &[
+                        i32_type.into(),
+                        i32_type.into(),
+                        i32_type.into(),
+                        i32_type.into(),
+                        ptr_type.into(),
+                    ],
+                    false,
+                );
+                let gv = self.module.add_global(ident_ty, None, "ident");
+                gv.set_initializer(&ident);
+                gv
+            };
+            self.builder
+                .build_call(
+                    kmpc_fork_call,
+                    &[
+                        ident.as_pointer_value().into(),
+                        i32_type.const_int(3, false).into(),
+                        function_outlined
+                            .as_global_value()
+                            .as_pointer_value()
+                            .into(),
+                        len_alloca.into(),
+                        dst_alloca.into(),
+                        src_alloca.into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            self.builder.build_return(None).unwrap();
+
+            // let arr = {
+            //     let gv = self.module.add_global(i64_type.array_type(3), None, "arr");
+            //     let v0 = i64_type.const_int(3, false);
+            //     let v1 = i64_type.const_int(1, false);
+            //     let v2 = i64_type.const_int(4, false);
+            //     let arr = i64_type.const_array(&[v0, v1, v2]);
+            //     gv.set_initializer(&arr);
+            //     gv
+            // };
+            // let _ = unsafe { self.builder.build_global_string("Hello, World!", "hello_world").unwrap() };
 
             Some(())
         }
     }
 
     use inkwell::targets::*;
-    Target::initialize_all(&InitializationConfig::default());
+    Target::initialize_native(&InitializationConfig::default()).unwrap();
     let target_triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&target_triple).unwrap();
-    let target_machine = target
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let target_machine = Target::from_triple(&target_triple)
+        .unwrap()
         .create_target_machine(
             &target_triple,
-            "generic",
-            "",
+            &cpu,
+            &features,
             OptimizationLevel::Aggressive,
             RelocMode::PIC,
             CodeModel::Default,
@@ -350,24 +495,26 @@ fn main_inkwell() -> Result<()> {
             inkwell::passes::PassBuilderOptions::create(),
         )
         .unwrap();
-    {
-        let function = codegen
-            .module
-            .get_function("pow2")
-            .ok_or(Error::other("Unable to find `sum` function"))?;
-        function.print_to_stderr();
-    }
+
+    codegen.module.print_to_stderr();
+
+    target_machine
+        .write_to_file(
+            &codegen.module,
+            inkwell::targets::FileType::Object,
+            "out.o".as_ref(),
+        )
+        .unwrap();
 
     let pow2: JitFunction<SumFunc> = unsafe { codegen.execution_engine.get_function("pow2").ok() }
         .ok_or(Error::other("Unable to JIT compile `sum` function"))?;
 
-    codegen
-        .execution_engine
-        .get_function_value("pow2")
-        .unwrap()
-        .print_to_stderr();
+    codegen.execution_engine.get_function_value("pow2").unwrap();
 
-    let src = [3f32, 1f32, 4f32, 1f32, 5f32, 9f32];
+    let mut src = Vec::new();
+    for i in 0..100 {
+        src.push((i + 2) as f32);
+    }
     let mut dst = vec![0f32; src.len()];
 
     unsafe {
@@ -384,7 +531,7 @@ fn main_inkwell() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    if false {
+    if true {
         main_cranelift()
     } else {
         main_inkwell()

@@ -330,22 +330,22 @@ impl<'a> GraphCompiler<'a> {
                     todo!("MatMul");
                 }
             }
-            Operator::MatMulRightTransposed => {
-                let lhs = &inputs[args::MATMUL_LHS];
-                let rhs = &inputs[args::MATMUL_RHS];
-                if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
-                    let res = &self.allocate_or_get_tensor(node.outputs[0])?;
-                    let shape = MatMulShape::new(&lhs.ty, &rhs.ty.transpose(&[1, 0]));
-                    let ty = TensorOperand::dynamic_vector_op_type(
-                        res.ty.value_type(),
-                        &self.translator.isa,
-                    );
-                    self.translator
-                        .gen_matmul_a_tb(ty, res.ptr, lhs.ptr, rhs.ptr, &shape);
-                } else {
-                    todo!("MatMulRightTransposed");
-                }
-            }
+            // Operator::MatMulRightTransposed => {
+            //     let lhs = &inputs[args::MATMUL_LHS];
+            //     let rhs = &inputs[args::MATMUL_RHS];
+            //     if lhs.ty.dims.ndim() == 2 && rhs.ty.dims.ndim() == 2 {
+            //         let res = &self.allocate_or_get_tensor(node.outputs[0])?;
+            //         let shape = MatMulShape::new(&lhs.ty, &rhs.ty.transpose(&[1, 0]));
+            //         let ty = TensorOperand::dynamic_vector_op_type(
+            //             res.ty.value_type(),
+            //             &self.translator.isa,
+            //         );
+            //         self.translator
+            //             .gen_matmul_a_tb(ty, res.ptr, lhs.ptr, rhs.ptr, &shape);
+            //     } else {
+            //         todo!("MatMulRightTransposed");
+            //     }
+            // }
             Operator::Conv(ref conv) => {
                 let input = &inputs[args::CONV_DATA];
                 let kernel = &inputs[args::CONV_WEIGHT];
@@ -389,10 +389,11 @@ impl<'a> GraphCompiler<'a> {
 
                 let channel = Channel::Meld(channel);
                 let im2col = Im2Col {
-                    result_shape,
+                    nbatch: 1,
+                    one_fm_shape: result_shape,
                     pad: conv.pad.clone(),
                     dilations: conv.dilations.clone(),
-                    kernel_shape,
+                    one_kernel_shape: kernel_shape,
                     channel,
                     strides: conv.strides.clone(),
                 };
@@ -414,7 +415,7 @@ impl<'a> GraphCompiler<'a> {
                 if is_reshape_required {
                     let buffer = {
                         let ptr = buffer.ptr;
-                        let mut dims = im2col.result_shape.clone();
+                        let mut dims = im2col.one_fm_shape.clone();
                         dims.push(feature_map_count);
                         TensorPtr {
                             ptr,
@@ -463,10 +464,11 @@ impl<'a> GraphCompiler<'a> {
 
                 let channel = Channel::Split(channel);
                 let im2col = Im2Col {
-                    result_shape,
+                    nbatch: 1,
+                    one_fm_shape: result_shape,
                     pad: maxpool.pad.clone(),
                     dilations: maxpool.dilations.clone(),
-                    kernel_shape,
+                    one_kernel_shape: kernel_shape,
                     channel,
                     strides: maxpool.strides.clone(),
                 };
@@ -483,7 +485,8 @@ impl<'a> GraphCompiler<'a> {
                 );
             }
 
-            Operator::Input(_) | Operator::Output(_) => (), // nothing to do
+            Operator::Input(_) | Operator::Output(_) => (), // nothing to do,
+            _ => todo!("{:?}", node.op),
         }
         Ok(())
     }
@@ -597,12 +600,14 @@ enum ElementwiseOp {
     Transpose(UnaryOperand, Vec<usize>),
 }
 
+/*
 impl Im2Col {
     fn padded_len(&self, dim: usize) -> usize {
         let unit = self.dilations[dim] * (self.kernel_shape[dim] - 1) + 1;
-        self.strides[dim] * (self.result_shape[dim] - 1) + unit
+        self.strides[dim] * (self.one_fm_shape[dim] - 1) + unit
     }
 }
+*/
 
 impl ElementwiseOp {
     fn operands(&self) -> ElementwiseOperands {
@@ -1627,7 +1632,7 @@ impl<'a> FunctionTranslator<'a> {
         let outer_loops = {
             let mut outer_loops = Vec::new();
             let mut next = exit;
-            for i in 0..im2col.result_shape.ndim() {
+            for i in 0..im2col.one_fm_shape.ndim() {
                 let head = self.builder.create_block();
                 let body = self.builder.create_block();
 
@@ -1654,7 +1659,7 @@ impl<'a> FunctionTranslator<'a> {
         let inner_loops = {
             let mut inner_loops = Vec::new();
             let mut next = outer_loops.last().unwrap().body;
-            for (i, kernel_size) in im2col.kernel_shape.iter().enumerate() {
+            for (i, kernel_size) in im2col.one_kernel_shape.iter().enumerate() {
                 let head = self.builder.create_block();
                 let body = self.builder.create_block();
 
@@ -1671,7 +1676,7 @@ impl<'a> FunctionTranslator<'a> {
                     ConvPad::NotSet(pad) => pad[i],
                     ConvPad::Valid => (0, 0),
                     ConvPad::SameLower | ConvPad::SameUpper => {
-                        let extended_img_len = (im2col.result_shape[i] - 1) * im2col.strides[i]
+                        let extended_img_len = (im2col.one_fm_shape[i] - 1) * im2col.strides[i]
                             + (kernel_size - 1) * dilation
                             + 1;
                         let pad_len = extended_img_len - img_src.tensor.ty.dims[i];
@@ -1754,7 +1759,7 @@ impl<'a> FunctionTranslator<'a> {
                 let dst = self.builder.block_params(outer.body)[0];
                 let dst = if i + 1 == outer_loops.len() {
                     if let Channel::Meld(channel) = im2col.channel {
-                        let offset = im2col.kernel_shape.size() * (channel - 1);
+                        let offset = im2col.one_kernel_shape.size() * (channel - 1);
                         self.builder
                             .ins()
                             .iadd_imm(dst, img_dst.op_type.bytes() as i64 * offset as i64)
@@ -1892,12 +1897,12 @@ impl<'a> FunctionTranslator<'a> {
         let dst = match im2col.channel {
             Channel::Meld(_) => self.builder.ins().iadd_imm(
                 dst,
-                img_dst.op_type.bytes() as i64 * im2col.kernel_shape.size() as i64,
+                img_dst.op_type.bytes() as i64 * im2col.one_kernel_shape.size() as i64,
             ),
             Channel::Split(_) => self.builder.ins().iadd_imm(
                 dst,
-                im2col.result_shape.size() as i64
-                    * im2col.kernel_shape.size() as i64
+                im2col.one_fm_shape.size() as i64
+                    * im2col.one_kernel_shape.size() as i64
                     * img_dst.op_type.bytes() as i64,
             ),
         };

@@ -1,24 +1,39 @@
 use crate::load::ModelLoadError;
 use crate::model::{Graph, Model, Node, ValueId};
+use crate::operator;
 use crate::operator::Operator;
+use crate::optimize::{gemm, im2col, optimizer::Optimizer, trunc_output, opinfo::*};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor, TensorData, TypeError};
+use crate::codegen::unionfind::UnionFind;
+
+use itertools::izip;
+use modular_bitfield::prelude::*;
 
 use crate::codegen::memory;
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
-use inkwell::execution_engine::{ExecutionEngine, FunctionLookupError, JitFunction};
 use inkwell::intrinsics::Intrinsic;
-use inkwell::module::Module;
-use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::module::{Linkage, Module};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::Path;
+
+use rand::distributions::{Alphanumeric, DistString};
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
+
+use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -73,7 +88,7 @@ pub struct CodeGen<'ctx> {
     builder: Builder<'ctx>,
 
     allocator: memory::Allocator<GlobalValue<'ctx>>,
-    id2value: HashMap<ValueId, PointerValue<'ctx>>,
+    mem_man: SimpleMemoryManager<'ctx>,
     main: FunctionValue<'ctx>,
     main_entry: BasicBlock<'ctx>,
 
@@ -83,14 +98,156 @@ pub struct CodeGen<'ctx> {
     noundef: Attribute,
 
     intrinsics: Intrinsics<'ctx>,
+    blas: BLAS<'ctx>,
+
+    debug_stuff: DebugStuff<'ctx>,
 }
 
 struct FunctionTranslator<'a, 'ctx> {
     context: &'ctx Context,
-    module: &'a Module<'ctx>,
     builder: &'a Builder<'ctx>,
     function: &'a FunctionValue<'ctx>,
     intrinsics: &'a Intrinsics<'ctx>,
+    blas: &'a BLAS<'ctx>,
+
+    debug_stuff: &'a DebugStuff<'ctx>,
+}
+
+struct DebugStuff<'ctx> {
+    printf: FunctionValue<'ctx>,
+    float_fmt: GlobalValue<'ctx>,
+    i64_fmt: GlobalValue<'ctx>,
+}
+
+impl<'ctx> DebugStuff<'ctx> {
+    fn new(ctx: &'ctx Context, module: &Module<'ctx>, builder: &Builder<'ctx>) -> Self {
+        let i32_type = ctx.i32_type();
+        let ptr_type = ctx.ptr_type(AddressSpace::default());
+
+        let printf = i32_type.fn_type(&[ptr_type.into()], true);
+        let printf =
+            module.add_function("printf", printf, Some(inkwell::module::Linkage::External));
+        let float_fmt = builder
+            .build_global_string_ptr("%f\n", "float_fmt")
+            .unwrap();
+        let i64_fmt = builder.build_global_string_ptr("%ld\n", "i64_fmt").unwrap();
+        Self {
+            printf,
+            float_fmt,
+            i64_fmt,
+        }
+    }
+}
+
+#[derive(BitfieldSpecifier)]
+#[bits = 1]
+#[derive(Debug, Clone, Copy)]
+enum GemmPrecision {
+    Single,
+    Double,
+}
+
+#[bitfield]
+#[derive(Default, Debug, Clone, Copy)]
+struct GemmType {
+    trans_a: bool,
+    trans_b: bool,
+    trans_c: bool,
+    precision: GemmPrecision,
+    #[skip]
+    __: B4,
+}
+
+struct BLAS<'ctx> {
+    gemm_fn: Vec<FunctionValue<'ctx>>,
+}
+
+impl<'ctx> BLAS<'ctx> {
+    fn new(ctx: &'ctx Context, module: &Module<'ctx>) -> Self {
+        let gemm_fn = (0..16)
+            .map(|i| GemmType::from_bytes([i]))
+            .map(|ty| {
+                let name = format!(
+                    "my_{p}gemm_{ta}{tb}_{tc}",
+                    p = match ty.precision() {
+                        GemmPrecision::Single => "s",
+                        GemmPrecision::Double => "d",
+                    },
+                    ta = if ty.trans_a() { "t" } else { "n" },
+                    tb = if ty.trans_b() { "t" } else { "n" },
+                    tc = if ty.trans_c() { "t" } else { "n" }
+                );
+                let fp_type = match ty.precision() {
+                    GemmPrecision::Single => ctx.f32_type(),
+                    GemmPrecision::Double => ctx.f64_type(),
+                };
+                let void_type = ctx.void_type();
+                let int_type = ctx.i32_type();
+                let ptr_type = ctx.ptr_type(AddressSpace::default());
+                let fn_type = void_type.fn_type(
+                    &[
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        ptr_type.into(),
+                        int_type.into(),
+                        int_type.into(),
+                        int_type.into(),
+                        fp_type.into(),
+                        fp_type.into(),
+                    ],
+                    false,
+                );
+                module.add_function(name.as_str(), fn_type, Some(Linkage::External))
+            })
+            .collect();
+        Self { gemm_fn }
+    }
+
+    fn get(&self, ty: GemmType) -> FunctionValue<'ctx> {
+        self.gemm_fn[ty.into_bytes()[0] as usize]
+    }
+}
+
+struct SimpleMemoryManager<'ctx> {
+    uf: UnionFind<ValueId>,
+    map: HashMap<ValueId, PointerValue<'ctx>>,
+}
+
+impl<'ctx> SimpleMemoryManager<'ctx> {
+    fn new() -> Self {
+        Self::init(&[])
+    }
+
+    fn init(values: &[ValueId]) -> Self {
+        let mut uf = UnionFind::with_capacity(values.len());
+        for &id in values {
+            uf.append(id);
+        }
+        let map = HashMap::with_capacity(values.len());
+        Self { uf, map }
+    }
+
+    fn insert(&mut self, id: ValueId, ptr: PointerValue<'ctx>) {
+        let repr = self.uf.representative(&id);
+        match self.map.entry(repr) {
+            Entry::Vacant(e) => { e.insert(ptr); },
+            Entry::Occupied(e) => panic!("ValueId {} already exists", e.get()),
+        }
+    }
+
+    fn exist(&mut self, id: ValueId) -> bool {
+        let repr = self.uf.representative(&id);
+        self.map.contains_key(&repr)
+    }
+
+    fn get(&mut self, id: ValueId) -> Option<PointerValue<'ctx>> {
+        let repr = self.uf.representative(&id);
+        self.map.get(&repr).cloned()
+    }
+
+    fn merge(&mut self, x: ValueId, y: ValueId) {
+        self.uf.merge(&x, &y);
+    }
 }
 
 fn target_machine() -> Result<TargetMachine, CodeGenError> {
@@ -153,10 +310,14 @@ impl<'ctx> CodeGen<'ctx> {
         let f32_ty = context.f32_type().into();
         let f64_ty = context.f64_type().into();
 
-        let fmax_f32 = get_intrinsic!("llvm.maximum.f32", &[f32_ty, f32_ty])?;
-        let fmax_f64 = get_intrinsic!("llvm.maximum.f64", &[f64_ty, f64_ty])?;
+        let fmax_f32 = get_intrinsic!("llvm.maximum", &[f32_ty, f32_ty])?;
+        let fmax_f64 = get_intrinsic!("llvm.maximum", &[f64_ty, f64_ty])?;
 
         let intrinsics = Intrinsics { fmax_f32, fmax_f64 };
+
+        let blas = BLAS::new(context, &module);
+
+        let debug_stuff = DebugStuff::new(context, &module, &builder);
 
         Ok(CodeGen {
             context,
@@ -164,7 +325,7 @@ impl<'ctx> CodeGen<'ctx> {
             builder,
 
             allocator: memory::Allocator::new(),
-            id2value: HashMap::new(),
+            mem_man: SimpleMemoryManager::new(),
             main,
             main_entry,
 
@@ -174,6 +335,9 @@ impl<'ctx> CodeGen<'ctx> {
             noundef,
 
             intrinsics,
+            blas,
+
+            debug_stuff,
         })
     }
 
@@ -236,7 +400,7 @@ impl<'ctx> CodeGen<'ctx> {
                     define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
                 }
             };
-            self.id2value.insert(*id, gv.as_pointer_value());
+            self.mem_man.insert(*id, gv.as_pointer_value());
         }
         Ok(())
     }
@@ -270,17 +434,32 @@ impl<'ctx> CodeGen<'ctx> {
                         value.name.as_str(),
                     )?
                     .into_pointer_value();
-                self.id2value.insert(value_id, ptr);
+                self.mem_man.insert(value_id, ptr);
             }
         }
         Ok(())
     }
 
     pub fn compile_graph(&mut self, graph: &Graph) -> Result<(), BuilderError> {
+        self.mem_man = SimpleMemoryManager::init(graph.values.inner().iter().map(|(id, _)| id).collect::<Vec<_>>().as_slice());
+        for (_, node) in graph.nodes.iter() {
+            if node.is_dummy() {
+                continue;
+            }
+            if node.op.is_identity() {
+                let input = node.inputs[0];
+                let output = node.outputs[0];
+                self.mem_man.merge(input, output);
+            }
+        }
+
         self.init_data(graph)?;
         self.init_main_args(graph)?;
-        for (_, node) in graph.nodes.iter() {
+        for node in graph.topological_order().iter().map(|&id| &graph.nodes[id]) {
             if matches!(node.op, Operator::Input(_) | Operator::Output(_)) {
+                continue;
+            }
+            if node.op.is_identity() {
                 continue;
             }
             let function = self.compile_node(node, graph)?;
@@ -299,13 +478,13 @@ impl<'ctx> CodeGen<'ctx> {
                     .i64_type()
                     .const_int(ty.dims.size() as u64, false);
                 let name = graph.values[id].name.as_str();
-                if let std::collections::hash_map::Entry::Vacant(e) = self.id2value.entry(id) {
+                if !self.mem_man.exist(id) {
                     let ptr = match ty.elem_type {
                         DataType::F32 => malloc!(self.context.f32_type(), len, name),
                         DataType::F64 => malloc!(self.context.f64_type(), len, name),
                         DataType::I64 => malloc!(self.context.i64_type(), len, name),
                     }?;
-                    e.insert(ptr);
+                    self.mem_man.insert(id, ptr);
                 }
             }
 
@@ -313,7 +492,7 @@ impl<'ctx> CodeGen<'ctx> {
             args.extend(node.inputs.clone());
             let args = args
                 .iter()
-                .map(|&id| self.id2value[&id])
+                .map(|&id| self.mem_man.get(id).unwrap())
                 .map(|ptr| ptr.into())
                 .collect::<Vec<_>>();
             let call = self.builder.build_call(function, &args[..], "")?;
@@ -338,10 +517,11 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(entry);
         let translator = FunctionTranslator {
             context: self.context,
-            module: &self.module,
             builder: &self.builder,
             function: &function,
             intrinsics: &self.intrinsics,
+            blas: &self.blas,
+            debug_stuff: &self.debug_stuff,
         };
 
         let mut ptrs = args
@@ -367,13 +547,17 @@ impl<'ctx> CodeGen<'ctx> {
 
         macro_rules! gen_binaryop {
             ($op: expr) => {{
+                let mut lhs = ptrs[1].clone();
+                lhs.ty = lhs.ty.broadcast(&ptrs[0].ty.dims);
+                let mut rhs = ptrs[2].clone();
+                rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
                 let binop = BinaryOps {
                     dst: ptrs[0].clone(),
-                    lhs: ptrs[1].clone(),
-                    rhs: ptrs[2].clone(),
+                    lhs,
+                    rhs,
                 };
                 let op = Operation::BinaryOp(binop, $op);
-                translator.gen_nested_loop(op, entry)
+                translator.gen_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
             }};
         }
 
@@ -386,7 +570,29 @@ impl<'ctx> CodeGen<'ctx> {
                     },
                     $op,
                 );
-                translator.gen_nested_loop(op, entry)
+                translator.gen_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+            }};
+        }
+
+        macro_rules! gen_gemm {
+            ($gemm: expr) => {{
+                let prec = match ptrs[0].ty.elem_type {
+                    DataType::F32 => GemmPrecision::Single,
+                    DataType::F64 => GemmPrecision::Double,
+                    _ => unreachable!(),
+                };
+                let m = ptrs[0].ty.dims[0] as i32;
+                let n = ptrs[0].ty.dims[1] as i32;
+                let k = ptrs[1].ty.dims[1] as i32;
+                let gemm = Gemm::new($gemm, prec, m, n, k);
+                Operation::BinaryOp(
+                    BinaryOps {
+                        dst: ptrs[0].clone(),
+                        lhs: ptrs[1].clone(),
+                        rhs: ptrs[2].clone(),
+                    },
+                    BinaryOpcode::Gemm(gemm),
+                )
             }};
         }
 
@@ -397,6 +603,35 @@ impl<'ctx> CodeGen<'ctx> {
                 ptrs[1].perms = Some(perm.clone());
                 gen_unaryop!(UnaryOpcode::Transpose)
             }
+            Operator::MatMul => {
+                let nest = ptrs[0].ty.dims.ndim() - 2;
+                let gemm = gen_gemm!(&operator::Gemm {
+                    trans_a: false,
+                    trans_b: false,
+                    trans_c: false,
+                    alpha: 1.0,
+                    beta: 0.0,
+                });
+                translator.gen_nested_loop(gemm, entry, nest)
+            }
+            Operator::Gemm(ref gemm) => {
+                let gemm = gen_gemm!(gemm);
+                translator.gen_nested_loop(gemm, entry, 0)
+            }
+            Operator::Im2Col(ref im2col) => translator.build_im2col(
+                ptrs[0].ptr,
+                &ptrs[0].ty.dims,
+                ptrs[1].ptr,
+                &ptrs[1].ty.dims,
+                ptrs[0].ty.elem_type,
+                im2col,
+                entry,
+            ),
+            Operator::ReduceMatrix(op) => match op {
+                operator::ReduceOp::Max => {
+                    translator.build_matrix_reduce(&ptrs[0], &ptrs[1], op, entry)
+                }
+            },
             _ => todo!(),
         }?;
 
@@ -451,10 +686,54 @@ enum Operation<'ctx> {
     BinaryOp(BinaryOps<'ctx>, BinaryOpcode),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum BinaryOpcode {
     IntAdd,
     FloatAdd,
+    Gemm(Gemm),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Gemm {
+    ty: GemmType,
+    alpha: f64,
+    beta: f64,
+    m: i32,
+    n: i32,
+    k: i32,
+}
+
+impl Gemm {
+    fn new(gemm: &operator::Gemm, prec: GemmPrecision, m: i32, n: i32, k: i32) -> Self {
+        let ty = GemmType::new()
+            .with_trans_a(gemm.trans_a)
+            .with_trans_b(gemm.trans_b)
+            .with_trans_c(gemm.trans_c)
+            .with_precision(prec);
+        Self {
+            ty,
+            alpha: gemm.alpha,
+            beta: gemm.beta,
+            m,
+            n,
+            k,
+        }
+    }
+
+    fn make_const<'ctx>(&self, ctx: &'ctx Context, v: f64) -> FloatValue<'ctx> {
+        match self.ty.precision() {
+            GemmPrecision::Single => ctx.f32_type().const_float(v.try_into().unwrap()),
+            GemmPrecision::Double => ctx.f64_type().const_float(v),
+        }
+    }
+
+    fn alpha_value<'ctx>(&self, ctx: &'ctx Context) -> FloatValue<'ctx> {
+        self.make_const(ctx, self.alpha)
+    }
+
+    fn beta_value<'ctx>(&self, ctx: &'ctx Context) -> FloatValue<'ctx> {
+        self.make_const(ctx, self.beta)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -481,6 +760,23 @@ impl Operation<'_> {
             Operation::BinaryOp(op, _) => &op.dst.ty.dims,
         }
     }
+}
+
+#[derive(Debug)]
+struct Im2ColsInnerLoop<'a, 'ctx> {
+    preheader: BasicBlock<'ctx>,
+    exit: BasicBlock<'ctx>,
+
+    dst_ptr: PointerValue<'ctx>,
+    dst_offset: IntValue<'ctx>,
+
+    src_ptr: TensorPtr<'ctx>,
+    is_pad: IntValue<'ctx>,
+    pads: &'a [u64],
+    outer_offsets: &'a [IntValue<'ctx>],
+
+    elem_ty: FloatType<'ctx>,
+    nest: u64,
 }
 
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
@@ -542,6 +838,546 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(call)
     }
 
+    fn build_im2col_by_channel_inner(
+        &self,
+        inner_loops: Im2ColsInnerLoop<'_, 'ctx>,
+        im2col: &operator::Im2Col,
+    ) -> Result<IntValue<'ctx>, BuilderError> {
+        if inner_loops.nest as usize == inner_loops.outer_offsets.len() {
+            let prolog = self
+                .context
+                .append_basic_block(*self.function, "inner.prolog");
+            let normal = self
+                .context
+                .append_basic_block(*self.function, "inner.normal");
+            let pad = self.context.append_basic_block(*self.function, "inner.pad");
+            let epilog = self
+                .context
+                .append_basic_block(*self.function, "inner.epilog");
+
+            self.builder.build_unconditional_branch(prolog)?;
+            self.builder.position_at_end(prolog);
+            self.builder
+                .build_conditional_branch(inner_loops.is_pad, pad, normal)?;
+
+            self.builder.position_at_end(pad);
+            self.builder.build_unconditional_branch(epilog)?;
+
+            self.builder.position_at_end(normal);
+            let load_v = self.build_load(&inner_loops.src_ptr)?;
+            self.builder.build_unconditional_branch(epilog)?;
+
+            self.builder.position_at_end(epilog);
+            let store_v = self.builder.build_phi(inner_loops.elem_ty, "store.v")?;
+            store_v.add_incoming(&[(&load_v, normal), (&inner_loops.elem_ty.const_zero(), pad)]);
+            let gep = unsafe {
+                self.builder.build_in_bounds_gep(
+                    inner_loops.elem_ty,
+                    inner_loops.dst_ptr,
+                    &[inner_loops.dst_offset],
+                    "gep",
+                )
+            }?;
+            self.builder.build_store(gep, store_v.as_basic_value())?;
+            let next_dst_offset = self.builder.build_int_add(
+                inner_loops.dst_offset,
+                self.context.i64_type().const_int(1, false),
+                "next.dst.offset",
+            )?;
+            if false {
+                let fv = self.builder.build_float_cast(
+                    store_v.as_basic_value().into_float_value(),
+                    self.context.f64_type(),
+                    "float.val",
+                )?;
+                self.build_tail_call(
+                    self.debug_stuff.printf,
+                    &[
+                        self.debug_stuff.float_fmt.as_pointer_value().into(),
+                        fv.into(),
+                    ],
+                    "",
+                )?;
+                self.build_tail_call(
+                    self.debug_stuff.printf,
+                    &[
+                        self.debug_stuff.i64_fmt.as_pointer_value().into(),
+                        inner_loops.src_ptr.offset.into(),
+                    ],
+                    "",
+                )?;
+                let is_pad = self.builder.build_int_z_extend(
+                    inner_loops.is_pad,
+                    self.context.i64_type(),
+                    "is.pad",
+                )?;
+                self.build_tail_call(
+                    self.debug_stuff.printf,
+                    &[
+                        self.debug_stuff.i64_fmt.as_pointer_value().into(),
+                        is_pad.into(),
+                    ],
+                    "",
+                )?;
+            }
+            self.builder.build_unconditional_branch(inner_loops.exit)?;
+            return Ok(next_dst_offset);
+        }
+
+        let head = self
+            .context
+            .append_basic_block(*self.function, "inner.head");
+        let exit = self
+            .context
+            .append_basic_block(*self.function, "inner.exit");
+        let nest = inner_loops.nest;
+
+        self.builder.position_at_end(inner_loops.preheader);
+        self.builder.build_unconditional_branch(head)?;
+
+        self.builder.position_at_end(head);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let dst_offset = self
+            .builder
+            .build_phi(self.context.i64_type(), "dst.offset")?;
+        let src_inner_offset = self
+            .builder
+            .build_phi(self.context.i64_type(), "src.inner.offset")?;
+        let dst_offset_int = dst_offset.as_basic_value().into_int_value();
+        let src_inner_offset_int = src_inner_offset.as_basic_value().into_int_value();
+        let src_offset = self.builder.build_int_add(
+            inner_loops.outer_offsets[nest as usize],
+            src_inner_offset_int,
+            "src.offset",
+        )?;
+        let is_pad_left = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            src_offset,
+            self.context
+                .i64_type()
+                .const_int(inner_loops.pads[nest as usize], false),
+            "is.pad.left",
+        )?;
+        let is_pad_right = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLE,
+            self.context.i64_type().const_int(
+                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap()
+                    + inner_loops.pads[nest as usize],
+                false,
+            ),
+            src_offset,
+            "is.pad.right",
+        )?;
+        let is_pad_i = self
+            .builder
+            .build_or(is_pad_left, is_pad_right, "is.pad.i")?;
+        let is_pad = self
+            .builder
+            .build_or(inner_loops.is_pad, is_pad_i, "is.pad")?;
+
+        let src_offset = self.builder.build_int_sub(
+            src_offset,
+            self.context
+                .i64_type()
+                .const_int(inner_loops.pads[nest as usize], false),
+            "src.offset",
+        )?;
+        let src_offset = self.builder.build_int_mul(
+            src_offset,
+            self.context.i64_type().const_int(
+                inner_loops
+                    .src_ptr
+                    .stride(nest as usize + 2)
+                    .try_into()
+                    .unwrap(),
+                false,
+            ),
+            "src.inner.offset.mul",
+        )?;
+        let src_offset =
+            self.builder
+                .build_int_add(inner_loops.src_ptr.offset, src_offset, "src.offset")?;
+        let src_ptr = TensorPtr {
+            ptr: inner_loops.src_ptr.ptr,
+            ty: inner_loops.src_ptr.ty.clone(),
+            offset: src_offset,
+            name: format!("src.{}", nest),
+            perms: inner_loops.src_ptr.perms.clone(),
+        };
+        let next_inner_loops = Im2ColsInnerLoop {
+            preheader: head,
+            exit,
+            dst_ptr: inner_loops.dst_ptr,
+            dst_offset: dst_offset_int,
+            src_ptr,
+            is_pad,
+            pads: inner_loops.pads,
+            outer_offsets: inner_loops.outer_offsets,
+            elem_ty: inner_loops.elem_ty,
+            nest: nest + 1,
+        };
+
+        let next_dst_offset = self.build_im2col_by_channel_inner(next_inner_loops, im2col)?;
+
+        self.builder.position_at_end(exit);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let dilation = self
+            .context
+            .i64_type()
+            .const_int(im2col.dilations[nest as usize].try_into().unwrap(), false);
+        let src_inner_offset_next = self.builder.build_int_add(
+            src_inner_offset.as_basic_value().into_int_value(),
+            dilation,
+            "src.inner.offset.next",
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind_next,
+            self.context.i64_type().const_int(
+                im2col.one_kernel_shape[nest as usize].try_into().unwrap(),
+                false,
+            ),
+            "cond",
+        )?;
+        self.builder
+            .build_conditional_branch(cond, head, inner_loops.exit)?;
+        ind.add_incoming(&[
+            (&ind_next, exit),
+            (&self.context.i64_type().const_zero(), inner_loops.preheader),
+        ]);
+        src_inner_offset.add_incoming(&[
+            (&src_inner_offset_next, exit),
+            (&self.context.i64_type().const_zero(), inner_loops.preheader),
+        ]);
+        dst_offset.add_incoming(&[
+            (&next_dst_offset, exit),
+            (&inner_loops.dst_offset, inner_loops.preheader),
+        ]);
+        Ok(next_dst_offset)
+    }
+
+    fn build_im2col_by_channel_outer(
+        &self,
+        dst_ptr: PointerValue<'ctx>,
+        src_ptr: TensorPtr<'ctx>,
+        offsets: Vec<IntValue<'ctx>>,
+        dst_offset: IntValue<'ctx>,
+        nest: usize,
+        preheader: BasicBlock<'ctx>,
+        exit: BasicBlock<'ctx>,
+        im2col: &operator::Im2Col,
+    ) -> Result<IntValue<'ctx>, BuilderError> {
+        let max_nest = im2col.one_fm_shape.ndim();
+        if nest == max_nest {
+            let is_pad = self.context.bool_type().const_int(0, false);
+            let pads = (0..max_nest)
+                .map(|i| match &im2col.pad {
+                    operator::ConvPad::NotSet(pad) => pad[i].0,
+                    operator::ConvPad::Valid => 0,
+                    operator::ConvPad::SameLower | operator::ConvPad::SameUpper => {
+                        let padded_len = im2col.padded_len(i);
+                        let pad_len = padded_len - src_ptr.ty.dims[i + 2];
+                        let pad_left = pad_len / 2;
+                        let add_left =
+                            pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
+                        println!("padded_len: {:?}", padded_len);
+                        pad_left + add_left as usize
+                    }
+                })
+                .map(|x| x.try_into().unwrap())
+                .collect::<Vec<u64>>();
+            let elem_ty = match src_ptr.ty.elem_type {
+                DataType::F32 => self.context.f32_type(),
+                DataType::F64 => self.context.f64_type(),
+                _ => todo!(),
+            };
+
+            let inner_loops = Im2ColsInnerLoop {
+                preheader,
+                exit,
+
+                dst_ptr,
+                dst_offset,
+
+                src_ptr,
+                is_pad,
+                pads: &pads,
+                outer_offsets: &offsets,
+
+                elem_ty,
+                nest: 0,
+            };
+
+            return self.build_im2col_by_channel_inner(inner_loops, im2col);
+        }
+
+        let head = self
+            .context
+            .append_basic_block(*self.function, "outer.head");
+        let exiting = self
+            .context
+            .append_basic_block(*self.function, "outer.exit");
+
+        self.builder.build_unconditional_branch(head)?;
+
+        self.builder.position_at_end(head);
+        // let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let src_offset_init = src_ptr.offset;
+        let dst_offset_init = dst_offset;
+        let src_offset = self
+            .builder
+            .build_phi(self.context.i64_type(), "src.offset")?;
+        let dst_offset = self
+            .builder
+            .build_phi(self.context.i64_type(), "dst.offset")?;
+        let src_offset_int = src_offset.as_basic_value().into_int_value();
+        let dst_offset_int = dst_offset.as_basic_value().into_int_value();
+        let mut offsets = offsets;
+        offsets.push(src_offset_int);
+        let next_dst_offset = self.build_im2col_by_channel_outer(
+            dst_ptr,
+            src_ptr,
+            offsets,
+            dst_offset_int,
+            nest + 1,
+            head,
+            exiting,
+            im2col,
+        )?;
+
+        self.builder.position_at_end(exiting);
+        let next_dst_offset = if nest + 1 == max_nest {
+            match im2col.channel {
+                operator::Channel::Meld(channel) => self.builder.build_int_add(
+                    next_dst_offset,
+                    self.context.i64_type().const_int(
+                        ((channel - 1) * im2col.one_kernel_shape.size())
+                            .try_into()
+                            .unwrap(),
+                        false,
+                    ),
+                    "next.dst.offset",
+                )?,
+                operator::Channel::Split(_) => next_dst_offset,
+            }
+        } else {
+            next_dst_offset
+        };
+        let padded_img_size: i64 = im2col.padded_len(nest).try_into().unwrap();
+        let kernel_size: i64 = im2col.one_kernel_shape[nest].try_into().unwrap();
+        let dilation: i64 = im2col.dilations[nest].try_into().unwrap();
+        let next_src_offset = self.builder.build_int_add(
+            src_offset_int,
+            self.context
+                .i64_type()
+                .const_int(im2col.strides[nest].try_into().unwrap(), false),
+            "src.offset.next",
+        )?;
+        let bound = padded_img_size - (kernel_size - 1) * dilation;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            next_src_offset,
+            self.context
+                .i64_type()
+                .const_int(bound.try_into().unwrap(), false),
+            "cond",
+        )?;
+        self.builder.build_conditional_branch(cond, head, exit)?;
+        dst_offset.add_incoming(&[(&next_dst_offset, exiting), (&dst_offset_init, preheader)]);
+        src_offset.add_incoming(&[
+            (&next_src_offset, exiting),
+            (&self.context.i64_type().const_zero(), preheader),
+        ]);
+        Ok(next_dst_offset)
+    }
+
+    fn build_im2col(
+        &self,
+        dst_ptr: PointerValue<'ctx>,
+        dst_shape: &ResolvedTensorDims,
+        src_ptr: PointerValue<'ctx>,
+        src_shape: &ResolvedTensorDims,
+        elem_type: DataType,
+        im2col: &operator::Im2Col,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let header_nbatch = self
+            .context
+            .append_basic_block(*self.function, "im2col.header.nbatch");
+        let exiting_nbatch = self
+            .context
+            .append_basic_block(*self.function, "im2col.exit.nbatch");
+        let header_channel = self
+            .context
+            .append_basic_block(*self.function, "im2col.header.channel");
+        let exiting_channel = self
+            .context
+            .append_basic_block(*self.function, "im2col.exit.channel");
+        let exit = self
+            .context
+            .append_basic_block(*self.function, "im2col.exit");
+
+        self.builder.build_unconditional_branch(header_nbatch)?;
+
+        self.builder.position_at_end(header_nbatch);
+        let ind_nbatch = self
+            .builder
+            .build_phi(self.context.i64_type(), "ind.nbatch")?;
+        let offset_dst_nbatch = self
+            .builder
+            .build_phi(self.context.i64_type(), "offset.dst.nbatch")?;
+        let offset_src_nbatch = self
+            .builder
+            .build_phi(self.context.i64_type(), "offset.src.nbatch")?;
+        let offset_dst_nbatch_int = offset_dst_nbatch.as_basic_value().into_int_value();
+        let offset_src_nbatch_int = offset_src_nbatch.as_basic_value().into_int_value();
+        self.builder.build_unconditional_branch(header_channel)?;
+
+        self.builder.position_at_end(header_channel);
+        let ind_channel = self
+            .builder
+            .build_phi(self.context.i64_type(), "ind.channel")?;
+        let offset_dst_channel = self
+            .builder
+            .build_phi(self.context.i64_type(), "offset.dst.channel")?;
+        let offset_src_channel = self
+            .builder
+            .build_phi(self.context.i64_type(), "offset.src.channel")?;
+        let offset_dst_channel_int = offset_dst_channel.as_basic_value().into_int_value();
+        let offset_src_channel_int = offset_src_channel.as_basic_value().into_int_value();
+        let offset_dst = self.builder.build_int_add(
+            offset_dst_nbatch_int,
+            offset_dst_channel_int,
+            "offset.dst",
+        )?;
+        let offset_src = self.builder.build_int_add(
+            offset_src_nbatch_int,
+            offset_src_channel_int,
+            "offset.src",
+        )?;
+
+        let src_ptr = TensorPtr {
+            ptr: src_ptr,
+            ty: ResolvedTensorType::new(elem_type, src_shape.clone()),
+            offset: offset_src,
+            name: "src".to_string(),
+            perms: None,
+        };
+
+        self.build_im2col_by_channel_outer(
+            dst_ptr,
+            src_ptr,
+            vec![],
+            offset_dst,
+            0,
+            header_channel,
+            exiting_channel,
+            im2col,
+        )?;
+
+        self.builder.position_at_end(exiting_channel);
+        let next_ind_channel = self.builder.build_int_add(
+            ind_channel.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.channel.next",
+        )?;
+        let next_offset_dst_channel = match im2col.channel {
+            operator::Channel::Meld(_) => im2col.one_kernel_shape.size(),
+            operator::Channel::Split(_) => im2col.one_fm_shape.size() * im2col.one_kernel_shape.size(),
+        };
+        let next_offset_dst_channel = self.builder.build_int_add(
+            offset_dst_channel_int,
+            self.context
+                .i64_type()
+                .const_int(next_offset_dst_channel.try_into().unwrap(), false),
+            "offset.dst.channel.next",
+        )?;
+        let next_offset_src_channel = self.builder.build_int_add(
+            offset_src_channel_int,
+            self.context.i64_type().const_int(
+                (src_shape.size() / im2col.nbatch / im2col.channel.inner())
+                    .try_into()
+                    .unwrap(),
+                false,
+            ),
+            "offset.src.channel.next",
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            next_ind_channel,
+            self.context
+                .i64_type()
+                .const_int(im2col.channel.inner().try_into().unwrap(), false),
+            "cond",
+        )?;
+        self.builder
+            .build_conditional_branch(cond, header_channel, exiting_nbatch)?;
+        ind_channel.add_incoming(&[
+            (&next_ind_channel, exiting_channel),
+            (&self.context.i64_type().const_int(0, false), header_nbatch),
+        ]);
+        offset_dst_channel.add_incoming(&[
+            (&next_offset_dst_channel, exiting_channel),
+            (&offset_dst_nbatch_int, header_nbatch),
+        ]);
+        offset_src_channel.add_incoming(&[
+            (&next_offset_src_channel, exiting_channel),
+            (&self.context.i64_type().const_zero(), header_nbatch),
+        ]);
+
+        self.builder.position_at_end(exiting_nbatch);
+        let next_ind_nbatch = self.builder.build_int_add(
+            ind_nbatch.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.nbatch.next",
+        )?;
+        let next_offset_dst_nbatch = self.builder.build_int_add(
+            offset_dst_nbatch_int,
+            self.context.i64_type().const_int(
+                (dst_shape.size() / im2col.nbatch).try_into().unwrap(),
+                false,
+            ),
+            "offset.dst.nbatch.next",
+        )?;
+        let next_offset_src_nbatch = self.builder.build_int_add(
+            offset_src_nbatch_int,
+            self.context.i64_type().const_int(
+                (src_shape.size() / im2col.nbatch).try_into().unwrap(),
+                false,
+            ),
+            "offset.src.nbatch.next",
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            next_ind_nbatch,
+            self.context
+                .i64_type()
+                .const_int(im2col.nbatch.try_into().unwrap(), false),
+            "cond",
+        )?;
+        self.builder
+            .build_conditional_branch(cond, header_nbatch, exit)?;
+        ind_nbatch.add_incoming(&[
+            (&next_ind_nbatch, exiting_nbatch),
+            (&self.context.i64_type().const_int(0, false), entry),
+        ]);
+        offset_dst_nbatch.add_incoming(&[
+            (&next_offset_dst_nbatch, exiting_nbatch),
+            (&self.context.i64_type().const_int(0, false), entry),
+        ]);
+        offset_src_nbatch.add_incoming(&[
+            (&next_offset_src_nbatch, exiting_nbatch),
+            (&self.context.i64_type().const_int(0, false), entry),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         match op {
             Operation::UnaryOp(op, opcode) => {
@@ -568,18 +1404,175 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 };
                 self.build_store(&op.dst, res)
             }
-            Operation::BinaryOp(op, opcode) => {
-                let res = match opcode {
-                    BinaryOpcode::FloatAdd => {
-                        let lhs = self.build_load(&op.lhs)?.into_float_value();
-                        let rhs = self.build_load(&op.rhs)?.into_float_value();
-                        self.builder.build_float_add(lhs, rhs, "res")?
-                    }
-                    BinaryOpcode::IntAdd => todo!(),
-                };
-                self.build_store(&op.dst, res)
-            }
+            Operation::BinaryOp(op, opcode) => match opcode {
+                BinaryOpcode::FloatAdd => {
+                    let lhs = self.build_load(&op.lhs)?.into_float_value();
+                    let rhs = self.build_load(&op.rhs)?.into_float_value();
+                    let res = self.builder.build_float_add(lhs, rhs, "res")?;
+                    self.build_store(&op.dst, res)
+                }
+                BinaryOpcode::IntAdd => todo!(),
+                BinaryOpcode::Gemm(ref gemm) => {
+                    let gemm_fn = self.blas.get(gemm.ty);
+                    let alpha = gemm.alpha_value(self.context);
+                    let beta = gemm.beta_value(self.context);
+                    let m = self.context.i32_type().const_int(gemm.m as u64, false);
+                    let n = self.context.i32_type().const_int(gemm.n as u64, false);
+                    let k = self.context.i32_type().const_int(gemm.k as u64, false);
+                    self.build_tail_call(
+                        gemm_fn,
+                        &[
+                            op.lhs.ptr.into(),
+                            op.rhs.ptr.into(),
+                            op.dst.ptr.into(),
+                            m.into(),
+                            n.into(),
+                            k.into(),
+                            alpha.into(),
+                            beta.into(),
+                        ],
+                        "",
+                    )?;
+                    Ok(())
+                }
+            },
         }
+    }
+
+    fn build_matrix_reduce(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        op: operator::ReduceOp,
+        preheader: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let elem_ty = src.ty.elem_type;
+        let row: u64 = src.ty.dims[0].try_into().unwrap();
+        let col: u64 = src.ty.dims[1].try_into().unwrap();
+        let src = src.ptr;
+        let dst = dst.ptr;
+
+        let header0 = self.context.append_basic_block(*self.function, "header0");
+        let exiting0 = self.context.append_basic_block(*self.function, "exiting0");
+        let body = self.context.append_basic_block(*self.function, "body");
+        let exit = self.context.append_basic_block(*self.function, "exit");
+
+        self.builder.build_unconditional_branch(header0)?;
+
+        self.builder.position_at_end(header0);
+        let ind0 = self.builder.build_phi(self.context.i64_type(), "ind0")?;
+        let offset0 = self.builder.build_phi(self.context.i64_type(), "offset0")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let ind1 = self.builder.build_phi(self.context.i64_type(), "ind1")?;
+        let fp_ty = match elem_ty {
+            DataType::F32 => self.context.f32_type(),
+            DataType::F64 => self.context.f64_type(),
+            _ => todo!(),
+        };
+        let acc = self.builder.build_phi(fp_ty, "acc")?;
+        let offset1 = self.builder.build_int_add(
+            offset0.as_basic_value().into_int_value(),
+            ind1.as_basic_value().into_int_value(),
+            "offset1",
+        )?;
+
+        macro_rules! gen_body {
+            ($f: expr, $acc: expr) => {{
+                let gep = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(fp_ty, src, &[offset1], "gep")
+                }?;
+                let val = self.builder.build_load(fp_ty, gep, "val")?;
+                $f($acc, val)
+            }};
+        }
+
+        let (id_v, res) = match op {
+            operator::ReduceOp::Max => {
+                let (id_v, fmax) = match elem_ty {
+                    DataType::F32 => (
+                        self.context.f32_type().const_float(f32::MIN as f64),
+                        self.intrinsics.fmax_f32,
+                    ),
+                    DataType::F64 => (
+                        self.context.f64_type().const_float(f64::MIN),
+                        self.intrinsics.fmax_f64,
+                    ),
+                    _ => todo!(),
+                };
+                let res =
+                    gen_body!(
+                        |acc: BasicValueEnum<'ctx>, val: BasicValueEnum<'ctx>| self
+                            .build_tail_call(fmax, &[acc.into(), val.into()], "res"),
+                        acc.as_basic_value()
+                    )?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
+                (id_v, res)
+            }
+        };
+        let ind1_next = self.builder.build_int_add(
+            ind1.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind1.next",
+        )?;
+        let cond1 = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind1_next,
+            self.context.i64_type().const_int(col, false),
+            "cond1",
+        )?;
+        self.builder
+            .build_conditional_branch(cond1, body, exiting0)?;
+        ind1.add_incoming(&[
+            (&ind1_next, body),
+            (&self.context.i64_type().const_zero(), header0),
+        ]);
+        acc.add_incoming(&[(&res, body), (&id_v, header0)]);
+
+        self.builder.position_at_end(exiting0);
+        let gep = unsafe {
+            self.builder.build_in_bounds_gep(
+                fp_ty,
+                dst,
+                &[ind0.as_basic_value().into_int_value()],
+                "gep",
+            )
+        }?;
+        self.builder.build_store(gep, res)?;
+        let ind0_next = self.builder.build_int_add(
+            ind0.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind0.next",
+        )?;
+        let offset0_next = self.builder.build_int_add(
+            offset0.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(col, false),
+            "offset0.next",
+        )?;
+        let cond0 = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind0_next,
+            self.context.i64_type().const_int(row, false),
+            "cond0",
+        )?;
+        self.builder
+            .build_conditional_branch(cond0, header0, exit)?;
+        ind0.add_incoming(&[
+            (&ind0_next, exiting0),
+            (&self.context.i64_type().const_zero(), preheader),
+        ]);
+        offset0.add_incoming(&[
+            (&offset0_next, exiting0),
+            (&self.context.i64_type().const_zero(), preheader),
+        ]);
+
+        self.builder.position_at_end(exit);
+
+        Ok(exit)
     }
 
     fn gen_nested_loop_rec(
@@ -587,6 +1580,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         ops: Operation<'ctx>,
         loop_bb: LoopBB<'ctx>,
         nest: usize,
+        max_nest: usize,
     ) -> Result<(), BuilderError> {
         macro_rules! update_offset {
             ($ptr: expr, $offset_phi: expr, $exiting: expr) => {{
@@ -624,17 +1618,18 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }};
         }
 
-        let is_last = nest + 1 == ops.result_dims().ndim();
+        if nest == max_nest {
+            self.build_operation(&ops)?;
+            self.builder.build_unconditional_branch(loop_bb.exit)?;
+            return Ok(());
+        }
         let ind = self
             .builder
             .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
+        let exiting_bb = self
+            .context
+            .append_basic_block(*self.function, format!("exit.{}", nest).as_str());
         let bound: u64 = ops.result_dims()[nest].try_into().unwrap();
-        let exiting_bb = if is_last {
-            loop_bb.header
-        } else {
-            self.context
-                .append_basic_block(*self.function, format!("exit.{}", nest).as_str())
-        };
         let bound = self.context.i64_type().const_int(bound, false);
         let next_ops = match ops {
             Operation::UnaryOp(op, opcode) => {
@@ -682,70 +1677,46 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 )
             }
         };
-        if is_last {
-            self.build_operation(&next_ops)?;
-            let ind_next = self.builder.build_int_add(
-                ind.as_basic_value().into_int_value(),
-                self.context.i64_type().const_int(1, false),
-                format!("ind.{}.next", nest).as_str(),
-            )?;
-            let cond = self.builder.build_int_compare(
-                inkwell::IntPredicate::SLT,
-                ind_next,
-                bound,
-                format!("cond.{}", nest).as_str(),
-            )?;
-            ind.add_incoming(&[
-                (
-                    &self.context.i64_type().const_int(0, false),
-                    loop_bb.preheader,
-                ),
-                (&ind_next, exiting_bb),
-            ]);
-            self.builder
-                .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
-            Ok(())
-        } else {
-            let next_bb = self
-                .context
-                .append_basic_block(*self.function, format!("loop.{}", nest).as_str());
-            self.builder.build_unconditional_branch(next_bb)?;
-            self.builder.position_at_end(exiting_bb);
-            let ind_next = self.builder.build_int_add(
-                ind.as_basic_value().into_int_value(),
-                self.context.i64_type().const_int(1, false),
-                format!("ind.{}.next", nest).as_str(),
-            )?;
-            let cond = self.builder.build_int_compare(
-                inkwell::IntPredicate::SLT,
-                ind_next,
-                bound,
-                format!("cond.{}", nest).as_str(),
-            )?;
-            self.builder
-                .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
+        let next_bb = self
+            .context
+            .append_basic_block(*self.function, format!("loop.{}", nest).as_str());
+        self.builder.build_unconditional_branch(next_bb)?;
+        self.builder.position_at_end(exiting_bb);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            format!("ind.{}.next", nest).as_str(),
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind_next,
+            bound,
+            format!("cond.{}", nest).as_str(),
+        )?;
+        self.builder
+            .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
 
-            ind.add_incoming(&[
-                (
-                    &self.context.i64_type().const_int(0, false),
-                    loop_bb.preheader,
-                ),
-                (&ind_next, exiting_bb),
-            ]);
-            self.builder.position_at_end(next_bb);
-            let next_loop_bb = LoopBB {
-                preheader: loop_bb.header,
-                header: next_bb,
-                exit: exiting_bb,
-            };
-            self.gen_nested_loop_rec(next_ops, next_loop_bb, nest + 1)
-        }
+        ind.add_incoming(&[
+            (
+                &self.context.i64_type().const_int(0, false),
+                loop_bb.preheader,
+            ),
+            (&ind_next, exiting_bb),
+        ]);
+        self.builder.position_at_end(next_bb);
+        let next_loop_bb = LoopBB {
+            preheader: loop_bb.header,
+            header: next_bb,
+            exit: exiting_bb,
+        };
+        self.gen_nested_loop_rec(next_ops, next_loop_bb, nest + 1, max_nest)
     }
 
     fn gen_nested_loop(
         &self,
         op: Operation<'ctx>,
         preheader: BasicBlock<'ctx>,
+        max_nest: usize,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         let header = self.context.append_basic_block(*self.function, "header");
         let exit = self.context.append_basic_block(*self.function, "exit");
@@ -756,7 +1727,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header,
             exit,
         };
-        self.gen_nested_loop_rec(op, loop_bb, 0)?;
+        self.gen_nested_loop_rec(op, loop_bb, 0, max_nest)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }
@@ -769,7 +1740,6 @@ pub enum LLVMSessionError {
     CodeGenError(CodeGenError),
     ModelLoadError(ModelLoadError),
     TypeError(TypeError),
-    FunctionLookupError(FunctionLookupError),
     OtherError(String),
 }
 
@@ -777,9 +1747,14 @@ pub struct LLVMSession<'ctx> {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
 
-    llvm_ctx: &'ctx Context,
+    #[allow(dead_code)]
     codegen: CodeGen<'ctx>,
-    execution_engine: ExecutionEngine<'ctx>,
+
+    shared_obj: PathBuf,
+
+    #[allow(dead_code)]
+    lib: libloading::Library,
+    func: CodeType,
 }
 
 fn get_argument_types(
@@ -800,7 +1775,30 @@ impl<'ctx> LLVMSession<'ctx> {
         llvm_passes: &[LLVMPass],
     ) -> Result<Self, LLVMSessionError> {
         let mut model = Model::load_from_path(p).map_err(LLVMSessionError::ModelLoadError)?;
+        let mut optimizer = Optimizer::new(String::from("optimizer"));
         model.graph.infer().map_err(LLVMSessionError::TypeError)?;
+
+        // optimizer.passes.push(Box::new(MatMulAxTB::default()));
+        optimizer
+            .passes
+            .push(Box::new(im2col::InsertIm2Col::default()));
+        optimizer
+            .passes
+            .push(Box::new(gemm::MatMul2Gemm::default()));
+        optimizer
+            .passes
+            .push(Box::new(gemm::GemmTransComposition::default()));
+        // optimizer
+        //     .passes
+        //     .push(Box::new(trunc_output::TruncOutput::default()));
+
+        optimizer.run(&mut model.graph);
+        {
+            use std::fs::File;
+            use std::io::Write;
+            let mut file = File::create("model.dot").unwrap();
+            file.write_all(model.graph.to_dot().as_bytes()).unwrap();
+        }
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let mut codegen = CodeGen::new(ctx).map_err(LLVMSessionError::CodeGenError)?;
@@ -808,18 +1806,55 @@ impl<'ctx> LLVMSession<'ctx> {
             .compile(&model.graph, llvm_passes)
             .map_err(LLVMSessionError::CodeGenError)?;
 
-        let execution_engine = codegen
-            .module
-            .create_jit_execution_engine(OptimizationLevel::Aggressive)
+        codegen.module.print_to_file("model.ll").unwrap();
+
+        let mut rng = SmallRng::from_entropy();
+        let id = Alphanumeric.sample_string(&mut rng, 16);
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let tmp_obj = dir.join(format!("model_{}.o", id));
+        let shared_obj = dir.join(format!("model_{}.so", id));
+
+        codegen
+            .target_machine
+            .write_to_file(&codegen.module, FileType::Object, tmp_obj.as_ref())
             .map_err(CodeGenError::LLVMError)
             .map_err(LLVMSessionError::CodeGenError)?;
+
+        // TODO: args
+        Command::new("clang")
+            .args([
+                "-shared",
+                "-fPIC",
+                "-fopenmp",
+                "-I/usr/include/openblas",
+                "-lopenblas",
+                "-o",
+                shared_obj.to_str().unwrap(),
+                tmp_obj.to_str().unwrap(),
+                dir.join("c/blas.c").to_str().unwrap(),
+            ])
+            .status()
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?;
+
+        Command::new("rm")
+            .args(["-f", tmp_obj.to_str().unwrap()])
+            .status()
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?;
+
+        let lib = unsafe { libloading::Library::new(shared_obj.as_os_str()) }
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?;
+        let func: libloading::Symbol<CodeType> = unsafe { lib.get(b"main") }
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?;
+        let func = *func;
 
         Ok(LLVMSession {
             input_ty: inputs_ty,
             output_ty: outputs_ty,
-            llvm_ctx: ctx,
             codegen,
-            execution_engine,
+            shared_obj,
+            lib,
+            func,
         })
     }
 
@@ -835,10 +1870,17 @@ impl<'ctx> LLVMSession<'ctx> {
             .map(|t| t.data.as_mut_ptr())
             .collect::<Vec<_>>();
         let input_ptrs = inputs.iter().map(|t| t.data.as_ptr()).collect::<Vec<_>>();
-        let func: JitFunction<CodeType> = unsafe { self.execution_engine.get_function("main") }
-            .map_err(LLVMSessionError::FunctionLookupError)?;
-        unsafe { func.call(output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
+        unsafe { (self.func)(output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
         Ok(outputs)
+    }
+}
+
+impl Drop for LLVMSession<'_> {
+    fn drop(&mut self) {
+        Command::new("rm")
+            .args(["-f", self.shared_obj.to_str().unwrap()])
+            .status()
+            .unwrap();
     }
 }
 
@@ -928,11 +1970,6 @@ fn test_add_large() -> TestResult {
             15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
         )?;
         let outputs = session.run(&[input0, input1])?;
-        // session.codegen.target_machine.write_to_file(
-        //     &session.codegen.module,
-        //     inkwell::targets::FileType::Object,
-        //     "test_add_large.o".as_ref(),
-        // ).unwrap();
         tensor_assert_eq!(outputs[0], orig0 + orig1);
         Ok(())
     })
@@ -956,6 +1993,273 @@ fn transpose() -> TestResult {
         let output = session.run(&[input])?;
         let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned();
         tensor_assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn matmul() -> TestResult {
+    with_session("models/test/matmul.onnx", |session| {
+        let (input0, orig0) = make_tensor!(
+            f32,
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        )?;
+        let (input1, orig1) = make_tensor!(f32, [1.0, 2.0], [3.0, 4.0], [5.0, 6.0],)?;
+        let output = session.run(&[input0, input1])?;
+        tensor_assert_eq!(output[0], orig0.dot(&orig1));
+        Ok(())
+    })
+}
+
+#[test]
+fn matmul_a_x_tb() -> TestResult {
+    with_session("models/test/matmul_a_x_tb.onnx", |session| {
+        let (input0, orig0) = make_range_tensor!(f32, 5, 7)?;
+        let (input1, orig1) = make_range_tensor!(f32, 6, 7)?;
+
+        let output = session.run(&[input0, input1])?;
+        tensor_assert_eq!(output[0], orig0.dot(&orig1.t()));
+        Ok(())
+    })
+}
+
+// https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-32
+#[test]
+fn test_conv() -> TestResult {
+    with_session("models/test/conv.onnx", |session| {
+        // (1 x 1 x 5 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+        let output = session.run(&[input0, input1])?;
+
+        // (1 x 1 x 5 x 5)
+        let (expected, _) = make_tensor!(
+            f32,
+            [[
+                [12.0, 21.0, 27.0, 33.0, 24.0],
+                [33.0, 54.0, 63.0, 72.0, 51.0],
+                [63.0, 99.0, 108.0, 117.0, 81.0],
+                [93.0, 144.0, 153.0, 162.0, 111.0],
+                [72.0, 111.0, 117.0, 123.0, 84.0],
+            ]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_conv_with_strides0() -> TestResult {
+    with_session("models/test/conv_with_strides0.onnx", |session| {
+        // (1 x 1 x 7 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+                [25.0, 26.0, 27.0, 28.0, 29.0],
+                [30.0, 31.0, 32.0, 33.0, 34.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+        let output = session.run(&[input0, input1])?;
+
+        // (1 x 1 x 4 x 3)
+        let (expected, _) = make_tensor!(
+            f32,
+            [[
+                [12.0, 27.0, 24.0],
+                [63.0, 108.0, 81.0],
+                [123.0, 198.0, 141.0],
+                [112.0, 177.0, 124.0],
+            ]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_conv_with_strides1() -> TestResult {
+    with_session("models/test/conv_with_strides1.onnx", |session| {
+        // (1 x 1 x 7 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+                [25.0, 26.0, 27.0, 28.0, 29.0],
+                [30.0, 31.0, 32.0, 33.0, 34.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+        let output = session.run(&[input0, input1])?;
+
+        // (1 x 1 x 3 x 2)
+        let (expected, _) = make_tensor!(f32, [[[54.0, 72.0], [144.0, 162.0], [234.0, 252.0],]],)?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_conv_with_strides2() -> TestResult {
+    with_session("models/test/conv_with_strides2.onnx", |session| {
+        // (1 x 1 x 7 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+                [25.0, 26.0, 27.0, 28.0, 29.0],
+                [30.0, 31.0, 32.0, 33.0, 34.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+        let output = session.run(&[input0, input1])?;
+
+        // (1 x 1 x 4 x 2)
+        let (expected, _) = make_tensor!(
+            f32,
+            [[[21.0, 33.0], [99.0, 117.0], [189.0, 207.0], [171.0, 183.0],]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_conv_channels() -> TestResult {
+    with_session("models/test/conv_channels.onnx", |session| {
+        // (1 x 2 x 7 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [
+                [
+                    [0.0, 1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0, 13.0, 14.0],
+                    [15.0, 16.0, 17.0, 18.0, 19.0],
+                    [20.0, 21.0, 22.0, 23.0, 24.0],
+                    [25.0, 26.0, 27.0, 28.0, 29.0],
+                    [30.0, 31.0, 32.0, 33.0, 34.0],
+                ],
+                [
+                    [1.0, 2.0, 3.0, 4.0, 5.0],
+                    [6.0, 7.0, 8.0, 9.0, 10.0],
+                    [11.0, 12.0, 13.0, 14.0, 15.0],
+                    [16.0, 17.0, 18.0, 19.0, 20.0],
+                    [21.0, 22.0, 23.0, 24.0, 25.0],
+                    [26.0, 27.0, 28.0, 29.0, 30.0],
+                    [31.0, 32.0, 33.0, 34.0, 35.0],
+                ]
+            ],
+        )?;
+
+        // (1 x 2 x 3 x 3)
+        let (input1, _) = make_tensor!(
+            f32,
+            [
+                [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+                [[2.0, 2.0, 2.0], [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]],
+            ],
+        )?;
+        let output = session.run(&[input0, input1])?;
+
+        // (1 x 1 x 4 x 3)
+        let (expected, _) = make_tensor!(
+            f32,
+            [[
+                [44.0, 93.0, 80.0],
+                [201.0, 342.0, 255.0],
+                [381.0, 612.0, 435.0],
+                [344.0, 543.0, 380.0],
+            ]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_conv_with_autopad_same() -> TestResult {
+    with_session("models/test/conv_with_autopad_same.onnx", |session| {
+        // (1 x 1 x 5 x 5)
+        let (input0, _) = make_tensor!(
+            f32,
+            [[
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [15.0, 16.0, 17.0, 18.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+            ]],
+        )?;
+
+        // (1 x 1 x 3 x 3)
+        let (input1, _) =
+            make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+
+        let output = session.run(&[input0, input1])?;
+
+        let (expected, _) = make_tensor!(
+            f32,
+            [[[12.0, 27.0, 24.0], [63.0, 108.0, 81.0], [72.0, 117.0, 84.0],]],
+        )?;
+        assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_maxpool() -> TestResult {
+    with_session("models/test/maxpool.onnx", |session| {
+        let (input, orig) = make_range_tensor!(f32, 1, 3, 8, 8)?;
+        let output = session.run(&[input])?;
+
+        let expected = orig
+            .windows((1, 1, 2, 2))
+            .into_iter()
+            .map(|w| w.iter().cloned().fold(f32::NEG_INFINITY, f32::max))
+            .collect::<ndarray::Array<f32, _>>()
+            .to_shape((1, 3, 7, 7))
+            .map_err(|e| LLVMSessionError::OtherError(format!("{:?}", e)))?
+            .to_owned();
+        let expected = Tensor::try_from(expected).map_err(LLVMSessionError::TypeError)?;
+        assert_eq!(output[0], expected);
         Ok(())
     })
 }

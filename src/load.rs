@@ -415,7 +415,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .transpose()?
                 .with_default(1);
             let pad = load_pad(attributes)?;
-            Ok(Operator::MaxPool(MaxPool {
+            Ok(Operator::MaxPool(Pooling {
                 pad,
                 ceil_mode,
                 dilations,

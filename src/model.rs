@@ -175,6 +175,12 @@ pub struct ValueInfo {
 #[derive(Default, Debug)]
 pub struct Values(Arena<ValueInfo>);
 
+impl Values {
+    pub fn inner(&self) -> &Arena<ValueInfo> {
+        &self.0
+    }
+}
+
 pub type ValueId = Id<ValueInfo>;
 
 impl Index<ValueId> for Values {

@@ -7,14 +7,19 @@ use std::ops::Index;
 pub enum Operator {
     Add,
     Conv(Conv),
+    Gemm(Gemm),
     ReLU,
-    MatMul,
-    MaxPool(MaxPool),
     Reshape,
+    MatMul,
+    MaxPool(Pooling),
     Transpose(Vec<usize>),
 
     // Custom
-    MatMulRightTransposed,
+    Im2Col(Im2Col),
+    ReduceMatrix(ReduceOp),
+
+    // For debug
+    ForceReshape,
 
     // Dummy
     Input(ValueId),
@@ -60,12 +65,33 @@ pub struct Conv {
 
 // TODO: storage_order
 #[derive(Debug, Clone)]
-pub struct MaxPool {
+pub struct Pooling {
     pub pad: ConvPad,
     pub ceil_mode: bool,
     pub dilations: OptionalVec<usize>,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Gemm {
+    pub alpha: f64,
+    pub beta: f64,
+    pub trans_a: bool,
+    pub trans_b: bool,
+    pub trans_c: bool,
+}
+
+impl Default for Gemm {
+    fn default() -> Self {
+        Self {
+            alpha: 1.0,
+            beta: 0.0,
+            trans_a: false,
+            trans_b: false,
+            trans_c: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,14 +100,31 @@ pub enum Channel {
     Split(usize), // MaxPool
 }
 
+impl Channel {
+    pub fn inner(&self) -> usize {
+        match self {
+            Channel::Meld(v) => *v,
+            Channel::Split(v) => *v,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Im2Col {
-    pub result_shape: ResolvedTensorDims, // convolution of one image and one kernel
+    pub nbatch: usize,
+    pub one_fm_shape: ResolvedTensorDims, // convolution of one image and one kernel (feature map)
     pub pad: ConvPad,
     pub channel: Channel,
     pub dilations: OptionalVec<usize>,
-    pub kernel_shape: ResolvedTensorDims,
+    pub one_kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+}
+
+impl Im2Col {
+    pub fn padded_len(&self, dim: usize) -> usize {
+        let unit = self.dilations[dim] * (self.one_kernel_shape[dim] - 1) + 1;
+        self.strides[dim] * (self.one_fm_shape[dim] - 1) + unit
+    }
 }
 
 impl Operator {
@@ -89,20 +132,30 @@ impl Operator {
         match self {
             Operator::Add => "Add",
             Operator::Conv(_) => "Conv",
+            Operator::Gemm(_) => "Gemm",
             Operator::ReLU => "ReLU",
+            Operator::Reshape => "Reshape",
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
-            Operator::Reshape => "Reshape",
             Operator::Transpose(_) => "Transpose",
 
             // Custom
-            Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",
+            // Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",
+            Operator::Im2Col(_) => "Im2Col (Custom)",
+            Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
+
+            Operator::ForceReshape => "ForceReshape (For Debug)",
 
             // Dummy
             Operator::Input(_) => "Input",
             Operator::Output(_) => "Output",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ReduceOp {
+    Max,
 }
 
 pub mod args {
@@ -124,6 +177,9 @@ pub mod args {
     pub const MAXPOOL_DATA: usize = 0;
 
     pub const TRANSPOSE_DATA: usize = 0;
+
+    pub const GEMM_A: usize = 0;
+    pub const GEMM_B: usize = 1;
 }
 
 //#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
