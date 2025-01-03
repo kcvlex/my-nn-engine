@@ -1,3 +1,4 @@
+use crate::codegen::blas::{GemmArgs, Precision, BLAS};
 use crate::codegen::plan;
 use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
 use crate::model::{Graph, Node, NodeId, ValueId};
@@ -5,8 +6,6 @@ use crate::operator;
 use crate::operator::Operator;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
-
-use modular_bitfield::prelude::*;
 
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
@@ -111,7 +110,7 @@ struct FunctionTranslator<'a, 'ctx> {
     builder: &'a Builder<'ctx>,
     function: &'a FunctionValue<'ctx>,
     intrinsics: &'a Intrinsics<'ctx>,
-    blas: &'a BLAS<'ctx>,
+    blas: &'a BLAS<'a>,
 
     #[allow(dead_code)]
     debug_stuff: &'a DebugStuff<'ctx>,
@@ -181,75 +180,6 @@ impl<'ctx> DebugStuff<'ctx> {
             float_fmt,
             i64_fmt,
         }
-    }
-}
-
-#[derive(BitfieldSpecifier)]
-#[bits = 1]
-#[derive(Debug, Clone, Copy)]
-enum GemmPrecision {
-    Single,
-    Double,
-}
-
-#[bitfield]
-#[derive(Default, Debug, Clone, Copy)]
-struct GemmType {
-    trans_a: bool,
-    trans_b: bool,
-    trans_c: bool,
-    precision: GemmPrecision,
-    #[skip]
-    __: B4,
-}
-
-struct BLAS<'ctx> {
-    gemm_fn: Vec<FunctionValue<'ctx>>,
-}
-
-impl<'ctx> BLAS<'ctx> {
-    fn new(ctx: &'ctx Context, module: &Module<'ctx>) -> Self {
-        let gemm_fn = (0..16)
-            .map(|i| GemmType::from_bytes([i]))
-            .map(|ty| {
-                let name = format!(
-                    "my_{p}gemm_{ta}{tb}_{tc}",
-                    p = match ty.precision() {
-                        GemmPrecision::Single => "s",
-                        GemmPrecision::Double => "d",
-                    },
-                    ta = if ty.trans_a() { "t" } else { "n" },
-                    tb = if ty.trans_b() { "t" } else { "n" },
-                    tc = if ty.trans_c() { "t" } else { "n" }
-                );
-                let fp_type = match ty.precision() {
-                    GemmPrecision::Single => ctx.f32_type(),
-                    GemmPrecision::Double => ctx.f64_type(),
-                };
-                let void_type = ctx.void_type();
-                let int_type = ctx.i32_type();
-                let ptr_type = ctx.ptr_type(AddressSpace::default());
-                let fn_type = void_type.fn_type(
-                    &[
-                        ptr_type.into(),
-                        ptr_type.into(),
-                        ptr_type.into(),
-                        int_type.into(),
-                        int_type.into(),
-                        int_type.into(),
-                        fp_type.into(),
-                        fp_type.into(),
-                    ],
-                    false,
-                );
-                module.add_function(name.as_str(), fn_type, Some(Linkage::External))
-            })
-            .collect();
-        Self { gemm_fn }
-    }
-
-    fn get(&self, ty: GemmType) -> FunctionValue<'ctx> {
-        self.gemm_fn[ty.into_bytes()[0] as usize]
     }
 }
 
@@ -619,16 +549,26 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         macro_rules! gen_gemm {
-            ($gemm: expr) => {{
+            ($gemm: expr, $nest: expr) => {{
                 let prec = match ptrs[0].ty.elem_type {
-                    DataType::F32 => GemmPrecision::Single,
-                    DataType::F64 => GemmPrecision::Double,
+                    DataType::F32 => Precision::Single,
+                    DataType::F64 => Precision::Double,
                     _ => unreachable!(),
                 };
-                let m = ptrs[0].ty.dims[0] as i32;
-                let n = ptrs[0].ty.dims[1] as i32;
-                let k = ptrs[1].ty.dims[1] as i32;
-                let gemm = Gemm::new($gemm, prec, m, n, k);
+                let m = ptrs[0].ty.dims[$nest] as u32;
+                let n = ptrs[0].ty.dims[$nest + 1] as u32;
+                let k = ptrs[1].ty.dims[$nest + 1] as u32;
+                let gemm = Gemm {
+                    prec,
+                    alpha: $gemm.alpha,
+                    beta: $gemm.beta,
+                    trans_a: $gemm.trans_a,
+                    trans_b: $gemm.trans_b,
+                    trans_c: $gemm.trans_c,
+                    m,
+                    n,
+                    k,
+                };
                 Operation::BinaryOp(
                     BinaryOps {
                         dst: ptrs[0].clone(),
@@ -649,17 +589,20 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Operator::MatMul => {
                 let nest = ptrs[0].ty.dims.ndim() - 2;
-                let gemm = gen_gemm!(&operator::Gemm {
-                    trans_a: false,
-                    trans_b: false,
-                    trans_c: false,
-                    alpha: 1.0,
-                    beta: 0.0,
-                });
+                let gemm = gen_gemm!(
+                    &operator::Gemm {
+                        trans_a: false,
+                        trans_b: false,
+                        trans_c: false,
+                        alpha: 1.0,
+                        beta: 0.0,
+                    },
+                    nest
+                );
                 translator.build_nested_loop(gemm, entry, nest)
             }
             Operator::Gemm(ref gemm) => {
-                let gemm = gen_gemm!(gemm);
+                let gemm = gen_gemm!(gemm, 0);
                 translator.build_nested_loop(gemm, entry, 0)
             }
             Operator::Im2Col(ref im2col) => translator.build_im2col(
@@ -738,45 +681,15 @@ enum BinaryOpcode {
 
 #[derive(Debug, Clone, Copy)]
 struct Gemm {
-    ty: GemmType,
+    prec: Precision,
+    trans_a: bool,
+    trans_b: bool,
+    trans_c: bool,
     alpha: f64,
     beta: f64,
-    m: i32,
-    n: i32,
-    k: i32,
-}
-
-impl Gemm {
-    fn new(gemm: &operator::Gemm, prec: GemmPrecision, m: i32, n: i32, k: i32) -> Self {
-        let ty = GemmType::new()
-            .with_trans_a(gemm.trans_a)
-            .with_trans_b(gemm.trans_b)
-            .with_trans_c(gemm.trans_c)
-            .with_precision(prec);
-        Self {
-            ty,
-            alpha: gemm.alpha,
-            beta: gemm.beta,
-            m,
-            n,
-            k,
-        }
-    }
-
-    fn make_const<'ctx>(&self, ctx: &'ctx Context, v: f64) -> FloatValue<'ctx> {
-        match self.ty.precision() {
-            GemmPrecision::Single => ctx.f32_type().const_float(v),
-            GemmPrecision::Double => ctx.f64_type().const_float(v),
-        }
-    }
-
-    fn alpha_value<'ctx>(&self, ctx: &'ctx Context) -> FloatValue<'ctx> {
-        self.make_const(ctx, self.alpha)
-    }
-
-    fn beta_value<'ctx>(&self, ctx: &'ctx Context) -> FloatValue<'ctx> {
-        self.make_const(ctx, self.beta)
-    }
+    m: u32,
+    n: u32,
+    k: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -806,7 +719,7 @@ impl Operation<'_> {
 }
 
 #[derive(Debug)]
-struct Im2ColsInnerLoop<'a, 'ctx> {
+struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
     preheader: BasicBlock<'ctx>,
     exit: BasicBlock<'ctx>,
 
@@ -1416,26 +1329,18 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
                 // BinaryOpcode::IntAdd => todo!(),
                 BinaryOpcode::Gemm(ref gemm) => {
-                    let gemm_fn = self.blas.get(gemm.ty);
-                    let alpha = gemm.alpha_value(self.context);
-                    let beta = gemm.beta_value(self.context);
-                    let m = self.context.i32_type().const_int(gemm.m as u64, false);
-                    let n = self.context.i32_type().const_int(gemm.n as u64, false);
-                    let k = self.context.i32_type().const_int(gemm.k as u64, false);
-                    self.build_tail_call(
-                        gemm_fn,
-                        &[
-                            op.lhs.ptr.into(),
-                            op.rhs.ptr.into(),
-                            op.dst.ptr.into(),
-                            m.into(),
-                            n.into(),
-                            k.into(),
-                            alpha.into(),
-                            beta.into(),
-                        ],
-                        "",
-                    )?;
+                    let prec = gemm.prec;
+                    let gemm = GemmArgs {
+                        a: (op.lhs.ptr, gemm.trans_a),
+                        b: (op.rhs.ptr, gemm.trans_b),
+                        c: (op.dst.ptr, gemm.trans_c),
+                        alpha: gemm.alpha,
+                        beta: gemm.beta,
+                        m: gemm.m as u64,
+                        n: gemm.n as u64,
+                        k: gemm.k as u64,
+                    };
+                    self.blas.call_gemm(prec, &gemm, &self.builder)?;
                     Ok(())
                 }
             },
