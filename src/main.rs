@@ -1,17 +1,15 @@
-use my_onnx::codegen::session::Session;
 use my_onnx::codegen::llvm::LLVMSession;
 use my_onnx::model::Model;
-use my_onnx::optimize::optimizer::Optimizer;
+use my_onnx::optimize::optimizer::{ExperimentalGraphModifier, Optimizer};
 use my_onnx::tensor::tensor::Tensor;
 use std::env;
 use std::fs::File;
 use std::io::{Error, Result, Write};
 
-fn main_cranelift() -> Result<()> {
+fn main0() -> Result<()> {
     let args: Vec<_> = env::args().collect();
-    let mut optimizer = Optimizer::new(String::from("test pass"));
-    //optimizer.passes.push(Box::new(MatMulAxTB::default()));
     if false {
+        let optimizer = Optimizer::<ExperimentalGraphModifier>::new(String::from("test pass"));
         let mut model =
             Model::load_from_path(&args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
         model
@@ -27,7 +25,6 @@ fn main_cranelift() -> Result<()> {
         let mut writer = std::io::BufWriter::new(file);
         writer.write_all(model.graph.to_dot().as_bytes())?;
     } else {
-
         {
             // 7
             let input: ndarray::Array<f32, _> = ndarray::array!([[
@@ -175,19 +172,13 @@ fn main_cranelift() -> Result<()> {
             let input: Tensor = input
                 .try_into()
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
-            let output = if false {
-                let session =
-                    Session::new(&args[1], optimizer).map_err(|e| Error::other(format!("{:?}", e)))?;
-                session.run(&[input])
-                    .map_err(|e| Error::other(format!("{:?}", e)))
-            } else {
-                use inkwell::context::Context;
-                let context = Context::create();
-                let session =
-                    LLVMSession::new(&context, &args[1], &[]).map_err(|e| Error::other(format!("{:?}", e)))?;
-                session.run(&[input])
-                    .map_err(|e| Error::other(format!("{:?}", e)))
-            }?;
+            use inkwell::context::Context;
+            let context = Context::create();
+            let session = LLVMSession::new(&context, &args[1])
+                .map_err(|e| Error::other(format!("{:?}", e)))?;
+            let output = session
+                .run(&[input])
+                .map_err(|e| Error::other(format!("{:?}", e)))?;
             println!("{:?}", output);
             //println!("{:?}", output.unwrap()[0].data.raw_vec());
         }
@@ -532,7 +523,7 @@ fn main_inkwell() -> Result<()> {
 
 fn main() -> Result<()> {
     if true {
-        main_cranelift()
+        main0()
     } else {
         main_inkwell()
     }

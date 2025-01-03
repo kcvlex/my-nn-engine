@@ -111,6 +111,7 @@ impl GraphLoader {
                     inputs: Vec::new(),
                     outputs: vec![x],
                     op: Operator::Input(x),
+                    mark_as_deleted: false,
                 };
                 res.push(nodes.alloc(node));
             }
@@ -124,6 +125,7 @@ impl GraphLoader {
                     inputs: vec![x],
                     outputs: Vec::new(),
                     op: Operator::Output(x),
+                    mark_as_deleted: false,
                 };
                 nodes.alloc(node)
             })
@@ -198,6 +200,7 @@ impl GraphLoader {
                 inputs,
                 outputs,
                 op,
+                mark_as_deleted: false,
             });
         }
         Ok(res)

@@ -1,6 +1,6 @@
 use crate::model::{Graph, Node, ValueId};
 use crate::operator::*;
-use crate::optimize::optimizer;
+use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::ResolvedTensorType;
 
@@ -62,12 +62,12 @@ fn gen_im2col_from_pooling(
     (im2col, im2col_output_shape)
 }
 
-impl optimizer::Pass for InsertIm2Col {
+impl<T: GraphModifier> Pass<T> for InsertIm2Col {
     fn summary(&self) -> &'static str {
         "Insert explicit Im2Col nodes and expand Conv/MaxPool"
     }
 
-    fn run(&self, graph: &mut Graph, modifier: &mut optimizer::GraphModifier) {
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
         let res = graph
             .nodes
             .iter()
@@ -115,6 +115,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![im2col_data],
                             name: format!("Im2Col_{index}"),
                             op: Operator::Im2Col(im2col),
+                            mark_as_deleted: false,
                         },
                     );
 
@@ -158,6 +159,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![reshaped_kernel],
                             name: format!("Im2Col_{index}_ReshapeKernel"),
                             op: Operator::Reshape,
+                            mark_as_deleted: false,
                         },
                     );
                     // Gemm
@@ -185,6 +187,7 @@ impl optimizer::Pass for InsertIm2Col {
                                 alpha: 1.0,
                                 beta: 0.0,
                             }),
+                            mark_as_deleted: false,
                         },
                     );
 
@@ -211,6 +214,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![reshaped_output],
                             name: format!("Im2Col_{index}_ReshapeOutput"),
                             op: Operator::Reshape,
+                            mark_as_deleted: false,
                         },
                     );
 
@@ -239,6 +243,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![transposed_output],
                             name: format!("Im2Col_{index}_TransposeOutput"),
                             op: Operator::Transpose(perm),
+                            mark_as_deleted: false,
                         },
                     );
 
@@ -276,6 +281,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![im2col_data],
                             name: format!("Im2Col_{index}"),
                             op: Operator::Im2Col(im2col),
+                            mark_as_deleted: false,
                         },
                     );
 
@@ -290,6 +296,7 @@ impl optimizer::Pass for InsertIm2Col {
                         outputs: vec![reduced_data],
                         name: format!("Im2Col_{index}_Reduce"),
                         op: Operator::ReduceMatrix(op),
+                        mark_as_deleted: false,
                     };
                     modifier.register_new_node(graph, reduce_node);
 
@@ -306,6 +313,7 @@ impl optimizer::Pass for InsertIm2Col {
                             outputs: vec![reshaped_output],
                             name: format!("Im2Col_{index}_ReshapeOutput"),
                             op: Operator::Reshape,
+                            mark_as_deleted: false,
                         },
                     );
                     modifier.replace_input_value(graph, old_output_value, reshaped_output);

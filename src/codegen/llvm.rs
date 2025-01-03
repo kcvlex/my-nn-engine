@@ -1,13 +1,18 @@
+use crate::codegen::plan;
+use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
+use crate::codegen::unionfind::HashUnionFind;
 use crate::load::ModelLoadError;
-use crate::model::{Graph, Model, Node, ValueId};
+use crate::model::{Graph, Model, Node, NodeId, ValueId};
 use crate::operator;
 use crate::operator::Operator;
-use crate::optimize::{gemm, im2col, optimizer::Optimizer, trunc_output, opinfo::*};
+use crate::optimize::{
+    gemm, im2col,
+    opinfo::*,
+    optimizer::{Optimizer, SimpleGraphModifier},
+};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor, TensorData, TypeError};
-use crate::codegen::unionfind::UnionFind;
 
-use itertools::izip;
 use modular_bitfield::prelude::*;
 
 use crate::codegen::memory;
@@ -24,8 +29,8 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::path::Path;
 
 use rand::distributions::{Alphanumeric, DistString};
@@ -44,9 +49,20 @@ pub enum CodeGenError {
 }
 
 pub enum LLVMPass {
+    // Module
+    Attributor,
+
+    // CGSCC
+    ArgPromotion,
+    AttributorCGSCC,
+    Inline,
+
+    // Loop
     LoopUnroll,
     LoopVectorize,
     SLPVectorize,
+
+    // Function
     InstCombine,
     Reassociate,
     GlobalValueNumbering,
@@ -57,6 +73,10 @@ pub enum LLVMPass {
 impl LLVMPass {
     pub fn to_llvm_pass(&self) -> &'static str {
         match self {
+            LLVMPass::Attributor => "attributor",
+            LLVMPass::ArgPromotion => "argpromotion",
+            LLVMPass::AttributorCGSCC => "attributor-cgscc",
+            LLVMPass::Inline => "inline",
             LLVMPass::LoopUnroll => "loop-unroll",
             LLVMPass::LoopVectorize => "loop-vectorize",
             LLVMPass::SLPVectorize => "slp-vectorizer",
@@ -87,8 +107,8 @@ pub struct CodeGen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
 
-    allocator: memory::Allocator<GlobalValue<'ctx>>,
-    mem_man: SimpleMemoryManager<'ctx>,
+    // allocator: memory::Allocator<GlobalValue<'ctx>>,
+    // mem_man: SimpleMemoryManager<'ctx>,
     main: FunctionValue<'ctx>,
     main_entry: BasicBlock<'ctx>,
 
@@ -96,11 +116,19 @@ pub struct CodeGen<'ctx> {
 
     noalias: Attribute,
     noundef: Attribute,
+    cpu: Attribute,
+    features: Attribute,
 
     intrinsics: Intrinsics<'ctx>,
     blas: BLAS<'ctx>,
 
     debug_stuff: DebugStuff<'ctx>,
+
+    graph: Graph,
+    order: Vec<(NodeId, AllocateInfo)>,
+    ptr_values: HashMap<ValueId, PointerValue<'ctx>>,
+    mem_size: Vec<u64>,
+    chunk2ptr: HashMap<ChunkId, PointerValue<'ctx>>,
 }
 
 struct FunctionTranslator<'a, 'ctx> {
@@ -209,7 +237,7 @@ impl<'ctx> BLAS<'ctx> {
 }
 
 struct SimpleMemoryManager<'ctx> {
-    uf: UnionFind<ValueId>,
+    uf: HashUnionFind<ValueId>,
     map: HashMap<ValueId, PointerValue<'ctx>>,
 }
 
@@ -219,7 +247,7 @@ impl<'ctx> SimpleMemoryManager<'ctx> {
     }
 
     fn init(values: &[ValueId]) -> Self {
-        let mut uf = UnionFind::with_capacity(values.len());
+        let mut uf = HashUnionFind::with_capacity(values.len());
         for &id in values {
             uf.append(id);
         }
@@ -230,7 +258,9 @@ impl<'ctx> SimpleMemoryManager<'ctx> {
     fn insert(&mut self, id: ValueId, ptr: PointerValue<'ctx>) {
         let repr = self.uf.representative(&id);
         match self.map.entry(repr) {
-            Entry::Vacant(e) => { e.insert(ptr); },
+            Entry::Vacant(e) => {
+                e.insert(ptr);
+            }
             Entry::Occupied(e) => panic!("ValueId {} already exists", e.get()),
         }
     }
@@ -271,8 +301,38 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
         })
 }
 
+// TODO: Target dependent value
+fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
+    let result_ty = graph.get_resolved_tensor_type(value).unwrap();
+    let data_size = match result_ty.elem_type {
+        DataType::I64 => 8,
+        DataType::F32 => 4,
+        DataType::F64 => 8,
+    };
+    (result_ty.dims.size() * data_size).try_into().unwrap()
+}
+
+fn calc_memsize(graph: &Graph, order: &Vec<(NodeId, AllocateInfo)>) -> Vec<u64> {
+    let mut mem_size = vec![
+        0;
+        order
+            .iter()
+            .filter_map(|(_, info)| info.ty.chunk_id())
+            .max()
+            .map(|x| x + 1)
+            .unwrap_or(0)
+    ];
+    for (node_id, info) in order.iter() {
+        if let Some(chunk_id) = info.ty.chunk_id() {
+            let output_id = &graph.nodes[*node_id].outputs[0];
+            mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(graph, *output_id));
+        }
+    }
+    mem_size
+}
+
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context) -> Result<Self, CodeGenError> {
+    pub fn new(context: &'ctx Context, graph: Graph) -> Result<Self, CodeGenError> {
         let module = context.create_module("main");
         let builder = context.create_builder();
 
@@ -284,6 +344,8 @@ impl<'ctx> CodeGen<'ctx> {
         let main_entry = context.append_basic_block(main, "entry");
         builder.position_at_end(main_entry);
 
+        let target_machine = target_machine()?;
+
         let get_attr = |name: &str| {
             let kind_id = Attribute::get_named_enum_kind_id(name);
             context.create_enum_attribute(kind_id, 0)
@@ -291,13 +353,19 @@ impl<'ctx> CodeGen<'ctx> {
 
         let noalias = get_attr("noalias");
         let noundef = get_attr("noundef");
+        let cpu = context
+            .create_string_attribute("target-cpu", target_machine.get_cpu().to_str().unwrap());
+        let features = context.create_string_attribute(
+            "target-features",
+            target_machine.get_feature_string().to_str().unwrap(),
+        );
 
         main.add_attribute(AttributeLoc::Param(0), noalias);
         main.add_attribute(AttributeLoc::Param(0), noundef);
         main.add_attribute(AttributeLoc::Param(1), noalias);
         main.add_attribute(AttributeLoc::Param(1), noundef);
-
-        let target_machine = target_machine()?;
+        main.add_attribute(AttributeLoc::Function, cpu);
+        main.add_attribute(AttributeLoc::Function, features);
 
         macro_rules! get_intrinsic {
             ($name: expr, $args: expr) => {{
@@ -319,13 +387,16 @@ impl<'ctx> CodeGen<'ctx> {
 
         let debug_stuff = DebugStuff::new(context, &module, &builder);
 
+        let order = plan::plan(&graph);
+        let mem_size = calc_memsize(&graph, &order);
+        let ptr_values = HashMap::new();
+        let chunk2ptr = HashMap::new();
+
         Ok(CodeGen {
             context,
             module,
             builder,
 
-            allocator: memory::Allocator::new(),
-            mem_man: SimpleMemoryManager::new(),
             main,
             main_entry,
 
@@ -333,17 +404,24 @@ impl<'ctx> CodeGen<'ctx> {
 
             noalias,
             noundef,
+            cpu,
+            features,
 
             intrinsics,
             blas,
 
             debug_stuff,
+
+            graph,
+            order,
+            ptr_values,
+            mem_size,
+            chunk2ptr,
         })
     }
 
-    pub fn compile(&mut self, graph: &Graph, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
-        self.compile_graph(graph)
-            .map_err(CodeGenError::BuilderError)?;
+    pub fn compile_with_passes(&mut self, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
+        self.compile_graph().map_err(CodeGenError::BuilderError)?;
         if !passes.is_empty() {
             self.module
                 .run_passes(
@@ -356,6 +434,17 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    pub fn compile_default(&mut self) -> Result<(), CodeGenError> {
+        self.compile_graph().map_err(CodeGenError::BuilderError)?;
+        self.module
+            .run_passes(
+                "default<O3>",
+                &self.target_machine,
+                inkwell::passes::PassBuilderOptions::create(),
+            )
+            .map_err(CodeGenError::LLVMError)
+    }
+
     // TODO: Adjust attributes
     fn create_function(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
         let mut vec = Vec::with_capacity(argc as usize);
@@ -363,15 +452,19 @@ impl<'ctx> CodeGen<'ctx> {
             vec.push(self.context.ptr_type(AddressSpace::default()).into());
         }
         let fn_type = self.context.void_type().fn_type(&vec, false);
-        let func = self.module.add_function(name, fn_type, None);
+        let func = self
+            .module
+            .add_function(name, fn_type, Some(Linkage::Private));
         for i in 0..argc {
             func.add_attribute(AttributeLoc::Param(i), self.noalias);
             func.add_attribute(AttributeLoc::Param(i), self.noundef);
         }
+        func.add_attribute(AttributeLoc::Function, self.cpu);
+        func.add_attribute(AttributeLoc::Function, self.features);
         func
     }
 
-    fn init_data(&mut self, graph: &Graph) -> Result<(), BuilderError> {
+    fn init_data(&mut self) -> Result<(), BuilderError> {
         macro_rules! define_gv {
             ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
                 let len = $data.len();
@@ -384,8 +477,8 @@ impl<'ctx> CodeGen<'ctx> {
                 gv
             }};
         }
-        for (id, value) in graph.initializer.iter() {
-            let name = format!("gv.{}", graph.values[*id].name);
+        for (id, value) in self.graph.initializer.iter() {
+            let name = format!("gv.{}", self.graph.values[*id].name);
             let gv = match value.data {
                 TensorData::F32(ref data) => {
                     let ty = self.context.f32_type();
@@ -400,24 +493,24 @@ impl<'ctx> CodeGen<'ctx> {
                     define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
                 }
             };
-            self.mem_man.insert(*id, gv.as_pointer_value());
+            self.ptr_values.insert(*id, gv.as_pointer_value());
         }
         Ok(())
     }
 
-    fn init_main_args(&mut self, graph: &Graph) -> Result<(), BuilderError> {
-        for (i, arr) in [&graph.outputs, &graph.inputs].iter().enumerate() {
+    fn init_main_args(&mut self) -> Result<(), BuilderError> {
+        for (i, arr) in [&self.graph.outputs, &self.graph.inputs].iter().enumerate() {
             let ptr = self
                 .main
                 .get_nth_param(i as u32)
                 .unwrap()
                 .into_pointer_value();
             for (i, node_id) in arr.iter().enumerate() {
-                let value_id = match graph.nodes[*node_id].op {
+                let value_id = match self.graph.nodes[*node_id].op {
                     Operator::Input(v) | Operator::Output(v) => v,
                     _ => unreachable!(),
                 };
-                let value = &graph.values[value_id];
+                let value = &self.graph.values[value_id];
                 let ptr = unsafe {
                     self.builder.build_in_bounds_gep(
                         self.context.ptr_type(AddressSpace::default()),
@@ -434,81 +527,74 @@ impl<'ctx> CodeGen<'ctx> {
                         value.name.as_str(),
                     )?
                     .into_pointer_value();
-                self.mem_man.insert(value_id, ptr);
+                self.ptr_values.insert(value_id, ptr);
             }
         }
         Ok(())
     }
 
-    pub fn compile_graph(&mut self, graph: &Graph) -> Result<(), BuilderError> {
-        self.mem_man = SimpleMemoryManager::init(graph.values.inner().iter().map(|(id, _)| id).collect::<Vec<_>>().as_slice());
-        for (_, node) in graph.nodes.iter() {
-            if node.is_dummy() {
-                continue;
-            }
-            if node.op.is_identity() {
-                let input = node.inputs[0];
-                let output = node.outputs[0];
-                self.mem_man.merge(input, output);
-            }
-        }
+    pub fn compile_graph(&mut self) -> Result<(), BuilderError> {
+        self.init_data()?;
+        self.init_main_args()?;
+        for (node, alloc) in self
+            .order
+            .iter()
+            .map(|(id, info)| (&self.graph.nodes[*id], info))
+        {
+            let function = if node.op.is_identity() || node.is_dummy() {
+                None
+            } else {
+                Some(self.compile_node(node)?)
+            };
 
-        self.init_data(graph)?;
-        self.init_main_args(graph)?;
-        for node in graph.topological_order().iter().map(|&id| &graph.nodes[id]) {
-            if matches!(node.op, Operator::Input(_) | Operator::Output(_)) {
-                continue;
-            }
-            if node.op.is_identity() {
-                continue;
-            }
-            let function = self.compile_node(node, graph)?;
             self.builder.position_at_end(self.main_entry);
-            macro_rules! malloc {
-                ($ty: expr, $len: expr, $name: expr) => {{
-                    self.builder.build_array_malloc($ty, $len, $name)
-                }};
-            }
-
-            // TODO: malloc
-            for &id in node.outputs.iter() {
-                let ty = graph.get_resolved_tensor_type(id).unwrap();
-                let len = self
-                    .context
-                    .i64_type()
-                    .const_int(ty.dims.size() as u64, false);
-                let name = graph.values[id].name.as_str();
-                if !self.mem_man.exist(id) {
-                    let ptr = match ty.elem_type {
-                        DataType::F32 => malloc!(self.context.f32_type(), len, name),
-                        DataType::F64 => malloc!(self.context.f64_type(), len, name),
-                        DataType::I64 => malloc!(self.context.i64_type(), len, name),
-                    }?;
-                    self.mem_man.insert(id, ptr);
+            let dst_ptr = match alloc.ty {
+                AllocateType::Chunk(chunk) => {
+                    if alloc.is_first_use {
+                        let ptr = self.builder.build_array_malloc(
+                            self.context.i8_type(),
+                            self.context
+                                .i64_type()
+                                .const_int(self.mem_size[chunk], false),
+                            format!("chunk.{}", chunk).as_str(),
+                        )?;
+                        self.chunk2ptr.insert(chunk, ptr);
+                        ptr
+                    } else {
+                        *self.chunk2ptr.get(&chunk).unwrap()
+                    }
                 }
+                AllocateType::Input(v) | AllocateType::Output(v) => {
+                    *self.ptr_values.get(&v).unwrap()
+                }
+            };
+
+            for &id in node.outputs.iter() {
+                self.ptr_values.insert(id, dst_ptr);
             }
 
-            let mut args = node.outputs.clone();
-            args.extend(node.inputs.clone());
-            let args = args
-                .iter()
-                .map(|&id| self.mem_man.get(id).unwrap())
-                .map(|ptr| ptr.into())
-                .collect::<Vec<_>>();
-            let call = self.builder.build_call(function, &args[..], "")?;
-            call.set_tail_call(true);
+            if let Some(function) = function {
+                let mut args = node.outputs.clone();
+                args.extend(node.inputs.clone());
+                let args = args
+                    .iter()
+                    .map(|&id| self.ptr_values.get(&id).unwrap())
+                    .map(|ptr| (*ptr).into())
+                    .collect::<Vec<_>>();
+                let call = self.builder.build_call(function, &args[..], "")?;
+                call.set_tail_call(true);
+            }
         }
 
+        for ptr in self.chunk2ptr.values() {
+            self.builder.build_free(*ptr)?;
+        }
         self.builder.position_at_end(self.main_entry);
         self.builder.build_return(None)?;
         Ok(())
     }
 
-    fn compile_node(
-        &self,
-        node: &Node,
-        graph: &Graph,
-    ) -> Result<FunctionValue<'ctx>, BuilderError> {
+    fn compile_node(&self, node: &Node) -> Result<FunctionValue<'ctx>, BuilderError> {
         let mut args = node.outputs.clone();
         args.extend(node.inputs.clone());
 
@@ -532,7 +618,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .get_nth_param(i as u32)
                     .unwrap()
                     .into_pointer_value();
-                let ty = graph.get_resolved_tensor_type(id).unwrap().clone();
+                let ty = self.graph.get_resolved_tensor_type(id).unwrap().clone();
                 let name = format!("ptr.{}", i);
                 let offset = self.context.i64_type().const_int(0, false);
                 TensorPtr {
@@ -1084,7 +1170,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         let pad_left = pad_len / 2;
                         let add_left =
                             pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
-                        println!("padded_len: {:?}", padded_len);
                         pad_left + add_left as usize
                     }
                 })
@@ -1125,8 +1210,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_unconditional_branch(head)?;
 
         self.builder.position_at_end(head);
-        // let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
-        let src_offset_init = src_ptr.offset;
         let dst_offset_init = dst_offset;
         let src_offset = self
             .builder
@@ -1287,7 +1370,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         )?;
         let next_offset_dst_channel = match im2col.channel {
             operator::Channel::Meld(_) => im2col.one_kernel_shape.size(),
-            operator::Channel::Split(_) => im2col.one_fm_shape.size() * im2col.one_kernel_shape.size(),
+            operator::Channel::Split(_) => {
+                im2col.one_fm_shape.size() * im2col.one_kernel_shape.size()
+            }
         };
         let next_offset_dst_channel = self.builder.build_int_add(
             offset_dst_channel_int,
@@ -1769,16 +1854,11 @@ fn get_argument_types(
 }
 
 impl<'ctx> LLVMSession<'ctx> {
-    pub fn new<P: AsRef<Path>>(
-        ctx: &'ctx Context,
-        p: P,
-        llvm_passes: &[LLVMPass],
-    ) -> Result<Self, LLVMSessionError> {
+    pub fn new<P: AsRef<Path>>(ctx: &'ctx Context, p: P) -> Result<Self, LLVMSessionError> {
         let mut model = Model::load_from_path(p).map_err(LLVMSessionError::ModelLoadError)?;
-        let mut optimizer = Optimizer::new(String::from("optimizer"));
+        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer"));
         model.graph.infer().map_err(LLVMSessionError::TypeError)?;
 
-        // optimizer.passes.push(Box::new(MatMulAxTB::default()));
         optimizer
             .passes
             .push(Box::new(im2col::InsertIm2Col::default()));
@@ -1788,9 +1868,6 @@ impl<'ctx> LLVMSession<'ctx> {
         optimizer
             .passes
             .push(Box::new(gemm::GemmTransComposition::default()));
-        // optimizer
-        //     .passes
-        //     .push(Box::new(trunc_output::TruncOutput::default()));
 
         optimizer.run(&mut model.graph);
         {
@@ -1801,9 +1878,10 @@ impl<'ctx> LLVMSession<'ctx> {
         }
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
-        let mut codegen = CodeGen::new(ctx).map_err(LLVMSessionError::CodeGenError)?;
+        let mut codegen = CodeGen::new(ctx, model.graph).map_err(LLVMSessionError::CodeGenError)?;
         codegen
-            .compile(&model.graph, llvm_passes)
+            .compile_default()
+            //.compile_with_passes(&[])
             .map_err(LLVMSessionError::CodeGenError)?;
 
         codegen.module.print_to_file("model.ll").unwrap();
@@ -1922,14 +2000,13 @@ macro_rules! tensor_assert_eq {
 }
 
 #[cfg(test)]
-fn make_session<'ctx, P: AsRef<std::path::Path>>(
-    ctx: &'ctx Context,
+fn make_session<P: AsRef<std::path::Path>>(
+    ctx: &'_ Context,
     path: P,
-    passes: &[LLVMPass],
-) -> Result<LLVMSession<'ctx>, LLVMSessionError> {
+) -> Result<LLVMSession<'_>, LLVMSessionError> {
     use std::path::PathBuf;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    LLVMSession::new(ctx, path, passes)
+    LLVMSession::new(ctx, path)
 }
 
 #[cfg(test)]
@@ -1939,7 +2016,7 @@ where
     F: FnOnce(LLVMSession) -> TestResult,
 {
     let context = Context::create();
-    let session = make_session(&context, path, &[])?;
+    let session = make_session(&context, path)?;
     f(session)?;
     Ok(())
 }
@@ -1971,6 +2048,42 @@ fn test_add_large() -> TestResult {
         )?;
         let outputs = session.run(&[input0, input1])?;
         tensor_assert_eq!(outputs[0], orig0 + orig1);
+        Ok(())
+    })
+}
+
+#[test]
+fn test_add_broadcast() -> TestResult {
+    with_session("models/test/add_broadcast.onnx", |session| {
+        // (1 x 4 x 5)
+        let (input0, orig0) = make_tensor!(
+            f32,
+            [
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+                [2.0, 3.0, 4.0, 5.0, 6.0],
+                [3.0, 4.0, 5.0, 6.0, 7.0],
+                [4.0, 5.0, 6.0, 7.0, 8.0],
+            ],
+        )?;
+
+        // (2 x 3 x 1 x 1)
+        let (input1, orig1) = make_tensor!(
+            f32,
+            [[[1.0]], [[2.0]], [[3.0]]],
+            [[[1.0]], [[2.0]], [[3.0]]],
+        )?;
+
+        // (4 x 5)
+        let (input2, orig2) = make_tensor!(
+            f32,
+            [10.0, 11.0, 12.0, 13.0, 14.0],
+            [20.0, 21.0, 22.0, 23.0, 24.0],
+            [30.0, 31.0, 32.0, 33.0, 34.0],
+            [40.0, 41.0, 42.0, 43.0, 44.0],
+        )?;
+
+        let output = session.run(&[input0, input1, input2])?;
+        tensor_assert_eq!(output[0], orig0 + orig1 + orig2);
         Ok(())
     })
 }

@@ -1,16 +1,16 @@
 use crate::model::{Graph, Node, ValueId};
 use crate::operator::*;
-use crate::optimize::optimizer;
+use crate::optimize::optimizer::{GraphModifier, Pass};
 
 #[derive(Default)]
 pub struct GemmTransComposition {}
 
-impl optimizer::Pass for GemmTransComposition {
+impl<T: GraphModifier> Pass<T> for GemmTransComposition {
     fn summary(&self) -> &'static str {
         "Compose Gemm and Tranpose into Gemm"
     }
 
-    fn run(&self, graph: &mut Graph, modifier: &mut optimizer::GraphModifier) {
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
         let res = graph
             .nodes
             .iter()
@@ -61,6 +61,7 @@ impl optimizer::Pass for GemmTransComposition {
                     outputs: vec![new_output],
                     name: format!("GemmTransComposition_{index}"),
                     op: Operator::Gemm(gemm),
+                    mark_as_deleted: false,
                 };
                 println!("new_node: {:?}", new_node);
                 modifier.register_new_node(graph, new_node);
@@ -73,12 +74,12 @@ impl optimizer::Pass for GemmTransComposition {
 #[derive(Default)]
 pub struct MatMul2Gemm {}
 
-impl optimizer::Pass for MatMul2Gemm {
+impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
     fn summary(&self) -> &'static str {
         "Convert 2-D MatMul to Gemm"
     }
 
-    fn run(&self, graph: &mut Graph, modifier: &mut optimizer::GraphModifier) {
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
         let mut res = Vec::new();
         for (id, node) in graph.nodes.iter() {
             let (lhs, rhs) = if matches!(node.op, Operator::MatMul) {
@@ -105,6 +106,7 @@ impl optimizer::Pass for MatMul2Gemm {
                 outputs: vec![new_output],
                 name: format!("MatMul2Gemm_{index}"),
                 op: Operator::Gemm(Gemm::default()),
+                mark_as_deleted: false,
             };
             modifier.register_new_node(graph, new_node);
             modifier.replace_input_value(graph, old_output, new_output);

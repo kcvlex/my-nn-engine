@@ -47,17 +47,13 @@ impl Graph {
             .collect()
     }
 
-    pub fn delete_nodes<T>(&mut self, pred: T)
-    where
-        T: Fn(&(NodeId, &Node)) -> bool,
-    {
+    pub fn delete_nodes(&mut self) {
         let mut nodes = Nodes::default();
-        for (_, node) in self.nodes.iter().filter(|v| {
-            let to_delete = pred(v);
-            if to_delete && v.1.is_dummy() {
+        for (_, node) in self.nodes.iter().filter(|(_, node)| {
+            if node.mark_as_deleted && node.is_dummy() {
                 panic!("cannot delete input/output node");
             }
-            !to_delete && !v.1.is_dummy()
+            !node.mark_as_deleted && !node.is_dummy()
         }) {
             nodes.alloc(node.clone());
         }
@@ -69,56 +65,6 @@ impl Graph {
                 .collect();
         }
         self.nodes = nodes;
-    }
-
-    pub fn topological_order(&self) -> Vec<NodeId> {
-        fn dfs(
-            node: NodeId,
-            res: &mut Vec<NodeId>,
-            visited: &mut HashSet<NodeId>,
-            adj: &HashMap<NodeId, HashSet<NodeId>>,
-            nodes: &Nodes,
-        ) {
-            if visited.contains(&node) {
-                return;
-            }
-            visited.insert(node);
-            if let Some(neighbors) = adj.get(&node) {
-                for &next in neighbors.iter() {
-                    dfs(next, res, visited, adj, nodes);
-                }
-            }
-            if !nodes[node].is_dummy() {
-                res.push(node);
-            }
-        }
-
-        let mut res = Vec::new();
-        let mut visited = HashSet::new();
-        let mut defined = HashMap::new();
-        for (id, node) in self.nodes.iter() {
-            for value in node.outputs.iter() {
-                defined.insert(value, id);
-            }
-        }
-        let mut adj = HashMap::new();
-        for (id, node) in self.nodes.iter() {
-            for value in node.inputs.iter() {
-                if let Some(defines) = defined.get(value) {
-                    adj.entry(*defines).or_insert(HashSet::new()).insert(id);
-                } else {
-                    assert!(self.initializer.contains_key(value));
-                }
-            }
-        }
-
-        for (id, _) in self.nodes.iter().filter(|(_, node)| !node.is_dummy()) {
-            if !visited.contains(&id) {
-                dfs(id, &mut res, &mut visited, &adj, &self.nodes);
-            }
-        }
-        res.reverse();
-        res
     }
 
     pub fn is_output_value(&self, id: ValueId) -> bool {
@@ -135,6 +81,8 @@ pub struct Node {
     pub outputs: Vec<ValueId>,
     pub name: String,
     pub op: Operator,
+
+    pub mark_as_deleted: bool,
 }
 
 impl Node {
@@ -151,18 +99,30 @@ impl Nodes {
     pub fn alloc(&mut self, v: Node) -> NodeId {
         self.0.alloc(v)
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (NodeId, &Node)> {
+        self.0.iter().filter(|(_, v)| !v.mark_as_deleted)
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (NodeId, &mut Node)> {
+        self.0.iter_mut().filter(|(_, v)| !v.mark_as_deleted)
+    }
 }
 
 impl Index<NodeId> for Nodes {
     type Output = Node;
     fn index(&self, index: NodeId) -> &Self::Output {
-        &self.0[index]
+        let res = &self.0[index];
+        assert!(!res.mark_as_deleted);
+        res
     }
 }
 
 impl IndexMut<NodeId> for Nodes {
     fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
-        &mut self.0[index]
+        let res = &mut self.0[index];
+        assert!(!res.mark_as_deleted);
+        res
     }
 }
 
@@ -202,12 +162,14 @@ impl Values {
     }
 }
 
+/*
 impl Deref for Nodes {
     type Target = Arena<Node>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+*/
 
 type GraphvizValue = (String, Option<TensorType>);
 

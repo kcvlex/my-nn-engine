@@ -151,6 +151,10 @@ impl Operator {
             Operator::Output(_) => "Output",
         }
     }
+
+    pub fn is_elementwise(&self) -> bool {
+        matches!(self, Operator::Add | Operator::ReLU)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
