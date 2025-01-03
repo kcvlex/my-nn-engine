@@ -1,4 +1,4 @@
-use my_onnx::codegen::llvm::LLVMSession;
+use my_onnx::codegen::session::LLVMSession;
 use my_onnx::model::Model;
 use my_onnx::optimize::optimizer::{ExperimentalGraphModifier, Optimizer};
 use my_onnx::tensor::tensor::Tensor;
