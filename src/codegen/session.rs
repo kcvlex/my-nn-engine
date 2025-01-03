@@ -2,7 +2,7 @@ use crate::codegen::gen::{CodeGen, CodeGenError};
 use crate::load::ModelLoadError;
 use crate::model::{Graph, Model, ValueId};
 use crate::optimize::{
-    gemm, im2col,
+    gemm, identity, im2col,
     optimizer::{Optimizer, SimpleGraphModifier},
 };
 use crate::tensor::tensor::{ResolvedTensorType, Tensor, TypeError};
@@ -71,6 +71,9 @@ impl<'ctx> Session<'ctx> {
         optimizer
             .passes
             .push(Box::new(gemm::GemmTransComposition::default()));
+        optimizer
+            .passes
+            .push(Box::new(identity::Reshape2Identity::default()));
 
         optimizer.run(&mut model.graph);
 

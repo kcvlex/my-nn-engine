@@ -8,6 +8,7 @@ pub enum Operator {
     Add,
     Conv(Conv),
     Gemm(Gemm),
+    Identity,
     ReLU,
     Reshape,
     MatMul,
@@ -134,6 +135,7 @@ impl Operator {
             Operator::Add => "Add",
             Operator::Conv(_) => "Conv",
             Operator::Gemm(_) => "Gemm",
+            Operator::Identity => "Identity",
             Operator::ReLU => "ReLU",
             Operator::Reshape => "Reshape",
             Operator::MatMul => "MatMul",
@@ -156,6 +158,10 @@ impl Operator {
 
     pub fn is_elementwise(&self) -> bool {
         matches!(self, Operator::Add | Operator::ReLU | Operator::Sigmoid)
+    }
+
+    pub fn is_identity(&self) -> bool {
+        matches!(self, Operator::Identity)
     }
 }
 

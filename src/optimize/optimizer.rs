@@ -35,6 +35,10 @@ pub trait GraphModifier {
     fn replace_input_value(&mut self, graph: &mut Graph, old_value: ValueId, new_value: ValueId) {
         self.replace_input_value_if(graph, old_value, new_value, |_, _| true);
     }
+
+    fn replace_op(&mut self, graph: &mut Graph, node_id: NodeId, op: Operator) {
+        graph.nodes[node_id].op = op;
+    }
 }
 
 trait NodeDelete {

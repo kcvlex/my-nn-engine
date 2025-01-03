@@ -1,4 +1,4 @@
 pub mod gemm;
+pub mod identity;
 pub mod im2col;
-pub mod opinfo;
 pub mod optimizer;

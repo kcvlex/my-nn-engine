@@ -427,6 +427,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             }))
         }
         "Sigmoid" => Ok(Operator::Sigmoid),
+        "Identity" => Ok(Operator::Identity),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

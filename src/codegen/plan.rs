@@ -1,6 +1,5 @@
 use crate::model::{Graph, NodeId, Nodes, ValueId};
 use crate::operator::Operator;
-use crate::optimize::opinfo::*;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq)]

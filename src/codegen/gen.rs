@@ -3,7 +3,6 @@ use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
 use crate::model::{Graph, Node, NodeId, ValueId};
 use crate::operator;
 use crate::operator::Operator;
-use crate::optimize::opinfo::*;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
 
@@ -675,7 +674,7 @@ impl<'ctx> CodeGen<'ctx> {
                     translator.build_matrix_reduce(&ptrs[0], &ptrs[1], op, entry)
                 }
             },
-            _ => todo!(),
+            _ => todo!("{:?}", node.op),
         }?;
 
         self.builder.position_at_end(exit);
