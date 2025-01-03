@@ -124,7 +124,7 @@ impl<'graph> MemoryPlanner<'graph> {
         for &node_id in order.iter().rev() {
             let chunk = self.allocations.get(&node_id).unwrap();
             if let AllocateType::Chunk(chunk) = chunk {
-                    last_user[*chunk] = Some(node_id);
+                last_user[*chunk] = Some(node_id);
             }
             info_v.push(AllocateInfo {
                 ty: *chunk,

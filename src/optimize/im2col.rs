@@ -1,4 +1,4 @@
-use crate::model::{Graph, Node, ValueId};
+use crate::model::{Graph, Node};
 use crate::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;

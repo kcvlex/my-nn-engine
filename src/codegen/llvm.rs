@@ -1,6 +1,5 @@
 use crate::codegen::plan;
 use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
-use crate::codegen::unionfind::HashUnionFind;
 use crate::load::ModelLoadError;
 use crate::model::{Graph, Model, Node, NodeId, ValueId};
 use crate::operator;
@@ -15,7 +14,6 @@ use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor, TensorData, Ty
 
 use modular_bitfield::prelude::*;
 
-use crate::codegen::memory;
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
@@ -29,7 +27,6 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -107,8 +104,6 @@ pub struct CodeGen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
 
-    // allocator: memory::Allocator<GlobalValue<'ctx>>,
-    // mem_man: SimpleMemoryManager<'ctx>,
     main: FunctionValue<'ctx>,
     main_entry: BasicBlock<'ctx>,
 
@@ -138,9 +133,11 @@ struct FunctionTranslator<'a, 'ctx> {
     intrinsics: &'a Intrinsics<'ctx>,
     blas: &'a BLAS<'ctx>,
 
+    #[allow(dead_code)]
     debug_stuff: &'a DebugStuff<'ctx>,
 }
 
+#[allow(dead_code)]
 struct DebugStuff<'ctx> {
     printf: FunctionValue<'ctx>,
     float_fmt: GlobalValue<'ctx>,
@@ -236,50 +233,6 @@ impl<'ctx> BLAS<'ctx> {
     }
 }
 
-struct SimpleMemoryManager<'ctx> {
-    uf: HashUnionFind<ValueId>,
-    map: HashMap<ValueId, PointerValue<'ctx>>,
-}
-
-impl<'ctx> SimpleMemoryManager<'ctx> {
-    fn new() -> Self {
-        Self::init(&[])
-    }
-
-    fn init(values: &[ValueId]) -> Self {
-        let mut uf = HashUnionFind::with_capacity(values.len());
-        for &id in values {
-            uf.append(id);
-        }
-        let map = HashMap::with_capacity(values.len());
-        Self { uf, map }
-    }
-
-    fn insert(&mut self, id: ValueId, ptr: PointerValue<'ctx>) {
-        let repr = self.uf.representative(&id);
-        match self.map.entry(repr) {
-            Entry::Vacant(e) => {
-                e.insert(ptr);
-            }
-            Entry::Occupied(e) => panic!("ValueId {} already exists", e.get()),
-        }
-    }
-
-    fn exist(&mut self, id: ValueId) -> bool {
-        let repr = self.uf.representative(&id);
-        self.map.contains_key(&repr)
-    }
-
-    fn get(&mut self, id: ValueId) -> Option<PointerValue<'ctx>> {
-        let repr = self.uf.representative(&id);
-        self.map.get(&repr).cloned()
-    }
-
-    fn merge(&mut self, x: ValueId, y: ValueId) {
-        self.uf.merge(&x, &y);
-    }
-}
-
 fn target_machine() -> Result<TargetMachine, CodeGenError> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(CodeGenError::TargetMachineError)?;
@@ -312,7 +265,7 @@ fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
     (result_ty.dims.size() * data_size).try_into().unwrap()
 }
 
-fn calc_memsize(graph: &Graph, order: &Vec<(NodeId, AllocateInfo)>) -> Vec<u64> {
+fn calc_memsize(graph: &Graph, order: &[(NodeId, AllocateInfo)]) -> Vec<u64> {
     let mut mem_size = vec![
         0;
         order
@@ -705,10 +658,8 @@ impl<'ctx> CodeGen<'ctx> {
                 translator.gen_nested_loop(gemm, entry, 0)
             }
             Operator::Im2Col(ref im2col) => translator.build_im2col(
-                ptrs[0].ptr,
-                &ptrs[0].ty.dims,
-                ptrs[1].ptr,
-                &ptrs[1].ty.dims,
+                (ptrs[0].ptr, &ptrs[0].ty.dims),
+                (ptrs[1].ptr, &ptrs[1].ty.dims),
                 ptrs[0].ty.elem_type,
                 im2col,
                 entry,
@@ -727,6 +678,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 }
 
+// TODO: Change `ty` to reference
 #[derive(Debug, Clone)]
 struct TensorPtr<'ctx> {
     ptr: PointerValue<'ctx>,
@@ -774,7 +726,7 @@ enum Operation<'ctx> {
 
 #[derive(Debug, Clone)]
 enum BinaryOpcode {
-    IntAdd,
+    // IntAdd,
     FloatAdd,
     Gemm(Gemm),
 }
@@ -808,7 +760,7 @@ impl Gemm {
 
     fn make_const<'ctx>(&self, ctx: &'ctx Context, v: f64) -> FloatValue<'ctx> {
         match self.ty.precision() {
-            GemmPrecision::Single => ctx.f32_type().const_float(v.try_into().unwrap()),
+            GemmPrecision::Single => ctx.f32_type().const_float(v),
             GemmPrecision::Double => ctx.f64_type().const_float(v),
         }
     }
@@ -970,42 +922,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.context.i64_type().const_int(1, false),
                 "next.dst.offset",
             )?;
-            if false {
-                let fv = self.builder.build_float_cast(
-                    store_v.as_basic_value().into_float_value(),
-                    self.context.f64_type(),
-                    "float.val",
-                )?;
-                self.build_tail_call(
-                    self.debug_stuff.printf,
-                    &[
-                        self.debug_stuff.float_fmt.as_pointer_value().into(),
-                        fv.into(),
-                    ],
-                    "",
-                )?;
-                self.build_tail_call(
-                    self.debug_stuff.printf,
-                    &[
-                        self.debug_stuff.i64_fmt.as_pointer_value().into(),
-                        inner_loops.src_ptr.offset.into(),
-                    ],
-                    "",
-                )?;
-                let is_pad = self.builder.build_int_z_extend(
-                    inner_loops.is_pad,
-                    self.context.i64_type(),
-                    "is.pad",
-                )?;
-                self.build_tail_call(
-                    self.debug_stuff.printf,
-                    &[
-                        self.debug_stuff.i64_fmt.as_pointer_value().into(),
-                        is_pad.into(),
-                    ],
-                    "",
-                )?;
-            }
             self.builder.build_unconditional_branch(inner_loops.exit)?;
             return Ok(next_dst_offset);
         }
@@ -1148,15 +1064,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_im2col_by_channel_outer(
         &self,
-        dst_ptr: PointerValue<'ctx>,
+        dst_info: (PointerValue<'ctx>, IntValue<'ctx>),
         src_ptr: TensorPtr<'ctx>,
         offsets: Vec<IntValue<'ctx>>,
-        dst_offset: IntValue<'ctx>,
         nest: usize,
-        preheader: BasicBlock<'ctx>,
-        exit: BasicBlock<'ctx>,
+        blocks: (BasicBlock<'ctx>, BasicBlock<'ctx>),
         im2col: &operator::Im2Col,
     ) -> Result<IntValue<'ctx>, BuilderError> {
+        let (dst_ptr, dst_offset) = dst_info;
+        let (preheader, exit) = blocks;
         let max_nest = im2col.one_fm_shape.ndim();
         if nest == max_nest {
             let is_pad = self.context.bool_type().const_int(0, false);
@@ -1222,13 +1138,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let mut offsets = offsets;
         offsets.push(src_offset_int);
         let next_dst_offset = self.build_im2col_by_channel_outer(
-            dst_ptr,
+            (dst_ptr, dst_offset_int),
             src_ptr,
             offsets,
-            dst_offset_int,
             nest + 1,
-            head,
-            exiting,
+            (head, exiting),
             im2col,
         )?;
 
@@ -1280,14 +1194,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_im2col(
         &self,
-        dst_ptr: PointerValue<'ctx>,
-        dst_shape: &ResolvedTensorDims,
-        src_ptr: PointerValue<'ctx>,
-        src_shape: &ResolvedTensorDims,
+        dst_info: (PointerValue<'ctx>, &ResolvedTensorDims),
+        src_info: (PointerValue<'ctx>, &ResolvedTensorDims),
         elem_type: DataType,
         im2col: &operator::Im2Col,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let (dst_ptr, dst_shape) = dst_info;
+        let (src_ptr, src_shape) = src_info;
+
         let header_nbatch = self
             .context
             .append_basic_block(*self.function, "im2col.header.nbatch");
@@ -1352,13 +1267,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
 
         self.build_im2col_by_channel_outer(
-            dst_ptr,
+            (dst_ptr, offset_dst),
             src_ptr,
             vec![],
-            offset_dst,
             0,
-            header_channel,
-            exiting_channel,
+            (header_channel, exiting_channel),
             im2col,
         )?;
 
@@ -1496,7 +1409,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     let res = self.builder.build_float_add(lhs, rhs, "res")?;
                     self.build_store(&op.dst, res)
                 }
-                BinaryOpcode::IntAdd => todo!(),
+                // BinaryOpcode::IntAdd => todo!(),
                 BinaryOpcode::Gemm(ref gemm) => {
                     let gemm_fn = self.blas.get(gemm.ty);
                     let alpha = gemm.alpha_value(self.context);
@@ -1829,6 +1742,7 @@ pub enum LLVMSessionError {
 }
 
 pub struct LLVMSession<'ctx> {
+    #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
 

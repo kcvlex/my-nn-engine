@@ -4,8 +4,8 @@ use crate::tensor::{
     tensor::{ResolvedTensorType, Tensor, TensorType, UnresolvedTensorType},
 };
 use id_arena::{Arena, Id};
-use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, Index, IndexMut};
+use std::collections::HashMap;
+use std::ops::{Index, IndexMut};
 
 #[derive(Debug)]
 pub struct Model {

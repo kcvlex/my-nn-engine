@@ -186,20 +186,14 @@ fn main0() -> Result<()> {
     Ok(())
 }
 
-fn main_inkwell() -> Result<()> {
-    use inkwell::attributes::*;
+fn main1() -> Result<()> {
     use inkwell::builder::Builder;
     use inkwell::context::Context;
     use inkwell::execution_engine::{ExecutionEngine, JitFunction};
     use inkwell::module::Module;
-    use inkwell::types::*;
     use inkwell::values::*;
     use inkwell::OptimizationLevel;
 
-    /// Convenience type alias for the `sum` function.
-    ///
-    /// Calling this is innately `unsafe` because there's no guarantee it doesn't
-    /// do `unsafe` operations internally.
     type SumFunc = unsafe extern "C" fn(*const u8, *const u8, u64);
 
     struct CodeGen<'ctx> {
@@ -343,9 +337,7 @@ fn main_inkwell() -> Result<()> {
 
         fn jit_compile_sum(&self) -> Option<()> {
             let i32_type = self.context.i32_type();
-            let i64_type = self.context.i64_type();
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-            let f32_type = self.context.f32_type();
             let void_type = self.context.void_type();
             let fn_type =
                 void_type.fn_type(&[ptr_type.into(), ptr_type.into(), i32_type.into()], false);
@@ -525,6 +517,6 @@ fn main() -> Result<()> {
     if true {
         main0()
     } else {
-        main_inkwell()
+        main1()
     }
 }
