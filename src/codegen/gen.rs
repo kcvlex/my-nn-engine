@@ -380,6 +380,10 @@ impl<'ctx> CodeGen<'ctx> {
         &self.target_machine
     }
 
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
     pub fn compile_with_passes(&mut self, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
         self.compile_graph().map_err(CodeGenError::BuilderError)?;
         if !passes.is_empty() {

@@ -59,8 +59,8 @@ impl Graph {
                 let dims = broadcast_shape(&a.dims, &b.dims)?;
                 res.push(ResolvedTensorType::new(a.elem_type, dims));
             }
-            Operator::ReLU => {
-                res.push(inputs[args::RELU_DATA].clone());
+            Operator::ReLU | Operator::Sigmoid => {
+                res.push(inputs[0].clone());
             }
             Operator::Transpose(perms) => {
                 let data = &inputs[args::TRANSPOSE_DATA];

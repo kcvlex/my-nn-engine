@@ -12,6 +12,7 @@ pub enum Operator {
     Reshape,
     MatMul,
     MaxPool(Pooling),
+    Sigmoid,
     Transpose(Vec<usize>),
 
     // Custom
@@ -137,6 +138,7 @@ impl Operator {
             Operator::Reshape => "Reshape",
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
+            Operator::Sigmoid => "Sigmoid",
             Operator::Transpose(_) => "Transpose",
 
             // Custom
@@ -153,7 +155,7 @@ impl Operator {
     }
 
     pub fn is_elementwise(&self) -> bool {
-        matches!(self, Operator::Add | Operator::ReLU)
+        matches!(self, Operator::Add | Operator::ReLU | Operator::Sigmoid)
     }
 }
 

@@ -176,6 +176,7 @@ fn main0() -> Result<()> {
             let context = Context::create();
             let session =
                 Session::new(&context, &args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
+            session.write_model("model.dot");
             let output = session
                 .run(&[input])
                 .map_err(|e| Error::other(format!("{:?}", e)))?;

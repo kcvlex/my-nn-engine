@@ -9,6 +9,8 @@ use crate::tensor::tensor::{ResolvedTensorType, Tensor, TypeError};
 
 use inkwell::context::Context;
 use inkwell::targets::FileType;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 
 use rand::distributions::{Alphanumeric, DistString};
@@ -71,12 +73,7 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(gemm::GemmTransComposition::default()));
 
         optimizer.run(&mut model.graph);
-        {
-            use std::fs::File;
-            use std::io::Write;
-            let mut file = File::create("model.dot").unwrap();
-            file.write_all(model.graph.to_dot().as_bytes()).unwrap();
-        }
+
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
@@ -152,6 +149,12 @@ impl<'ctx> Session<'ctx> {
         unsafe { (self.func)(output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
         Ok(outputs)
     }
+
+    pub fn write_model<P: AsRef<Path>>(&self, p: P) {
+        let mut file = File::create(p).unwrap();
+        file.write_all(self.codegen.graph().to_dot().as_bytes())
+            .unwrap();
+    }
 }
 
 impl Drop for Session<'_> {
@@ -169,7 +172,7 @@ mod test {
 
     use inkwell::context::Context;
 
-    use crate::codegen::session::{Session, SessionError};
+    use super::*;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
@@ -210,7 +213,9 @@ mod test {
         path: P,
     ) -> Result<Session<'_>, SessionError> {
         use std::path::PathBuf;
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/test/operator")
+            .join(path);
         Session::new(ctx, path)
     }
 
@@ -229,7 +234,7 @@ mod test {
 
     #[test]
     fn add() -> TestResult {
-        with_session("models/test/add.onnx", |session| {
+        with_session("add.onnx", |session| {
             let (input0, orig0) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
             let (input1, orig1) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
             let output = session.run(&[input0, input1])?;
@@ -240,7 +245,7 @@ mod test {
 
     #[test]
     fn add_large() -> TestResult {
-        with_session("models/test/add_large.onnx", |session| {
+        with_session("add_large.onnx", |session| {
             let (input0, orig0) = make_tensor!(
                 f32, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0,
                 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
@@ -257,7 +262,7 @@ mod test {
 
     #[test]
     fn add_broadcast() -> TestResult {
-        with_session("models/test/add_broadcast.onnx", |session| {
+        with_session("add_broadcast.onnx", |session| {
             // (1 x 4 x 5)
             let (input0, orig0) = make_tensor!(
                 f32,
@@ -293,7 +298,7 @@ mod test {
 
     #[test]
     fn relu() -> TestResult {
-        with_session("models/test/relu.onnx", |session| {
+        with_session("relu.onnx", |session| {
             let (input, orig) =
                 make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
             let output = session.run(&[input])?;
@@ -304,7 +309,7 @@ mod test {
 
     #[test]
     fn transpose() -> TestResult {
-        with_session("models/test/transpose.onnx", |session| {
+        with_session("transpose.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
             let output = session.run(&[input])?;
             let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned();
@@ -315,7 +320,7 @@ mod test {
 
     #[test]
     fn matmul() -> TestResult {
-        with_session("models/test/matmul.onnx", |session| {
+        with_session("matmul.onnx", |session| {
             let (input0, orig0) = make_tensor!(
                 f32,
                 [1.0, 2.0, 3.0],
@@ -332,7 +337,7 @@ mod test {
 
     #[test]
     fn matmul_a_x_tb() -> TestResult {
-        with_session("models/test/matmul_a_x_tb.onnx", |session| {
+        with_session("matmul_a_x_tb.onnx", |session| {
             let (input0, orig0) = make_range_tensor!(f32, 5, 7)?;
             let (input1, orig1) = make_range_tensor!(f32, 6, 7)?;
 
@@ -345,7 +350,7 @@ mod test {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-32
     #[test]
     fn conv() -> TestResult {
-        with_session("models/test/conv.onnx", |session| {
+        with_session("conv.onnx", |session| {
             // (1 x 1 x 5 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -381,7 +386,7 @@ mod test {
 
     #[test]
     fn conv_with_strides0() -> TestResult {
-        with_session("models/test/conv_with_strides0.onnx", |session| {
+        with_session("conv_with_strides0.onnx", |session| {
             // (1 x 1 x 7 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -418,7 +423,7 @@ mod test {
 
     #[test]
     fn conv_with_strides1() -> TestResult {
-        with_session("models/test/conv_with_strides1.onnx", |session| {
+        with_session("conv_with_strides1.onnx", |session| {
             // (1 x 1 x 7 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -448,7 +453,7 @@ mod test {
 
     #[test]
     fn conv_with_strides2() -> TestResult {
-        with_session("models/test/conv_with_strides2.onnx", |session| {
+        with_session("conv_with_strides2.onnx", |session| {
             // (1 x 1 x 7 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -480,7 +485,7 @@ mod test {
 
     #[test]
     fn conv_channels() -> TestResult {
-        with_session("models/test/conv_channels.onnx", |session| {
+        with_session("conv_channels.onnx", |session| {
             // (1 x 2 x 7 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -533,7 +538,7 @@ mod test {
 
     #[test]
     fn conv_with_autopad_same() -> TestResult {
-        with_session("models/test/conv_with_autopad_same.onnx", |session| {
+        with_session("conv_with_autopad_same.onnx", |session| {
             // (1 x 1 x 5 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -563,7 +568,7 @@ mod test {
 
     #[test]
     fn maxpool() -> TestResult {
-        with_session("models/test/maxpool.onnx", |session| {
+        with_session("maxpool.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 3, 8, 8)?;
             let output = session.run(&[input])?;
 

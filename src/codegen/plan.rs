@@ -3,7 +3,7 @@ use crate::operator::Operator;
 use crate::optimize::opinfo::*;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct AllocateInfo {
     pub ty: AllocateType,
     pub is_first_use: bool,
@@ -11,7 +11,7 @@ pub struct AllocateInfo {
 
 pub type ChunkId = usize;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocateType {
     Chunk(ChunkId),
     Input(ValueId),
@@ -294,11 +294,106 @@ fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
 
 pub fn plan(graph: &Graph) -> Vec<(NodeId, AllocateInfo)> {
     let order = simple_topological_order(graph);
-    let mut planner = MemoryPlanner::new(graph);
-    planner
+    MemoryPlanner::new(graph)
         .run(&order)
         .into_iter()
         .zip(order)
         .map(|(x, y)| (y, x))
         .collect()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::model::Model;
+    use std::io::{Error, Result};
+    use std::path::PathBuf;
+
+    fn load_model(path: &str) -> Result<Model> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/test/plan")
+            .join(path);
+        let mut model =
+            Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;
+        model
+            .graph
+            .infer()
+            .map_err(|e| Error::other(format!("{:?}", e)))?;
+        Ok(model)
+    }
+
+    fn to_node_order(graph: &Graph, order: &[&str]) -> Result<Vec<NodeId>> {
+        let mut name2id: HashMap<&str, _> = HashMap::new();
+        for (id, node) in graph.nodes.iter() {
+            if name2id.insert(&node.name, id).is_some() {
+                return Err(Error::other("duplicated node name"));
+            }
+        }
+
+        let mut res = Vec::with_capacity(order.len());
+        for name in order.iter() {
+            let id = name2id
+                .get(name)
+                .ok_or_else(|| Error::other("node not found"))?;
+            res.push(*id);
+        }
+        Ok(res)
+    }
+
+    // Graph:
+    //
+    //               +-- 1.Sigmoid -- 3.Pool --+
+    //              /                           \
+    // Input -- 0.Sigmoid                      4.Add -- 5.Transpose -- Output
+    //              \                           /
+    //               +-- 2.Pool ---------------+
+    //
+    #[test]
+    fn diamond() -> Result<()> {
+        let model = load_model("diamond.onnx")?;
+        let order = [
+            "/layer1/Sigmoid",
+            "/layer2/layer2.0/Sigmoid",
+            "/layer3/MaxPool",
+            "/layer2/layer2.1/MaxPool",
+            "/Add",
+            "/Transpose",
+        ];
+        let order = to_node_order(&model.graph, &order)?;
+        let mem = MemoryPlanner::new(&model.graph).run(&order);
+        let output_id = match model.graph.nodes[model.graph.outputs[0]].op {
+            Operator::Output(id) => id,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            mem,
+            &[
+                AllocateInfo {
+                    ty: AllocateType::Chunk(0),
+                    is_first_use: true
+                },
+                AllocateInfo {
+                    ty: AllocateType::Chunk(1),
+                    is_first_use: true
+                },
+                AllocateInfo {
+                    ty: AllocateType::Chunk(2),
+                    is_first_use: true
+                },
+                AllocateInfo {
+                    ty: AllocateType::Chunk(0),
+                    is_first_use: false
+                },
+                AllocateInfo {
+                    ty: AllocateType::Chunk(0),
+                    is_first_use: false
+                },
+                AllocateInfo {
+                    ty: AllocateType::Output(output_id),
+                    is_first_use: false
+                },
+            ]
+        );
+        Ok(())
+    }
 }
