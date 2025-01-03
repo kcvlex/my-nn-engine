@@ -1,16 +1,11 @@
 use crate::codegen::plan;
 use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
-use crate::load::ModelLoadError;
-use crate::model::{Graph, Model, Node, NodeId, ValueId};
+use crate::model::{Graph, Node, NodeId, ValueId};
 use crate::operator;
 use crate::operator::Operator;
-use crate::optimize::{
-    gemm, im2col,
-    opinfo::*,
-    optimizer::{Optimizer, SimpleGraphModifier},
-};
+use crate::optimize::opinfo::*;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::{DataType, ResolvedTensorType, Tensor, TensorData, TypeError};
+use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
 
 use modular_bitfield::prelude::*;
 
@@ -20,22 +15,12 @@ use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage, Module};
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
-};
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
 use std::collections::HashMap;
-use std::path::Path;
-
-use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
-
-use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -101,18 +86,14 @@ struct Intrinsics<'ctx> {
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
-    pub(in crate::codegen) module: Module<'ctx>,
+    module: Module<'ctx>,
     builder: Builder<'ctx>,
 
     main: FunctionValue<'ctx>,
     main_entry: BasicBlock<'ctx>,
 
-    pub(in crate::codegen) target_machine: TargetMachine,
-
-    noalias: Attribute,
-    noundef: Attribute,
-    cpu: Attribute,
-    features: Attribute,
+    attrs: Attributes,
+    target_machine: TargetMachine,
 
     intrinsics: Intrinsics<'ctx>,
     blas: BLAS<'ctx>,
@@ -135,6 +116,46 @@ struct FunctionTranslator<'a, 'ctx> {
 
     #[allow(dead_code)]
     debug_stuff: &'a DebugStuff<'ctx>,
+}
+
+struct Attributes {
+    noalias: Attribute,
+    noundef: Attribute,
+    cpu: Attribute,
+    features: Attribute,
+}
+
+impl Attributes {
+    fn new(context: &Context, target_machine: &TargetMachine) -> Self {
+        let get_attr = |name: &str| {
+            let kind_id = Attribute::get_named_enum_kind_id(name);
+            context.create_enum_attribute(kind_id, 0)
+        };
+
+        let noalias = get_attr("noalias");
+        let noundef = get_attr("noundef");
+        let cpu = context
+            .create_string_attribute("target-cpu", target_machine.get_cpu().to_str().unwrap());
+        let features = context.create_string_attribute(
+            "target-features",
+            target_machine.get_feature_string().to_str().unwrap(),
+        );
+
+        Self {
+            noalias,
+            noundef,
+            cpu,
+            features,
+        }
+    }
+    fn add_default_attributes<'ctx>(&self, function: &FunctionValue<'ctx>) {
+        for i in 0..function.count_params() {
+            function.add_attribute(AttributeLoc::Param(i), self.noalias);
+            function.add_attribute(AttributeLoc::Param(i), self.noundef);
+        }
+        function.add_attribute(AttributeLoc::Function, self.cpu);
+        function.add_attribute(AttributeLoc::Function, self.features);
+    }
 }
 
 #[allow(dead_code)]
@@ -299,26 +320,8 @@ impl<'ctx> CodeGen<'ctx> {
 
         let target_machine = target_machine()?;
 
-        let get_attr = |name: &str| {
-            let kind_id = Attribute::get_named_enum_kind_id(name);
-            context.create_enum_attribute(kind_id, 0)
-        };
-
-        let noalias = get_attr("noalias");
-        let noundef = get_attr("noundef");
-        let cpu = context
-            .create_string_attribute("target-cpu", target_machine.get_cpu().to_str().unwrap());
-        let features = context.create_string_attribute(
-            "target-features",
-            target_machine.get_feature_string().to_str().unwrap(),
-        );
-
-        main.add_attribute(AttributeLoc::Param(0), noalias);
-        main.add_attribute(AttributeLoc::Param(0), noundef);
-        main.add_attribute(AttributeLoc::Param(1), noalias);
-        main.add_attribute(AttributeLoc::Param(1), noundef);
-        main.add_attribute(AttributeLoc::Function, cpu);
-        main.add_attribute(AttributeLoc::Function, features);
+        let attrs = Attributes::new(context, &target_machine);
+        attrs.add_default_attributes(&main);
 
         macro_rules! get_intrinsic {
             ($name: expr, $args: expr) => {{
@@ -355,11 +358,7 @@ impl<'ctx> CodeGen<'ctx> {
 
             target_machine,
 
-            noalias,
-            noundef,
-            cpu,
-            features,
-
+            attrs,
             intrinsics,
             blas,
 
@@ -371,6 +370,14 @@ impl<'ctx> CodeGen<'ctx> {
             mem_size,
             chunk2ptr,
         })
+    }
+
+    pub fn module(&self) -> &Module<'ctx> {
+        &self.module
+    }
+
+    pub fn target_machine(&self) -> &TargetMachine {
+        &self.target_machine
     }
 
     pub fn compile_with_passes(&mut self, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
@@ -408,12 +415,7 @@ impl<'ctx> CodeGen<'ctx> {
         let func = self
             .module
             .add_function(name, fn_type, Some(Linkage::Private));
-        for i in 0..argc {
-            func.add_attribute(AttributeLoc::Param(i), self.noalias);
-            func.add_attribute(AttributeLoc::Param(i), self.noundef);
-        }
-        func.add_attribute(AttributeLoc::Function, self.cpu);
-        func.add_attribute(AttributeLoc::Function, self.features);
+        self.attrs.add_default_attributes(&func);
         func
     }
 
@@ -596,7 +598,7 @@ impl<'ctx> CodeGen<'ctx> {
                     rhs,
                 };
                 let op = Operation::BinaryOp(binop, $op);
-                translator.gen_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+                translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
             }};
         }
 
@@ -609,7 +611,7 @@ impl<'ctx> CodeGen<'ctx> {
                     },
                     $op,
                 );
-                translator.gen_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+                translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
             }};
         }
 
@@ -651,11 +653,11 @@ impl<'ctx> CodeGen<'ctx> {
                     alpha: 1.0,
                     beta: 0.0,
                 });
-                translator.gen_nested_loop(gemm, entry, nest)
+                translator.build_nested_loop(gemm, entry, nest)
             }
             Operator::Gemm(ref gemm) => {
                 let gemm = gen_gemm!(gemm);
-                translator.gen_nested_loop(gemm, entry, 0)
+                translator.build_nested_loop(gemm, entry, 0)
             }
             Operator::Im2Col(ref im2col) => translator.build_im2col(
                 (ptrs[0].ptr, &ptrs[0].ty.dims),
@@ -1573,7 +1575,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
-    fn gen_nested_loop_rec(
+    fn build_nested_loop_rec(
         &self,
         ops: Operation<'ctx>,
         loop_bb: LoopBB<'ctx>,
@@ -1707,10 +1709,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header: next_bb,
             exit: exiting_bb,
         };
-        self.gen_nested_loop_rec(next_ops, next_loop_bb, nest + 1, max_nest)
+        self.build_nested_loop_rec(next_ops, next_loop_bb, nest + 1, max_nest)
     }
 
-    fn gen_nested_loop(
+    fn build_nested_loop(
         &self,
         op: Operation<'ctx>,
         preheader: BasicBlock<'ctx>,
@@ -1725,7 +1727,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header,
             exit,
         };
-        self.gen_nested_loop_rec(op, loop_bb, 0, max_nest)?;
+        self.build_nested_loop_rec(op, loop_bb, 0, max_nest)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }

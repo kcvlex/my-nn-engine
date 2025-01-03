@@ -1,4 +1,4 @@
-use my_onnx::codegen::session::LLVMSession;
+use my_onnx::codegen::session::Session;
 use my_onnx::model::Model;
 use my_onnx::optimize::optimizer::{ExperimentalGraphModifier, Optimizer};
 use my_onnx::tensor::tensor::Tensor;
@@ -174,8 +174,8 @@ fn main0() -> Result<()> {
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
             use inkwell::context::Context;
             let context = Context::create();
-            let session = LLVMSession::new(&context, &args[1])
-                .map_err(|e| Error::other(format!("{:?}", e)))?;
+            let session =
+                Session::new(&context, &args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
             let output = session
                 .run(&[input])
                 .map_err(|e| Error::other(format!("{:?}", e)))?;

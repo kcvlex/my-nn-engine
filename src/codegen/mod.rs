@@ -1,3 +1,3 @@
-pub mod llvm;
+pub mod gen;
 pub mod plan;
 pub mod session;
