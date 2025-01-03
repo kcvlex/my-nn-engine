@@ -616,6 +616,7 @@ impl<'ctx> CodeGen<'ctx> {
                 operator::ReduceOp::Max => {
                     translator.build_matrix_reduce(&ptrs[0], &ptrs[1], op, entry)
                 }
+                _ => todo!("{:?}", node.op),
             },
             _ => todo!("{:?}", node.op),
         }?;
@@ -1340,7 +1341,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         n: gemm.n as u64,
                         k: gemm.k as u64,
                     };
-                    self.blas.call_gemm(prec, &gemm, &self.builder)?;
+                    self.blas.call_gemm(prec, &gemm, self.builder)?;
                     Ok(())
                 }
             },
@@ -1386,14 +1387,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             "offset1",
         )?;
 
-        macro_rules! gen_body {
-            ($f: expr, $acc: expr) => {{
+        macro_rules! load {
+            () => {{
                 let gep = unsafe {
                     self.builder
                         .build_in_bounds_gep(fp_ty, src, &[offset1], "gep")
                 }?;
-                let val = self.builder.build_load(fp_ty, gep, "val")?;
-                $f($acc, val)
+                self.builder.build_load(fp_ty, gep, "val")?
             }};
         }
 
@@ -1410,17 +1410,30 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     ),
                     _ => todo!(),
                 };
-                let res =
-                    gen_body!(
-                        |acc: BasicValueEnum<'ctx>, val: BasicValueEnum<'ctx>| self
-                            .build_tail_call(fmax, &[acc.into(), val.into()], "res"),
-                        acc.as_basic_value()
-                    )?
+                let val = load!();
+                let res = self
+                    .build_tail_call(fmax, &[acc.as_basic_value().into(), val.into()], "res")?
                     .try_as_basic_value()
                     .left()
                     .unwrap();
-                (id_v, res)
+                (id_v.as_basic_value_enum(), res)
             }
+            operator::ReduceOp::Sum | operator::ReduceOp::Average => {
+                let fp_ty = match elem_ty {
+                    DataType::F32 => self.context.f32_type(),
+                    DataType::F64 => self.context.f64_type(),
+                    _ => todo!(),
+                };
+                let zero = fp_ty.const_zero();
+                let val = load!();
+                let res = self.builder.build_float_add(
+                    acc.as_basic_value().into_float_value(),
+                    val.into_float_value(),
+                    "res",
+                )?;
+                (zero.as_basic_value_enum(), res.as_basic_value_enum())
+            }
+            _ => todo!(),
         };
         let ind1_next = self.builder.build_int_add(
             ind1.as_basic_value().into_int_value(),
@@ -1450,6 +1463,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 "gep",
             )
         }?;
+        let res = match op {
+            operator::ReduceOp::Average | operator::ReduceOp::Mean => {
+                let div = fp_ty.const_float(col as f64);
+                self.builder
+                    .build_float_div(res.into_float_value(), div, "res")?
+                    .as_basic_value_enum()
+            }
+            operator::ReduceOp::Max | operator::ReduceOp::Sum => res,
+        };
         self.builder.build_store(gep, res)?;
         let ind0_next = self.builder.build_int_add(
             ind0.as_basic_value().into_int_value(),

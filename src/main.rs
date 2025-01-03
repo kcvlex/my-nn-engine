@@ -170,6 +170,7 @@ fn main0() -> Result<()> {
                 ],
             ],],);
             let input: Tensor = input
+                .into_dyn()
                 .try_into()
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
             use inkwell::context::Context;

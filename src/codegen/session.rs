@@ -4,6 +4,7 @@ use crate::model::{Graph, Model, ValueId};
 use crate::optimize::{
     gemm, identity, im2col,
     optimizer::{Optimizer, SimpleGraphModifier},
+    reduce,
 };
 use crate::tensor::tensor::{ResolvedTensorType, Tensor, TypeError};
 
@@ -67,6 +68,9 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(im2col::InsertIm2Col::default()));
         optimizer
             .passes
+            .push(Box::new(reduce::Reduce2ReduceMatrix::default()));
+        optimizer
+            .passes
             .push(Box::new(gemm::MatMul2Gemm::default()));
         optimizer
             .passes
@@ -76,6 +80,9 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(identity::Reshape2Identity::default()));
 
         optimizer.run(&mut model.graph);
+
+        // TODO: remove
+        Self::_write_model(&model.graph, "model.dot");
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
@@ -153,10 +160,13 @@ impl<'ctx> Session<'ctx> {
         Ok(outputs)
     }
 
-    pub fn write_model<P: AsRef<Path>>(&self, p: P) {
+    fn _write_model<P: AsRef<Path>>(graph: &Graph, p: P) {
         let mut file = File::create(p).unwrap();
-        file.write_all(self.codegen.graph().to_dot().as_bytes())
-            .unwrap();
+        file.write_all(graph.to_dot().as_bytes()).unwrap();
+    }
+
+    pub fn write_model<P: AsRef<Path>>(&self, p: P) {
+        Self::_write_model(self.codegen.graph(), p);
     }
 }
 
@@ -182,6 +192,7 @@ mod test {
             let orig: ndarray::Array<$ty, _> = ndarray::array!($($expr,)*);
             let res: Result<(Tensor, _), _> = orig
                 .clone()
+                .into_dyn()
                 .try_into()
                 .map(|t| (t, orig.clone()))
                 .map_err(SessionError::TypeError);
@@ -197,6 +208,7 @@ mod test {
                 .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
             let res: Result<(Tensor, _), _> = orig
                 .clone()
+                .into_dyn()
                 .try_into()
                 .map(|t| (t, orig.clone()))
                 .map_err(SessionError::TypeError);
@@ -241,7 +253,7 @@ mod test {
             let (input0, orig0) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
             let (input1, orig1) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
             let output = session.run(&[input0, input1])?;
-            tensor_assert_eq!(output[0], orig0 + orig1);
+            tensor_assert_eq!(output[0], (orig0 + orig1).into_dyn());
             Ok(())
         })
     }
@@ -258,7 +270,7 @@ mod test {
                 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
             )?;
             let outputs = session.run(&[input0, input1])?;
-            tensor_assert_eq!(outputs[0], orig0 + orig1);
+            tensor_assert_eq!(outputs[0], (orig0 + orig1).into_dyn());
             Ok(())
         })
     }
@@ -294,7 +306,7 @@ mod test {
             )?;
 
             let output = session.run(&[input0, input1, input2])?;
-            tensor_assert_eq!(output[0], orig0 + orig1 + orig2);
+            tensor_assert_eq!(output[0], (orig0 + orig1 + orig2).into_dyn());
             Ok(())
         })
     }
@@ -305,7 +317,7 @@ mod test {
             let (input, orig) =
                 make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
             let output = session.run(&[input])?;
-            tensor_assert_eq!(output[0], orig.mapv(|x| x.max(0.0)));
+            tensor_assert_eq!(output[0], orig.mapv(|x| x.max(0.0)).into_dyn());
             Ok(())
         })
     }
@@ -315,7 +327,7 @@ mod test {
         with_session("transpose.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
             let output = session.run(&[input])?;
-            let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned();
+            let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned().into_dyn();
             tensor_assert_eq!(output[0], expected);
             Ok(())
         })
@@ -333,7 +345,7 @@ mod test {
             )?;
             let (input1, orig1) = make_tensor!(f32, [1.0, 2.0], [3.0, 4.0], [5.0, 6.0],)?;
             let output = session.run(&[input0, input1])?;
-            tensor_assert_eq!(output[0], orig0.dot(&orig1));
+            tensor_assert_eq!(output[0], orig0.dot(&orig1).into_dyn());
             Ok(())
         })
     }
@@ -345,7 +357,7 @@ mod test {
             let (input1, orig1) = make_range_tensor!(f32, 6, 7)?;
 
             let output = session.run(&[input0, input1])?;
-            tensor_assert_eq!(output[0], orig0.dot(&orig1.t()));
+            tensor_assert_eq!(output[0], orig0.dot(&orig1.t()).into_dyn());
             Ok(())
         })
     }
@@ -582,9 +594,28 @@ mod test {
                 .collect::<ndarray::Array<f32, _>>()
                 .to_shape((1, 3, 7, 7))
                 .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+                .into_dyn()
                 .to_owned();
-            let expected = Tensor::try_from(expected).map_err(SessionError::TypeError)?;
-            assert_eq!(output[0], expected);
+            tensor_assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn reducemax() -> TestResult {
+        with_session("reducemax.onnx", |session| {
+            let (input, orig) = make_tensor!(
+                f32,
+                [
+                    [[5., 1.], [20., 2.]], [[30., 1.], [40., 2.]], [[55., 1.], [60., 2.]],
+                ],
+            )?;
+            let expected = orig.fold_axis(ndarray::Axis(2), f32::NEG_INFINITY, |&a, &b| a.max(b))
+                .into_shape_with_order((3, 2))
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+                .into_dyn();
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected);
             Ok(())
         })
     }

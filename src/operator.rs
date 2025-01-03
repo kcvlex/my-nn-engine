@@ -13,6 +13,9 @@ pub enum Operator {
     Reshape,
     MatMul,
     MaxPool(Pooling),
+    ReduceMax(Reduce),
+    ReduceMean(Reduce),
+    ReduceSum(Reduce),
     Sigmoid,
     Transpose(Vec<usize>),
 
@@ -73,6 +76,28 @@ pub struct Pooling {
     pub dilations: OptionalVec<usize>,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Reduce {
+    pub axes: Vec<i64>,
+    pub keepdims: bool,
+}
+
+impl Reduce {
+    pub fn normalize_axes(&self, rank: usize) -> Option<Vec<usize>> {
+        let res: Vec<_> = self
+            .axes
+            .iter()
+            .map(|&a| if a < 0 { rank as i64 + a } else { a } as usize)
+            .collect();
+        for i in res.iter() {
+            if rank <= *i {
+                return None;
+            }
+        }
+        Some(res)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +165,9 @@ impl Operator {
             Operator::Reshape => "Reshape",
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
+            Operator::ReduceMax(_) => "ReduceMax",
+            Operator::ReduceMean(_) => "ReduceMean",
+            Operator::ReduceSum(_) => "ReduceSum",
             Operator::Sigmoid => "Sigmoid",
             Operator::Transpose(_) => "Transpose",
 
@@ -167,7 +195,10 @@ impl Operator {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ReduceOp {
+    Average,
     Max,
+    Mean,
+    Sum,
 }
 
 pub mod args {

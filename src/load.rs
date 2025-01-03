@@ -354,6 +354,20 @@ impl<T: Clone + Copy> OptionalVecExt<T> for Option<Vec<T>> {
 }
 
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
+    macro_rules! reduce {
+        () => {{
+            let keepdims = attributes
+                .get("keepdims")
+                .map(|x| x.int())
+                .transpose()?
+                .map_or(true, |x| x != 0);
+            let axes = attributes
+                .get("axes")
+                .map(|x| x.ints())
+                .unwrap_or(Ok(Vec::new()))?;
+            Reduce { keepdims, axes }
+        }};
+    }
     match op {
         "Add" => Ok(Operator::Add),
         "Relu" => Ok(Operator::ReLU),
@@ -428,6 +442,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         }
         "Sigmoid" => Ok(Operator::Sigmoid),
         "Identity" => Ok(Operator::Identity),
+        "ReduceMax" => Ok(Operator::ReduceMax(reduce!())),
+        "ReduceMean" => Ok(Operator::ReduceMean(reduce!())),
+        "ReduceSum" => Ok(Operator::ReduceSum(reduce!())),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

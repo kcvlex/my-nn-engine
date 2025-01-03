@@ -260,6 +260,33 @@ impl Graph {
                     ResolvedTensorDims::new(dims.to_vec()),
                 ));
             }
+            Operator::ReduceMax(ref reduce)
+            | Operator::ReduceMean(ref reduce)
+            | Operator::ReduceSum(ref reduce) => {
+                let data = &inputs[0];
+                let rank = data.dims.ndim();
+                let axes = reduce
+                    .normalize_axes(rank)
+                    .ok_or(TypeError::InferError("Invalid axes".to_string()))?;
+
+                let mut drop = vec![false; rank];
+                for i in axes.iter() {
+                    drop[*i] = true;
+                }
+                let mut dims = Vec::with_capacity(rank - axes.len());
+                for (i, &d) in data.dims.iter().enumerate() {
+                    if !reduce.keepdims && drop[i] {
+                        continue;
+                    }
+                    let d = if drop[i] { 1 } else { d };
+                    dims.push(d);
+                }
+
+                res.push(ResolvedTensorType::new(
+                    data.elem_type,
+                    ResolvedTensorDims::new(dims),
+                ));
+            }
 
             // Custom
             Operator::Input(_)

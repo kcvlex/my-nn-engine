@@ -258,9 +258,9 @@ impl Tensor {
 
 macro_rules! define_try_from {
     ($ty: ty, $data: ident) => {
-        impl<D: ndarray::Dimension> TryFrom<ndarray::Array<$ty, D>> for Tensor {
+        impl TryFrom<ndarray::Array<$ty, ndarray::IxDyn>> for Tensor {
             type Error = TypeError;
-            fn try_from(array: ndarray::Array<$ty, D>) -> Result<Self, Self::Error> {
+            fn try_from(array: ndarray::Array<$ty, ndarray::IxDyn>) -> Result<Self, Self::Error> {
                 let dim = ResolvedTensorDims::new(array.shape().to_vec());
                 let data = TensorData::$data(array.flatten().to_vec());
                 Self::new(dim, data)
