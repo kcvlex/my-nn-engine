@@ -24,6 +24,12 @@ pub struct Tensor {
     pub ty: ResolvedTensorType,
 }
 
+impl Tensor {
+    pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64) -> bool {
+        self.ty == other.ty && self.data.eq_with_epsillong(&other.data, epsilon)
+    }
+}
+
 // TODO: Complex
 #[derive(Debug, Clone)]
 pub enum TensorData {
@@ -40,6 +46,24 @@ impl PartialEq for TensorData {
             (TensorData::I64(a), TensorData::I64(b)) => a == b,
             (TensorData::F32(a), TensorData::F32(b)) => a == b,
             (TensorData::F64(a), TensorData::F64(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl TensorData {
+    pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64) -> bool {
+        macro_rules! eq {
+            ($a: expr, $b: expr) => {
+                $a.iter()
+                    .zip($b.iter())
+                    .all(|(x, y)| ((x - y).abs() as f64) < epsilon)
+            };
+        }
+        match (self, other) {
+            (TensorData::I64(a), TensorData::I64(b)) => a == b,
+            (TensorData::F32(a), TensorData::F32(b)) => eq!(a, b),
+            (TensorData::F64(a), TensorData::F64(b)) => eq!(a, b),
             _ => false,
         }
     }
@@ -109,8 +133,7 @@ impl TensorType {
     pub fn normalize(&mut self) {
         if let TensorType::Unresolved(ref ty) = self {
             if let Some(resolved) = ty.dims.as_ref().and_then(|x| x.to_resolved()) {
-                *self =
-                    TensorType::Resolved(ResolvedTensorType::new(ty.elem_type.clone(), resolved));
+                *self = TensorType::Resolved(ResolvedTensorType::new(ty.elem_type, resolved));
             }
         }
     }

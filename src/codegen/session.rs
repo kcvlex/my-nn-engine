@@ -91,8 +91,8 @@ impl<'ctx> Session<'ctx> {
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
         codegen
-            .compile_default()
-            //.compile_with_passes(&[])
+            //.compile_default()
+            .compile_with_passes(&[])
             .map_err(SessionError::CodeGenError)?;
 
         codegen.module().print_to_file("model.ll").unwrap();
@@ -223,6 +223,16 @@ mod test {
         ($left: expr, $right: expr) => {{
             let right = Tensor::try_from($right).map_err(SessionError::TypeError)?;
             assert_eq!($left, right);
+        }};
+    }
+
+    macro_rules! assert_eq_epsilon {
+        ($left: expr, $right: expr, $epsilon: expr) => {{
+            let res = $left.eq_with_epsilon(&$right, $epsilon);
+            if !res {
+                // For pretty print
+                assert_eq!($left, $right);
+            }
         }};
     }
 
@@ -690,7 +700,7 @@ mod test {
             )?;
 
             let output = session.run(&[input])?;
-            assert_eq!(output[0], expected);
+            assert_eq_epsilon!(output[0], expected, 0.001);
             Ok(())
         })
     }

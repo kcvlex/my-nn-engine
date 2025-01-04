@@ -638,7 +638,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let dst = ptrs[0].ptr;
                 let inputs = ptrs.iter().skip(1).map(|ptr| ptr.ptr).collect::<Vec<_>>();
                 let m = ptrs[1].ty.dims[0] as u64;
-                let n = ptrs[1].ty.dims[1] as u64;
+                let n = (ptrs[1].ty.dims.size() as u64) / m;
                 let elem_type = ptrs[0].ty.elem_type;
                 translator.build_batchnorm_by_channel(
                     dst,
@@ -931,8 +931,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let is_pad_right = self.builder.build_int_compare(
             inkwell::IntPredicate::SLE,
             self.context.i64_type().const_int(
-                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap()
-                    + inner_loops.pads[nest as usize],
+                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap() +
+                    inner_loops.pads[nest as usize],
                 false,
             ),
             src_offset,
@@ -1744,18 +1744,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(header);
         let ind0 = self.builder.build_phi(self.context.i64_type(), "ind0")?;
         let offset0 = self.builder.build_phi(self.context.i64_type(), "offset0")?;
+        let ind0_int = ind0.as_basic_value().into_int_value();
         let offset0_int = offset0.as_basic_value().into_int_value();
         let scale = self
-            .build_raw_load(fp_type, scale_ptr, offset0_int)?
+            .build_raw_load(fp_type, scale_ptr, ind0_int)?
             .into_float_value();
         let bias = self
-            .build_raw_load(fp_type, bias_ptr, offset0_int)?
+            .build_raw_load(fp_type, bias_ptr, ind0_int)?
             .into_float_value();
         let mean = self
-            .build_raw_load(fp_type, mean_ptr, offset0_int)?
+            .build_raw_load(fp_type, mean_ptr, ind0_int)?
             .into_float_value();
         let variance = self
-            .build_raw_load(fp_type, variance_ptr, offset0_int)?
+            .build_raw_load(fp_type, variance_ptr, ind0_int)?
             .into_float_value();
         let factor = self.builder.build_float_add(variance, epsilon, "factor")?;
         let factor = self
@@ -1805,7 +1806,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         self.builder.position_at_end(exiting);
         let ind0_next = self.builder.build_int_add(
-            ind0.as_basic_value().into_int_value(),
+            ind0_int,
             self.context.i64_type().const_int(1, false),
             "ind0.next",
         )?;

@@ -22,9 +22,9 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
             .nodes
             .iter()
             .filter_map(|(id, node)| match node.op {
-                Operator::ReduceMax(ref reduce)
-                | Operator::ReduceMean(ref reduce)
-                | Operator::ReduceSum(ref reduce) => {
+                Operator::ReduceMax(ref reduce) |
+                Operator::ReduceMean(ref reduce) |
+                Operator::ReduceSum(ref reduce) => {
                     let input_value = node.inputs[0];
                     let input_ty = graph.get_resolved_tensor_type(input_value).unwrap();
                     let input_rank = input_ty.dims.ndim();

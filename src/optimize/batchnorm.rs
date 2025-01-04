@@ -2,8 +2,6 @@ use crate::model::{Graph, Node};
 use crate::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::TransposeGenerator;
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::ResolvedTensorType;
 
 #[derive(Default)]
 pub struct DecomposeBatchNormalization {}
@@ -35,7 +33,6 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
             let input_ty = graph.get_resolved_tensor_type(input).unwrap().clone();
             let mut perms = (0..input_ty.dims.ndim()).collect::<Vec<_>>();
             perms.swap(0, 1);
-            let channel = input_ty.dims[1];
 
             let transposed_input = TransposeGenerator::default()
                 .set_input(input)
@@ -45,6 +42,7 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
                 .generate(graph, modifier)
                 .unwrap();
 
+            // let channel = input_ty.dims[1];
             // let reduced_ty =
             //     ResolvedTensorType::new(input_ty.elem_type, ResolvedTensorDims::new(vec![channel]));
             // let mean_value = modifier.register_new_value(
