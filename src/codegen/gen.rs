@@ -80,6 +80,10 @@ impl LLVMPass {
 struct Intrinsics<'ctx> {
     fmax_f32: FunctionValue<'ctx>,
     fmax_f64: FunctionValue<'ctx>,
+    sqrt_f32: FunctionValue<'ctx>,
+    sqrt_f64: FunctionValue<'ctx>,
+    fma_f32: FunctionValue<'ctx>,
+    fma_f64: FunctionValue<'ctx>,
 }
 
 pub struct CodeGen<'ctx> {
@@ -265,8 +269,19 @@ impl<'ctx> CodeGen<'ctx> {
 
         let fmax_f32 = get_intrinsic!("llvm.maximum", &[f32_ty, f32_ty])?;
         let fmax_f64 = get_intrinsic!("llvm.maximum", &[f64_ty, f64_ty])?;
+        let sqrt_f32 = get_intrinsic!("llvm.sqrt", &[f32_ty])?;
+        let sqrt_f64 = get_intrinsic!("llvm.sqrt", &[f64_ty])?;
+        let fma_f32 = get_intrinsic!("llvm.fma", &[f32_ty, f32_ty, f32_ty])?;
+        let fma_f64 = get_intrinsic!("llvm.fma", &[f64_ty, f64_ty, f64_ty])?;
 
-        let intrinsics = Intrinsics { fmax_f32, fmax_f64 };
+        let intrinsics = Intrinsics {
+            fmax_f32,
+            fmax_f64,
+            sqrt_f32,
+            sqrt_f64,
+            fma_f32,
+            fma_f64,
+        };
 
         let blas = BLAS::new(context, &module);
 
@@ -619,6 +634,21 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptrs = ptrs.iter().map(|ptr| ptr.ptr).collect::<Vec<_>>();
                 translator.build_matrix_reduce(&ptrs, elem_type, (m, n), op, entry)
             }
+            Operator::BatchNormalizationPerChannel(ref batchnorm) => {
+                let dst = ptrs[0].ptr;
+                let inputs = ptrs.iter().skip(1).map(|ptr| ptr.ptr).collect::<Vec<_>>();
+                let m = ptrs[1].ty.dims[0] as u64;
+                let n = ptrs[1].ty.dims[1] as u64;
+                let elem_type = ptrs[0].ty.elem_type;
+                translator.build_batchnorm_by_channel(
+                    dst,
+                    inputs.as_slice(),
+                    elem_type,
+                    (m, n),
+                    entry,
+                    batchnorm,
+                )
+            }
             _ => todo!("{:?}", node.op),
         }?;
 
@@ -785,6 +815,27 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_store(gep, val).map(|_| ())
     }
 
+    fn build_raw_load<T: BasicType<'ctx> + Copy>(
+        &self,
+        ty: T,
+        ptr: PointerValue<'ctx>,
+        offset: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
+        let gep = unsafe { self.builder.build_in_bounds_gep(ty, ptr, &[offset], "gep") }?;
+        self.builder.build_load(ty, gep, "load")
+    }
+
+    fn build_raw_store<T: BasicType<'ctx>, V: BasicValue<'ctx>>(
+        &self,
+        ty: T,
+        ptr: PointerValue<'ctx>,
+        offset: IntValue<'ctx>,
+        val: V,
+    ) -> Result<(), BuilderError> {
+        let gep = unsafe { self.builder.build_in_bounds_gep(ty, ptr, &[offset], "gep") }?;
+        self.builder.build_store(gep, val).map(|_| ())
+    }
+
     fn build_tail_call(
         &self,
         function: FunctionValue<'ctx>,
@@ -828,15 +879,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             self.builder.position_at_end(epilog);
             let store_v = self.builder.build_phi(inner_loops.elem_ty, "store.v")?;
             store_v.add_incoming(&[(&load_v, normal), (&inner_loops.elem_ty.const_zero(), pad)]);
-            let gep = unsafe {
-                self.builder.build_in_bounds_gep(
-                    inner_loops.elem_ty,
-                    inner_loops.dst_ptr,
-                    &[inner_loops.dst_offset],
-                    "gep",
-                )
-            }?;
-            self.builder.build_store(gep, store_v.as_basic_value())?;
+            self.build_raw_store(
+                inner_loops.elem_ty,
+                inner_loops.dst_ptr,
+                inner_loops.dst_offset,
+                store_v.as_basic_value(),
+            )?;
             let next_dst_offset = self.builder.build_int_add(
                 inner_loops.dst_offset,
                 self.context.i64_type().const_int(1, false),
@@ -883,8 +931,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let is_pad_right = self.builder.build_int_compare(
             inkwell::IntPredicate::SLE,
             self.context.i64_type().const_int(
-                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap() +
-                    inner_loops.pads[nest as usize],
+                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap()
+                    + inner_loops.pads[nest as usize],
                 false,
             ),
             src_offset,
@@ -1387,11 +1435,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         macro_rules! load {
             () => {{
-                let gep = unsafe {
-                    self.builder
-                        .build_in_bounds_gep(fp_ty, ptrs[1], &[offset1], "gep")
-                }?;
-                self.builder.build_load(fp_ty, gep, "val")?
+                self.build_raw_load(fp_ty, ptrs[1], offset1)?
+                    .into_float_value()
             }};
         }
 
@@ -1423,23 +1468,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     _ => todo!(),
                 };
                 let zero = fp_ty.const_zero();
-                let val = load!().into_float_value();
+                let val = load!();
                 let res = match op {
                     operator::ReduceOp::Sum | operator::ReduceOp::Mean => self
                         .builder
                         .build_float_add(acc.as_basic_value().into_float_value(), val, "res"),
                     operator::ReduceOp::Variance => {
-                        let mean = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                fp_ty,
-                                ptrs[2],
-                                &[ind0.as_basic_value().into_int_value()],
-                                "gep",
-                            )
-                        }?;
                         let mean = self
-                            .builder
-                            .build_load(fp_ty, mean, "mean")?
+                            .build_raw_load(fp_ty, ptrs[2], ind0.as_basic_value().into_int_value())?
                             .into_float_value();
                         let diff = self.builder.build_float_sub(val, mean, "diff")?;
                         self.builder.build_float_mul(diff, diff, "diff.squared")
@@ -1469,14 +1505,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         acc.add_incoming(&[(&res, body), (&id_v, header0)]);
 
         self.builder.position_at_end(exiting0);
-        let gep = unsafe {
-            self.builder.build_in_bounds_gep(
-                fp_ty,
-                ptrs[0],
-                &[ind0.as_basic_value().into_int_value()],
-                "gep",
-            )
-        }?;
         let res = match op {
             operator::ReduceOp::Mean | operator::ReduceOp::Variance => {
                 let div = fp_ty.const_float(col as f64);
@@ -1486,7 +1514,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             operator::ReduceOp::Max | operator::ReduceOp::Sum => res,
         };
-        self.builder.build_store(gep, res)?;
+        self.build_raw_store(fp_ty, ptrs[0], ind0.as_basic_value().into_int_value(), res)?;
         let ind0_next = self.builder.build_int_add(
             ind0.as_basic_value().into_int_value(),
             self.context.i64_type().const_int(1, false),
@@ -1672,6 +1700,136 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             exit,
         };
         self.build_nested_loop_rec(op, loop_bb, 0, max_nest)?;
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
+    fn build_batchnorm_by_channel(
+        &self,
+        dst: PointerValue<'ctx>,
+        inputs: &[PointerValue<'ctx>],
+        elem_ty: DataType,
+        mn: (u64, u64),
+        preheader: BasicBlock<'ctx>,
+        batchnorm: &operator::BatchNormalization,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let src = inputs[operator::args::BATCHNORM_DATA];
+        let scale_ptr = inputs[operator::args::BATCHNORM_SCALE];
+        let bias_ptr = inputs[operator::args::BATCHNORM_BIAS];
+        let mean_ptr = inputs[operator::args::BATCHNORM_MEAN];
+        let variance_ptr = inputs[operator::args::BATCHNORM_VAR];
+        let (m, n) = mn;
+        let (fp_type, sqrt, fma) = match elem_ty {
+            DataType::F32 => (
+                self.context.f32_type(),
+                self.intrinsics.sqrt_f32,
+                self.intrinsics.fma_f32,
+            ),
+            DataType::F64 => (
+                self.context.f64_type(),
+                self.intrinsics.sqrt_f64,
+                self.intrinsics.fma_f64,
+            ),
+            _ => unreachable!(),
+        };
+        let epsilon = fp_type.const_float(batchnorm.epsilon as f64);
+
+        let header = self.context.append_basic_block(*self.function, "entry");
+        let exit = self.context.append_basic_block(*self.function, "exit");
+        let exiting = self.context.append_basic_block(*self.function, "exiting");
+        let body = self.context.append_basic_block(*self.function, "body");
+
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let ind0 = self.builder.build_phi(self.context.i64_type(), "ind0")?;
+        let offset0 = self.builder.build_phi(self.context.i64_type(), "offset0")?;
+        let offset0_int = offset0.as_basic_value().into_int_value();
+        let scale = self
+            .build_raw_load(fp_type, scale_ptr, offset0_int)?
+            .into_float_value();
+        let bias = self
+            .build_raw_load(fp_type, bias_ptr, offset0_int)?
+            .into_float_value();
+        let mean = self
+            .build_raw_load(fp_type, mean_ptr, offset0_int)?
+            .into_float_value();
+        let variance = self
+            .build_raw_load(fp_type, variance_ptr, offset0_int)?
+            .into_float_value();
+        let factor = self.builder.build_float_add(variance, epsilon, "factor")?;
+        let factor = self
+            .build_tail_call(sqrt, &[factor.into()], "factor")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let factor = self.builder.build_float_div(scale, factor, "factor")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let ind1 = self.builder.build_phi(self.context.i64_type(), "ind1")?;
+        let offset1 = self.builder.build_int_add(
+            offset0_int,
+            ind1.as_basic_value().into_int_value(),
+            "offset1",
+        )?;
+        let val = self
+            .build_raw_load(fp_type, src, offset1)?
+            .into_float_value();
+        let val = self.builder.build_float_sub(val, mean, "val.sub.mean")?;
+        let val = self
+            .build_tail_call(fma, &[val.into(), factor.into(), bias.into()], "val")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        self.build_raw_store(fp_type, dst, offset1, val)?;
+        let ind1_next = self.builder.build_int_add(
+            ind1.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind1.next",
+        )?;
+        let cond1 = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind1_next,
+            self.context.i64_type().const_int(n, false),
+            "cond1",
+        )?;
+        self.builder
+            .build_conditional_branch(cond1, body, exiting)?;
+        ind1.add_incoming(&[
+            (&ind1_next, body),
+            (&self.context.i64_type().const_zero(), header),
+        ]);
+
+        self.builder.position_at_end(exiting);
+        let ind0_next = self.builder.build_int_add(
+            ind0.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind0.next",
+        )?;
+        let offset0_next = self.builder.build_int_add(
+            offset0_int,
+            self.context.i64_type().const_int(n, false),
+            "offset0.next",
+        )?;
+        let cond0 = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind0_next,
+            self.context.i64_type().const_int(m, false),
+            "cond0",
+        )?;
+        self.builder.build_conditional_branch(cond0, header, exit)?;
+        ind0.add_incoming(&[
+            (&ind0_next, exiting),
+            (&self.context.i64_type().const_zero(), preheader),
+        ]);
+        offset0.add_incoming(&[
+            (&offset0_next, exiting),
+            (&self.context.i64_type().const_zero(), preheader),
+        ]);
+
         self.builder.position_at_end(exit);
         Ok(exit)
     }

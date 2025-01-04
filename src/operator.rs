@@ -233,6 +233,12 @@ pub mod args {
 
     pub const GEMM_A: usize = 0;
     pub const GEMM_B: usize = 1;
+
+    pub const BATCHNORM_DATA: usize = 0;
+    pub const BATCHNORM_SCALE: usize = 1;
+    pub const BATCHNORM_BIAS: usize = 2;
+    pub const BATCHNORM_MEAN: usize = 3;
+    pub const BATCHNORM_VAR: usize = 4;
 }
 
 //#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
