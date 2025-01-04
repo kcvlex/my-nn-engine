@@ -55,14 +55,14 @@ enum Attribute {
 }
 
 impl Attribute {
-    // fn float(&self) -> LoadResult<f32> {
-    //     match self {
-    //         Attribute::Float(x) => Ok(*x),
-    //         x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
-    //     }
-    // }
+    fn f(&self) -> LoadResult<f32> {
+        match self {
+            Attribute::Float(x) => Ok(*x),
+            x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
+        }
+    }
 
-    fn int(&self) -> LoadResult<i64> {
+    fn i(&self) -> LoadResult<i64> {
         match self {
             Attribute::Int(x) => Ok(*x),
             x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
@@ -87,7 +87,7 @@ impl Attribute {
         }
     }
 
-    fn str(&self) -> LoadResult<&str> {
+    fn s(&self) -> LoadResult<&str> {
         match self {
             Attribute::Str(x) => Ok(x),
             x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
@@ -315,7 +315,7 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
 }
 
 fn load_pad(attrs: &Attributes) -> LoadResult<ConvPad> {
-    let auto_pad = attrs.get("auto_pad").map_or(Ok("NOTSET"), |x| x.str())?;
+    let auto_pad = attrs.get("auto_pad").map_or(Ok("NOTSET"), |x| x.s())?;
     let pads = attrs
         .get("pads")
         .map(|x| x.ints::<usize>())
@@ -353,23 +353,38 @@ impl<T: Clone + Copy> OptionalVecExt<T> for Option<Vec<T>> {
     }
 }
 
+fn load_reduce(attributes: &Attributes) -> LoadResult<Reduce> {
+    let keepdims = attributes
+        .get("keepdims")
+        .map(|x| x.i())
+        .transpose()?
+        .map_or(true, |x| x != 0);
+    let axes = attributes
+        .get("axes")
+        .map(|x| x.ints())
+        .unwrap_or(Ok(Vec::new()))?;
+    Ok(Reduce { keepdims, axes })
+}
+
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
-    macro_rules! reduce {
-        () => {{
-            let keepdims = attributes
-                .get("keepdims")
-                .map(|x| x.int())
-                .transpose()?
-                .map_or(true, |x| x != 0);
-            let axes = attributes
-                .get("axes")
-                .map(|x| x.ints())
-                .unwrap_or(Ok(Vec::new()))?;
-            Reduce { keepdims, axes }
-        }};
-    }
     match op {
         "Add" => Ok(Operator::Add),
+        "BatchNormalization" => {
+            let epsilon = attributes
+                .get("epsilon")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(1e-5);
+            let momentum = attributes
+                .get("momentum")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(0.9);
+            Ok(Operator::BatchNormalization(BatchNormalization {
+                epsilon,
+                momentum,
+            }))
+        }
         "Relu" => Ok(Operator::ReLU),
         "MatMul" => Ok(Operator::MatMul),
         "Reshape" => Ok(Operator::Reshape),
@@ -386,7 +401,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .map(|x| x.ints())
                 .transpose()?
                 .with_default(1);
-            let groups = attributes.get("groups").map_or(Ok(1), |x| x.int())?;
+            let groups = attributes.get("groups").map_or(Ok(1), |x| x.i())?;
             let kernel_shape = attributes
                 .get("kernel_shape")
                 .ok_or(ModelLoadError::Unexpected(
@@ -416,7 +431,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .with_default(1);
             let ceil_mode = attributes
                 .get("ceil_mode")
-                .map(|x| x.int())
+                .map(|x| x.i())
                 .transpose()?
                 .map_or(false, |x| x != 0);
             let kernel_shape = attributes
@@ -442,9 +457,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         }
         "Sigmoid" => Ok(Operator::Sigmoid),
         "Identity" => Ok(Operator::Identity),
-        "ReduceMax" => Ok(Operator::ReduceMax(reduce!())),
-        "ReduceMean" => Ok(Operator::ReduceMean(reduce!())),
-        "ReduceSum" => Ok(Operator::ReduceSum(reduce!())),
+        "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
+        "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),
+        "ReduceSum" => Ok(Operator::ReduceSum(load_reduce(attributes)?)),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

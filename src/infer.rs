@@ -59,7 +59,10 @@ impl Graph {
                 let dims = broadcast_shape(&a.dims, &b.dims)?;
                 res.push(ResolvedTensorType::new(a.elem_type, dims));
             }
-            Operator::ReLU | Operator::Sigmoid | Operator::Identity => {
+            Operator::ReLU |
+            Operator::Sigmoid |
+            Operator::Identity |
+            Operator::BatchNormalization(_) => {
                 res.push(inputs[0].clone());
             }
             Operator::Transpose(perms) => {
@@ -260,9 +263,9 @@ impl Graph {
                     ResolvedTensorDims::new(dims.to_vec()),
                 ));
             }
-            Operator::ReduceMax(ref reduce)
-            | Operator::ReduceMean(ref reduce)
-            | Operator::ReduceSum(ref reduce) => {
+            Operator::ReduceMax(ref reduce) |
+            Operator::ReduceMean(ref reduce) |
+            Operator::ReduceSum(ref reduce) => {
                 let data = &inputs[0];
                 let rank = data.dims.ndim();
                 let axes = reduce
@@ -289,11 +292,12 @@ impl Graph {
             }
 
             // Custom
-            Operator::Input(_)
-            | Operator::Output(_)
-            | Operator::Im2Col(_)
-            | Operator::ReduceMatrix(_)
-            | Operator::ForceReshape => {
+            Operator::Input(_) |
+            Operator::Output(_) |
+            Operator::BatchNormalizationPerChannel(_) |
+            Operator::Im2Col(_) |
+            Operator::ReduceMatrix(_) |
+            Operator::ForceReshape => {
                 unreachable!()
             }
         }

@@ -1,7 +1,8 @@
-use crate::model::{Graph, Node, ValueId};
+use crate::model::{Graph, Node};
 use crate::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
-use crate::tensor::tensor::{ResolvedTensorType, TensorData};
+use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
+use crate::tensor::tensor::ResolvedTensorType;
 
 #[derive(Default)]
 pub struct Reduce2ReduceMatrix {}
@@ -21,9 +22,9 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
             .nodes
             .iter()
             .filter_map(|(id, node)| match node.op {
-                Operator::ReduceMax(ref reduce)
-                | Operator::ReduceMean(ref reduce)
-                | Operator::ReduceSum(ref reduce) => {
+                Operator::ReduceMax(ref reduce) |
+                Operator::ReduceMean(ref reduce) |
+                Operator::ReduceSum(ref reduce) => {
                     let input_value = node.inputs[0];
                     let input_ty = graph.get_resolved_tensor_type(input_value).unwrap();
                     let input_rank = input_ty.dims.ndim();
@@ -61,47 +62,29 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
 
             let transpose_required = perms.iter().enumerate().any(|(i, &v)| i != v);
             let input_v = if transpose_required {
-                let transposed_dims = input_ty.dims.transpose(&perms);
-                let transposed_output = modifier.register_new_value(
-                    graph,
-                    format!("Reduce2ReduceMatrix_Transpose_{i}"),
-                    ResolvedTensorType::new(input_ty.elem_type, transposed_dims),
-                );
-                modifier.register_new_node(
-                    graph,
-                    Node {
-                        inputs: vec![*input_value],
-                        outputs: vec![transposed_output],
-                        name: format!("Reduce2ReduceMatrix_Transpose_{i}"),
-                        op: Operator::Transpose(perms),
-                        mark_as_deleted: false,
-                    },
-                );
-                transposed_output
+                TransposeGenerator::default()
+                    .set_input(*input_value)
+                    .set_perms(perms)
+                    .set_node_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                    .set_value_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                    .generate(graph, modifier)
+                    .unwrap()
             } else {
                 *input_value
             };
 
-            let old_output = graph.nodes[*id].outputs[0].clone();
+            let old_output = graph.nodes[*id].outputs[0];
             let output_ty = &graph.get_resolved_tensor_type(old_output).unwrap().clone();
             let row = output_ty.dims.size();
             let col = input_ty.dims.size() / row;
 
-            let reshaped_output = modifier.register_new_value(
-                graph,
-                format!("Reduce2ReduceMatrix_Reshape_{i}"),
-                ResolvedTensorType::new(input_ty.elem_type, vec![row, col].into()),
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![input_v],
-                    outputs: vec![reshaped_output],
-                    name: format!("Reduce2ReduceMatrix_Reshape_{i}"),
-                    op: Operator::Reshape,
-                    mark_as_deleted: false,
-                },
-            );
+            let reshaped_output = ReshapeGenerator::default()
+                .set_input(input_v)
+                .set_dims(vec![row, col].into())
+                .set_node_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
 
             let reduce_matrix_output = modifier.register_new_value(
                 graph,
@@ -119,22 +102,13 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
                 },
             );
 
-            let reshaped_output = modifier.register_new_value(
-                graph,
-                format!("Reduce2ReduceMatrix_ReshapeBack_{i}"),
-                output_ty.clone(),
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![reduce_matrix_output],
-                    outputs: vec![reshaped_output],
-                    name: format!("Reduce2ReduceMatrix_ReshapeBack_{i}"),
-                    op: Operator::Reshape,
-                    mark_as_deleted: false,
-                },
-            );
-
+            let reshaped_output = ReshapeGenerator::default()
+                .set_input(reduce_matrix_output)
+                .set_dims(output_ty.dims.clone())
+                .set_node_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
             modifier.replace_input_value(graph, old_output, reshaped_output);
         }
     }

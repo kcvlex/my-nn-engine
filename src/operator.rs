@@ -6,6 +6,7 @@ use std::ops::Index;
 #[derive(Debug, Clone)]
 pub enum Operator {
     Add,
+    BatchNormalization(BatchNormalization),
     Conv(Conv),
     Gemm(Gemm),
     Identity,
@@ -20,6 +21,7 @@ pub enum Operator {
     Transpose(Vec<usize>),
 
     // Custom
+    BatchNormalizationPerChannel(BatchNormalization),
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
 
@@ -29,6 +31,12 @@ pub enum Operator {
     // Dummy
     Input(ValueId),
     Output(ValueId),
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchNormalization {
+    pub epsilon: f32,
+    pub momentum: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +166,7 @@ impl Operator {
     pub fn name(&self) -> &str {
         match self {
             Operator::Add => "Add",
+            Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Conv(_) => "Conv",
             Operator::Gemm(_) => "Gemm",
             Operator::Identity => "Identity",
@@ -173,6 +182,7 @@ impl Operator {
 
             // Custom
             // Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",
+            Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
 
@@ -195,9 +205,9 @@ impl Operator {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ReduceOp {
-    Average,
     Max,
     Mean,
+    Variance,
     Sum,
 }
 

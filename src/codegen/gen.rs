@@ -612,12 +612,13 @@ impl<'ctx> CodeGen<'ctx> {
                 im2col,
                 entry,
             ),
-            Operator::ReduceMatrix(op) => match op {
-                operator::ReduceOp::Max => {
-                    translator.build_matrix_reduce(&ptrs[0], &ptrs[1], op, entry)
-                }
-                _ => todo!("{:?}", node.op),
-            },
+            Operator::ReduceMatrix(op) => {
+                let m = ptrs[1].ty.dims[0] as u64;
+                let n = ptrs[1].ty.dims[1] as u64;
+                let elem_type = ptrs[0].ty.elem_type;
+                let ptrs = ptrs.iter().map(|ptr| ptr.ptr).collect::<Vec<_>>();
+                translator.build_matrix_reduce(&ptrs, elem_type, (m, n), op, entry)
+            }
             _ => todo!("{:?}", node.op),
         }?;
 
@@ -882,8 +883,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let is_pad_right = self.builder.build_int_compare(
             inkwell::IntPredicate::SLE,
             self.context.i64_type().const_int(
-                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap()
-                    + inner_loops.pads[nest as usize],
+                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap() +
+                    inner_loops.pads[nest as usize],
                 false,
             ),
             src_offset,
@@ -1350,16 +1351,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_matrix_reduce(
         &self,
-        dst: &TensorPtr<'ctx>,
-        src: &TensorPtr<'ctx>,
+        ptrs: &[PointerValue<'ctx>],
+        elem_ty: DataType,
+        mn: (u64, u64),
         op: operator::ReduceOp,
         preheader: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let elem_ty = src.ty.elem_type;
-        let row: u64 = src.ty.dims[0].try_into().unwrap();
-        let col: u64 = src.ty.dims[1].try_into().unwrap();
-        let src = src.ptr;
-        let dst = dst.ptr;
+        let (row, col) = mn;
 
         let header0 = self.context.append_basic_block(*self.function, "header0");
         let exiting0 = self.context.append_basic_block(*self.function, "exiting0");
@@ -1391,7 +1389,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             () => {{
                 let gep = unsafe {
                     self.builder
-                        .build_in_bounds_gep(fp_ty, src, &[offset1], "gep")
+                        .build_in_bounds_gep(fp_ty, ptrs[1], &[offset1], "gep")
                 }?;
                 self.builder.build_load(fp_ty, gep, "val")?
             }};
@@ -1418,22 +1416,38 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap();
                 (id_v.as_basic_value_enum(), res)
             }
-            operator::ReduceOp::Sum | operator::ReduceOp::Average => {
+            operator::ReduceOp::Sum | operator::ReduceOp::Mean | operator::ReduceOp::Variance => {
                 let fp_ty = match elem_ty {
                     DataType::F32 => self.context.f32_type(),
                     DataType::F64 => self.context.f64_type(),
                     _ => todo!(),
                 };
                 let zero = fp_ty.const_zero();
-                let val = load!();
-                let res = self.builder.build_float_add(
-                    acc.as_basic_value().into_float_value(),
-                    val.into_float_value(),
-                    "res",
-                )?;
+                let val = load!().into_float_value();
+                let res = match op {
+                    operator::ReduceOp::Sum | operator::ReduceOp::Mean => self
+                        .builder
+                        .build_float_add(acc.as_basic_value().into_float_value(), val, "res"),
+                    operator::ReduceOp::Variance => {
+                        let mean = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                fp_ty,
+                                ptrs[2],
+                                &[ind0.as_basic_value().into_int_value()],
+                                "gep",
+                            )
+                        }?;
+                        let mean = self
+                            .builder
+                            .build_load(fp_ty, mean, "mean")?
+                            .into_float_value();
+                        let diff = self.builder.build_float_sub(val, mean, "diff")?;
+                        self.builder.build_float_mul(diff, diff, "diff.squared")
+                    }
+                    _ => unreachable!(),
+                }?;
                 (zero.as_basic_value_enum(), res.as_basic_value_enum())
             }
-            _ => todo!(),
         };
         let ind1_next = self.builder.build_int_add(
             ind1.as_basic_value().into_int_value(),
@@ -1458,13 +1472,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let gep = unsafe {
             self.builder.build_in_bounds_gep(
                 fp_ty,
-                dst,
+                ptrs[0],
                 &[ind0.as_basic_value().into_int_value()],
                 "gep",
             )
         }?;
         let res = match op {
-            operator::ReduceOp::Average | operator::ReduceOp::Mean => {
+            operator::ReduceOp::Mean | operator::ReduceOp::Variance => {
                 let div = fp_ty.const_float(col as f64);
                 self.builder
                     .build_float_div(res.into_float_value(), div, "res")?

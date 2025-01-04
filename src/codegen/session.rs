@@ -327,7 +327,11 @@ mod test {
         with_session("transpose.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
             let output = session.run(&[input])?;
-            let expected = orig.view().permuted_axes([2, 3, 1, 0]).to_owned().into_dyn();
+            let expected = orig
+                .view()
+                .permuted_axes([2, 3, 1, 0])
+                .to_owned()
+                .into_dyn();
             tensor_assert_eq!(output[0], expected);
             Ok(())
         })
@@ -607,10 +611,13 @@ mod test {
             let (input, orig) = make_tensor!(
                 f32,
                 [
-                    [[5., 1.], [20., 2.]], [[30., 1.], [40., 2.]], [[55., 1.], [60., 2.]],
+                    [[5., 1.], [20., 2.]],
+                    [[30., 1.], [40., 2.]],
+                    [[55., 1.], [60., 2.]],
                 ],
             )?;
-            let expected = orig.fold_axis(ndarray::Axis(2), f32::NEG_INFINITY, |&a, &b| a.max(b))
+            let expected = orig
+                .fold_axis(ndarray::Axis(2), f32::NEG_INFINITY, |&a, &b| a.max(b))
                 .into_shape_with_order((3, 2))
                 .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
                 .into_dyn();
