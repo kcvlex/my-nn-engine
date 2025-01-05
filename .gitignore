@@ -6,5 +6,6 @@
 *.png
 *.dot
 *.ll
+*.so
 models/*.onnx
 download
