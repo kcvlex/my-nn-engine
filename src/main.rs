@@ -602,8 +602,9 @@ fn main() -> Result<()> {
     if true {
         main_(Select::MainRunResnet)?;
     } else {
-        main_(Select::MainResnetInput)?;
-        main_(Select::MainResnetSample)?;
+        // main_(Select::MainResnetInput)?;
+        // main_(Select::MainResnetSample)?;
+        main_(Select::Main0)?;
     }
     Ok(())
 }
