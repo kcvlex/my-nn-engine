@@ -1,7 +1,7 @@
 use my_onnx::codegen::session::Session;
 use my_onnx::model::Model;
 use my_onnx::optimize::optimizer::{ExperimentalGraphModifier, Optimizer};
-use my_onnx::tensor::tensor::Tensor;
+use my_onnx::tensor::tensor::{Tensor, TensorData};
 use std::env;
 use std::fs::File;
 use std::io::{Error, Result, Write};
@@ -27,7 +27,7 @@ fn main0() -> Result<()> {
     } else {
         {
             // 7
-            let input: ndarray::Array<f32, _> = ndarray::array!([[
+            let input: ndarray::Array<f32, _> = ndarray::array!([
                 [
                     0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
                     0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
@@ -168,15 +168,15 @@ fn main0() -> Result<()> {
                     0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
                     0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000
                 ],
-            ],],);
+            ],);
             let input: Tensor = input
                 .into_dyn()
                 .try_into()
                 .map_err(|e| Error::other(format!("{:?}", e)))?;
             use inkwell::context::Context;
             let context = Context::create();
-            let session =
-                Session::new(&context, &args[1]).map_err(|e| Error::other(format!("{:?}", e)))?;
+            let session = Session::new(&context, &args[1], Some(&[&input.ty.dims]))
+                .map_err(|e| Error::other(format!("{:?}", e)))?;
             session.write_model("model.dot");
             let output = session
                 .run(&[input])
@@ -515,10 +515,95 @@ fn main1() -> Result<()> {
     Ok(())
 }
 
+use image::{ImageReader, ImageResult};
+use std::path::PathBuf;
+
+fn main_resnet_input() -> ImageResult<()> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let img = dir.join("download/imagenet-sample-images/n01440764_tench.JPEG");
+    let img = ImageReader::open(img)?.decode()?;
+    let img = img.resize_exact(224, 224, image::imageops::FilterType::Lanczos3);
+    img.save("download/sample.jpg")
+}
+
+fn main_resnet_sample() -> ImageResult<()> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let img = dir.join("download/sample.jpg");
+    let img = ImageReader::open(img)?.decode()?;
+    let img = img.to_rgb8();
+    for h in 0..10 {
+        for w in 0..10 {
+            println!("{:?}", img.get_pixel(w, h));
+        }
+    }
+    Ok(())
+}
+
+enum Select {
+    MainResnetInput,
+    MainResnetSample,
+    MainRunResnet,
+    Main0,
+    Main1,
+}
+use ndarray::{arr3, Array};
+
+fn main_run_resnet() -> Result<()> {
+    let args: Vec<_> = env::args().collect();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let img = dir.join("download/sample.jpg");
+    let img = ImageReader::open(img)
+        .map_err(|e| Error::other(format!("{:?}", e)))?
+        .decode()
+        .map_err(|e| Error::other(format!("{:?}", e)))?
+        .to_rgb8();
+    let input: Tensor = Array::from_shape_fn((1, 3, 224, 224), |(_, c, h, w)| {
+        img.get_pixel(h as u32, w as u32)[c] as f32 / 255.0
+    })
+    .into_dyn()
+    .try_into()
+    .map_err(|e| Error::other(format!("{:?}", e)))?;
+    // println!("{:?}", input);
+    let ctx = inkwell::context::Context::create();
+    let session = Session::new(
+        &ctx,
+        //dir.join("models/resnet18-v2-7.onnx"),
+        &args[1],
+        Some(&[&input.ty.dims]),
+    )
+    .map_err(|e| Error::other(format!("{:?}", e)))?;
+    session.write_model("model.dot");
+    let output = session
+        .run(&[input])
+        .map_err(|e| Error::other(format!("{:?}", e)))?;
+    let vec = match output[0].data {
+        TensorData::F32(ref vec) => vec.clone(),
+        _ => return Err(Error::other("Invalid output data type")),
+    };
+    println!("{:?}", vec);
+    Ok(())
+}
+
+fn main_(select: Select) -> Result<()> {
+    match select {
+        Select::MainResnetInput => {
+            main_resnet_input().map_err(|e| Error::other(format!("{:?}", e)))
+        }
+        Select::MainResnetSample => {
+            main_resnet_sample().map_err(|e| Error::other(format!("{:?}", e)))
+        }
+        Select::MainRunResnet => main_run_resnet(),
+        Select::Main0 => main0(),
+        Select::Main1 => main1(),
+    }
+}
+
 fn main() -> Result<()> {
     if true {
-        main0()
+        main_(Select::MainRunResnet)?;
     } else {
-        main1()
+        main_(Select::MainResnetInput)?;
+        main_(Select::MainResnetSample)?;
     }
+    Ok(())
 }

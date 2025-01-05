@@ -69,6 +69,10 @@ impl Attribute {
         }
     }
 
+    fn b(&self) -> LoadResult<bool> {
+        self.i().map(|x| x != 0)
+    }
+
     fn ints<T>(&self) -> LoadResult<Vec<T>>
     where
         T: TryFrom<i64>,
@@ -137,6 +141,7 @@ impl GraphLoader {
             outputs,
             values: self.values,
             nodes,
+            resolved_params: HashMap::new(),
         })
     }
 
@@ -289,7 +294,7 @@ impl TryFrom<tensor_shape_proto::dimension::Value> for Dimension {
                     .map_err(|_| ModelLoadError::NegativeDimension(x))?;
                 Ok(Dimension::Const(x))
             }
-            tensor_shape_proto::dimension::Value::DimParam(x) => Ok(Dimension::Param(x)),
+            tensor_shape_proto::dimension::Value::DimParam(x) => Ok(Dimension::Param(x.into())),
         }
     }
 }
@@ -356,9 +361,9 @@ impl<T: Clone + Copy> OptionalVecExt<T> for Option<Vec<T>> {
 fn load_reduce(attributes: &Attributes) -> LoadResult<Reduce> {
     let keepdims = attributes
         .get("keepdims")
-        .map(|x| x.i())
+        .map(|x| x.b())
         .transpose()?
-        .map_or(true, |x| x != 0);
+        .unwrap_or(true);
     let axes = attributes
         .get("axes")
         .map(|x| x.ints())
@@ -431,9 +436,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .with_default(1);
             let ceil_mode = attributes
                 .get("ceil_mode")
-                .map(|x| x.i())
+                .map(|x| x.b())
                 .transpose()?
-                .map_or(false, |x| x != 0);
+                .unwrap_or(false);
             let kernel_shape = attributes
                 .get("kernel_shape")
                 .ok_or(ModelLoadError::Unexpected(
@@ -460,6 +465,38 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
         "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),
         "ReduceSum" => Ok(Operator::ReduceSum(load_reduce(attributes)?)),
+        "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
+        "Gemm" => {
+            let trans_a = attributes
+                .get("transA")
+                .map(|x| x.b())
+                .transpose()?
+                .unwrap_or(false);
+            let trans_b = attributes
+                .get("transB")
+                .map(|x| x.b())
+                .transpose()?
+                .unwrap_or(false);
+            let alpha = attributes
+                .get("alpha")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(1.0)
+                .into();
+            let beta = attributes
+                .get("beta")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(0.0)
+                .into();
+            Ok(Operator::Gemm(Gemm {
+                trans_a,
+                trans_b,
+                trans_c: false,
+                alpha,
+                beta,
+            }))
+        }
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

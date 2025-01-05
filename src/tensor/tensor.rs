@@ -8,6 +8,7 @@ pub enum TypeError {
     BroadcastError(ResolvedTensorDims, ResolvedTensorDims),
     ReshapeError(ResolvedTensorDims, ResolvedTensorDims),
     InferError(String),
+    InconsistentInput,
     UnresolvedInput,
 }
 

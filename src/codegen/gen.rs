@@ -163,8 +163,10 @@ impl Attributes {
 #[allow(dead_code)]
 struct DebugStuff<'ctx> {
     printf: FunctionValue<'ctx>,
+    fflush: FunctionValue<'ctx>,
     float_fmt: GlobalValue<'ctx>,
     i64_fmt: GlobalValue<'ctx>,
+    stdout: GlobalValue<'ctx>,
 }
 
 impl<'ctx> DebugStuff<'ctx> {
@@ -175,14 +177,21 @@ impl<'ctx> DebugStuff<'ctx> {
         let printf = i32_type.fn_type(&[ptr_type.into()], true);
         let printf =
             module.add_function("printf", printf, Some(inkwell::module::Linkage::External));
+        let fflush = i32_type.fn_type(&[ptr_type.into()], false);
+        let fflush =
+            module.add_function("fflush", fflush, Some(inkwell::module::Linkage::External));
+        let stdout = module.add_global(ptr_type, None, "stdout");
+        stdout.set_externally_initialized(true);
         let float_fmt = builder
             .build_global_string_ptr("%f\n", "float_fmt")
             .unwrap();
         let i64_fmt = builder.build_global_string_ptr("%ld\n", "i64_fmt").unwrap();
         Self {
             printf,
+            fflush,
             float_fmt,
             i64_fmt,
+            stdout,
         }
     }
 }
@@ -413,6 +422,9 @@ impl<'ctx> CodeGen<'ctx> {
                     Operator::Input(v) | Operator::Output(v) => v,
                     _ => unreachable!(),
                 };
+                if self.graph.initializer.contains_key(&value_id) {
+                    continue;
+                }
                 let value = &self.graph.values[value_id];
                 let ptr = unsafe {
                     self.builder.build_in_bounds_gep(
@@ -489,9 +501,9 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
-        for ptr in self.chunk2ptr.values() {
-            self.builder.build_free(*ptr)?;
-        }
+        //for ptr in self.chunk2ptr.values() {
+        //    self.builder.build_free(*ptr)?;
+        //}
         self.builder.position_at_end(self.main_entry);
         self.builder.build_return(None)?;
         Ok(())
@@ -1742,6 +1754,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_unconditional_branch(header)?;
 
         self.builder.position_at_end(header);
+
         let ind0 = self.builder.build_phi(self.context.i64_type(), "ind0")?;
         let offset0 = self.builder.build_phi(self.context.i64_type(), "offset0")?;
         let ind0_int = ind0.as_basic_value().into_int_value();
@@ -1766,6 +1779,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .unwrap()
             .into_float_value();
         let factor = self.builder.build_float_div(scale, factor, "factor")?;
+
         self.builder.build_unconditional_branch(body)?;
 
         self.builder.position_at_end(body);

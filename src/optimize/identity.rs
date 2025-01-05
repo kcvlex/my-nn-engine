@@ -14,12 +14,9 @@ impl<T: GraphModifier> Pass<T> for Reshape2Identity {
         let ids = graph
             .nodes
             .iter()
-            .filter_map(|(id, node)| {
-                if let Operator::Reshape = node.op {
-                    Some(id)
-                } else {
-                    None
-                }
+            .filter_map(|(id, node)| match node.op {
+                Operator::Reshape => Some(id),
+                _ => None,
             })
             .collect::<Vec<_>>();
         for id in ids.iter() {

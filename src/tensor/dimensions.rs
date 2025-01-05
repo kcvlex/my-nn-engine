@@ -4,10 +4,25 @@ use std::ops::Index;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedTensorDims(Vec<Dimension>);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParamKey(String);
+
+impl std::fmt::Display for ParamKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dimension {
     Const(usize),
-    Param(String),
+    Param(ParamKey),
+}
+
+impl<T: Into<String>> From<T> for ParamKey {
+    fn from(s: T) -> Self {
+        ParamKey(s.into())
+    }
 }
 
 impl Index<usize> for UnresolvedTensorDims {

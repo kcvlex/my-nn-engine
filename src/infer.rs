@@ -87,9 +87,31 @@ impl Graph {
                     .get(&shape)
                     .ok_or(TypeError::UnresolvedInput)
                     .map(|x| match x.data {
-                        TensorData::I64(ref v) => Ok(ResolvedTensorDims::new(
-                            v.iter().map(|x| *x as usize).collect(),
-                        )),
+                        TensorData::I64(ref v) => {
+                            let prod0 = a.dims.size();
+                            let prod1 = v
+                                .iter()
+                                .copied()
+                                .enumerate()
+                                .filter(|(_, x)| *x != -1)
+                                .map(|(i, x)| if x == 0 { a.dims[i] } else { x as usize })
+                                .product::<usize>();
+                            Ok(ResolvedTensorDims::new(
+                                v.iter()
+                                    .copied()
+                                    .enumerate()
+                                    .map(|(i, x)| {
+                                        if x == -1 {
+                                            prod0 / prod1
+                                        } else if x == 0 {
+                                            a.dims[i]
+                                        } else {
+                                            x as usize
+                                        }
+                                    })
+                                    .collect(),
+                            ))
+                        }
                         _ => Err(TypeError::InferError("Invalid shape".to_string())),
                     })??;
 
@@ -143,9 +165,10 @@ impl Graph {
                             conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i),
                             stride,
                         );
-                        if rem != 0 {
-                            return Err(TypeError::InferError("rem must be 0".to_string()));
-                        }
+                        // if rem != 0 {
+                        //     println!("node.name={:?}", node.name);
+                        //     return Err(TypeError::InferError("rem must be 0".to_string()));
+                        // }
                         q + 1
                     } else {
                         input[i].div_ceil(stride)
@@ -239,6 +262,14 @@ impl Graph {
                     ResolvedTensorDims::new(dims),
                 ));
             }
+            Operator::GlobalAveragePool => {
+                let x = &inputs[0];
+                let dims = x.dims[..2].to_vec();
+                res.push(ResolvedTensorType::new(
+                    x.elem_type,
+                    ResolvedTensorDims::new(dims),
+                ));
+            }
 
             Operator::Gemm(Gemm {
                 trans_a,
@@ -249,15 +280,13 @@ impl Graph {
                 let a = &inputs[args::GEMM_A];
                 let b = &inputs[args::GEMM_B];
 
+                assert!(!*trans_c);
                 let m = a.dims[if !*trans_a { 0 } else { 1 }];
                 let n = b.dims[if !*trans_b { 1 } else { 0 }];
                 // let a_k = a.dims[1 - a_idx];
                 // let b_k = b.dims[b_idx];
                 // assert!(a_k == b_k);
-                let mut dims = [m, n];
-                if *trans_c {
-                    dims.reverse();
-                }
+                let dims = [m, n];
                 res.push(ResolvedTensorType::new(
                     a.elem_type,
                     ResolvedTensorDims::new(dims.to_vec()),

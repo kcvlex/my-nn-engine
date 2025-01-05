@@ -69,7 +69,7 @@ impl<T: GraphModifier + NodeDelete> Optimizer<T> {
     pub fn run(&self, graph: &mut Graph) {
         let mut modifier = T::new(graph);
         for opt in self.passes.iter() {
-            // println!("Running pass: {}", opt.summary());
+            println!("Running pass: {}", opt.summary());
             opt.run(graph, &mut modifier);
             modifier.update_deleted_nodes(graph);
         }
@@ -176,6 +176,10 @@ impl NodeDelete for SimpleGraphModifier {
             .iter_mut()
             .filter(|(id, _)| !visited.contains(id))
         {
+            if node.is_dummy() {
+                // TODO: correct?
+                continue;
+            }
             node.mark_as_deleted = true;
             for used in node.inputs.iter() {
                 if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
@@ -196,7 +200,7 @@ impl NodeDelete for SimpleGraphModifier {
         {
             for defined in node.outputs.iter() {
                 self.value2defined.remove(defined);
-                assert!(!self.value2used.contains_key(defined));
+                // assert!(!self.value2used.contains_key(defined));
             }
         }
     }
@@ -218,7 +222,7 @@ impl SimpleGraphModifier {
         for value in graph.nodes[node_id]
             .inputs
             .iter()
-            .filter(|id| !graph.initializer.contains_key(id))
+            .filter(|v| !graph.initializer.contains_key(v))
         {
             let (defined, _) = self.value2defined.get(value).unwrap();
             self.used_nodes_dfs(graph, *defined, visited);

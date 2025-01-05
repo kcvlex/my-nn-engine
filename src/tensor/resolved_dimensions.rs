@@ -80,6 +80,10 @@ impl ResolvedTensorDims {
         }
         res
     }
+
+    pub fn as_slice(&self) -> &[usize] {
+        &self.0
+    }
 }
 
 impl<Idx> Index<Idx> for ResolvedTensorDims

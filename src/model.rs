@@ -1,7 +1,8 @@
 use crate::operator::Operator;
 use crate::tensor::{
-    dimensions::Dimension,
-    tensor::{ResolvedTensorType, Tensor, TensorType, UnresolvedTensorType},
+    dimensions::{Dimension, ParamKey},
+    resolved_dimensions::ResolvedTensorDims,
+    tensor::{ResolvedTensorType, Tensor, TensorType, TypeError, UnresolvedTensorType},
 };
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
@@ -20,9 +21,81 @@ pub struct Graph {
     pub outputs: Vec<NodeId>,
     pub values: Values,
     pub initializer: HashMap<ValueId, Tensor>,
+    pub resolved_params: HashMap<ParamKey, usize>,
+}
+
+fn unify_types(
+    lhs: &[Dimension],
+    rhs: &[usize],
+    params: &mut HashMap<ParamKey, usize>,
+) -> Option<ResolvedTensorDims> {
+    if lhs.len() != rhs.len() {
+        return None;
+    }
+
+    let mut res = Vec::new();
+    for (ld, rd) in lhs.iter().zip(rhs.iter()) {
+        let mut ld = ld.clone();
+        if let Dimension::Param(ref k) = ld {
+            if let Some(x) = params.get(k) {
+                ld = Dimension::Const(*x);
+            }
+        }
+        match ld {
+            Dimension::Const(x) => {
+                if x != *rd {
+                    return None;
+                }
+            }
+            Dimension::Param(k) => {
+                params.insert(k.clone(), *rd);
+            }
+        };
+        res.push(*rd);
+    }
+
+    Some(res.into())
 }
 
 impl Graph {
+    pub fn resolve_input_types(
+        &mut self,
+        input_tys: &[&ResolvedTensorDims],
+    ) -> Result<(), TypeError> {
+        let ids = self
+            .inputs
+            .iter()
+            .map(|&n| match self.nodes[n].op {
+                Operator::Input(v) => v,
+                _ => unreachable!(),
+            })
+            .filter(|&v| !self.initializer.contains_key(&v))
+            .collect::<Vec<_>>();
+        if input_tys.len() != ids.len() {
+            return Err(TypeError::InconsistentInput);
+        }
+
+        for (i, id) in ids.iter().enumerate() {
+            match self.values[*id].ty.as_ref().unwrap() {
+                TensorType::Resolved(_) => (), // TODO: check if consistent
+                TensorType::Unresolved(ref ty) => {
+                    let ty = ty.clone();
+                    let res = unify_types(
+                        ty.dims.unwrap().inner().as_slice(),
+                        input_tys[i].as_slice(),
+                        &mut self.resolved_params,
+                    )
+                    .ok_or(TypeError::InconsistentInput)?;
+                    self.values[*id].ty = Some(TensorType::Resolved(ResolvedTensorType::new(
+                        ty.elem_type,
+                        res,
+                    )));
+                }
+            };
+        }
+        Ok(())
+    }
+
     pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {
         self.values[id].ty.as_ref()?.as_resolved()
     }
@@ -194,7 +267,7 @@ impl TensorType {
                 .iter()
                 .map(|d| match d {
                     Dimension::Const(x) => x.to_string(),
-                    Dimension::Param(x) => x.clone(),
+                    Dimension::Param(x) => x.to_string(),
                 })
                 .collect::<Vec<_>>(),
             Self::Unresolved(_) => vec!["?".to_string()],

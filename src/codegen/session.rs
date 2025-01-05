@@ -2,11 +2,14 @@ use crate::codegen::gen::{CodeGen, CodeGenError};
 use crate::load::ModelLoadError;
 use crate::model::{Graph, Model, ValueId};
 use crate::optimize::{
-    batchnorm, gemm, identity, im2col,
+    batchnorm, gemm, identity, im2col, normalize,
     optimizer::{Optimizer, SimpleGraphModifier},
     reduce,
 };
-use crate::tensor::tensor::{ResolvedTensorType, Tensor, TypeError};
+use crate::tensor::{
+    resolved_dimensions::ResolvedTensorDims,
+    tensor::{ResolvedTensorType, Tensor, TypeError},
+};
 
 use inkwell::context::Context;
 use inkwell::targets::FileType;
@@ -58,8 +61,18 @@ fn get_argument_types(
 }
 
 impl<'ctx> Session<'ctx> {
-    pub fn new<P: AsRef<Path>>(ctx: &'ctx Context, p: P) -> Result<Self, SessionError> {
+    pub fn new<P: AsRef<Path>>(
+        ctx: &'ctx Context,
+        p: P,
+        input_ty: Option<&[&ResolvedTensorDims]>,
+    ) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
+        if let Some(input_ty) = input_ty {
+            model
+                .graph
+                .resolve_input_types(input_ty)
+                .map_err(SessionError::TypeError)?;
+        }
         let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer"));
         model.graph.infer().map_err(SessionError::TypeError)?;
 
@@ -74,6 +87,9 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(reduce::Reduce2ReduceMatrix::default()));
         optimizer
             .passes
+            .push(Box::new(normalize::EliminateGlobalAvgPool::default()));
+        optimizer
+            .passes
             .push(Box::new(gemm::MatMul2Gemm::default()));
         optimizer
             .passes
@@ -86,6 +102,7 @@ impl<'ctx> Session<'ctx> {
 
         // TODO: remove
         Self::_write_model(&model.graph, "model.dot");
+        //panic!("a");
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
@@ -94,8 +111,9 @@ impl<'ctx> Session<'ctx> {
             //.compile_default()
             .compile_with_passes(&[])
             .map_err(SessionError::CodeGenError)?;
+        println!("Compiled");
 
-        codegen.module().print_to_file("model.ll").unwrap();
+        //codegen.module().print_to_file("model.ll").unwrap();
 
         let mut rng = SmallRng::from_entropy();
         let id = Alphanumeric.sample_string(&mut rng, 16);
@@ -136,6 +154,8 @@ impl<'ctx> Session<'ctx> {
         let func: libloading::Symbol<CodeType> = unsafe { lib.get(b"main") }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let func = *func;
+
+        println!("Loaded");
 
         Ok(Session {
             input_ty: inputs_ty,
@@ -244,7 +264,7 @@ mod test {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")
             .join(path);
-        Session::new(ctx, path)
+        Session::new(ctx, path, None)
     }
 
     fn with_session<P, F>(path: P, f: F) -> TestResult
