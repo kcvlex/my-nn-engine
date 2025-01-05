@@ -20,7 +20,7 @@ fn gen_im2col_from_conv(
 
     let one_kernel_shape: ResolvedTensorDims = kernel_shape.iter().skip(2).copied().collect();
 
-    let one_fm_size = output_shape.size(); // size of one feature_map
+    let one_fm_size = one_fm_shape.size(); // size of one feature_map
     let one_kernel_size = one_kernel_shape.size();
     let im2col_output_shape =
         ResolvedTensorDims::new(vec![one_fm_size * nbatch, one_kernel_size * channel]);
@@ -95,7 +95,8 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                     let output_shape = &graph
                         .get_resolved_tensor_type(old_output_value)
                         .unwrap()
-                        .dims;
+                        .dims
+                        .clone();
                     let (im2col, im2col_output_shape) =
                         gen_im2col_from_conv(conv, kernel_shape, output_shape);
                     let nbatch = im2col.nbatch;
@@ -108,6 +109,8 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         format!("Im2Col_{index}_ExpandedData"),
                         ResolvedTensorType::new(kernel.elem_type, im2col_output_shape.clone()),
                     );
+                    println!("im2col: {:?}", im2col);
+                    println!("im2col_output_shape: {:?}", im2col_output_shape);
                     modifier.register_new_node(
                         graph,
                         Node {
@@ -162,16 +165,20 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                             mark_as_deleted: false,
                         },
                     );
+
+                    let dims = 
+                            ResolvedTensorDims::new(vec![
+                                im2col_output_shape[0],
+                                kernel_shape.size() / im2col_output_shape[1],
+                            ]);
+                    assert_eq!(dims.size(), output_shape.size());
                     // Gemm
                     let gemm_output = modifier.register_new_value(
                         graph,
                         format!("Im2Col_{index}_GemmOutput"),
                         ResolvedTensorType::new(
                             kernel.elem_type,
-                            ResolvedTensorDims::new(vec![
-                                im2col_output_shape[0],
-                                kernel_shape.size() / im2col_output_shape[1],
-                            ]),
+                            dims
                         ),
                     );
                     modifier.register_new_node(
@@ -286,10 +293,12 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                     );
 
                     // Reduce
+                    let dims = ResolvedTensorDims::new(vec![row]); 
+                    assert_eq!(dims.size(), output_shape.size());
                     let reduced_data = modifier.register_new_value(
                         graph,
                         format!("Im2Col_{index}_ReducedData"),
-                        ResolvedTensorType::new(*elem_type, vec![row].into()),
+                        ResolvedTensorType::new(*elem_type, dims),
                     );
                     let reduce_node = Node {
                         inputs: vec![im2col_data],

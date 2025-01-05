@@ -175,6 +175,7 @@ impl Graph {
                     };
                     dims.push(dim);
                 }
+                println!("node.name={:?}, dims={:?}", node.name, dims);
                 res.push(ResolvedTensorType::new(
                     x.elem_type,
                     ResolvedTensorDims::new(dims),

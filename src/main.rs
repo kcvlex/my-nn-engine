@@ -360,7 +360,7 @@ enum Select {
     MainRunResnet,
     Main1,
 }
-use ndarray::Array;
+use ndarray::{Array, Axis};
 
 fn main_run_resnet() -> Result<()> {
     let args: Vec<_> = env::args().collect();
@@ -390,11 +390,19 @@ fn main_run_resnet() -> Result<()> {
     let output = session
         .run(&[input])
         .map_err(|e| Error::other(format!("{:?}", e)))?;
-    let vec = match output[0].data {
+    let output = match output[0].data {
         TensorData::F32(ref vec) => vec.clone(),
         _ => return Err(Error::other("Invalid output data type")),
     };
-    println!("{:?}", vec);
+    // println!("{:?}", vec);
+    let output = Array::from_vec(output)
+        // .into_shape_with_order(1000).unwrap()
+        .into_shape_with_order((1, 64, 56, 56)).unwrap()
+        .index_axis(Axis(0), 0)
+        .index_axis(Axis(0), 42)
+        .index_axis(Axis(0), 42)
+        .to_vec();
+    println!("{:?}", output);
     Ok(())
 }
 
@@ -412,11 +420,12 @@ fn main_(select: Select) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    if false {
+    if true {
         main_(Select::MainRunResnet)?;
     } else {
         // main_(Select::MainResnetInput)?;
         // main_(Select::MainResnetSample)?;
+        // main_(Select::Main0)?;
     }
     Ok(())
 }
