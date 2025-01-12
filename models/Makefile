@@ -9,8 +9,12 @@ mnist-12.onnx:
 resnet152-v2-7.onnx:
 	$(WGET) -O $@ $(CLASSIFICATION)/resnet/model/resnet152-v2-7.onnx
 
-resnet18-v2-7.onnx:
-	$(WGET) -O $@ $(CLASSIFICATION)/resnet/model/resnet18-v2-7.onnx
-
 mobilenetv2-12.onnx:
 	$(WGET) -O $@ $(CLASSIFICATION)/mobilenet/model/mobilenetv2-12.onnx
+
+.PHONY: resnet18-v2-7
+resnet18-v2-7: resnet18-v2-7.tar.gz
+	tar -xvf $<
+
+resnet18-v2-7.tar.gz:
+	$(WGET) -O $@.tar.gz $(CLASSIFICATION)/resnet/model/$@.tar.gz

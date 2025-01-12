@@ -212,7 +212,7 @@ impl GraphLoader {
     }
 }
 
-fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
+pub fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     let elem_type = DataType::try_from(tensor.data_type)?;
     let data = if tensor.raw_data.is_empty() {
         match elem_type {
@@ -499,4 +499,17 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         }
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
+}
+
+#[test]
+fn load_tensor_pb() -> Result<(), ModelLoadError> {
+    use std::path::PathBuf;
+
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("models/resnet18-v2-7/test_data_set_0/output_0.pb");
+    let tensor = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
+    let tensor = TensorProto::decode(&*tensor).map_err(ModelLoadError::Decode)?;
+    let tensor = load_tensor(tensor)?;
+    println!("{:?}", tensor);
+    Ok(())
 }

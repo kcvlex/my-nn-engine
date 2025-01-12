@@ -155,7 +155,7 @@ pub struct Node {
     pub name: String,
     pub op: Operator,
 
-    pub mark_as_deleted: bool,
+    pub(crate) mark_as_deleted: bool,
 }
 
 impl Node {

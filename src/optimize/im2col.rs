@@ -166,20 +166,16 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         },
                     );
 
-                    let dims = 
-                            ResolvedTensorDims::new(vec![
-                                im2col_output_shape[0],
-                                kernel_shape.size() / im2col_output_shape[1],
-                            ]);
+                    let dims = ResolvedTensorDims::new(vec![
+                        im2col_output_shape[0],
+                        kernel_shape.size() / im2col_output_shape[1],
+                    ]);
                     assert_eq!(dims.size(), output_shape.size());
                     // Gemm
                     let gemm_output = modifier.register_new_value(
                         graph,
                         format!("Im2Col_{index}_GemmOutput"),
-                        ResolvedTensorType::new(
-                            kernel.elem_type,
-                            dims
-                        ),
+                        ResolvedTensorType::new(kernel.elem_type, dims),
                     );
                     modifier.register_new_node(
                         graph,
@@ -293,7 +289,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                     );
 
                     // Reduce
-                    let dims = ResolvedTensorDims::new(vec![row]); 
+                    let dims = ResolvedTensorDims::new(vec![row]);
                     assert_eq!(dims.size(), output_shape.size());
                     let reduced_data = modifier.register_new_value(
                         graph,

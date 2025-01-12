@@ -107,9 +107,10 @@ impl<'ctx> Session<'ctx> {
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
+        println!("Compiling");
         codegen
-            //.compile_default()
-            .compile_with_passes(&[])
+            .compile_default()
+            // .compile_with_passes(&[])
             .map_err(SessionError::CodeGenError)?;
         println!("Compiled");
 

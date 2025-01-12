@@ -339,13 +339,11 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn compile_with_passes(&mut self, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
         self.compile_graph().map_err(CodeGenError::BuilderError)?;
+        let opt = inkwell::passes::PassBuilderOptions::create();
+        // opt.set_verify_each(true);
         if !passes.is_empty() {
             self.module
-                .run_passes(
-                    LLVMPass::passes(passes).as_str(),
-                    &self.target_machine,
-                    inkwell::passes::PassBuilderOptions::create(),
-                )
+                .run_passes(LLVMPass::passes(passes).as_str(), &self.target_machine, opt)
                 .map_err(CodeGenError::LLVMError)?;
         }
         Ok(())
@@ -353,6 +351,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn compile_default(&mut self) -> Result<(), CodeGenError> {
         self.compile_graph().map_err(CodeGenError::BuilderError)?;
+        println!("Graph compiled");
         self.module
             .run_passes(
                 "default<O3>",
@@ -450,6 +449,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn compile_graph(&mut self) -> Result<(), BuilderError> {
         self.init_data()?;
+        println!("Data initialized");
         self.init_main_args()?;
         for (node, alloc) in self
             .order

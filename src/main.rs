@@ -372,9 +372,18 @@ fn main_run_resnet() -> Result<()> {
         .map_err(|e| Error::other(format!("{:?}", e)))?
         .to_rgb8();
     for i in 0..10 {
-        println!("img[0][{i}].R={:?}", (img.get_pixel(0, i)[0] as f32) / 255.0);
-        println!("img[0][{i}].G={:?}", (img.get_pixel(0, i)[1] as f32) / 255.0);
-        println!("img[0][{i}].B={:?}", (img.get_pixel(0, i)[2] as f32) / 255.0);
+        println!(
+            "img[0][{i}].R={:?}",
+            (img.get_pixel(0, i)[0] as f32) / 255.0
+        );
+        println!(
+            "img[0][{i}].G={:?}",
+            (img.get_pixel(0, i)[1] as f32) / 255.0
+        );
+        println!(
+            "img[0][{i}].B={:?}",
+            (img.get_pixel(0, i)[2] as f32) / 255.0
+        );
     }
     let input: Tensor = Array::from_shape_fn((1, 3, 224, 224), |(_, c, h, w)| {
         img.get_pixel(h as u32, w as u32)[c] as f32 / 255.0
