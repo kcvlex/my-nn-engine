@@ -1,5 +1,5 @@
-use crate::model::{Graph, Model, Node, Nodes, ValueId, ValueInfo, Values};
-use crate::operator::*;
+use crate::onnx::model::{Graph, Model, Node, Nodes, ValueId, ValueInfo, Values};
+use crate::onnx::operator::*;
 use crate::tensor::{
     dimensions::{Dimension, UnresolvedTensorDims},
     resolved_dimensions::ResolvedTensorDims,

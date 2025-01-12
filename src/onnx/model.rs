@@ -1,4 +1,4 @@
-use crate::operator::Operator;
+use crate::onnx::operator::Operator;
 use crate::tensor::{
     dimensions::{Dimension, ParamKey},
     resolved_dimensions::ResolvedTensorDims,

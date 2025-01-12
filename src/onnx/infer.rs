@@ -1,5 +1,5 @@
-use crate::model::{Graph, NodeId};
-use crate::operator::*;
+use crate::onnx::model::{Graph, NodeId};
+use crate::onnx::operator::*;
 use crate::tensor::{
     resolved_dimensions::{broadcast_shape, ResolvedTensorDims},
     tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},

@@ -1,5 +1,5 @@
-use crate::model::{Graph, Node, ValueId};
-use crate::operator::*;
+use crate::onnx::model::{Graph, Node, ValueId};
+use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 
 #[derive(Default)]

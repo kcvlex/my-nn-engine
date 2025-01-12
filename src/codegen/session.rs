@@ -1,6 +1,6 @@
 use crate::codegen::gen::{CodeGen, CodeGenError};
-use crate::load::ModelLoadError;
-use crate::model::{Graph, Model, ValueId};
+use crate::onnx::load::ModelLoadError;
+use crate::onnx::model::{Graph, Model, ValueId};
 use crate::optimize::{
     batchnorm, gemm, identity, im2col, normalize,
     optimizer::{Optimizer, SimpleGraphModifier},

@@ -1,5 +1,5 @@
-use crate::model::{Graph, Node};
-use crate::operator::*;
+use crate::onnx::model::{Graph, Node};
+use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::ResolvedTensorType;

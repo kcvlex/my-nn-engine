@@ -1,9 +1,9 @@
 use crate::codegen::blas::{GemmArgs, Precision, BLAS};
 use crate::codegen::plan;
 use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
-use crate::model::{Graph, Node, NodeId, ValueId};
-use crate::operator;
-use crate::operator::Operator;
+use crate::onnx::model::{Graph, Node, NodeId, ValueId};
+use crate::onnx::operator;
+use crate::onnx::operator::Operator;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
 

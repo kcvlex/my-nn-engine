@@ -1,5 +1,5 @@
-use crate::model::{Graph, NodeId, Nodes, ValueId};
-use crate::operator::Operator;
+use crate::onnx::model::{Graph, NodeId, Nodes, ValueId};
+use crate::onnx::operator::Operator;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -304,7 +304,7 @@ pub fn plan(graph: &Graph) -> Vec<(NodeId, AllocateInfo)> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::model::Model;
+    use crate::onnx::model::Model;
     use std::io::{Error, Result};
     use std::path::PathBuf;
 
