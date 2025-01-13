@@ -1,5 +1,5 @@
 use crate::codegen::gen::{CodeGen, CodeGenError};
-use crate::onnx::load::ModelLoadError;
+use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::optimize::{
     batchnorm, gemm, identity, im2col, normalize,
@@ -257,27 +257,6 @@ mod test {
                 // For pretty print
                 assert_eq!($left, $right);
             }
-        }};
-    }
-
-    macro_rules! load_tensor {
-        ($ty: ty, $path: expr, $shape: expr) => {{
-            let mut input = Vec::new();
-            File::open($path)
-                .map(BufReader::new)
-                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
-                .read_to_end(&mut input)
-                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-            input
-                .as_slice()
-                .chunks_exact(size_of::<$ty>())
-                .map(|chunk| <$ty>::from_le_bytes(chunk.try_into().unwrap()))
-                .collect::<ndarray::Array<$ty, _>>()
-                .into_shape_with_order($shape)
-                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
-                .into_dyn()
-                .try_into()
-                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
         }};
     }
 
@@ -755,16 +734,13 @@ mod test {
     fn mnist() -> TestResult {
         with_session("../../mnist-12.onnx", |session| {
             let path =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/mnist-sample-input.bin");
-            let input = load_tensor!(f32, path, (1, 1, 28, 28))?;
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/mnist-12/test_data_set_0");
+            let input = path.join("input_0.pb");
+            let input = Tensor::load_from_path(input).map_err(SessionError::ModelLoadError)?;
             let output = session.run(&[input])?;
-            let (expected, _) = make_tensor!(
-                f32,
-                [
-                    -1.256688, 0.62759185, 8.642946, 9.428967, -13.740415, -6.045854, -23.487156,
-                    28.340471, -6.791564, 3.9420235,
-                ],
-            )?;
+            let expected = path.join("output_0.pb");
+            let expected =
+                Tensor::load_from_path(expected).map_err(SessionError::ModelLoadError)?;
             assert_eq_epsilon!(output[0], expected, 0.001);
             Ok(())
         })

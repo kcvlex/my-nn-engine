@@ -360,7 +360,7 @@ enum Select {
     MainRunResnet,
     Main1,
 }
-use ndarray::{Array, Axis};
+use ndarray::Array;
 
 fn main_run_resnet() -> Result<()> {
     let args: Vec<_> = env::args().collect();

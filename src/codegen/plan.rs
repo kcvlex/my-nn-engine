@@ -304,6 +304,7 @@ pub fn plan(graph: &Graph) -> Vec<(NodeId, AllocateInfo)> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::onnx::load::*;
     use crate::onnx::model::Model;
     use std::io::{Error, Result};
     use std::path::PathBuf;

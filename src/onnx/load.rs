@@ -29,13 +29,27 @@ pub enum ModelLoadError {
 
 type LoadResult<T> = Result<T, ModelLoadError>;
 
-impl Model {
-    pub fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Model> {
+pub trait LoadProto {
+    fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self>
+    where
+        Self: Sized;
+}
+
+impl LoadProto for Model {
+    fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self> {
         let model = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
         let model = ModelProto::decode(&*model).map_err(ModelLoadError::Decode)?;
         let graph = model.graph.ok_or(ModelLoadError::NoGraph)?;
         let graph = GraphLoader::default().load_graph(graph)?;
         Ok(Model { graph })
+    }
+}
+
+impl LoadProto for Tensor {
+    fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self> {
+        let tensor = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
+        let tensor = TensorProto::decode(&*tensor).map_err(ModelLoadError::Decode)?;
+        load_tensor(tensor)
     }
 }
 
@@ -212,7 +226,7 @@ impl GraphLoader {
     }
 }
 
-pub fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
+fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     let elem_type = DataType::try_from(tensor.data_type)?;
     let data = if tensor.raw_data.is_empty() {
         match elem_type {
