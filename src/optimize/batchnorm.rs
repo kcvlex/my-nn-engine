@@ -35,6 +35,7 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
             perms.swap(0, 1);
 
             let transposed_input = TransposeGenerator::default()
+                .set_contiguous(true)
                 .set_input(input)
                 .set_perms(perms.clone())
                 .set_node_name(format!("Transpose_{}", node_id.index()))

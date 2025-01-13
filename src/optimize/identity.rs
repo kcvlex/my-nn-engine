@@ -3,11 +3,11 @@ use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 
 #[derive(Default)]
-pub struct Reshape2Identity {}
+pub struct Ops2Identity {}
 
-impl<T: GraphModifier> Pass<T> for Reshape2Identity {
+impl<T: GraphModifier> Pass<T> for Ops2Identity {
     fn summary(&self) -> &'static str {
-        "Convert Reshape to Identity"
+        "Convert Reshape/Transpose to Identity"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
@@ -15,7 +15,7 @@ impl<T: GraphModifier> Pass<T> for Reshape2Identity {
             .nodes
             .iter()
             .filter_map(|(id, node)| match node.op {
-                Operator::Reshape => Some(id),
+                Operator::Reshape | Operator::Transpose(_) => Some(id),
                 _ => None,
             })
             .collect::<Vec<_>>();

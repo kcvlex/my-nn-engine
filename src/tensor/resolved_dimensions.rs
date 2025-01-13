@@ -84,6 +84,10 @@ impl ResolvedTensorDims {
     pub fn as_slice(&self) -> &[usize] {
         &self.0
     }
+
+    pub fn raw(&self) -> &Vec<usize> {
+        &self.0
+    }
 }
 
 impl<Idx> Index<Idx> for ResolvedTensorDims

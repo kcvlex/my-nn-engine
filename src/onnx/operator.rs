@@ -23,6 +23,7 @@ pub enum Operator {
 
     // Custom
     BatchNormalizationPerChannel(BatchNormalization),
+    Contiguous,
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
 
@@ -183,8 +184,8 @@ impl Operator {
             Operator::Transpose(_) => "Transpose",
 
             // Custom
-            // Operator::MatMulRightTransposed => "MatMulRightTransposed (Custom)",
             Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
+            Operator::Contiguous => "Contiguous (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
 

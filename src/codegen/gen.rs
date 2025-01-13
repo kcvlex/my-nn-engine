@@ -525,7 +525,7 @@ impl<'ctx> CodeGen<'ctx> {
             debug_stuff: &self.debug_stuff,
         };
 
-        let mut ptrs = args
+        let ptrs = args
             .iter()
             .enumerate()
             .map(|(i, &id)| {
@@ -541,7 +541,6 @@ impl<'ctx> CodeGen<'ctx> {
                     ty,
                     offset,
                     name,
-                    perms: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -610,10 +609,11 @@ impl<'ctx> CodeGen<'ctx> {
         let exit = match node.op {
             Operator::Add => gen_binaryop!(BinaryOpcode::FloatAdd),
             Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
-            Operator::Transpose(ref perm) => {
-                ptrs[1].perms = Some(perm.clone());
-                gen_unaryop!(UnaryOpcode::Transpose)
-            }
+            // Operator::Transpose(ref perm) => {
+            //     ptrs[1].perms = Some(perm.clone());
+            //     gen_unaryop!(UnaryOpcode::Transpose)
+            // }
+            Operator::Contiguous => gen_unaryop!(UnaryOpcode::Transfer),
             Operator::MatMul => {
                 let nest = ptrs[0].ty.dims.ndim() - 2;
                 let gemm = gen_gemm!(
@@ -643,7 +643,6 @@ impl<'ctx> CodeGen<'ctx> {
                 let m = ptrs[1].ty.dims[0] as u64;
                 let n = ptrs[1].ty.dims[1] as u64;
                 let elem_type = ptrs[0].ty.elem_type;
-                let ptrs = ptrs.iter().map(|ptr| ptr.ptr).collect::<Vec<_>>();
                 translator.build_matrix_reduce(&ptrs, elem_type, (m, n), op, entry)
             }
             Operator::BatchNormalizationPerChannel(ref batchnorm) => {
@@ -677,15 +676,11 @@ struct TensorPtr<'ctx> {
     ty: ResolvedTensorType,
     offset: IntValue<'ctx>,
     name: String,
-    perms: Option<Vec<usize>>,
 }
 
+// TODO: Remove
 impl TensorPtr<'_> {
     fn stride(&self, i: usize) -> usize {
-        let i = match self.perms {
-            Some(ref perms) => perms[i],
-            None => i,
-        };
         self.ty.stride(i)
     }
 }
@@ -739,7 +734,7 @@ struct Gemm {
 #[derive(Debug, Clone, Copy)]
 enum UnaryOpcode {
     ReLU,
-    Transpose,
+    Transfer,
 }
 
 struct UnaryOps<'ctx> {
@@ -984,7 +979,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             ty: inner_loops.src_ptr.ty.clone(),
             offset: src_offset,
             name: format!("src.{}", nest),
-            perms: inner_loops.src_ptr.perms.clone(),
         };
         let next_inner_loops = Im2ColsInnerLoop {
             preheader: head,
@@ -1243,7 +1237,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             ty: ResolvedTensorType::new(elem_type, src_shape.clone()),
             offset: offset_src,
             name: "src".to_string(),
-            perms: None,
         };
 
         self.build_im2col_by_channel_outer(
@@ -1378,7 +1371,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             .left()
                             .unwrap()
                     }
-                    UnaryOpcode::Transpose => self.build_load(&op.src)?,
+                    UnaryOpcode::Transfer => self.build_load(&op.src)?,
                 };
                 self.build_store(&op.dst, res)
             }
@@ -1411,7 +1404,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_matrix_reduce(
         &self,
-        ptrs: &[PointerValue<'ctx>],
+        ptrs: &[TensorPtr<'ctx>],
         elem_ty: DataType,
         mn: (u64, u64),
         op: operator::ReduceOp,
@@ -1439,15 +1432,22 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             _ => todo!(),
         };
         let acc = self.builder.build_phi(fp_ty, "acc")?;
+        let offset1 = self.builder.build_int_mul(
+            ind1.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(ptrs[1].stride(1).try_into().unwrap(), false),
+            "offset1",
+        )?;
         let offset1 = self.builder.build_int_add(
             offset0.as_basic_value().into_int_value(),
-            ind1.as_basic_value().into_int_value(),
+            offset1,
             "offset1",
         )?;
 
         macro_rules! load {
             () => {{
-                self.build_raw_load(fp_ty, ptrs[1], offset1)?
+                self.build_raw_load(fp_ty, ptrs[1].ptr, offset1)?
                     .into_float_value()
             }};
         }
@@ -1486,8 +1486,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         .builder
                         .build_float_add(acc.as_basic_value().into_float_value(), val, "res"),
                     operator::ReduceOp::Variance => {
+                        // TODO?: stride
                         let mean = self
-                            .build_raw_load(fp_ty, ptrs[2], ind0.as_basic_value().into_int_value())?
+                            .build_raw_load(
+                                fp_ty,
+                                ptrs[2].ptr,
+                                ind0.as_basic_value().into_int_value(),
+                            )?
                             .into_float_value();
                         let diff = self.builder.build_float_sub(val, mean, "diff")?;
                         self.builder.build_float_mul(diff, diff, "diff.squared")
@@ -1526,7 +1531,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             operator::ReduceOp::Max | operator::ReduceOp::Sum => res,
         };
-        self.build_raw_store(fp_ty, ptrs[0], ind0.as_basic_value().into_int_value(), res)?;
+        self.build_raw_store(
+            fp_ty,
+            ptrs[0].ptr,
+            ind0.as_basic_value().into_int_value(),
+            res,
+        )?;
         let ind0_next = self.builder.build_int_add(
             ind0.as_basic_value().into_int_value(),
             self.context.i64_type().const_int(1, false),
@@ -1534,7 +1544,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         )?;
         let offset0_next = self.builder.build_int_add(
             offset0.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(col, false),
+            self.context
+                .i64_type()
+                .const_int(ptrs[1].stride(0).try_into().unwrap(), false),
             "offset0.next",
         )?;
         let cond0 = self.builder.build_int_compare(
@@ -1597,7 +1609,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     ty: $ptr.ty,
                     offset: offset_sum,
                     name: $ptr.name,
-                    perms: $ptr.perms.clone(),
                 }
             }};
         }

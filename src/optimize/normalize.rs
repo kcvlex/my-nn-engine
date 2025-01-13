@@ -1,8 +1,49 @@
-use crate::onnx::model::{Graph, Node};
+use crate::onnx::model::{Graph, Node, ValueInfo};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::ReshapeGenerator;
 use crate::tensor::{resolved_dimensions::ResolvedTensorDims, tensor::ResolvedTensorType};
+
+// TODO: Bundle all passes into a single one
+
+#[derive(Default)]
+pub struct ContigousOutput {}
+
+// This pass is assumed to be run before shape inference
+impl<T: GraphModifier> Pass<T> for ContigousOutput {
+    fn summary(&self) -> &'static str {
+        "Insert contiguous before all Outputs"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let ids = graph.outputs.clone();
+        for id in ids.iter() {
+            let input = graph.nodes[*id].inputs[0];
+            let input_ty = graph.values[input].ty.clone();
+            let new_value = graph.values.alloc(ValueInfo {
+                name: format!("Contiguous_Output_{}", id.index()),
+                ty: input_ty,
+            });
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![input],
+                    outputs: vec![new_value],
+                    op: Operator::Contiguous,
+                    name: format!("Contiguous_Output_{}", id.index()),
+                    mark_as_deleted: false,
+                },
+            );
+            modifier.replace_input_value_if(graph, input, new_value, |_, node| {
+                matches!(node.op, Operator::Output(_))
+            });
+
+            // Forget the dimension information of old output to make shape inference easier
+            // TODO: Maybe incorrect if the Input node is directly connected to the Output node
+            graph.values[input].ty = None;
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct EliminateGlobalAvgPool {}

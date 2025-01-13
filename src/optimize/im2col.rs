@@ -1,6 +1,7 @@
 use crate::onnx::model::{Graph, Node};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
+use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::ResolvedTensorType;
 
@@ -144,27 +145,16 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                     // modifier.replace_input_value(graph, old_output_value, force_reshape_output);
 
                     // Reshape the kernel
-                    let reshaped_kernel = modifier.register_new_value(
-                        graph,
-                        format!("Im2Col_{index}_ReshapedKernel"),
-                        ResolvedTensorType::new(
-                            kernel.elem_type,
-                            ResolvedTensorDims::new(vec![
-                                feature_map_count,
-                                kernel_shape.size() / feature_map_count,
-                            ]),
-                        ),
-                    );
-                    modifier.register_new_node(
-                        graph,
-                        Node {
-                            inputs: vec![kernel_value],
-                            outputs: vec![reshaped_kernel],
-                            name: format!("Im2Col_{index}_ReshapeKernel"),
-                            op: Operator::Reshape,
-                            mark_as_deleted: false,
-                        },
-                    );
+                    let reshaped_kernel = ReshapeGenerator::default()
+                        .set_input(kernel_value)
+                        .set_dims(ResolvedTensorDims::new(vec![
+                            feature_map_count,
+                            kernel_shape.size() / feature_map_count,
+                        ]))
+                        .set_node_name(format!("Im2Col_{index}_ReshapeKernel"))
+                        .set_value_name(format!("Im2Col_{index}_ReshapeKernel"))
+                        .generate(graph, modifier)
+                        .unwrap();
 
                     let dims = ResolvedTensorDims::new(vec![
                         im2col_output_shape[0],
@@ -202,24 +192,13 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         vec.push(feature_map_count);
                         vec
                     };
-                    let reshaped_output = modifier.register_new_value(
-                        graph,
-                        format!("Im2Col_{index}_ReshapedOutput"),
-                        ResolvedTensorType::new(
-                            kernel.elem_type,
-                            ResolvedTensorDims::new(reshaped_output_shape.clone()),
-                        ),
-                    );
-                    modifier.register_new_node(
-                        graph,
-                        Node {
-                            inputs: vec![gemm_output],
-                            outputs: vec![reshaped_output],
-                            name: format!("Im2Col_{index}_ReshapeOutput"),
-                            op: Operator::Reshape,
-                            mark_as_deleted: false,
-                        },
-                    );
+                    let reshaped_output = ReshapeGenerator::default()
+                        .set_input(gemm_output)
+                        .set_dims(ResolvedTensorDims::new(reshaped_output_shape.clone()))
+                        .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
+                        .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
+                        .generate(graph, modifier)
+                        .unwrap();
 
                     // Transpose the output
                     let perm = {
@@ -229,26 +208,13 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         vec.extend((0..one_fm_shape.ndim()).map(|x| x + 1));
                         vec
                     };
-                    let tranposed_output_shape =
-                        perm.iter().map(|i| reshaped_output_shape[*i]).collect();
-                    let transposed_output = modifier.register_new_value(
-                        graph,
-                        format!("Im2Col_{index}_TransposedOutput"),
-                        ResolvedTensorType::new(
-                            kernel.elem_type,
-                            ResolvedTensorDims::new(tranposed_output_shape),
-                        ),
-                    );
-                    modifier.register_new_node(
-                        graph,
-                        Node {
-                            inputs: vec![reshaped_output],
-                            outputs: vec![transposed_output],
-                            name: format!("Im2Col_{index}_TransposeOutput"),
-                            op: Operator::Transpose(perm),
-                            mark_as_deleted: false,
-                        },
-                    );
+                    let transposed_output = TransposeGenerator::default()
+                        .set_input(reshaped_output)
+                        .set_perms(perm)
+                        .set_node_name(format!("Im2Col_{index}_TransposeOutput"))
+                        .set_value_name(format!("Im2Col_{index}_TransposeOutput"))
+                        .generate(graph, modifier)
+                        .unwrap();
 
                     modifier.replace_input_value(graph, old_output_value, transposed_output);
                 }
@@ -306,21 +272,14 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                     modifier.register_new_node(graph, reduce_node);
 
                     // Reshape
-                    let reshaped_output = modifier.register_new_value(
-                        graph,
-                        format!("Im2Col_{index}_ReshapedOutput"),
-                        ResolvedTensorType::new(*elem_type, output_shape.clone()),
-                    );
-                    modifier.register_new_node(
-                        graph,
-                        Node {
-                            inputs: vec![reduced_data],
-                            outputs: vec![reshaped_output],
-                            name: format!("Im2Col_{index}_ReshapeOutput"),
-                            op: Operator::Reshape,
-                            mark_as_deleted: false,
-                        },
-                    );
+                    let reshaped_output = ReshapeGenerator::default()
+                        .set_input(reduced_data)
+                        .set_dims(output_shape.clone())
+                        .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
+                        .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
+                        .generate(graph, modifier)
+                        .unwrap();
+
                     modifier.replace_input_value(graph, old_output_value, reshaped_output);
                 }
                 _ => unreachable!(),

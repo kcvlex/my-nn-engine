@@ -175,7 +175,6 @@ impl Graph {
                     };
                     dims.push(dim);
                 }
-                println!("node.name={:?}, dims={:?}", node.name, dims);
                 res.push(ResolvedTensorType::new(
                     x.elem_type,
                     ResolvedTensorDims::new(dims),
@@ -322,6 +321,10 @@ impl Graph {
             }
 
             // Custom
+            Operator::Contiguous => {
+                let input = &inputs[0];
+                res.push(input.contiguous());
+            }
             Operator::Input(_) |
             Operator::Output(_) |
             Operator::BatchNormalizationPerChannel(_) |

@@ -60,18 +60,13 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
             }
             perms.extend(info.axes.iter());
 
-            let transpose_required = perms.iter().enumerate().any(|(i, &v)| i != v);
-            let input_v = if transpose_required {
-                TransposeGenerator::default()
-                    .set_input(*input_value)
-                    .set_perms(perms)
-                    .set_node_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
-                    .set_value_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
-                    .generate(graph, modifier)
-                    .unwrap()
-            } else {
-                *input_value
-            };
+            let input_v = TransposeGenerator::default()
+                .set_input(*input_value)
+                .set_perms(perms)
+                .set_node_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
 
             let old_output = graph.nodes[*id].outputs[0];
             let output_ty = &graph.get_resolved_tensor_type(old_output).unwrap().clone();

@@ -1,7 +1,7 @@
+use inkwell::context::Context;
 use my_onnx::codegen::session::{Session, SessionError};
 use my_onnx::onnx::load::*;
 use my_onnx::tensor::tensor::Tensor;
-use inkwell::context::Context;
 use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;

@@ -73,9 +73,16 @@ impl<'ctx> Session<'ctx> {
                 .resolve_input_types(input_ty)
                 .map_err(SessionError::TypeError)?;
         }
-        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer"));
+        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer1"));
+
+        // TODO: Change the infer process to a pass
+        optimizer
+            .passes
+            .push(Box::new(normalize::ContigousOutput::default()));
+        optimizer.run(&mut model.graph);
         model.graph.infer().map_err(SessionError::TypeError)?;
 
+        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer2"));
         optimizer
             .passes
             .push(Box::new(im2col::InsertIm2Col::default()));
@@ -96,8 +103,7 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(gemm::GemmTransComposition::default()));
         optimizer
             .passes
-            .push(Box::new(identity::Reshape2Identity::default()));
-
+            .push(Box::new(identity::Ops2Identity::default()));
         optimizer.run(&mut model.graph);
 
         // TODO: remove
@@ -110,7 +116,7 @@ impl<'ctx> Session<'ctx> {
         println!("Compiling");
         codegen
             .compile_default()
-            // .compile_with_passes(&[])
+            //.compile_with_passes(&[])
             .map_err(SessionError::CodeGenError)?;
         println!("Compiled");
 
@@ -205,9 +211,9 @@ impl Drop for Session<'_> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::tensor::tensor::Tensor;
     use inkwell::context::Context;
-    use super::*;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
@@ -719,23 +725,6 @@ mod test {
             )?;
 
             let output = session.run(&[input])?;
-            assert_eq_epsilon!(output[0], expected, 0.001);
-            Ok(())
-        })
-    }
-
-    // TODO: Move to another directory
-    #[test]
-    fn mnist() -> TestResult {
-        with_session("../../mnist-12.onnx", |session| {
-            let path =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/mnist-12/test_data_set_0");
-            let input = path.join("input_0.pb");
-            let input = Tensor::load_from_path(input).map_err(SessionError::ModelLoadError)?;
-            let output = session.run(&[input])?;
-            let expected = path.join("output_0.pb");
-            let expected =
-                Tensor::load_from_path(expected).map_err(SessionError::ModelLoadError)?;
             assert_eq_epsilon!(output[0], expected, 0.001);
             Ok(())
         })
