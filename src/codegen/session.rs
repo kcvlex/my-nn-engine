@@ -206,13 +206,8 @@ impl Drop for Session<'_> {
 #[cfg(test)]
 mod test {
     use crate::tensor::tensor::Tensor;
-
     use inkwell::context::Context;
-
     use super::*;
-
-    use std::io::{BufReader, Read};
-    use std::mem::size_of;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
