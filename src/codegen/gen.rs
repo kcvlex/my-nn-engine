@@ -548,9 +548,13 @@ impl<'ctx> CodeGen<'ctx> {
         macro_rules! gen_binaryop {
             ($op: expr) => {{
                 let mut lhs = ptrs[1].clone();
+                println!("lhs.ty={:?}", lhs.ty);
                 lhs.ty = lhs.ty.broadcast(&ptrs[0].ty.dims);
+                println!("lhs.ty={:?}", lhs.ty);
                 let mut rhs = ptrs[2].clone();
+                println!("rhs.ty={:?}", rhs.ty);
                 rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
+                println!("rhs.ty={:?}", rhs.ty);
                 let binop = BinaryOps {
                     dst: ptrs[0].clone(),
                     lhs,

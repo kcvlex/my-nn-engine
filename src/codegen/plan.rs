@@ -219,6 +219,8 @@ impl<'graph> MemoryPlanner<'graph> {
         chunk
     }
 
+    // TODO: Identity assumes that the computation MUST be in-place.
+    // If the source is not contiguous, we need to allocate a new chunk.
     fn try_in_place(&self, node_id: NodeId) -> Option<usize> {
         if !self.can_in_place(node_id) {
             return None;
