@@ -34,6 +34,7 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
             let mut perms = (0..input_ty.dims.ndim()).collect::<Vec<_>>();
             perms.swap(0, 1);
 
+            // TODO: Support non-contiguous input
             let transposed_input = TransposeGenerator::default()
                 .set_contiguous(true)
                 .set_input(input)

@@ -110,8 +110,6 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         format!("Im2Col_{index}_ExpandedData"),
                         ResolvedTensorType::new(kernel.elem_type, im2col_output_shape.clone()),
                     );
-                    println!("im2col: {:?}", im2col);
-                    println!("im2col_output_shape: {:?}", im2col_output_shape);
                     modifier.register_new_node(
                         graph,
                         Node {

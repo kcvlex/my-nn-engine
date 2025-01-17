@@ -120,7 +120,7 @@ impl<'ctx> Session<'ctx> {
             .map_err(SessionError::CodeGenError)?;
         println!("Compiled");
 
-        // codegen.module().print_to_file("model.ll").unwrap();
+        //codegen.module().print_to_file("model.ll").unwrap();
 
         let mut rng = SmallRng::from_entropy();
         let id = Alphanumeric.sample_string(&mut rng, 16);

@@ -154,10 +154,10 @@ impl ReshapeGenerator {
         ))?;
         let node_name = self
             .node_name
-            .unwrap_or_else(|| format!("Transpose_{}", input.index()));
+            .unwrap_or_else(|| format!("Reshape_{}", input.index()));
         let value_name = self
             .value_name
-            .unwrap_or_else(|| format!("Transpose_{}", input.index()));
+            .unwrap_or_else(|| format!("Reshape_{}", input.index()));
 
         let input_ty = graph.get_resolved_tensor_type(input).unwrap().clone();
         if input_ty.dims.size() != dims.size() {

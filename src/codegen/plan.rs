@@ -1,5 +1,6 @@
 use crate::onnx::model::{Graph, NodeId, Nodes, ValueId};
 use crate::onnx::operator::Operator;
+use crate::tensor::tensor::ResolvedTensorType;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -157,7 +158,7 @@ impl<'graph> MemoryPlanner<'graph> {
             .collect();
 
         for node_id in order.iter().copied() {
-            if !self.graph.nodes[node_id].op.is_identity() {
+            if !matches!(self.graph.nodes[node_id].op, Operator::Identity) {
                 continue;
             }
             let input = self.graph.nodes[node_id].inputs[0];
@@ -185,7 +186,7 @@ impl<'graph> MemoryPlanner<'graph> {
                 *self.allocations.get_mut(node_id).unwrap() = AllocateType::Output(*v);
 
                 // TODO: Support other patterns
-                if self.graph.nodes[*node_id].op.is_identity() {
+                if matches!(self.graph.nodes[*node_id].op, Operator::Identity) {
                     output_set.insert(self.graph.nodes[*node_id].inputs[0], *v);
                 }
             }
@@ -227,8 +228,11 @@ impl<'graph> MemoryPlanner<'graph> {
         }
 
         for (i, &pred_id) in self.deps.preds.get(&node_id).unwrap().iter().enumerate() {
-            // Last use
-            if self.liveness_counter[&pred_id] == 1 {
+            // Last use && same dimensions (strides also must be the same)
+            if self.liveness_counter[&pred_id] != 1 {
+                continue;
+            }
+            if matches!(self.graph.nodes[node_id].op, Operator::Identity) || self.get_output_ty(pred_id) == self.get_output_ty(node_id) {
                 return Some(i);
             }
         }
@@ -236,10 +240,17 @@ impl<'graph> MemoryPlanner<'graph> {
         None
     }
 
+    fn get_output_ty(&self, node_id: NodeId) -> &ResolvedTensorType {
+        let value_id = self.graph.nodes[node_id].outputs[0];
+        self.graph
+            .get_resolved_tensor_type(value_id)
+            .as_ref()
+            .unwrap()
+    }
+
     fn can_in_place(&self, node_id: NodeId) -> bool {
         let op = &self.graph.nodes[node_id].op;
-        // op.is_elementwise() || op.is_identity() || matches!(op, Operator::Gemm(_))
-        op.is_elementwise() || op.is_identity()
+        matches!(op, Operator::Identity) || op.is_elementwise()
     }
 }
 
@@ -308,6 +319,8 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
+    use crate::optimize::normalize;
+    use crate::optimize::optimizer::{Optimizer, SimpleGraphModifier};
     use std::io::{Error, Result};
     use std::path::PathBuf;
 
@@ -317,6 +330,11 @@ mod test {
             .join(path);
         let mut model =
             Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;
+        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("diamond"));
+        optimizer
+            .passes
+            .push(Box::new(normalize::ContigousOutput::default()));
+        optimizer.run(&mut model.graph);
         model
             .graph
             .infer()
@@ -342,6 +360,7 @@ mod test {
         Ok(res)
     }
 
+    // TODO: Insert Contiguous operator
     // Graph:
     //
     //               +-- 1.Sigmoid -- 3.Pool --+
@@ -360,6 +379,7 @@ mod test {
             "/layer2/layer2.1/MaxPool",
             "/Add",
             "/Transpose",
+            "Contiguous_Output_7",
         ];
         let order = to_node_order(&model.graph, &order)?;
         let mem = MemoryPlanner::new(&model.graph).run(&order);
@@ -388,6 +408,10 @@ mod test {
                 },
                 AllocateInfo {
                     ty: AllocateType::Chunk(0),
+                    is_first_use: false
+                },
+                AllocateInfo {
+                    ty: AllocateType::Chunk(2),
                     is_first_use: false
                 },
                 AllocateInfo {

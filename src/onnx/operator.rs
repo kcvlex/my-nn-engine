@@ -200,10 +200,6 @@ impl Operator {
     pub fn is_elementwise(&self) -> bool {
         matches!(self, Operator::Add | Operator::ReLU | Operator::Sigmoid)
     }
-
-    pub fn is_identity(&self) -> bool {
-        matches!(self, Operator::Identity)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

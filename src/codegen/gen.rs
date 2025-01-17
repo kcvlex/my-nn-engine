@@ -150,9 +150,10 @@ impl Attributes {
             features,
         }
     }
-    fn add_default_attributes<'ctx>(&self, function: &FunctionValue<'ctx>) {
+    fn add_default_attributes(&self, function: &FunctionValue<'_>) {
         for i in 0..function.count_params() {
-            function.add_attribute(AttributeLoc::Param(i), self.noalias);
+            // TODO: Check if this function is in-place or not
+            // function.add_attribute(AttributeLoc::Param(i), self.noalias);
             function.add_attribute(AttributeLoc::Param(i), self.noundef);
         }
         function.add_attribute(AttributeLoc::Function, self.cpu);
@@ -456,7 +457,7 @@ impl<'ctx> CodeGen<'ctx> {
             .iter()
             .map(|(id, info)| (&self.graph.nodes[*id], info))
         {
-            let function = if node.op.is_identity() || node.is_dummy() {
+            let function = if matches!(node.op, Operator::Identity) || node.is_dummy() {
                 None
             } else {
                 Some(self.compile_node(node)?)

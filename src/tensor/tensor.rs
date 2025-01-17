@@ -259,8 +259,6 @@ impl ResolvedTensorType {
                 orig_dims.push(div);
                 orig_strides.push(target * stride);
             }
-
-            println!("orig_strides: {:?}", orig_strides);
         }
 
         assert!(orig_dims.is_empty());
