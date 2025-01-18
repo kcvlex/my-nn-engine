@@ -163,6 +163,7 @@ impl<'ctx> Routines<'ctx> {
         let k = self.i32_ty.const_int(gemm.k, false);
         let inc_a = if !a_trans { k } else { m };
         let inc_b = if !b_trans { n } else { k };
+
         builder.build_call(
             self.gemm,
             &[
@@ -178,12 +179,12 @@ impl<'ctx> Routines<'ctx> {
                 m.into(),
                 n.into(),
                 k.into(),
-                self.fp_ty.const_float(gemm.alpha).into(),
+                self.fp_ty.const_float(1.0).into(),
                 a_ptr.into(),
                 inc_a.into(),
                 b_ptr.into(),
                 inc_b.into(),
-                self.fp_ty.const_float(gemm.beta).into(),
+                self.fp_ty.const_float(0.0).into(),
                 c_ptr.into(),
                 n.into(),
             ],

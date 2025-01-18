@@ -100,6 +100,9 @@ impl<'ctx> Session<'ctx> {
             .push(Box::new(gemm::MatMul2Gemm::default()));
         optimizer
             .passes
+            .push(Box::new(gemm::TransformBLASGemm::default()));
+        optimizer
+            .passes
             .push(Box::new(gemm::GemmTransComposition::default()));
         optimizer
             .passes
@@ -200,14 +203,14 @@ impl<'ctx> Session<'ctx> {
     }
 }
 
-//impl Drop for Session<'_> {
-//    fn drop(&mut self) {
-//        Command::new("rm")
-//            .args(["-f", self.shared_obj.to_str().unwrap()])
-//            .status()
-//            .unwrap();
-//    }
-//}
+impl Drop for Session<'_> {
+    fn drop(&mut self) {
+        Command::new("rm")
+            .args(["-f", self.shared_obj.to_str().unwrap()])
+            .status()
+            .unwrap();
+    }
+}
 
 #[cfg(test)]
 mod test {

@@ -501,12 +501,11 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .get("beta")
                 .map(|x| x.f())
                 .transpose()?
-                .unwrap_or(0.0)
+                .unwrap_or(1.0)
                 .into();
             Ok(Operator::Gemm(Gemm {
                 trans_a,
                 trans_b,
-                trans_c: false,
                 alpha,
                 beta,
             }))

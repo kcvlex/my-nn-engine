@@ -362,7 +362,6 @@ impl<'ctx> CodeGen<'ctx> {
                 .run_passes(LLVMPass::passes(passes).as_str(), &self.target_machine, opt)
                 .map_err(CodeGenError::LLVMError)?;
         }
-        self.main.print_to_stderr();
         Ok(())
     }
 
@@ -371,15 +370,9 @@ impl<'ctx> CodeGen<'ctx> {
         println!("Graph compiled");
         let opt = inkwell::passes::PassBuilderOptions::create();
         // opt.set_verify_each(true);
-        self.main.print_to_stderr();
         self.module
-            .run_passes(
-                "default<O3>",
-                &self.target_machine,
-                opt,
-            )
+            .run_passes("default<O3>", &self.target_machine, opt)
             .map_err(CodeGenError::LLVMError)?;
-        self.main.print_to_stderr();
         Ok(())
     }
 
@@ -539,7 +532,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
                 let call = self.builder.build_call(function, &args[..], "")?;
-                // call.set_tail_call(true);
+                call.set_tail_call(true);
             }
         }
 
@@ -593,17 +586,20 @@ impl<'ctx> CodeGen<'ctx> {
         if let Operator::Identity = node.op {
             self.builder.position_at_end(entry);
             let len = ptrs[0].ty.dims.size();
-            let len = len * (match ptrs[0].ty.elem_type {
-                DataType::F32 => 4,
-                DataType::F64 => 8,
-                DataType::I64 => 8,
-            });
+            let len = len *
+                (match ptrs[0].ty.elem_type {
+                    DataType::F32 => 4,
+                    DataType::F64 => 8,
+                    DataType::I64 => 8,
+                });
             self.builder.build_memcpy(
                 ptrs[0].ptr,
                 1,
                 ptrs[1].ptr,
                 1,
-                self.context.i64_type().const_int(len.try_into().unwrap(), false),
+                self.context
+                    .i64_type()
+                    .const_int(len.try_into().unwrap(), false),
             )?;
             self.builder.build_return(None)?;
             return Ok(function);
@@ -686,7 +682,7 @@ impl<'ctx> CodeGen<'ctx> {
             Operator::MatMul => {
                 let nest = ptrs[0].ty.dims.ndim() - 2;
                 let gemm = gen_gemm!(
-                    &operator::Gemm {
+                    &operator::BLASGemm {
                         trans_a: false,
                         trans_b: false,
                         trans_c: false,
@@ -697,7 +693,7 @@ impl<'ctx> CodeGen<'ctx> {
                 );
                 translator.build_nested_loop(gemm, entry, nest)
             }
-            Operator::Gemm(ref gemm) => {
+            Operator::BLASGemm(ref gemm) => {
                 let gemm = gen_gemm!(gemm, 0);
                 translator.build_nested_loop(gemm, entry, 0)
             }
@@ -734,8 +730,6 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(exit);
         self.builder.build_return(None)?;
-
-        function.print_to_stderr();
 
         Ok(function)
     }
@@ -1438,7 +1432,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             _ => todo!(),
                         };
                         let src = self.build_load(&op.src)?.into_float_value();
-                        let res = self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                        let res = self
+                            .build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                             .try_as_basic_value()
                             .left()
                             .unwrap();
@@ -1451,38 +1446,51 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             DataType::F64 => 8,
                             DataType::I64 => 8,
                         };
-                        let len_int = self.context.i64_type().const_int(len.try_into().unwrap(), false);
-                        let src_offset = self.builder.build_int_mul(op.src.offset, len_int, "src.offset",)?;
-                        let dst_offset = self.builder.build_int_mul(op.dst.offset, len_int, "dst.offset",)?;
+                        let len_int = self
+                            .context
+                            .i64_type()
+                            .const_int(len.try_into().unwrap(), false);
+                        let src_offset =
+                            self.builder
+                                .build_int_mul(op.src.offset, len_int, "src.offset")?;
+                        let dst_offset =
+                            self.builder
+                                .build_int_mul(op.dst.offset, len_int, "dst.offset")?;
                         for i in 0..len {
                             let src_offset = self.builder.build_int_add(
                                 src_offset,
-                                self.context.i64_type().const_int(i.try_into().unwrap(), false),
-                                "src.offset",)?;
+                                self.context
+                                    .i64_type()
+                                    .const_int(i.try_into().unwrap(), false),
+                                "src.offset",
+                            )?;
                             let dst_offset = self.builder.build_int_add(
                                 dst_offset,
-                                self.context.i64_type().const_int(i.try_into().unwrap(), false),
-                                "dst.offset",)?;
-                        let src_gep = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                self.context.i8_type(),
-                                op.src.ptr,
-                                &[src_offset],
-                                "src.gep",
-                            )
-                        }?;
-                        let dst_gep = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                self.context.i8_type(),
-                                op.dst.ptr,
-                                &[dst_offset],
-                                "dst.gep",
-                            )
-                        }?;
-                        let load = self.builder.build_load(
-                            self.context.i8_type(),
-                            src_gep, "load")?;
-                        self.builder.build_store(dst_gep, load)?;
+                                self.context
+                                    .i64_type()
+                                    .const_int(i.try_into().unwrap(), false),
+                                "dst.offset",
+                            )?;
+                            let src_gep = unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    self.context.i8_type(),
+                                    op.src.ptr,
+                                    &[src_offset],
+                                    "src.gep",
+                                )
+                            }?;
+                            let dst_gep = unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    self.context.i8_type(),
+                                    op.dst.ptr,
+                                    &[dst_offset],
+                                    "dst.gep",
+                                )
+                            }?;
+                            let load =
+                                self.builder
+                                    .build_load(self.context.i8_type(), src_gep, "load")?;
+                            self.builder.build_store(dst_gep, load)?;
                         }
                         Ok(())
                     }

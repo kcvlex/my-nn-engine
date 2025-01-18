@@ -272,15 +272,11 @@ impl Graph {
             }
 
             Operator::Gemm(Gemm {
-                trans_a,
-                trans_b,
-                trans_c,
-                ..
+                trans_a, trans_b, ..
             }) => {
                 let a = &inputs[args::GEMM_A];
                 let b = &inputs[args::GEMM_B];
 
-                assert!(!*trans_c);
                 let m = a.dims[if !*trans_a { 0 } else { 1 }];
                 let n = b.dims[if !*trans_b { 1 } else { 0 }];
                 // let a_k = a.dims[1 - a_idx];
@@ -328,6 +324,7 @@ impl Graph {
             Operator::Input(_) |
             Operator::Output(_) |
             Operator::BatchNormalizationPerChannel(_) |
+            Operator::BLASGemm(_) |
             Operator::Im2Col(_) |
             Operator::ReduceMatrix(_) |
             Operator::ForceReshape => {

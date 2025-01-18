@@ -3,6 +3,77 @@ use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 
 #[derive(Default)]
+pub struct TransformBLASGemm {}
+
+impl<T: GraphModifier> Pass<T> for TransformBLASGemm {
+    fn summary(&self) -> &'static str {
+        "Transform ONNX Gemm to BLAS Gemm"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let res = graph
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| {
+                if let Operator::Gemm(gemm) = &node.op {
+                    Some((id, gemm.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for (id, gemm) in res.iter() {
+            let a = graph.nodes[*id].inputs[args::GEMM_A];
+            let b = graph.nodes[*id].inputs[args::GEMM_B];
+            let c_opt = graph.nodes[*id].inputs.get(args::GEMM_C).cloned();
+            let old_output = graph.nodes[*id].outputs[0];
+            let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+
+            // TODO
+            let blas_gemm: BLASGemm = gemm.try_into().unwrap();
+            let new_output = modifier.register_new_value(
+                graph,
+                format!("TransformBLASGemm_Output_{:?}", id),
+                ty.clone(),
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![a, b],
+                    outputs: vec![new_output],
+                    name: format!("TransformBLASGemm_{:?}", id),
+                    op: Operator::BLASGemm(blas_gemm),
+                    mark_as_deleted: false,
+                },
+            );
+
+            let new_output = if let Some(c) = c_opt {
+                let add = modifier.register_new_value(
+                    graph,
+                    format!("TransformBLASGemm_Add_{:?}", id),
+                    ty,
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![new_output, c],
+                        outputs: vec![add],
+                        name: format!("TransformBLASGemm_Add_{:?}", id),
+                        op: Operator::Add,
+                        mark_as_deleted: false,
+                    },
+                );
+                add
+            } else {
+                new_output
+            };
+
+            modifier.replace_input_value(graph, old_output, new_output);
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct GemmTransComposition {}
 
 impl<T: GraphModifier> Pass<T> for GemmTransComposition {
@@ -105,7 +176,7 @@ impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
                 inputs: vec![lhs, rhs],
                 outputs: vec![new_output],
                 name: format!("MatMul2Gemm_{index}"),
-                op: Operator::Gemm(Gemm::default()),
+                op: Operator::BLASGemm(BLASGemm::default()),
                 mark_as_deleted: false,
             };
             modifier.register_new_node(graph, new_node);

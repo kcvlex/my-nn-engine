@@ -233,8 +233,8 @@ impl<'graph> MemoryPlanner<'graph> {
             if self.liveness_counter[&pred_id] != 1 {
                 continue;
             }
-            if matches!(self.graph.nodes[node_id].op, Operator::Identity) || 
-               false// self.get_output_ty(pred_id) == self.get_output_ty(node_id) 
+            if matches!(self.graph.nodes[node_id].op, Operator::Identity) ||
+                self.get_output_ty(pred_id) == self.get_output_ty(node_id)
             {
                 return Some(i);
             }

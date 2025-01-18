@@ -23,6 +23,7 @@ pub enum Operator {
 
     // Custom
     BatchNormalizationPerChannel(BatchNormalization),
+    BLASGemm(BLASGemm),
     Contiguous,
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
@@ -116,10 +117,29 @@ pub struct Gemm {
     pub beta: f64,
     pub trans_a: bool,
     pub trans_b: bool,
-    pub trans_c: bool,
 }
 
 impl Default for Gemm {
+    fn default() -> Self {
+        Self {
+            alpha: 1.0,
+            beta: 1.0,
+            trans_a: false,
+            trans_b: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BLASGemm {
+    pub alpha: f64,
+    pub beta: f64,
+    pub trans_a: bool,
+    pub trans_b: bool,
+    pub trans_c: bool,
+}
+
+impl Default for BLASGemm {
     fn default() -> Self {
         Self {
             alpha: 1.0,
@@ -128,6 +148,23 @@ impl Default for Gemm {
             trans_b: false,
             trans_c: false,
         }
+    }
+}
+
+impl TryInto<BLASGemm> for &Gemm {
+    type Error = String;
+
+    fn try_into(self) -> Result<BLASGemm, Self::Error> {
+        if self.alpha != self.beta {
+            return Err("alpha and beta must be the same".to_string());
+        }
+        Ok(BLASGemm {
+            alpha: self.alpha,
+            beta: 0.0,
+            trans_a: self.trans_a,
+            trans_b: self.trans_b,
+            trans_c: false,
+        })
     }
 }
 
@@ -185,6 +222,7 @@ impl Operator {
 
             // Custom
             Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
+            Operator::BLASGemm(_) => "BLASGemm (Custom)",
             Operator::Contiguous => "Contiguous (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
@@ -232,6 +270,7 @@ pub mod args {
 
     pub const GEMM_A: usize = 0;
     pub const GEMM_B: usize = 1;
+    pub const GEMM_C: usize = 2;
 
     pub const BATCHNORM_DATA: usize = 0;
     pub const BATCHNORM_SCALE: usize = 1;

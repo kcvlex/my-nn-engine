@@ -171,7 +171,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                             inputs: vec![im2col_data, reshaped_kernel],
                             outputs: vec![gemm_output],
                             name: format!("Im2Col_{index}_Gemm"),
-                            op: Operator::Gemm(Gemm {
+                            op: Operator::BLASGemm(BLASGemm {
                                 trans_a: false,
                                 trans_b: true,
                                 trans_c: false,
