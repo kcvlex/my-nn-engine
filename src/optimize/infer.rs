@@ -1,5 +1,6 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
+use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::{
     resolved_dimensions::{broadcast_shape, ResolvedTensorDims},
     tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},
@@ -25,8 +26,52 @@ impl ConvShape<'_> {
     }
 }
 
-impl Graph {
-    fn infer_node_output(&mut self, node_id: NodeId) -> Result<Vec<ResolvedTensorType>, TypeError> {
+#[derive(Default)]
+pub struct ShapeInference {}
+
+impl<T: GraphModifier> Pass<T> for ShapeInference {
+    fn summary(&self) -> &'static str {
+        "Infer shape of each node"
+    }
+
+    fn run(&self, graph: &mut Graph, _modifier: &mut T) {
+        self.infer(graph).unwrap();
+    }
+}
+
+impl ShapeInference {
+    fn infer(&self, graph: &mut Graph) -> Result<(), TypeError> {
+        let ids = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| !node.is_dummy())
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        for id in ids {
+            let types = self.infer_node_output(graph, id)?;
+            let node = &graph.nodes[id];
+            for (value_id, inferred) in zip_eq(node.outputs.iter(), types.into_iter()) {
+                let cur_ty = &mut graph.values[*value_id].ty;
+                if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
+                    if *cur_ty != inferred {
+                        return Err(TypeError::InferError(format!(
+                            "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
+                            node.name, cur_ty, inferred
+                        )));
+                    }
+                } else {
+                    *cur_ty = Some(inferred.into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn infer_node_output(
+        &self,
+        graph: &mut Graph,
+        node_id: NodeId,
+    ) -> Result<Vec<ResolvedTensorType>, TypeError> {
         macro_rules! cond_error {
             ($cond: expr) => {{
                 if $cond {
@@ -35,13 +80,13 @@ impl Graph {
             }};
         }
 
-        let node = &mut self.nodes[node_id];
+        let node = &mut graph.nodes[node_id];
 
         let inputs: Vec<&ResolvedTensorType> = node
             .inputs
             .iter()
             .flat_map(|&id| {
-                self.values[id].ty.as_ref().map(|x| match x {
+                graph.values[id].ty.as_ref().map(|x| match x {
                     TensorType::Resolved(x) => Some(x),
                     TensorType::Unresolved(_) => None,
                 })
@@ -82,7 +127,7 @@ impl Graph {
             Operator::Reshape => {
                 let a = &inputs[args::RESHAPE_DATA];
                 let shape = node.inputs[args::RESHAPE_SHAPE];
-                let shape = self
+                let shape = graph
                     .initializer
                     .get(&shape)
                     .ok_or(TypeError::UnresolvedInput)
@@ -332,32 +377,5 @@ impl Graph {
             }
         }
         Ok(res)
-    }
-
-    pub fn infer(&mut self) -> Result<(), TypeError> {
-        let ids = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| !node.is_dummy())
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>();
-        for id in ids {
-            let types = self.infer_node_output(id)?;
-            let node = &self.nodes[id];
-            for (value_id, inferred) in zip_eq(node.outputs.iter(), types.into_iter()) {
-                let cur_ty = &mut self.values[*value_id].ty;
-                if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
-                    if *cur_ty != inferred {
-                        return Err(TypeError::InferError(format!(
-                            "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
-                            node.name, cur_ty, inferred
-                        )));
-                    }
-                } else {
-                    *cur_ty = Some(inferred.into());
-                }
-            }
-        }
-        Ok(())
     }
 }

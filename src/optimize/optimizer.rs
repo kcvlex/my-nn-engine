@@ -137,22 +137,41 @@ impl GraphModifier for SimpleGraphModifier {
     ) where
         P: Fn(NodeId, &Node) -> bool,
     {
-        if let Some(used) = self.value2used.get(&old_value).cloned() {
-            let new_used = self.value2used.entry(new_value).or_default();
+        let mut changed = HashSet::new();
+        if let Some(used) = self.value2used.get(&old_value) {
             for &(node, index) in used.iter() {
-                if !pred(node, &graph.nodes[node]) {
-                    continue;
+                if pred(node, &graph.nodes[node]) {
+                    changed.insert((node, index));
                 }
-                new_used.insert((node, index));
-                let node = &mut graph.nodes[node];
-                if let Operator::Output(v) = node.op {
-                    if v == old_value {
-                        node.op = Operator::Output(new_value);
-                    }
-                }
-                node.inputs[index] = new_value;
             }
         }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        if let Entry::Occupied(mut old) = self.value2used.entry(old_value) {
+            for v in changed.iter() {
+                old.get_mut().remove(v);
+            }
+            if old.get().is_empty() {
+                old.remove();
+            }
+        }
+
+        for (node, index) in changed.iter() {
+            let node = &mut graph.nodes[*node];
+            if let Operator::Output(v) = node.op {
+                assert!(v == old_value);
+                node.op = Operator::Output(new_value);
+            }
+            node.inputs[*index] = new_value;
+        }
+
+        self.value2used
+            .entry(new_value)
+            .or_default()
+            .extend(changed);
     }
 
     fn defined_node(&self, value: ValueId) -> Option<(NodeId, usize)> {
@@ -181,9 +200,10 @@ impl NodeDelete for SimpleGraphModifier {
                 continue;
             }
             node.mark_as_deleted = true;
-            for used in node.inputs.iter() {
+            println!("Mark as deleted: {:?}", node);
+            for (i, used) in node.inputs.iter().enumerate() {
                 if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
-                    e.get_mut().remove(&(id, 0));
+                    e.get_mut().remove(&(id, i));
                     if e.get().is_empty() {
                         e.remove();
                     }

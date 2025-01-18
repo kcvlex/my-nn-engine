@@ -322,6 +322,7 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
+    use crate::optimize::infer;
     use crate::optimize::normalize;
     use crate::optimize::optimizer::{Optimizer, SimpleGraphModifier};
     use std::io::{Error, Result};
@@ -337,11 +338,10 @@ mod test {
         optimizer
             .passes
             .push(Box::new(normalize::ContigousOutput::default()));
+        optimizer
+            .passes
+            .push(Box::new(infer::ShapeInference::default()));
         optimizer.run(&mut model.graph);
-        model
-            .graph
-            .infer()
-            .map_err(|e| Error::other(format!("{:?}", e)))?;
         Ok(model)
     }
 

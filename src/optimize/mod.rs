@@ -2,6 +2,7 @@ pub mod batchnorm;
 pub mod gemm;
 pub mod identity;
 pub mod im2col;
+pub mod infer;
 pub mod normalize;
 pub mod optimizer;
 pub mod reduce;

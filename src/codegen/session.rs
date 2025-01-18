@@ -2,7 +2,7 @@ use crate::codegen::gen::{CodeGen, CodeGenError};
 use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::optimize::{
-    batchnorm, gemm, identity, im2col, normalize,
+    batchnorm, gemm, identity, im2col, infer, normalize,
     optimizer::{Optimizer, SimpleGraphModifier},
     reduce,
 };
@@ -73,16 +73,14 @@ impl<'ctx> Session<'ctx> {
                 .resolve_input_types(input_ty)
                 .map_err(SessionError::TypeError)?;
         }
-        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer1"));
+        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer"));
 
-        // TODO: Change the infer process to a pass
         optimizer
             .passes
             .push(Box::new(normalize::ContigousOutput::default()));
-        optimizer.run(&mut model.graph);
-        model.graph.infer().map_err(SessionError::TypeError)?;
-
-        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("optimizer2"));
+        optimizer
+            .passes
+            .push(Box::new(infer::ShapeInference::default()));
         optimizer
             .passes
             .push(Box::new(im2col::InsertIm2Col::default()));
@@ -118,8 +116,8 @@ impl<'ctx> Session<'ctx> {
         let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
         println!("Compiling");
         codegen
-            //.compile_default()
-            .compile_with_passes(&[])
+            .compile_default()
+            //.compile_with_passes(&[])
             .map_err(SessionError::CodeGenError)?;
         println!("Compiled");
 
