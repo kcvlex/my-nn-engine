@@ -147,7 +147,6 @@ impl<'ctx> Session<'ctx> {
                 "-o",
                 shared_obj.to_str().unwrap(),
                 tmp_obj.to_str().unwrap(),
-                dir.join("c/blas.c").to_str().unwrap(),
             ])
             .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
