@@ -104,6 +104,7 @@ pub struct CodeGen<'ctx> {
 
     graph: Graph,
     order: Vec<(NodeId, AllocateInfo)>,
+    value2alloc: HashMap<ValueId, AllocateInfo>,
     ptr_values: HashMap<ValueId, PointerValue<'ctx>>,
     mem_size: Vec<u64>,
     chunk2ptr: HashMap<ChunkId, PointerValue<'ctx>>,
@@ -209,7 +210,8 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
             &target_triple,
             &cpu,
             &features,
-            OptimizationLevel::Aggressive,
+            //OptimizationLevel::Aggressive,
+            OptimizationLevel::None,
             RelocMode::PIC,
             CodeModel::Default,
         )
@@ -298,6 +300,18 @@ impl<'ctx> CodeGen<'ctx> {
         let debug_stuff = DebugStuff::new(context, &module, &builder);
 
         let order = plan::plan(&graph);
+        let value2alloc = order
+            .iter()
+            .copied()
+            .map(|(id, info)| (graph.nodes[id].outputs[0], info))
+            .collect::<HashMap<_, _>>();
+
+        for order in order.iter() {
+            println!("node_id: {:?}", order.0);
+            println!("node: {:?}", graph.nodes[order.0]);
+            println!("{:?}", order);
+        }
+
         let mem_size = calc_memsize(&graph, &order);
         let ptr_values = HashMap::new();
         let chunk2ptr = HashMap::new();
@@ -320,6 +334,7 @@ impl<'ctx> CodeGen<'ctx> {
 
             graph,
             order,
+            value2alloc,
             ptr_values,
             mem_size,
             chunk2ptr,
@@ -347,19 +362,25 @@ impl<'ctx> CodeGen<'ctx> {
                 .run_passes(LLVMPass::passes(passes).as_str(), &self.target_machine, opt)
                 .map_err(CodeGenError::LLVMError)?;
         }
+        self.main.print_to_stderr();
         Ok(())
     }
 
     pub fn compile_default(&mut self) -> Result<(), CodeGenError> {
         self.compile_graph().map_err(CodeGenError::BuilderError)?;
         println!("Graph compiled");
+        let opt = inkwell::passes::PassBuilderOptions::create();
+        // opt.set_verify_each(true);
+        self.main.print_to_stderr();
         self.module
             .run_passes(
                 "default<O3>",
                 &self.target_machine,
-                inkwell::passes::PassBuilderOptions::create(),
+                opt,
             )
-            .map_err(CodeGenError::LLVMError)
+            .map_err(CodeGenError::LLVMError)?;
+        self.main.print_to_stderr();
+        Ok(())
     }
 
     // TODO: Adjust attributes
@@ -448,6 +469,25 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    fn need_to_generate(&self, node: &Node) -> bool {
+        if node.is_dummy() {
+            return false;
+        }
+        if let Operator::Identity = node.op {
+            let chunk_in = self.value2alloc.get(&node.inputs[0]).map(|info| &info.ty);
+            let chunk_out = self.value2alloc.get(&node.outputs[0]).map(|info| &info.ty);
+            // TODO: correct?
+            let res = match (chunk_in, chunk_out) {
+                (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
+                    in_chunk != out_chunk
+                }
+                _ => false,
+            };
+            return res;
+        }
+        true
+    }
+
     pub fn compile_graph(&mut self) -> Result<(), BuilderError> {
         self.init_data()?;
         println!("Data initialized");
@@ -457,7 +497,7 @@ impl<'ctx> CodeGen<'ctx> {
             .iter()
             .map(|(id, info)| (&self.graph.nodes[*id], info))
         {
-            let function = if matches!(node.op, Operator::Identity) || node.is_dummy() {
+            let function = if !self.need_to_generate(node) {
                 None
             } else {
                 Some(self.compile_node(node)?)
@@ -467,8 +507,9 @@ impl<'ctx> CodeGen<'ctx> {
             let dst_ptr = match alloc.ty {
                 AllocateType::Chunk(chunk) => {
                     if alloc.is_first_use {
+                        // TODO: type
                         let ptr = self.builder.build_array_malloc(
-                            self.context.i8_type(),
+                            self.context.f32_type(),
                             self.context
                                 .i64_type()
                                 .const_int(self.mem_size[chunk], false),
@@ -498,9 +539,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
                 let call = self.builder.build_call(function, &args[..], "")?;
-                call.set_tail_call(true);
+                // call.set_tail_call(true);
             }
         }
+
+        // self.main.print_to_stderr();
 
         //for ptr in self.chunk2ptr.values() {
         //    self.builder.build_free(*ptr)?;
@@ -546,6 +589,26 @@ impl<'ctx> CodeGen<'ctx> {
             })
             .collect::<Vec<_>>();
 
+        // TODO
+        if let Operator::Identity = node.op {
+            self.builder.position_at_end(entry);
+            let len = ptrs[0].ty.dims.size();
+            let len = len * (match ptrs[0].ty.elem_type {
+                DataType::F32 => 4,
+                DataType::F64 => 8,
+                DataType::I64 => 8,
+            });
+            self.builder.build_memcpy(
+                ptrs[0].ptr,
+                1,
+                ptrs[1].ptr,
+                1,
+                self.context.i64_type().const_int(len.try_into().unwrap(), false),
+            )?;
+            self.builder.build_return(None)?;
+            return Ok(function);
+        }
+
         macro_rules! gen_binaryop {
             ($op: expr) => {{
                 let mut lhs = ptrs[1].clone();
@@ -556,6 +619,7 @@ impl<'ctx> CodeGen<'ctx> {
                 println!("rhs.ty={:?}", rhs.ty);
                 rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
                 println!("rhs.ty={:?}", rhs.ty);
+                println!("ptrs[0].ty={:?}", ptrs[0].ty);
                 let binop = BinaryOps {
                     dst: ptrs[0].clone(),
                     lhs,
@@ -670,6 +734,9 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(exit);
         self.builder.build_return(None)?;
+
+        function.print_to_stderr();
+
         Ok(function)
     }
 }
@@ -855,7 +922,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         name: &str,
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
         let call = self.builder.build_call(function, args, name)?;
-        call.set_tail_call(true);
+        //call.set_tail_call(true);
         Ok(call)
     }
 
@@ -1357,7 +1424,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         match op {
             Operation::UnaryOp(op, opcode) => {
-                let res = match opcode {
+                match opcode {
                     UnaryOpcode::ReLU => {
                         let (fmax, zero) = match op.dst.ty.elem_type {
                             DataType::F32 => (
@@ -1371,14 +1438,55 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             _ => todo!(),
                         };
                         let src = self.build_load(&op.src)?.into_float_value();
-                        self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                        let res = self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                             .try_as_basic_value()
                             .left()
-                            .unwrap()
+                            .unwrap();
+                        self.build_store(&op.dst, res)
                     }
-                    UnaryOpcode::Transfer => self.build_load(&op.src)?,
-                };
-                self.build_store(&op.dst, res)
+                    UnaryOpcode::Transfer => {
+                        // TODO
+                        let len = match op.src.ty.elem_type {
+                            DataType::F32 => 4,
+                            DataType::F64 => 8,
+                            DataType::I64 => 8,
+                        };
+                        let len_int = self.context.i64_type().const_int(len.try_into().unwrap(), false);
+                        let src_offset = self.builder.build_int_mul(op.src.offset, len_int, "src.offset",)?;
+                        let dst_offset = self.builder.build_int_mul(op.dst.offset, len_int, "dst.offset",)?;
+                        for i in 0..len {
+                            let src_offset = self.builder.build_int_add(
+                                src_offset,
+                                self.context.i64_type().const_int(i.try_into().unwrap(), false),
+                                "src.offset",)?;
+                            let dst_offset = self.builder.build_int_add(
+                                dst_offset,
+                                self.context.i64_type().const_int(i.try_into().unwrap(), false),
+                                "dst.offset",)?;
+                        let src_gep = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                self.context.i8_type(),
+                                op.src.ptr,
+                                &[src_offset],
+                                "src.gep",
+                            )
+                        }?;
+                        let dst_gep = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                self.context.i8_type(),
+                                op.dst.ptr,
+                                &[dst_offset],
+                                "dst.gep",
+                            )
+                        }?;
+                        let load = self.builder.build_load(
+                            self.context.i8_type(),
+                            src_gep, "load")?;
+                        self.builder.build_store(dst_gep, load)?;
+                        }
+                        Ok(())
+                    }
+                }
             }
             Operation::BinaryOp(op, opcode) => match opcode {
                 BinaryOpcode::FloatAdd => {
@@ -1390,9 +1498,21 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 // BinaryOpcode::IntAdd => todo!(),
                 BinaryOpcode::Gemm(ref gemm) => {
                     let prec = gemm.prec;
+                    // TODO: Transpose
+                    let mut trans_a = gemm.trans_a;
+                    let mut trans_b = gemm.trans_b;
+                    assert!(op.lhs.ty.dims.ndim() == 2);
+                    assert!(op.rhs.ty.dims.ndim() == 2);
+                    println!("gemm: lhs: {:?}", op.lhs.ty);
+                    if op.lhs.ty.stride(0) < op.lhs.ty.stride(1) {
+                        trans_a = !trans_a;
+                    }
+                    if op.rhs.ty.stride(0) < op.rhs.ty.stride(1) {
+                        trans_b = !trans_b;
+                    }
                     let gemm = GemmArgs {
-                        a: (op.lhs.ptr, gemm.trans_a),
-                        b: (op.rhs.ptr, gemm.trans_b),
+                        a: (op.lhs.ptr, trans_a),
+                        b: (op.rhs.ptr, trans_b),
                         c: (op.dst.ptr, gemm.trans_c),
                         alpha: gemm.alpha,
                         beta: gemm.beta,

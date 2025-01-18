@@ -3,7 +3,7 @@ use crate::onnx::operator::Operator;
 use crate::tensor::tensor::ResolvedTensorType;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct AllocateInfo {
     pub ty: AllocateType,
     pub is_first_use: bool,
@@ -27,6 +27,7 @@ impl AllocateType {
     }
 }
 
+// TODO: Make the order deterministic
 #[derive(Debug)]
 struct DependencyGraph {
     preds: HashMap<NodeId, Vec<NodeId>>,
@@ -232,7 +233,9 @@ impl<'graph> MemoryPlanner<'graph> {
             if self.liveness_counter[&pred_id] != 1 {
                 continue;
             }
-            if matches!(self.graph.nodes[node_id].op, Operator::Identity) || self.get_output_ty(pred_id) == self.get_output_ty(node_id) {
+            if matches!(self.graph.nodes[node_id].op, Operator::Identity) || 
+               false// self.get_output_ty(pred_id) == self.get_output_ty(node_id) 
+            {
                 return Some(i);
             }
         }

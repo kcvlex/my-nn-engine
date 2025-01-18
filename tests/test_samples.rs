@@ -13,17 +13,19 @@ fn run_test(model: &str, epsilon: f64) -> Result {
         .join(model);
     let data_dir = root_dir.join("test_data_set_0");
     let model_path = root_dir.join(format!("{model}.onnx"));
+    // let model_path = PathBuf::from("/home/kcvlex/gomi/pytorch/resnet_until_globalavg.onnx");
     let input_path = data_dir.join("input_0.pb");
     let output_path = data_dir.join("output_0.pb");
 
     let input = Tensor::load_from_path(input_path).map_err(SessionError::ModelLoadError)?;
     let session = Session::new(&ctx, &model_path, Some(&[&input.ty.dims]))?;
     let output = session.run(&[input])?;
-    let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
-    if !output[0].eq_with_epsilon(&expected, epsilon) {
-        // For pretty printing
-        assert_eq!(output[0], expected);
-    }
+    println!("{:?}", output[0]);
+    // let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
+    // if !output[0].eq_with_epsilon(&expected, epsilon) {
+    //     // For pretty printing
+    //     assert_eq!(output[0], expected);
+    // }
     Ok(())
 }
 

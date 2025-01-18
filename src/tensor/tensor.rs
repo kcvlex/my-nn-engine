@@ -170,6 +170,10 @@ impl ResolvedTensorType {
         }
         stride.extend(self.stride.iter().copied());
         let stride = ResolvedTensorDims::new(stride);
+        eprintln!("self.dims: {:?}", self.dims);
+        eprintln!("target: {:?}", target);
+        eprintln!("self.stride: {:?}", self.stride);
+        eprintln!("stride: {:?}", stride);
         Self {
             elem_type,
             dims,
