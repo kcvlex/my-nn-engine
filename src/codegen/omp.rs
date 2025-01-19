@@ -116,13 +116,14 @@ impl<'ctx> OMP<'ctx> {
         builder: &Builder<'ctx>,
         args: &ForkCallArgs<'ctx>,
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
-        let mut vec = Vec::with_capacity(args.args.len() + 2);
-        vec.push(args.outlined.as_global_value().as_pointer_value().into());
+        let mut vec = Vec::with_capacity(args.args.len() + 3);
+        vec.push(self.dummy_ident.as_pointer_value().into());
         vec.push(
             self.i32_type
-                .const_int(args.args.len() as u64, false)
+                .const_int(args.args.len().try_into().unwrap(), false)
                 .into(),
         );
+        vec.push(args.outlined.as_global_value().as_pointer_value().into());
         for arg in args.args.iter() {
             vec.push((*arg).into());
         }

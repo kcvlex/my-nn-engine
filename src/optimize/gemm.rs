@@ -134,7 +134,6 @@ impl<T: GraphModifier> Pass<T> for GemmTransComposition {
                     op: Operator::Gemm(gemm),
                     meta: NodeMeta::default(),
                 };
-                println!("new_node: {:?}", new_node);
                 modifier.register_new_node(graph, new_node);
                 modifier.replace_input_value(graph, old_output, new_output);
             }

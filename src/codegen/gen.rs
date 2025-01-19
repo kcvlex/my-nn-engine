@@ -1,4 +1,5 @@
 use crate::codegen::blas::{GemmArgs, Precision, BLAS};
+use crate::codegen::omp::{ForkCallArgs, ScheduleType, StaticFiniArgs, StaticInitArgs, OMP};
 use crate::codegen::plan;
 use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
 use crate::onnx::model::{Graph, Node, NodeId, ValueId};
@@ -84,6 +85,9 @@ struct Intrinsics<'ctx> {
     sqrt_f64: FunctionValue<'ctx>,
     fma_f32: FunctionValue<'ctx>,
     fma_f64: FunctionValue<'ctx>,
+    smin_i32: FunctionValue<'ctx>,
+    // lifetime_start: FunctionValue<'ctx>,
+    // lifetime_end: FunctionValue<'ctx>,
 }
 
 pub struct CodeGen<'ctx> {
@@ -99,6 +103,7 @@ pub struct CodeGen<'ctx> {
 
     intrinsics: Intrinsics<'ctx>,
     blas: BLAS<'ctx>,
+    omp: OMP<'ctx>,
 
     debug_stuff: DebugStuff<'ctx>,
 
@@ -110,6 +115,7 @@ pub struct CodeGen<'ctx> {
     chunk2ptr: HashMap<ChunkId, PointerValue<'ctx>>,
 }
 
+#[derive(Clone)]
 struct FunctionTranslator<'a, 'ctx> {
     context: &'ctx Context,
     module: &'a Module<'ctx>,
@@ -117,6 +123,7 @@ struct FunctionTranslator<'a, 'ctx> {
     function: &'a FunctionValue<'ctx>,
     intrinsics: &'a Intrinsics<'ctx>,
     blas: &'a BLAS<'a>,
+    omp: &'a OMP<'ctx>,
 
     #[allow(dead_code)]
     debug_stuff: &'a DebugStuff<'ctx>,
@@ -169,6 +176,7 @@ struct DebugStuff<'ctx> {
     fflush: FunctionValue<'ctx>,
     float_fmt: GlobalValue<'ctx>,
     i64_fmt: GlobalValue<'ctx>,
+    i64_i64_fmt: GlobalValue<'ctx>,
     stdout: GlobalValue<'ctx>,
 }
 
@@ -189,11 +197,15 @@ impl<'ctx> DebugStuff<'ctx> {
             .build_global_string_ptr("%f\n", "float_fmt")
             .unwrap();
         let i64_fmt = builder.build_global_string_ptr("%ld\n", "i64_fmt").unwrap();
+        let i64_i64_fmt = builder
+            .build_global_string_ptr("%ld %ld\n", "i64_i64_fmt")
+            .unwrap();
         Self {
             printf,
             fflush,
             float_fmt,
             i64_fmt,
+            i64_i64_fmt,
             stdout,
         }
     }
@@ -211,8 +223,7 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
             &target_triple,
             &cpu,
             &features,
-            //OptimizationLevel::Aggressive,
-            OptimizationLevel::None,
+            OptimizationLevel::Aggressive,
             RelocMode::PIC,
             CodeModel::Default,
         )
@@ -256,10 +267,16 @@ impl<'ctx> CodeGen<'ctx> {
         let module = context.create_module("main");
         let builder = context.create_builder();
 
-        let ptr_type = context.ptr_type(AddressSpace::default());
+        let f32_ty = context.f32_type().into();
+        let f64_ty = context.f64_type().into();
+        let i32_ty = context.i32_type().into();
+        //let i64_ty = context.i64_type().into();
+        let ptr_ty = context
+            .ptr_type(AddressSpace::default())
+            .as_basic_type_enum();
         let fn_type = context
             .void_type()
-            .fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
+            .fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let main = module.add_function("main", fn_type, None);
         let main_entry = context.append_basic_block(main, "entry");
         builder.position_at_end(main_entry);
@@ -277,15 +294,15 @@ impl<'ctx> CodeGen<'ctx> {
             }};
         }
 
-        let f32_ty = context.f32_type().into();
-        let f64_ty = context.f64_type().into();
-
         let fmax_f32 = get_intrinsic!("llvm.maximum", &[f32_ty, f32_ty])?;
         let fmax_f64 = get_intrinsic!("llvm.maximum", &[f64_ty, f64_ty])?;
         let sqrt_f32 = get_intrinsic!("llvm.sqrt", &[f32_ty])?;
         let sqrt_f64 = get_intrinsic!("llvm.sqrt", &[f64_ty])?;
         let fma_f32 = get_intrinsic!("llvm.fma", &[f32_ty, f32_ty, f32_ty])?;
         let fma_f64 = get_intrinsic!("llvm.fma", &[f64_ty, f64_ty, f64_ty])?;
+        let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
+        // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
+        // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
 
         let intrinsics = Intrinsics {
             fmax_f32,
@@ -294,9 +311,13 @@ impl<'ctx> CodeGen<'ctx> {
             sqrt_f64,
             fma_f32,
             fma_f64,
+            smin_i32,
+            // lifetime_start,
+            // lifetime_end,
         };
 
         let blas = BLAS::new(context, &module);
+        let omp = OMP::new(context, &module, &builder).map_err(CodeGenError::BuilderError)?;
 
         let debug_stuff = DebugStuff::new(context, &module, &builder);
 
@@ -306,12 +327,6 @@ impl<'ctx> CodeGen<'ctx> {
             .copied()
             .map(|(id, info)| (graph.nodes[id].outputs[0], info))
             .collect::<HashMap<_, _>>();
-
-        for order in order.iter() {
-            println!("node_id: {:?}", order.0);
-            println!("node: {:?}", graph.nodes[order.0]);
-            println!("{:?}", order);
-        }
 
         let mem_size = calc_memsize(&graph, &order);
         let ptr_values = HashMap::new();
@@ -329,7 +344,9 @@ impl<'ctx> CodeGen<'ctx> {
 
             attrs,
             intrinsics,
+
             blas,
+            omp,
 
             debug_stuff,
 
@@ -370,7 +387,6 @@ impl<'ctx> CodeGen<'ctx> {
         self.compile_graph().map_err(CodeGenError::BuilderError)?;
         println!("Graph compiled");
         let opt = inkwell::passes::PassBuilderOptions::create();
-        // opt.set_verify_each(true);
         self.module
             .run_passes("default<O3>", &self.target_machine, opt)
             .map_err(CodeGenError::LLVMError)?;
@@ -550,7 +566,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
                 let call = self.builder.build_call(function, &args[..], "")?;
-                call.set_tail_call(true);
+                //call.set_tail_call(true);
             }
         }
 
@@ -578,6 +594,7 @@ impl<'ctx> CodeGen<'ctx> {
             function: &function,
             intrinsics: &self.intrinsics,
             blas: &self.blas,
+            omp: &self.omp,
             debug_stuff: &self.debug_stuff,
         };
 
@@ -626,8 +643,8 @@ impl<'ctx> CodeGen<'ctx> {
 
         // TODO
         let omp_ctx = None;
-        let omp_parallel = None;
-        let omp_for = None;
+        let omp_parallel = node.meta.omp_parallel;
+        let omp_for = node.meta.omp_for;
 
         macro_rules! gen_binaryop {
             ($op: expr) => {{
@@ -787,19 +804,42 @@ impl<'ctx> TensorPtr<'ctx> {
         self.ty.stride(i)
     }
 
-    fn into_outlined_nth_tensor(&self, outlined: FunctionValue<'ctx>, n: u32) -> Self {
+    fn to_outlined_nth_tensor(
+        &self,
+        translator: &FunctionTranslator<'_, 'ctx>,
+        n: u32,
+    ) -> Result<Self, BuilderError> {
         // global_tid, bound_tid, ...
         let begin = 2 + n * 2;
-        let ptr = outlined.get_nth_param(begin).unwrap().into_pointer_value();
-        let offset = outlined.get_nth_param(begin + 1).unwrap().into_int_value();
+        let ptr_type = translator.context.ptr_type(AddressSpace::default());
+        let i64_type = translator.context.i64_type();
+
+        let ptr = translator
+            .function
+            .get_nth_param(begin)
+            .unwrap()
+            .into_pointer_value();
+        let ptr = translator
+            .builder
+            .build_load(ptr_type, ptr, "")?
+            .into_pointer_value();
+        let offset = translator
+            .function
+            .get_nth_param(begin + 1)
+            .unwrap()
+            .into_pointer_value();
+        let offset = translator
+            .builder
+            .build_load(i64_type, offset, "")?
+            .into_int_value();
         let ty = self.ty.clone();
         let name = self.name.clone();
-        Self {
+        Ok(Self {
             ptr,
             ty,
             offset,
             name,
-        }
+        })
     }
 }
 
@@ -841,8 +881,18 @@ struct OMPContext<'ctx> {
 struct OperationContext<'ctx> {
     operation: Operation<'ctx>,
     omp_ctx: Option<OMPContext<'ctx>>,
-    omp_parallel: Option<FunctionValue<'ctx>>,
+    omp_parallel: Option<usize>,
     omp_for: Option<usize>,
+}
+
+impl OperationContext<'_> {
+    fn to_paralleize(&self, nest: usize) -> bool {
+        self.omp_parallel.map_or(false, |n| n == nest)
+    }
+
+    fn to_for(&self, nest: usize) -> bool {
+        self.omp_for.map_or(false, |n| n == nest)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -890,18 +940,21 @@ impl<'ctx> Operation<'ctx> {
         }
     }
 
-    fn into_outlined(&self, outlined: FunctionValue<'ctx>) -> Self {
+    fn to_outlined(&self, translator: &FunctionTranslator<'_, 'ctx>) -> Result<Self, BuilderError> {
         match self {
             Operation::UnaryOp(op, opcode) => {
-                let dst = op.dst.into_outlined_nth_tensor(outlined, 0);
-                let src = op.src.into_outlined_nth_tensor(outlined, 1);
-                Operation::UnaryOp(UnaryOps { dst, src }, *opcode)
+                let dst = op.dst.to_outlined_nth_tensor(translator, 0)?;
+                let src = op.src.to_outlined_nth_tensor(translator, 1)?;
+                Ok(Operation::UnaryOp(UnaryOps { dst, src }, *opcode))
             }
             Operation::BinaryOp(op, opcode) => {
-                let dst = op.dst.into_outlined_nth_tensor(outlined, 0);
-                let lhs = op.lhs.into_outlined_nth_tensor(outlined, 1);
-                let rhs = op.rhs.into_outlined_nth_tensor(outlined, 2);
-                Operation::BinaryOp(BinaryOps { dst, lhs, rhs }, opcode.clone())
+                let dst = op.dst.to_outlined_nth_tensor(translator, 0)?;
+                let lhs = op.lhs.to_outlined_nth_tensor(translator, 1)?;
+                let rhs = op.rhs.to_outlined_nth_tensor(translator, 2)?;
+                Ok(Operation::BinaryOp(
+                    BinaryOps { dst, lhs, rhs },
+                    opcode.clone(),
+                ))
             }
         }
     }
@@ -928,18 +981,31 @@ impl<'ctx> Operation<'ctx> {
 
         void_type.fn_type(&vec, false)
     }
+
+    fn operands_as_vec(&self) -> Vec<TensorPtr<'ctx>> {
+        match self {
+            Operation::UnaryOp(UnaryOps { dst, src }, _) => vec![dst.clone(), src.clone()],
+            Operation::BinaryOp(BinaryOps { dst, lhs, rhs }, _) => {
+                vec![dst.clone(), lhs.clone(), rhs.clone()]
+            }
+        }
+    }
 }
 
 impl<'ctx> OperationContext<'ctx> {
-    fn into_outlined(&self, outlined: FunctionValue<'ctx>) -> Self {
-        let operation = self.operation.into_outlined(outlined);
+    fn to_outlined(
+        &self,
+        translator: &FunctionTranslator<'_, 'ctx>,
+        omp_ctx: OMPContext<'ctx>,
+    ) -> Result<Self, BuilderError> {
+        let operation = self.operation.to_outlined(translator)?;
         assert!(self.omp_ctx.is_none());
-        Self {
+        Ok(Self {
             operation,
-            omp_ctx: None,
+            omp_ctx: Some(omp_ctx),
             omp_parallel: None,
             omp_for: self.omp_for,
-        }
+        })
     }
 }
 
@@ -1631,7 +1697,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     let mut trans_b = gemm.trans_b;
                     assert!(op.lhs.ty.dims.ndim() == 2);
                     assert!(op.rhs.ty.dims.ndim() == 2);
-                    println!("gemm: lhs: {:?}", op.lhs.ty);
                     if op.lhs.ty.stride(0) < op.lhs.ty.stride(1) {
                         trans_a = !trans_a;
                     }
@@ -1824,12 +1889,192 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    fn init_outlined(&self) -> Result<(OMPContext<'ctx>, LoopBB<'ctx>), BuilderError> {
+        let entry = self.context.append_basic_block(*self.function, "entry");
+        let body = self.context.append_basic_block(*self.function, "body");
+        let exit = self.context.append_basic_block(*self.function, "exit");
+
+        let i32_type = self.context.i32_type();
+
+        self.builder.position_at_end(entry);
+        let is_last = self.builder.build_alloca(i32_type, "is.last")?;
+        let lb = self.builder.build_alloca(i32_type, "lb")?;
+        let ub = self.builder.build_alloca(i32_type, "ub")?;
+        let stride = self.builder.build_alloca(i32_type, "stride")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(exit);
+        self.builder.build_return(None)?;
+
+        self.builder.position_at_end(body);
+
+        let omp_ctx = OMPContext {
+            global_tid: self.function.get_nth_param(0).unwrap().into_pointer_value(),
+            is_last,
+            lb,
+            ub,
+            stride,
+        };
+        let loop_bb = LoopBB {
+            preheader: entry,
+            header: body,
+            exit,
+        };
+        Ok((omp_ctx, loop_bb))
+    }
+
+    fn build_omp_outlined(
+        &self,
+        op_ctx: OperationContext<'ctx>,
+        nest: usize,
+        max_nest: usize,
+    ) -> Result<FunctionValue<'ctx>, BuilderError> {
+        let fn_type = op_ctx.operation.outlined_type(self.context);
+        let fn_name = format!("{}.outlined", self.function.get_name().to_str().unwrap());
+        let outlined_fn = self.module.add_function(&fn_name, fn_type, None);
+
+        let new_builder = self.context.create_builder();
+        let translator = {
+            let mut translator = self.clone();
+            translator.builder = &new_builder;
+            translator.function = &outlined_fn;
+            translator
+        };
+        let (omp_ctx, loop_bb) = translator.init_outlined()?;
+        let op_ctx = op_ctx.to_outlined(&translator, omp_ctx)?;
+        translator.build_nested_loop_rec(op_ctx, loop_bb, nest, max_nest, None)?;
+
+        Ok(outlined_fn)
+    }
+
+    fn build_omp_for(
+        &self,
+        op_ctx: OperationContext<'ctx>,
+        loop_bb: LoopBB<'ctx>,
+        nest: usize,
+        max_nest: usize,
+    ) -> Result<(), BuilderError> {
+        let new_header = self
+            .context
+            .append_basic_block(*self.function, "omp.for.header");
+        let prolog_bb = self
+            .context
+            .append_basic_block(*self.function, "omp.for.prolog");
+        let epilog_bb = self
+            .context
+            .append_basic_block(*self.function, "omp.for.epilog");
+
+        let i32_type = self.context.i32_type();
+        let len: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
+        let len = i32_type.const_int(len - 1, false);
+        let OMPContext {
+            global_tid,
+            is_last,
+            lb,
+            ub,
+            stride,
+        } = op_ctx.omp_ctx.clone().unwrap();
+
+        let tid = self
+            .builder
+            .build_load(i32_type, global_tid, "global.tid")?
+            .as_basic_value_enum()
+            .into_int_value();
+        let one = i32_type.const_int(1, false);
+        for (ptr, val) in [
+            (is_last, i32_type.const_zero()),
+            (lb, i32_type.const_zero()),
+            (ub, len),
+            (stride, one),
+        ] {
+            // self.builder.build_call(self.intrinsics.lifetime_start, &[i64_type.const_int(4, false).into(), ptr.into()], "")?;
+            self.builder.build_store(ptr, val)?;
+        }
+
+        let args = StaticInitArgs {
+            tid,
+            sched: ScheduleType::UnorderedStatic,
+            is_last,
+            lb,
+            ub,
+            stride,
+            incr: one,
+        };
+        self.omp.static_init(self.builder, &args)?;
+        let lb = self
+            .builder
+            .build_load(i32_type, lb, "lb")?
+            .into_int_value();
+        let ub = self
+            .builder
+            .build_load(i32_type, ub, "ub_omp")?
+            .into_int_value();
+        let ub = self
+            .builder
+            .build_call(self.intrinsics.smin_i32, &[ub.into(), len.into()], "ub_min")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+        let ub = self.builder.build_int_add(ub, one, "ub_open")?;
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, lb, ub, "cond")?;
+        self.builder
+            .build_conditional_branch(cond, prolog_bb, epilog_bb)?;
+
+        self.builder.position_at_end(epilog_bb);
+        self.omp
+            .static_fini(self.builder, &StaticFiniArgs { tid })?;
+        self.builder.build_unconditional_branch(loop_bb.exit)?;
+
+        self.builder.position_at_end(prolog_bb);
+        let i64_type = self.context.i64_type();
+        let lb = self.builder.build_int_s_extend(lb, i64_type, "lb")?;
+        let ub = self.builder.build_int_s_extend(ub, i64_type, "ub")?;
+
+        macro_rules! update_offset {
+            ($ptr: expr) => {{
+                let add = self.builder.build_int_mul(
+                    lb,
+                    i64_type.const_int($ptr.stride(nest).try_into().unwrap(), false),
+                    "add",
+                )?;
+                $ptr.offset = self.builder.build_int_add($ptr.offset, add, "offset")?;
+            }};
+        }
+        let mut op_ctx = op_ctx;
+        match op_ctx.operation {
+            Operation::UnaryOp(ref mut op, _) => {
+                update_offset!(op.dst);
+                update_offset!(op.src);
+            }
+            Operation::BinaryOp(ref mut op, _) => {
+                update_offset!(op.dst);
+                update_offset!(op.lhs);
+                update_offset!(op.rhs);
+            }
+        }
+        self.builder.build_unconditional_branch(new_header)?;
+
+        op_ctx.omp_for = None;
+        let new_loop_bb = LoopBB {
+            preheader: prolog_bb,
+            header: new_header,
+            exit: epilog_bb,
+        };
+        let loop_range = Some((lb, ub));
+        self.builder.position_at_end(new_header);
+        self.build_nested_loop_rec(op_ctx, new_loop_bb, nest, max_nest, loop_range)
+    }
+
     fn build_nested_loop_rec(
         &self,
         op_ctx: OperationContext<'ctx>,
         loop_bb: LoopBB<'ctx>,
         nest: usize,
         max_nest: usize,
+        loop_range: Option<(IntValue<'ctx>, IntValue<'ctx>)>,
     ) -> Result<(), BuilderError> {
         macro_rules! update_offset {
             ($ptr: expr, $offset_phi: expr, $exiting: expr) => {{
@@ -1866,6 +2111,45 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }};
         }
 
+        if op_ctx.to_paralleize(nest) {
+            let tensors = op_ctx.operation.operands_as_vec();
+            let mut args = Vec::with_capacity(tensors.len() * 2);
+            for (i, tensor) in tensors.iter().enumerate() {
+                let ptr_ptr = self
+                    .builder
+                    .build_alloca(tensor.ptr.get_type(), format!("tensor_{i}_ptr").as_str())?;
+                let offset_ptr = self.builder.build_alloca(
+                    tensor.offset.get_type(),
+                    format!("tensor_{i}_offset").as_str(),
+                )?;
+                // TODO: Stop using hard-coded size value
+                //self.builder.build_call(self.intrinsics.lifetime_start, &[
+                //    self.context.i64_type().const_int(8, false).into(),
+                //    ptr_ptr.into(),
+                //], "")?;
+                self.builder.build_store(ptr_ptr, tensor.ptr)?;
+                // self.builder.build_call(self.intrinsics.lifetime_start, &[
+                //     self.context.i64_type().const_int(8, false).into(),
+                //     offset_ptr.into(),
+                // ], "")?;
+                self.builder.build_store(offset_ptr, tensor.offset)?;
+                args.push(ptr_ptr);
+                args.push(offset_ptr);
+            }
+
+            let outlined = self.build_omp_outlined(op_ctx, nest, max_nest)?;
+            let args = ForkCallArgs { outlined, args };
+            let call = self.omp.fork_call(self.builder, &args)?;
+            //call.set_tail_call(true);
+            self.builder.build_unconditional_branch(loop_bb.exit)?;
+
+            return Ok(());
+        }
+
+        if op_ctx.to_for(nest) {
+            return self.build_omp_for(op_ctx, loop_bb, nest, max_nest);
+        }
+
         if nest == max_nest {
             self.build_operation(&op_ctx.operation)?;
             self.builder.build_unconditional_branch(loop_bb.exit)?;
@@ -1877,8 +2161,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let exiting_bb = self
             .context
             .append_basic_block(*self.function, format!("exit.{}", nest).as_str());
-        let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
-        let bound = self.context.i64_type().const_int(bound, false);
+        let bound = match loop_range {
+            Some((_, ub)) => ub,
+            None => {
+                let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
+                self.context.i64_type().const_int(bound, false)
+            }
+        };
         let mut next_op_ctx = op_ctx;
         next_op_ctx.operation = match next_op_ctx.operation {
             Operation::UnaryOp(op, opcode) => {
@@ -1945,20 +2234,18 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder
             .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
 
-        ind.add_incoming(&[
-            (
-                &self.context.i64_type().const_int(0, false),
-                loop_bb.preheader,
-            ),
-            (&ind_next, exiting_bb),
-        ]);
+        let ind_init = match loop_range {
+            Some((lb, _)) => lb,
+            None => self.context.i64_type().const_zero(),
+        };
+        ind.add_incoming(&[(&ind_init, loop_bb.preheader), (&ind_next, exiting_bb)]);
         self.builder.position_at_end(next_bb);
         let next_loop_bb = LoopBB {
             preheader: loop_bb.header,
             header: next_bb,
             exit: exiting_bb,
         };
-        self.build_nested_loop_rec(next_op_ctx, next_loop_bb, nest + 1, max_nest)
+        self.build_nested_loop_rec(next_op_ctx, next_loop_bb, nest + 1, max_nest, None)
     }
 
     fn build_nested_loop(
@@ -1976,7 +2263,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header,
             exit,
         };
-        self.build_nested_loop_rec(op_ctx, loop_bb, 0, max_nest)?;
+        self.build_nested_loop_rec(op_ctx, loop_bb, 0, max_nest, None)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }

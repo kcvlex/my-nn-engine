@@ -2,7 +2,7 @@ use crate::codegen::gen::{CodeGen, CodeGenError};
 use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::optimize::{
-    batchnorm, gemm, identity, im2col, infer, normalize,
+    batchnorm, gemm, identity, im2col, infer, normalize, omp,
     optimizer::{Optimizer, SimpleGraphModifier},
     reduce,
 };
@@ -66,6 +66,7 @@ impl<'ctx> Session<'ctx> {
         ctx: &'ctx Context,
         p: P,
         input_ty: Option<&[&ResolvedTensorDims]>,
+        omp_threshold: usize,
     ) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         if let Some(input_ty) = input_ty {
@@ -103,6 +104,9 @@ impl<'ctx> Session<'ctx> {
         optimizer
             .passes
             .push(Box::new(gemm::GemmTransComposition::default()));
+        optimizer.passes.push(Box::new(omp::InnermostOMP {
+            threshold: omp_threshold,
+        }));
         optimizer
             .passes
             .push(Box::new(identity::Ops2Identity::default()));
@@ -129,7 +133,7 @@ impl<'ctx> Session<'ctx> {
             .map_err(SessionError::CodeGenError)?;
         println!("Compiled");
 
-        //codegen.module().print_to_file("model.ll").unwrap();
+        // codegen.module().print_to_file("model.ll").unwrap();
 
         let mut rng = SmallRng::from_entropy();
         let id = Alphanumeric.sample_string(&mut rng, 16);
@@ -289,7 +293,7 @@ mod test {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")
             .join(path);
-        Session::new(ctx, path, None)
+        Session::new(ctx, path, None, 10)
     }
 
     fn with_session<P, F>(path: P, f: F) -> TestResult

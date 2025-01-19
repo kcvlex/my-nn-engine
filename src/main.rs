@@ -159,6 +159,7 @@ fn main0() -> Result<()> {
         &context,
         &args[1],
         Some(&[&ResolvedTensorDims::new(vec![1, 28, 28])]),
+        100,
     )
     .map_err(|e| Error::other(format!("{:?}", e)))?;
     session.write_model("model.dot");
@@ -566,6 +567,7 @@ fn main_run_resnet() -> Result<()> {
         //dir.join("models/resnet18-v2-7.onnx"),
         &args[1],
         Some(&[&input.ty.dims]),
+        100,
     )
     .map_err(|e| Error::other(format!("{:?}", e)))?;
     session.write_model("model.dot");

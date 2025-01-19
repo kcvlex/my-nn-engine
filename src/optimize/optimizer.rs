@@ -200,7 +200,6 @@ impl NodeDelete for SimpleGraphModifier {
                 continue;
             }
             node.meta.mark_as_deleted = true;
-            println!("Mark as deleted: {:?}", node);
             for (i, used) in node.inputs.iter().enumerate() {
                 if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
                     e.get_mut().remove(&(id, i));

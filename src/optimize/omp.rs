@@ -1,10 +1,9 @@
 use crate::onnx::model::Graph;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 
-#[derive(Default)]
-pub struct InnermostOMP {}
-
-const THRESHOLD: usize = 100;
+pub struct InnermostOMP {
+    pub threshold: usize,
+}
 
 impl<T: GraphModifier> Pass<T> for InnermostOMP {
     fn summary(&self) -> &'static str {
@@ -21,12 +20,20 @@ impl<T: GraphModifier> Pass<T> for InnermostOMP {
                 }
 
                 let output = node.outputs[0];
-                let dims = &graph.get_resolved_tensor_type(output).unwrap().dims;
-                let annotate = dims.last().map(|x| THRESHOLD <= *x).unwrap_or(false);
+                let ty = &graph.get_resolved_tensor_type(output).unwrap();
+                let annotate = ty
+                    .dims
+                    .last()
+                    .map(|x| self.threshold <= *x)
+                    .unwrap_or(false);
                 if !annotate {
                     return None;
                 }
-                Some((id, dims.ndim() - 1))
+                let ndim = ty.dims.ndim();
+                if ty.stride(ndim - 1) != 1 {
+                    return None;
+                }
+                Some((id, ty.dims.ndim() - 1))
             })
             .collect::<Vec<_>>();
 
