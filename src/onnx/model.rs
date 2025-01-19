@@ -5,7 +5,7 @@ use crate::tensor::{
     tensor::{ResolvedTensorType, Tensor, TensorType, TypeError, UnresolvedTensorType},
 };
 use id_arena::{Arena, Id};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::{Index, IndexMut};
 
 #[derive(Debug)]
@@ -20,7 +20,7 @@ pub struct Graph {
     pub inputs: Vec<NodeId>,
     pub outputs: Vec<NodeId>,
     pub values: Values,
-    pub initializer: HashMap<ValueId, Tensor>,
+    pub initializer: BTreeMap<ValueId, Tensor>,
     pub resolved_params: HashMap<ParamKey, usize>,
 }
 

@@ -1,3 +1,2 @@
-mobile*
-mnist*
-resnet*
+validated/*
+!validated/Makefile

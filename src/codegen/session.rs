@@ -24,7 +24,7 @@ use rand::SeedableRng;
 use std::path::PathBuf;
 use std::process::Command;
 
-type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8);
+type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -38,6 +38,7 @@ pub struct Session<'ctx> {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
+    initializer: Vec<Tensor>,
 
     #[allow(dead_code)]
     codegen: CodeGen<'ctx>,
@@ -113,6 +114,13 @@ impl<'ctx> Session<'ctx> {
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
+        let initializer: Vec<_> = model
+            .graph
+            .initializer
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
         let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
         println!("Compiling");
         codegen
@@ -171,6 +179,7 @@ impl<'ctx> Session<'ctx> {
             shared_obj,
             lib,
             func,
+            initializer,
         })
     }
 
@@ -186,7 +195,18 @@ impl<'ctx> Session<'ctx> {
             .map(|t| t.data.as_mut_ptr())
             .collect::<Vec<_>>();
         let input_ptrs = inputs.iter().map(|t| t.data.as_ptr()).collect::<Vec<_>>();
-        unsafe { (self.func)(output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
+        let initializer_ptrs = self
+            .initializer
+            .iter()
+            .map(|t| t.data.as_ptr())
+            .collect::<Vec<_>>();
+        unsafe {
+            (self.func)(
+                output_ptrs.as_ptr(),
+                input_ptrs.as_ptr(),
+                initializer_ptrs.as_ptr(),
+            )
+        };
         Ok(outputs)
     }
 

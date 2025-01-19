@@ -5,7 +5,7 @@ use crate::onnx::model::{Graph, Node, NodeId, ValueId};
 use crate::onnx::operator;
 use crate::onnx::operator::Operator;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::{DataType, ResolvedTensorType, TensorData};
+use crate::tensor::tensor::{DataType, ResolvedTensorType};
 
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
@@ -258,7 +258,7 @@ impl<'ctx> CodeGen<'ctx> {
         let ptr_type = context.ptr_type(AddressSpace::default());
         let fn_type = context
             .void_type()
-            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
+            .fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
         let main = module.add_function("main", fn_type, None);
         let main_entry = context.append_basic_block(main, "entry");
         builder.position_at_end(main_entry);
@@ -390,61 +390,49 @@ impl<'ctx> CodeGen<'ctx> {
         func
     }
 
-    fn init_data(&mut self) -> Result<(), BuilderError> {
-        macro_rules! define_gv {
-            ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
-                let len = $data.len();
-                let gv = self
-                    .module
-                    .add_global($ty.array_type(len as u32), None, $name.as_str());
-                let arr = $data.iter().map($convert).collect::<Vec<_>>();
-                let arr = $ty.const_array(&arr);
-                gv.set_initializer(&arr);
-                gv
-            }};
-        }
-        for (id, value) in self.graph.initializer.iter() {
-            let name = format!("gv.{}", self.graph.values[*id].name);
-            let gv = match value.data {
-                TensorData::F32(ref data) => {
-                    let ty = self.context.f32_type();
-                    define_gv!(name, data, ty, |&x| ty.const_float(x.into()))
-                }
-                TensorData::F64(ref data) => {
-                    let ty = self.context.f64_type();
-                    define_gv!(name, data, ty, |&x| ty.const_float(x))
-                }
-                TensorData::I64(ref data) => {
-                    let ty = self.context.i64_type();
-                    define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
-                }
-            };
-            self.ptr_values.insert(*id, gv.as_pointer_value());
-        }
-        Ok(())
-    }
+    // fn init_data(&mut self) -> Result<(), BuilderError> {
+    //     macro_rules! define_gv {
+    //         ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
+    //             let len = $data.len();
+    //             let gv = self
+    //                 .module
+    //                 .add_global($ty.array_type(len as u32), None, $name.as_str());
+    //             let arr = $data.iter().map($convert).collect::<Vec<_>>();
+    //             let arr = $ty.const_array(&arr);
+    //             gv.set_initializer(&arr);
+    //             gv
+    //         }};
+    //     }
+    //     for (id, value) in self.graph.initializer.iter() {
+    //         let name = format!("gv.{}", self.graph.values[*id].name);
+    //         let gv = match value.data {
+    //             TensorData::F32(ref data) => {
+    //                 let ty = self.context.f32_type();
+    //                 define_gv!(name, data, ty, |&x| ty.const_float(x.into()))
+    //             }
+    //             TensorData::F64(ref data) => {
+    //                 let ty = self.context.f64_type();
+    //                 define_gv!(name, data, ty, |&x| ty.const_float(x))
+    //             }
+    //             TensorData::I64(ref data) => {
+    //                 let ty = self.context.i64_type();
+    //                 define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
+    //             }
+    //         };
+    //         self.ptr_values.insert(*id, gv.as_pointer_value());
+    //     }
+    //     Ok(())
+    // }
 
     fn init_main_args(&mut self) -> Result<(), BuilderError> {
-        for (i, arr) in [&self.graph.outputs, &self.graph.inputs].iter().enumerate() {
-            let ptr = self
-                .main
-                .get_nth_param(i as u32)
-                .unwrap()
-                .into_pointer_value();
-            for (i, node_id) in arr.iter().enumerate() {
-                let value_id = match self.graph.nodes[*node_id].op {
-                    Operator::Input(v) | Operator::Output(v) => v,
-                    _ => unreachable!(),
-                };
-                if self.graph.initializer.contains_key(&value_id) {
-                    continue;
-                }
-                let value = &self.graph.values[value_id];
+        macro_rules! init_ptr {
+            ($value_id: expr, $ptr: expr, $i: expr) => {{
+                let value = &self.graph.values[$value_id];
                 let ptr = unsafe {
                     self.builder.build_in_bounds_gep(
                         self.context.ptr_type(AddressSpace::default()),
-                        ptr,
-                        &[self.context.i64_type().const_int(i as u64, false)],
+                        $ptr,
+                        &[self.context.i64_type().const_int($i as u64, false)],
                         value.name.as_str(),
                     )
                 }?;
@@ -456,9 +444,38 @@ impl<'ctx> CodeGen<'ctx> {
                         value.name.as_str(),
                     )?
                     .into_pointer_value();
-                self.ptr_values.insert(value_id, ptr);
+                self.ptr_values.insert($value_id, ptr);
+            }};
+        }
+
+        for (i, arr) in [&self.graph.outputs, &self.graph.inputs].iter().enumerate() {
+            let ptr = self
+                .main
+                .get_nth_param(i as u32)
+                .unwrap()
+                .into_pointer_value();
+            for (i, node_id) in arr.iter().enumerate() {
+                let value_id = match self.graph.nodes[*node_id].op {
+                    Operator::Input(v) | Operator::Output(v) => v,
+                    _ => unreachable!(),
+                };
+
+                // TODO: necessary?
+                if self.graph.initializer.contains_key(&value_id) {
+                    continue;
+                }
+
+                init_ptr!(value_id, ptr, i);
             }
         }
+
+        {
+            let ptr = self.main.get_nth_param(2).unwrap().into_pointer_value();
+            for (i, value_id) in self.graph.initializer.keys().enumerate() {
+                init_ptr!(*value_id, ptr, i);
+            }
+        }
+
         Ok(())
     }
 
@@ -482,8 +499,8 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn compile_graph(&mut self) -> Result<(), BuilderError> {
-        self.init_data()?;
-        println!("Data initialized");
+        // self.init_data()?;
+        // println!("Data initialized");
         self.init_main_args()?;
         for (node, alloc) in self
             .order

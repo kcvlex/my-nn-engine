@@ -9,7 +9,7 @@ type Result = std::result::Result<(), SessionError>;
 fn run_test(model: &str, epsilon: f64) -> Result {
     let ctx = Context::create();
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models")
+        .join("models/validated")
         .join(model);
     let data_dir = root_dir.join("test_data_set_0");
     let model_path = root_dir.join(format!("{model}.onnx"));
@@ -34,5 +34,10 @@ fn test_mnist12() -> Result {
 
 #[test]
 fn test_resnet18() -> Result {
-    run_test("resnet18-v2-7", 1e-1)
+    run_test("resnet18-v2-7", 1e-3)
+}
+
+#[test]
+fn test_resnet152() -> Result {
+    run_test("resnet152-v2-7", 1e-3)
 }

@@ -6,7 +6,7 @@ use crate::tensor::{
     tensor::{DataType, Tensor, TensorData, TensorType, TypeError, UnresolvedTensorType},
 };
 use prost::{DecodeError, Message};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
@@ -176,8 +176,8 @@ impl GraphLoader {
         Ok(res)
     }
 
-    fn load_initializer(&mut self, v: Vec<TensorProto>) -> LoadResult<HashMap<ValueId, Tensor>> {
-        let mut res = HashMap::new();
+    fn load_initializer(&mut self, v: Vec<TensorProto>) -> LoadResult<BTreeMap<ValueId, Tensor>> {
+        let mut res = BTreeMap::new();
         for tensor in v.into_iter() {
             let name = tensor.name.clone();
             let tensor = load_tensor(tensor)?;
@@ -512,17 +512,4 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         }
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
-}
-
-#[test]
-fn load_tensor_pb() -> Result<(), ModelLoadError> {
-    use std::path::PathBuf;
-
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models/resnet18-v2-7/test_data_set_0/output_0.pb");
-    let tensor = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
-    let tensor = TensorProto::decode(&*tensor).map_err(ModelLoadError::Decode)?;
-    let tensor = load_tensor(tensor)?;
-    println!("{:?}", tensor);
-    Ok(())
 }
