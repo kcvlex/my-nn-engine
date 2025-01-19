@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node};
+use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
@@ -93,7 +93,7 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
                     outputs: vec![reduce_matrix_output],
                     name: format!("Reduce2ReduceMatrix_{i}"),
                     op: Operator::ReduceMatrix(info.op),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
 

@@ -21,7 +21,8 @@ pub struct Graph {
     pub outputs: Vec<NodeId>,
     pub values: Values,
     pub initializer: BTreeMap<ValueId, Tensor>,
-    pub resolved_params: HashMap<ParamKey, usize>,
+
+    pub(crate) resolved_params: HashMap<ParamKey, usize>,
 }
 
 fn unify_types(
@@ -123,10 +124,10 @@ impl Graph {
     pub fn delete_nodes(&mut self) {
         let mut nodes = Nodes::default();
         for (_, node) in self.nodes.iter().filter(|(_, node)| {
-            if node.mark_as_deleted && node.is_dummy() {
+            if node.meta.mark_as_deleted && node.is_dummy() {
                 panic!("cannot delete input/output node");
             }
-            !node.mark_as_deleted && !node.is_dummy()
+            !node.meta.mark_as_deleted && !node.is_dummy()
         }) {
             nodes.alloc(node.clone());
         }
@@ -148,6 +149,13 @@ impl Graph {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct NodeMeta {
+    pub(crate) mark_as_deleted: bool,
+    pub(crate) omp_parallel: Option<usize>,
+    pub(crate) omp_for: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub inputs: Vec<ValueId>,
@@ -155,7 +163,7 @@ pub struct Node {
     pub name: String,
     pub op: Operator,
 
-    pub(crate) mark_as_deleted: bool,
+    pub(crate) meta: NodeMeta,
 }
 
 impl Node {
@@ -174,11 +182,11 @@ impl Nodes {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (NodeId, &Node)> {
-        self.0.iter().filter(|(_, v)| !v.mark_as_deleted)
+        self.0.iter().filter(|(_, v)| !v.meta.mark_as_deleted)
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (NodeId, &mut Node)> {
-        self.0.iter_mut().filter(|(_, v)| !v.mark_as_deleted)
+        self.0.iter_mut().filter(|(_, v)| !v.meta.mark_as_deleted)
     }
 }
 
@@ -186,7 +194,7 @@ impl Index<NodeId> for Nodes {
     type Output = Node;
     fn index(&self, index: NodeId) -> &Self::Output {
         let res = &self.0[index];
-        assert!(!res.mark_as_deleted);
+        assert!(!res.meta.mark_as_deleted);
         res
     }
 }
@@ -194,7 +202,7 @@ impl Index<NodeId> for Nodes {
 impl IndexMut<NodeId> for Nodes {
     fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
         let res = &mut self.0[index];
-        assert!(!res.mark_as_deleted);
+        assert!(!res.meta.mark_as_deleted);
         res
     }
 }

@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node};
+use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
@@ -117,7 +117,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                             outputs: vec![im2col_data],
                             name: format!("Im2Col_{index}"),
                             op: Operator::Im2Col(im2col),
-                            mark_as_deleted: false,
+                            meta: NodeMeta::default(),
                         },
                     );
 
@@ -178,7 +178,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                                 alpha: 1.0,
                                 beta: 0.0,
                             }),
-                            mark_as_deleted: false,
+                            meta: NodeMeta::default(),
                         },
                     );
 
@@ -248,7 +248,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                             outputs: vec![im2col_data],
                             name: format!("Im2Col_{index}"),
                             op: Operator::Im2Col(im2col),
-                            mark_as_deleted: false,
+                            meta: NodeMeta::default(),
                         },
                     );
 
@@ -265,7 +265,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
                         outputs: vec![reduced_data],
                         name: format!("Im2Col_{index}_Reduce"),
                         op: Operator::ReduceMatrix(op),
-                        mark_as_deleted: false,
+                        meta: NodeMeta::default(),
                     };
                     modifier.register_new_node(graph, reduce_node);
 

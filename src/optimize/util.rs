@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node, ValueId};
+use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::GraphModifier;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
@@ -77,7 +77,7 @@ impl TransposeGenerator {
                 outputs: vec![transposed],
                 op: Operator::Transpose(perms),
                 name: node_name.clone(),
-                mark_as_deleted: false,
+                meta: NodeMeta::default(),
             },
         );
 
@@ -92,7 +92,7 @@ impl TransposeGenerator {
                     outputs: vec![new_value],
                     op: Operator::Contiguous,
                     name: format!("{node_name}_Contiguous"),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
             new_value
@@ -188,7 +188,7 @@ impl ReshapeGenerator {
                             outputs: vec![new_value],
                             op: Operator::Contiguous,
                             name: node_name,
-                            mark_as_deleted: false,
+                            meta: NodeMeta::default(),
                         },
                     );
                     (new_value, reshaped_ty)
@@ -204,7 +204,7 @@ impl ReshapeGenerator {
                 outputs: vec![new_value],
                 op: Operator::Reshape,
                 name: node_name,
-                mark_as_deleted: false,
+                meta: NodeMeta::default(),
             },
         );
         Ok(new_value)

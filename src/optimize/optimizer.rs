@@ -199,7 +199,7 @@ impl NodeDelete for SimpleGraphModifier {
                 // TODO: correct?
                 continue;
             }
-            node.mark_as_deleted = true;
+            node.meta.mark_as_deleted = true;
             println!("Mark as deleted: {:?}", node);
             for (i, used) in node.inputs.iter().enumerate() {
                 if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
@@ -234,7 +234,7 @@ impl SimpleGraphModifier {
 
         visited.insert(node_id);
 
-        assert!(!graph.nodes[node_id].mark_as_deleted);
+        assert!(!graph.nodes[node_id].meta.mark_as_deleted);
 
         if matches!(graph.nodes[node_id].op, Operator::Input(_)) {
             return;
@@ -365,13 +365,13 @@ impl ExperimentalGraphModifier {
     }
 
     fn delete_nodes_dfs(&mut self, node_id: NodeId, graph: &mut Graph) {
-        if graph.nodes[node_id].mark_as_deleted {
+        if graph.nodes[node_id].meta.mark_as_deleted {
             return;
         }
         if graph.nodes[node_id].is_dummy() {
             return;
         }
-        graph.nodes[node_id].mark_as_deleted = true;
+        graph.nodes[node_id].meta.mark_as_deleted = true;
         for value in graph.nodes[node_id].outputs.iter() {
             self.value2defined.remove(value);
             self.value2used.remove(value);

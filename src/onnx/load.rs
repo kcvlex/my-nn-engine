@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Model, Node, Nodes, ValueId, ValueInfo, Values};
+use crate::onnx::model::{Graph, Model, Node, NodeMeta, Nodes, ValueId, ValueInfo, Values};
 use crate::onnx::operator::*;
 use crate::tensor::{
     dimensions::{Dimension, UnresolvedTensorDims},
@@ -129,7 +129,7 @@ impl GraphLoader {
                     inputs: Vec::new(),
                     outputs: vec![x],
                     op: Operator::Input(x),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 };
                 res.push(nodes.alloc(node));
             }
@@ -143,7 +143,7 @@ impl GraphLoader {
                     inputs: vec![x],
                     outputs: Vec::new(),
                     op: Operator::Output(x),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 };
                 nodes.alloc(node)
             })
@@ -219,7 +219,7 @@ impl GraphLoader {
                 inputs,
                 outputs,
                 op,
-                mark_as_deleted: false,
+                meta: NodeMeta::default(),
             });
         }
         Ok(res)

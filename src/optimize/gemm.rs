@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node, ValueId};
+use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 
@@ -43,7 +43,7 @@ impl<T: GraphModifier> Pass<T> for TransformBLASGemm {
                     outputs: vec![new_output],
                     name: format!("TransformBLASGemm_{:?}", id),
                     op: Operator::BLASGemm(blas_gemm),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
 
@@ -60,7 +60,7 @@ impl<T: GraphModifier> Pass<T> for TransformBLASGemm {
                         outputs: vec![add],
                         name: format!("TransformBLASGemm_Add_{:?}", id),
                         op: Operator::Add,
-                        mark_as_deleted: false,
+                        meta: NodeMeta::default(),
                     },
                 );
                 add
@@ -132,7 +132,7 @@ impl<T: GraphModifier> Pass<T> for GemmTransComposition {
                     outputs: vec![new_output],
                     name: format!("GemmTransComposition_{index}"),
                     op: Operator::Gemm(gemm),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 };
                 println!("new_node: {:?}", new_node);
                 modifier.register_new_node(graph, new_node);
@@ -177,7 +177,7 @@ impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
                 outputs: vec![new_output],
                 name: format!("MatMul2Gemm_{index}"),
                 op: Operator::BLASGemm(BLASGemm::default()),
-                mark_as_deleted: false,
+                meta: NodeMeta::default(),
             };
             modifier.register_new_node(graph, new_node);
             modifier.replace_input_value(graph, old_output, new_output);

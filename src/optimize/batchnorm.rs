@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node};
+use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::TransposeGenerator;
@@ -99,7 +99,7 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
                         _ => unreachable!(),
                     }),
                     name: format!("BatchNormalizationPC_{}", node_id.index()),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
 

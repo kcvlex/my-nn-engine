@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node, ValueInfo};
+use crate::onnx::model::{Graph, Node, NodeMeta, ValueInfo};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::ReshapeGenerator;
@@ -31,7 +31,7 @@ impl<T: GraphModifier> Pass<T> for ContigousOutput {
                     outputs: vec![new_value],
                     op: Operator::Contiguous,
                     name: format!("Contiguous_Output_{}", id.index()),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
             modifier.replace_input_value_if(graph, input, new_value, |_, node| {
@@ -96,7 +96,7 @@ impl<T: GraphModifier> Pass<T> for EliminateGlobalAvgPool {
                     outputs: vec![pool_output],
                     op: Operator::ReduceMatrix(ReduceOp::Mean),
                     name: format!("GlobalAveragePool_{}", id.index()),
-                    mark_as_deleted: false,
+                    meta: NodeMeta::default(),
                 },
             );
 

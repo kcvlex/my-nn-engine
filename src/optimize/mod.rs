@@ -4,6 +4,7 @@ pub mod identity;
 pub mod im2col;
 pub mod infer;
 pub mod normalize;
+pub mod omp;
 pub mod optimizer;
 pub mod reduce;
 pub mod util;
