@@ -112,6 +112,7 @@ pub struct CodeGen<'ctx> {
 
 struct FunctionTranslator<'a, 'ctx> {
     context: &'ctx Context,
+    module: &'a Module<'ctx>,
     builder: &'a Builder<'ctx>,
     function: &'a FunctionValue<'ctx>,
     intrinsics: &'a Intrinsics<'ctx>,
@@ -572,6 +573,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(entry);
         let translator = FunctionTranslator {
             context: self.context,
+            module: &self.module,
             builder: &self.builder,
             function: &function,
             intrinsics: &self.intrinsics,
@@ -622,23 +624,29 @@ impl<'ctx> CodeGen<'ctx> {
             return Ok(function);
         }
 
+        // TODO
+        let omp_ctx = None;
+        let omp_parallel = None;
+        let omp_for = None;
+
         macro_rules! gen_binaryop {
             ($op: expr) => {{
                 let mut lhs = ptrs[1].clone();
-                println!("lhs.ty={:?}", lhs.ty);
                 lhs.ty = lhs.ty.broadcast(&ptrs[0].ty.dims);
-                println!("lhs.ty={:?}", lhs.ty);
                 let mut rhs = ptrs[2].clone();
-                println!("rhs.ty={:?}", rhs.ty);
                 rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
-                println!("rhs.ty={:?}", rhs.ty);
-                println!("ptrs[0].ty={:?}", ptrs[0].ty);
                 let binop = BinaryOps {
                     dst: ptrs[0].clone(),
                     lhs,
                     rhs,
                 };
                 let op = Operation::BinaryOp(binop, $op);
+                let op = OperationContext {
+                    operation: op,
+                    omp_ctx,
+                    omp_parallel,
+                    omp_for,
+                };
                 translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
             }};
         }
@@ -652,6 +660,12 @@ impl<'ctx> CodeGen<'ctx> {
                     },
                     $op,
                 );
+                let op = OperationContext {
+                    operation: op,
+                    omp_ctx,
+                    omp_parallel,
+                    omp_for,
+                };
                 translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
             }};
         }
@@ -677,14 +691,20 @@ impl<'ctx> CodeGen<'ctx> {
                     n,
                     k,
                 };
-                Operation::BinaryOp(
+                let op = Operation::BinaryOp(
                     BinaryOps {
                         dst: ptrs[0].clone(),
                         lhs: ptrs[1].clone(),
                         rhs: ptrs[2].clone(),
                     },
                     BinaryOpcode::Gemm(gemm),
-                )
+                );
+                OperationContext {
+                    operation: op,
+                    omp_ctx,
+                    omp_parallel,
+                    omp_for,
+                }
             }};
         }
 
@@ -761,10 +781,25 @@ struct TensorPtr<'ctx> {
     name: String,
 }
 
-// TODO: Remove
-impl TensorPtr<'_> {
+impl<'ctx> TensorPtr<'ctx> {
+    // TODO: Remove
     fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)
+    }
+
+    fn into_outlined_nth_tensor(&self, outlined: FunctionValue<'ctx>, n: u32) -> Self {
+        // global_tid, bound_tid, ...
+        let begin = 2 + n * 2;
+        let ptr = outlined.get_nth_param(begin).unwrap().into_pointer_value();
+        let offset = outlined.get_nth_param(begin + 1).unwrap().into_int_value();
+        let ty = self.ty.clone();
+        let name = self.name.clone();
+        Self {
+            ptr,
+            ty,
+            offset,
+            name,
+        }
     }
 }
 
@@ -792,6 +827,22 @@ impl<'ctx> LLVMScalarType<'ctx> {
 enum Operation<'ctx> {
     UnaryOp(UnaryOps<'ctx>, UnaryOpcode),
     BinaryOp(BinaryOps<'ctx>, BinaryOpcode),
+}
+
+#[derive(Clone)]
+struct OMPContext<'ctx> {
+    global_tid: PointerValue<'ctx>,
+    is_last: PointerValue<'ctx>,
+    lb: PointerValue<'ctx>,
+    ub: PointerValue<'ctx>,
+    stride: PointerValue<'ctx>,
+}
+
+struct OperationContext<'ctx> {
+    operation: Operation<'ctx>,
+    omp_ctx: Option<OMPContext<'ctx>>,
+    omp_parallel: Option<FunctionValue<'ctx>>,
+    omp_for: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -831,11 +882,63 @@ struct BinaryOps<'ctx> {
     rhs: TensorPtr<'ctx>,
 }
 
-impl Operation<'_> {
+impl<'ctx> Operation<'ctx> {
     fn result_dims(&self) -> &ResolvedTensorDims {
         match self {
             Operation::UnaryOp(op, _) => &op.dst.ty.dims,
             Operation::BinaryOp(op, _) => &op.dst.ty.dims,
+        }
+    }
+
+    fn into_outlined(&self, outlined: FunctionValue<'ctx>) -> Self {
+        match self {
+            Operation::UnaryOp(op, opcode) => {
+                let dst = op.dst.into_outlined_nth_tensor(outlined, 0);
+                let src = op.src.into_outlined_nth_tensor(outlined, 1);
+                Operation::UnaryOp(UnaryOps { dst, src }, *opcode)
+            }
+            Operation::BinaryOp(op, opcode) => {
+                let dst = op.dst.into_outlined_nth_tensor(outlined, 0);
+                let lhs = op.lhs.into_outlined_nth_tensor(outlined, 1);
+                let rhs = op.rhs.into_outlined_nth_tensor(outlined, 2);
+                Operation::BinaryOp(BinaryOps { dst, lhs, rhs }, opcode.clone())
+            }
+        }
+    }
+
+    fn outlined_type(&self, context: &'ctx Context) -> FunctionType<'ctx> {
+        let void_type = context.void_type();
+        let ptr_type = context.ptr_type(AddressSpace::default());
+        let argc = match self {
+            Operation::UnaryOp(_, _) => 2,
+            Operation::BinaryOp(_, _) => 3,
+        };
+        let mut vec = Vec::with_capacity(2 + argc * 2);
+
+        // global_tid
+        vec.push(ptr_type.into());
+
+        // bound_tid
+        vec.push(ptr_type.into());
+
+        for _ in 0..argc {
+            vec.push(ptr_type.into());
+            vec.push(ptr_type.into());
+        }
+
+        void_type.fn_type(&vec, false)
+    }
+}
+
+impl<'ctx> OperationContext<'ctx> {
+    fn into_outlined(&self, outlined: FunctionValue<'ctx>) -> Self {
+        let operation = self.operation.into_outlined(outlined);
+        assert!(self.omp_ctx.is_none());
+        Self {
+            operation,
+            omp_ctx: None,
+            omp_parallel: None,
+            omp_for: self.omp_for,
         }
     }
 }
@@ -1723,7 +1826,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_nested_loop_rec(
         &self,
-        ops: Operation<'ctx>,
+        op_ctx: OperationContext<'ctx>,
         loop_bb: LoopBB<'ctx>,
         nest: usize,
         max_nest: usize,
@@ -1764,7 +1867,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         }
 
         if nest == max_nest {
-            self.build_operation(&ops)?;
+            self.build_operation(&op_ctx.operation)?;
             self.builder.build_unconditional_branch(loop_bb.exit)?;
             return Ok(());
         }
@@ -1774,9 +1877,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let exiting_bb = self
             .context
             .append_basic_block(*self.function, format!("exit.{}", nest).as_str());
-        let bound: u64 = ops.result_dims()[nest].try_into().unwrap();
+        let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
         let bound = self.context.i64_type().const_int(bound, false);
-        let next_ops = match ops {
+        let mut next_op_ctx = op_ctx;
+        next_op_ctx.operation = match next_op_ctx.operation {
             Operation::UnaryOp(op, opcode) => {
                 let offset_phi_dst = self.builder.build_phi(
                     self.context.i64_type(),
@@ -1854,12 +1958,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header: next_bb,
             exit: exiting_bb,
         };
-        self.build_nested_loop_rec(next_ops, next_loop_bb, nest + 1, max_nest)
+        self.build_nested_loop_rec(next_op_ctx, next_loop_bb, nest + 1, max_nest)
     }
 
     fn build_nested_loop(
         &self,
-        op: Operation<'ctx>,
+        op_ctx: OperationContext<'ctx>,
         preheader: BasicBlock<'ctx>,
         max_nest: usize,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
@@ -1872,7 +1976,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             header,
             exit,
         };
-        self.build_nested_loop_rec(op, loop_bb, 0, max_nest)?;
+        self.build_nested_loop_rec(op_ctx, loop_bb, 0, max_nest)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }
