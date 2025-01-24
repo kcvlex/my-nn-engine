@@ -63,7 +63,6 @@ fn get_argument_types(
 
 impl Session {
     pub fn new<P: AsRef<Path>>(
-        ctx: &'_ Context,
         p: P,
         input_ty: Option<&[&ResolvedTensorDims]>,
         omp_threshold: usize,
@@ -263,7 +262,6 @@ impl Session {
 mod test {
     use super::*;
     use crate::tensor::tensor::Tensor;
-    use inkwell::context::Context;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
@@ -311,24 +309,16 @@ mod test {
         }};
     }
 
-    fn make_session<P: AsRef<std::path::Path>>(
-        ctx: &'_ Context,
-        path: P,
-    ) -> Result<Session, SessionError> {
-        use std::path::PathBuf;
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("models/test/operator")
-            .join(path);
-        Session::new(ctx, path, None, 10)
-    }
-
     fn with_session<P, F>(path: P, f: F) -> TestResult
     where
         P: AsRef<std::path::Path>,
         F: FnOnce(Session) -> TestResult,
     {
-        let context = Context::create();
-        let session = make_session(&context, path)?;
+        use std::path::PathBuf;
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/test/operator")
+            .join(path);
+        let session = Session::new(path, None, 10)?;
         f(session)?;
         Ok(())
     }

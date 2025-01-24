@@ -152,11 +152,8 @@ fn main0() -> Result<()> {
         .into_dyn()
         .try_into()
         .map_err(|e| Error::other(format!("{:?}", e)))?;
-    use inkwell::context::Context;
     use my_onnx::tensor::resolved_dimensions::ResolvedTensorDims;
-    let context = Context::create();
     let session = Session::new(
-        &context,
         &args[1],
         Some(&[&ResolvedTensorDims::new(vec![1, 28, 28])]),
         100,
@@ -561,9 +558,7 @@ fn main_run_resnet() -> Result<()> {
     .try_into()
     .map_err(|e| Error::other(format!("{:?}", e)))?;
     // println!("{:?}", input);
-    let ctx = inkwell::context::Context::create();
     let session = Session::new(
-        &ctx,
         //dir.join("models/resnet18-v2-7.onnx"),
         &args[1],
         Some(&[&input.ty.dims]),

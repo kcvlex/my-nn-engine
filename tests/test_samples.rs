@@ -1,4 +1,3 @@
-use inkwell::context::Context;
 use my_onnx::codegen::session::{Session, SessionError};
 use my_onnx::onnx::load::*;
 use my_onnx::tensor::tensor::Tensor;
@@ -7,7 +6,6 @@ use std::path::PathBuf;
 type Result = std::result::Result<(), SessionError>;
 
 fn run_test(model: &str, epsilon: f64) -> Result {
-    let ctx = Context::create();
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model);
@@ -17,7 +15,7 @@ fn run_test(model: &str, epsilon: f64) -> Result {
     let output_path = data_dir.join("output_0.pb");
 
     let input = Tensor::load_from_path(input_path).map_err(SessionError::ModelLoadError)?;
-    let session = Session::new(&ctx, &model_path, Some(&[&input.ty.dims]), 100)?;
+    let session = Session::new(&model_path, Some(&[&input.ty.dims]), 100)?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
     if !output[0].eq_with_epsilon(&expected, epsilon) {
