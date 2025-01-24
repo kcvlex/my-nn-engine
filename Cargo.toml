@@ -14,8 +14,10 @@ ndarray = "0.16.0"
 num-integer = "0.1.46"
 prost = "0.13.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
+rayon = "1.10.0"
 strum = "0.26.3"
 strum_macros = "0.26.4"
+tempfile = "3.15.0"
 
 [build-dependencies]
 prost-build = "0.13.1"

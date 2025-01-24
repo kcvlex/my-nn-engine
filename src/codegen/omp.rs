@@ -99,6 +99,7 @@ impl<'ctx> OMP<'ctx> {
         );
         let dummy_ident = module.add_global(ident_ty, None, "dummy_ident");
         dummy_ident.set_initializer(&dummy_ident_value);
+        dummy_ident.set_linkage(inkwell::module::Linkage::Internal);
 
         Ok(Self {
             i32_type,

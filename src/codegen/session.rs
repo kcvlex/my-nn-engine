@@ -1,4 +1,4 @@
-use crate::codegen::gen::{CodeGen, CodeGenError};
+use crate::codegen::gen::{CodeGenContext, CodeGenError};
 use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::optimize::{
@@ -11,17 +11,16 @@ use crate::tensor::{
     tensor::{ResolvedTensorType, Tensor, TypeError},
 };
 
+use tempfile::TempDir;
+
+use rayon::prelude::*;
+
 use inkwell::context::Context;
 use inkwell::targets::FileType;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
-
-use std::path::PathBuf;
 use std::process::Command;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
@@ -34,16 +33,17 @@ pub enum SessionError {
     OtherError(String),
 }
 
-pub struct Session<'ctx> {
+pub struct Session {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer: Vec<Tensor>,
 
     #[allow(dead_code)]
-    codegen: CodeGen<'ctx>,
+    codegen_ctx: CodeGenContext,
 
-    shared_obj: PathBuf,
+    #[allow(dead_code)]
+    tmp_dir: Option<TempDir>,
 
     #[allow(dead_code)]
     lib: libloading::Library,
@@ -61,9 +61,9 @@ fn get_argument_types(
         .ok_or(SessionError::TypeError(TypeError::UnresolvedInput))
 }
 
-impl<'ctx> Session<'ctx> {
+impl Session {
     pub fn new<P: AsRef<Path>>(
-        ctx: &'ctx Context,
+        ctx: &'_ Context,
         p: P,
         input_ty: Option<&[&ResolvedTensorDims]>,
         omp_threshold: usize,
@@ -125,28 +125,59 @@ impl<'ctx> Session<'ctx> {
             .cloned()
             .collect::<Vec<_>>();
 
-        let mut codegen = CodeGen::new(ctx, model.graph).map_err(SessionError::CodeGenError)?;
-        println!("Compiling");
-        codegen
-            .compile_default()
-            //.compile_with_passes(&[])
+        let codegen_ctx = CodeGenContext::new(model.graph).map_err(SessionError::CodeGenError)?;
+        let (codegens, mut contexts): (Vec<_>, Vec<_>) = codegen_ctx
+            .all_necessary_nodes()
+            .iter()
+            .copied()
+            .map(|id| {
+                let ll_ctx = Context::create();
+                (id, ll_ctx)
+            })
+            .unzip();
+        contexts.push(Context::create());
+        let mut codegens = codegens
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let ll_ctx = &contexts[i];
+                codegen_ctx.new_codegen_for_node(id, ll_ctx)
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map_err(SessionError::CodeGenError)?;
+        codegens.push({
+            let ll_ctx = contexts.last().unwrap();
+            codegen_ctx
+                .new_codegen_for_main(ll_ctx)
+                .map_err(SessionError::CodeGenError)?
+        });
+
+        let tmp_dir = TempDir::with_prefix("my_model_")
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        let codegens = codegens
+            .into_iter()
+            .enumerate()
+            .map(|(i, codegen)| {
+                let path = tmp_dir.path().join(format!("model_{i}.o"));
+                (path, codegen)
+            })
+            .collect::<Vec<_>>();
+
+        println!("Compiling");
+        let objs = codegens
+            .into_par_iter()
+            .map(|(path, codegen)| {
+                codegen.compile().unwrap();
+                codegen.run_opt_aggressive().unwrap();
+                codegen.write_to_file(FileType::Object, &path).unwrap();
+                // let ll_path = path.with_extension("ll");
+                // codegen.module().print_to_file(&ll_path).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
         println!("Compiled");
 
-        // codegen.module().print_to_file("model.ll").unwrap();
-
-        let mut rng = SmallRng::from_entropy();
-        let id = Alphanumeric.sample_string(&mut rng, 16);
-
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let tmp_obj = dir.join(format!("model_{}.o", id));
-        let shared_obj = dir.join(format!("model_{}.so", id));
-
-        codegen
-            .target_machine()
-            .write_to_file(codegen.module(), FileType::Object, tmp_obj.as_ref())
-            .map_err(CodeGenError::LLVMError)
-            .map_err(SessionError::CodeGenError)?;
+        let shared_obj = tmp_dir.path().join("model.so");
 
         // TODO: args
         Command::new("clang")
@@ -158,15 +189,12 @@ impl<'ctx> Session<'ctx> {
                 "-lopenblas",
                 "-o",
                 shared_obj.to_str().unwrap(),
-                tmp_obj.to_str().unwrap(),
             ])
+            .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
-        Command::new("rm")
-            .args(["-f", tmp_obj.to_str().unwrap()])
-            .status()
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        println!("Generated");
 
         let lib = unsafe { libloading::Library::new(shared_obj.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -179,8 +207,8 @@ impl<'ctx> Session<'ctx> {
         Ok(Session {
             input_ty: inputs_ty,
             output_ty: outputs_ty,
-            codegen,
-            shared_obj,
+            codegen_ctx,
+            tmp_dir: Some(tmp_dir),
             lib,
             func,
             initializer,
@@ -220,16 +248,14 @@ impl<'ctx> Session<'ctx> {
     }
 
     pub fn write_model<P: AsRef<Path>>(&self, p: P) {
-        Self::_write_model(self.codegen.graph(), p);
+        Self::_write_model(&self.codegen_ctx.graph, p);
     }
-}
 
-impl Drop for Session<'_> {
-    fn drop(&mut self) {
-        Command::new("rm")
-            .args(["-f", self.shared_obj.to_str().unwrap()])
-            .status()
-            .unwrap();
+    pub fn persistent(&mut self) -> Result<(), SessionError> {
+        if let Some(tmp_dir) = self.tmp_dir.take() {
+            let _ = tmp_dir.into_path();
+        }
+        Ok(())
     }
 }
 
@@ -288,7 +314,7 @@ mod test {
     fn make_session<P: AsRef<std::path::Path>>(
         ctx: &'_ Context,
         path: P,
-    ) -> Result<Session<'_>, SessionError> {
+    ) -> Result<Session, SessionError> {
         use std::path::PathBuf;
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")

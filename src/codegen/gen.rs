@@ -1,25 +1,27 @@
 use crate::codegen::blas::{GemmArgs, Precision, BLAS};
 use crate::codegen::omp::{ForkCallArgs, ScheduleType, StaticFiniArgs, StaticInitArgs, OMP};
 use crate::codegen::plan;
-use crate::codegen::plan::{AllocateInfo, AllocateType, ChunkId};
+use crate::codegen::plan::{AllocateInfo, AllocateType};
 use crate::onnx::model::{Graph, Node, NodeId, ValueId};
 use crate::onnx::operator;
 use crate::onnx::operator::Operator;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 use crate::tensor::tensor::{DataType, ResolvedTensorType};
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::OptimizationLevel;
 
 use inkwell::attributes::*;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::intrinsics::Intrinsic;
-use inkwell::module::{Linkage, Module};
-use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::module::Module;
+use inkwell::targets::FileType;
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
-use inkwell::OptimizationLevel;
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -78,41 +80,119 @@ impl LLVMPass {
     }
 }
 
-struct Intrinsics<'ctx> {
-    fmax_f32: FunctionValue<'ctx>,
-    fmax_f64: FunctionValue<'ctx>,
-    sqrt_f32: FunctionValue<'ctx>,
-    sqrt_f64: FunctionValue<'ctx>,
-    fma_f32: FunctionValue<'ctx>,
-    fma_f64: FunctionValue<'ctx>,
-    smin_i32: FunctionValue<'ctx>,
+struct Intrinsics<'ll> {
+    fmax_f32: FunctionValue<'ll>,
+    fmax_f64: FunctionValue<'ll>,
+    sqrt_f32: FunctionValue<'ll>,
+    sqrt_f64: FunctionValue<'ll>,
+    fma_f32: FunctionValue<'ll>,
+    fma_f64: FunctionValue<'ll>,
+    smin_i32: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,
 }
 
-pub struct CodeGen<'ctx> {
-    context: &'ctx Context,
-    module: Module<'ctx>,
-    builder: Builder<'ctx>,
+struct UnitInfo<'ll> {
+    ty: UnitType,
+    module: Module<'ll>,
+    func: FunctionValue<'ll>,
+    entry: BasicBlock<'ll>,
+}
 
-    main: FunctionValue<'ctx>,
-    main_entry: BasicBlock<'ctx>,
+enum UnitType {
+    Main,
+    Node(NodeId),
+}
 
-    attrs: Attributes,
-    target_machine: TargetMachine,
-
-    intrinsics: Intrinsics<'ctx>,
-    blas: BLAS<'ctx>,
-    omp: OMP<'ctx>,
-
-    debug_stuff: DebugStuff<'ctx>,
-
-    graph: Graph,
+pub struct CodeGenContext {
+    pub graph: Graph,
     order: Vec<(NodeId, AllocateInfo)>,
     value2alloc: HashMap<ValueId, AllocateInfo>,
-    ptr_values: HashMap<ValueId, PointerValue<'ctx>>,
     mem_size: Vec<u64>,
-    chunk2ptr: HashMap<ChunkId, PointerValue<'ctx>>,
+}
+
+pub struct CodeGen<'ll, 'gen> {
+    ll_ctx: &'ll Context,
+    gen_ctx: &'gen CodeGenContext,
+    unit: UnitInfo<'ll>,
+    attrs: Attributes,
+    intrinsics: Intrinsics<'ll>,
+    blas: BLAS<'ll>,
+    omp: OMP<'ll>,
+    debug_stuff: DebugStuff<'ll>,
+    target_machine: TargetMachine,
+}
+
+unsafe impl Send for CodeGen<'_, '_> {}
+unsafe impl Sync for CodeGen<'_, '_> {}
+
+fn target_machine() -> Result<TargetMachine, CodeGenError> {
+    Target::initialize_native(&InitializationConfig::default())
+        .map_err(CodeGenError::TargetMachineError)?;
+    let target_triple = TargetMachine::get_default_triple();
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    Target::from_triple(&target_triple)
+        .map_err(CodeGenError::LLVMError)?
+        .create_target_machine(
+            &target_triple,
+            &cpu,
+            &features,
+            OptimizationLevel::Aggressive,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| {
+            CodeGenError::TargetMachineError("Unable to create target machine".to_string())
+        })
+}
+
+impl CodeGenContext {
+    pub fn new(graph: Graph) -> Result<Self, CodeGenError> {
+        let order = plan::plan(&graph);
+        let value2alloc = order
+            .iter()
+            .copied()
+            .map(|(id, info)| (graph.nodes[id].outputs[0], info))
+            .collect::<HashMap<_, _>>();
+
+        let mem_size = calc_memsize(&graph, &order);
+
+        Ok(CodeGenContext {
+            graph,
+            order,
+            value2alloc,
+            mem_size,
+        })
+    }
+
+    fn need_to_generate(&self, node_id: NodeId) -> bool {
+        let node = &self.graph.nodes[node_id];
+        if node.is_dummy() {
+            return false;
+        }
+        if let Operator::Identity = node.op {
+            let chunk_in = self.value2alloc.get(&node.inputs[0]).map(|info| &info.ty);
+            let chunk_out = self.value2alloc.get(&node.outputs[0]).map(|info| &info.ty);
+            // TODO: correct?
+            let res = match (chunk_in, chunk_out) {
+                (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
+                    in_chunk != out_chunk
+                }
+                _ => false,
+            };
+            return res;
+        }
+        true
+    }
+
+    pub fn all_necessary_nodes(&self) -> Vec<NodeId> {
+        self.order
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|&id| self.need_to_generate(id))
+            .collect()
+    }
 }
 
 #[derive(Clone)]
@@ -120,7 +200,7 @@ struct FunctionTranslator<'a, 'ctx> {
     context: &'ctx Context,
     module: &'a Module<'ctx>,
     builder: &'a Builder<'ctx>,
-    function: &'a FunctionValue<'ctx>,
+    func: &'a FunctionValue<'ctx>,
     intrinsics: &'a Intrinsics<'ctx>,
     blas: &'a BLAS<'a>,
     omp: &'a OMP<'ctx>,
@@ -159,29 +239,33 @@ impl Attributes {
             features,
         }
     }
-    fn add_default_attributes(&self, function: &FunctionValue<'_>) {
-        for i in 0..function.count_params() {
-            // TODO: Check if this function is in-place or not
-            // function.add_attribute(AttributeLoc::Param(i), self.noalias);
-            function.add_attribute(AttributeLoc::Param(i), self.noundef);
+    fn add_default_attributes<P>(&self, func: &FunctionValue<'_>, is_noalias: P)
+    where
+        P: Fn(usize) -> bool,
+    {
+        for i in 0..func.count_params() {
+            if is_noalias(i as usize) {
+                func.add_attribute(AttributeLoc::Param(i), self.noalias);
+            }
+            func.add_attribute(AttributeLoc::Param(i), self.noundef);
         }
-        function.add_attribute(AttributeLoc::Function, self.cpu);
-        function.add_attribute(AttributeLoc::Function, self.features);
+        func.add_attribute(AttributeLoc::Function, self.cpu);
+        func.add_attribute(AttributeLoc::Function, self.features);
     }
 }
 
 #[allow(dead_code)]
-struct DebugStuff<'ctx> {
-    printf: FunctionValue<'ctx>,
-    fflush: FunctionValue<'ctx>,
-    float_fmt: GlobalValue<'ctx>,
-    i64_fmt: GlobalValue<'ctx>,
-    i64_i64_fmt: GlobalValue<'ctx>,
-    stdout: GlobalValue<'ctx>,
+struct DebugStuff<'ll> {
+    printf: FunctionValue<'ll>,
+    fflush: FunctionValue<'ll>,
+    float_fmt: GlobalValue<'ll>,
+    i64_fmt: GlobalValue<'ll>,
+    i64_i64_fmt: GlobalValue<'ll>,
+    stdout: GlobalValue<'ll>,
 }
 
-impl<'ctx> DebugStuff<'ctx> {
-    fn new(ctx: &'ctx Context, module: &Module<'ctx>, builder: &Builder<'ctx>) -> Self {
+impl<'ll> DebugStuff<'ll> {
+    fn new(ctx: &'ll Context, module: &Module<'ll>, builder: &Builder<'ll>) -> Self {
         let i32_type = ctx.i32_type();
         let ptr_type = ctx.ptr_type(AddressSpace::default());
 
@@ -209,27 +293,6 @@ impl<'ctx> DebugStuff<'ctx> {
             stdout,
         }
     }
-}
-
-fn target_machine() -> Result<TargetMachine, CodeGenError> {
-    Target::initialize_native(&InitializationConfig::default())
-        .map_err(CodeGenError::TargetMachineError)?;
-    let target_triple = TargetMachine::get_default_triple();
-    let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = TargetMachine::get_host_cpu_features().to_string();
-    Target::from_triple(&target_triple)
-        .map_err(CodeGenError::LLVMError)?
-        .create_target_machine(
-            &target_triple,
-            &cpu,
-            &features,
-            OptimizationLevel::Aggressive,
-            RelocMode::PIC,
-            CodeModel::Default,
-        )
-        .ok_or_else(|| {
-            CodeGenError::TargetMachineError("Unable to create target machine".to_string())
-        })
 }
 
 // TODO: Target dependent value
@@ -262,34 +325,76 @@ fn calc_memsize(graph: &Graph, order: &[(NodeId, AllocateInfo)]) -> Vec<u64> {
     mem_size
 }
 
-impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context, graph: Graph) -> Result<Self, CodeGenError> {
-        let module = context.create_module("main");
-        let builder = context.create_builder();
+impl CodeGenContext {
+    pub fn new_codegen_for_node<'ll>(
+        &self,
+        node_id: NodeId,
+        ll_ctx: &'ll Context,
+    ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
+        let node = &self.graph.nodes[node_id];
+        let target_machine = target_machine()?;
+        let attrs = Attributes::new(ll_ctx, &target_machine);
+        let module = ll_ctx.create_module(get_node_name_or(node, node_id).as_str());
+        let func = self.declare_node_func(node_id, ll_ctx, &module, &attrs);
+        let entry = ll_ctx.append_basic_block(func, "entry");
+        let ty = UnitType::Node(node_id);
+        let unit = UnitInfo {
+            ty,
+            module,
+            func,
+            entry,
+        };
 
-        let f32_ty = context.f32_type().into();
-        let f64_ty = context.f64_type().into();
-        let i32_ty = context.i32_type().into();
-        //let i64_ty = context.i64_type().into();
-        let ptr_ty = context
+        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine)
+    }
+
+    pub fn new_codegen_for_main<'ll>(
+        &self,
+        ll_ctx: &'ll Context,
+    ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
+        let module = ll_ctx.create_module("main");
+        let builder = ll_ctx.create_builder();
+
+        let ptr_ty = ll_ctx
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum();
-        let fn_type = context
+        let fn_type = ll_ctx
             .void_type()
             .fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let main = module.add_function("main", fn_type, None);
-        let main_entry = context.append_basic_block(main, "entry");
-        builder.position_at_end(main_entry);
+        let entry = ll_ctx.append_basic_block(main, "entry");
+        builder.position_at_end(entry);
 
         let target_machine = target_machine()?;
+        let attrs = Attributes::new(ll_ctx, &target_machine);
+        attrs.add_default_attributes(&main, |_| true);
+        let unit = UnitInfo {
+            ty: UnitType::Main,
+            module,
+            func: main,
+            entry,
+        };
+        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine)
+    }
 
-        let attrs = Attributes::new(context, &target_machine);
-        attrs.add_default_attributes(&main);
+    fn new_codegen_with_func<'ll>(
+        &self,
+        ll_ctx: &'ll Context,
+        unit: UnitInfo<'ll>,
+        attrs: Attributes,
+        target_machine: TargetMachine,
+    ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
+        let entry = unit.entry;
+        let f32_ty = ll_ctx.f32_type().into();
+        let f64_ty = ll_ctx.f64_type().into();
+        let i32_ty = ll_ctx.i32_type().into();
+        let builder = ll_ctx.create_builder();
+        builder.position_at_end(entry);
 
         macro_rules! get_intrinsic {
             ($name: expr, $args: expr) => {{
                 Intrinsic::find($name)
-                    .and_then(|intrinsic| intrinsic.get_declaration(&module, $args))
+                    .and_then(|intrinsic| intrinsic.get_declaration(&unit.module, $args))
                     .ok_or_else(|| CodeGenError::IntrinsicNotFound($name.to_string()))
             }};
         }
@@ -316,169 +421,141 @@ impl<'ctx> CodeGen<'ctx> {
             // lifetime_end,
         };
 
-        let blas = BLAS::new(context, &module);
-        let omp = OMP::new(context, &module, &builder).map_err(CodeGenError::BuilderError)?;
+        let blas = BLAS::new(ll_ctx, &unit.module);
+        let omp = OMP::new(ll_ctx, &unit.module, &builder).map_err(CodeGenError::BuilderError)?;
 
-        let debug_stuff = DebugStuff::new(context, &module, &builder);
-
-        let order = plan::plan(&graph);
-        let value2alloc = order
-            .iter()
-            .copied()
-            .map(|(id, info)| (graph.nodes[id].outputs[0], info))
-            .collect::<HashMap<_, _>>();
-
-        let mem_size = calc_memsize(&graph, &order);
-        let ptr_values = HashMap::new();
-        let chunk2ptr = HashMap::new();
+        let debug_stuff = DebugStuff::new(ll_ctx, &unit.module, &builder);
 
         Ok(CodeGen {
-            context,
-            module,
-            builder,
-
-            main,
-            main_entry,
-
-            target_machine,
-
+            ll_ctx,
+            gen_ctx: self,
+            unit,
             attrs,
             intrinsics,
-
             blas,
             omp,
-
             debug_stuff,
-
-            graph,
-            order,
-            value2alloc,
-            ptr_values,
-            mem_size,
-            chunk2ptr,
+            target_machine,
         })
     }
 
-    pub fn module(&self) -> &Module<'ctx> {
-        &self.module
-    }
-
-    pub fn target_machine(&self) -> &TargetMachine {
-        &self.target_machine
-    }
-
-    pub fn graph(&self) -> &Graph {
-        &self.graph
-    }
-
-    pub fn compile_with_passes(&mut self, passes: &[LLVMPass]) -> Result<(), CodeGenError> {
-        self.compile_graph().map_err(CodeGenError::BuilderError)?;
-        let opt = inkwell::passes::PassBuilderOptions::create();
-        // opt.set_verify_each(true);
-        if !passes.is_empty() {
-            self.module
-                .run_passes(LLVMPass::passes(passes).as_str(), &self.target_machine, opt)
-                .map_err(CodeGenError::LLVMError)?;
+    fn declare_node_func<'ctx>(
+        &self,
+        node_id: NodeId,
+        ctx: &'ctx Context,
+        module: &Module<'ctx>,
+        attrs: &Attributes,
+    ) -> FunctionValue<'ctx> {
+        let node = &self.graph.nodes[node_id];
+        let allocs = node
+            .outputs
+            .iter()
+            .chain(node.inputs.iter())
+            .map(|&id| self.value2alloc.get(&id))
+            .collect::<Vec<_>>();
+        let mut is_noalias = vec![true; allocs.len()];
+        for (i, alloc) in allocs.iter().enumerate() {
+            // If it is None, it is an input or an initializer
+            if let Some(info) = alloc {
+                let cnt = allocs
+                    .iter()
+                    .filter_map(|x| *x)
+                    .map(|&a| a.ty == info.ty)
+                    .filter(|x| *x)
+                    .count();
+                is_noalias[i] = cnt == 1;
+            }
         }
-        Ok(())
+
+        let args = vec![ctx.ptr_type(AddressSpace::default()).into(); allocs.len()];
+        let fn_type = ctx.void_type().fn_type(&args, false);
+        let func = module.add_function(get_node_name_or(node, node_id).as_str(), fn_type, None);
+        attrs.add_default_attributes(&func, |i| is_noalias[i]);
+        func
+    }
+}
+
+// TODO
+fn get_node_name_or(node: &Node, node_id: NodeId) -> String {
+    if node.name.is_empty() {
+        format!("node.{}", node_id.index())
+    } else {
+        node.name.clone()
+    }
+}
+
+impl<'ll> CodeGen<'ll, '_> {
+    pub fn compile(&self) -> Result<(), CodeGenError> {
+        (match self.unit.ty {
+            UnitType::Main => self.compile_main(),
+            UnitType::Node(node_id) => self.compile_node(node_id),
+        })
+        .map_err(CodeGenError::BuilderError)
     }
 
-    pub fn compile_default(&mut self) -> Result<(), CodeGenError> {
-        self.compile_graph().map_err(CodeGenError::BuilderError)?;
-        println!("Graph compiled");
+    pub fn run_opt_aggressive(&self) -> Result<(), CodeGenError> {
         let opt = inkwell::passes::PassBuilderOptions::create();
-        self.module
+        self.unit
+            .module
             .run_passes("default<O3>", &self.target_machine, opt)
             .map_err(CodeGenError::LLVMError)?;
         Ok(())
     }
 
-    // TODO: Adjust attributes
-    fn create_function(&self, name: &str, argc: u32) -> FunctionValue<'ctx> {
-        let mut vec = Vec::with_capacity(argc as usize);
-        for _ in 0..argc {
-            vec.push(self.context.ptr_type(AddressSpace::default()).into());
-        }
-        let fn_type = self.context.void_type().fn_type(&vec, false);
-        let func = self
-            .module
-            .add_function(name, fn_type, Some(Linkage::Private));
-        self.attrs.add_default_attributes(&func);
-        func
+    pub fn module(&self) -> &Module<'ll> {
+        &self.unit.module
     }
 
-    // fn init_data(&mut self) -> Result<(), BuilderError> {
-    //     macro_rules! define_gv {
-    //         ($name: expr, $data: expr, $ty: expr, $convert: expr) => {{
-    //             let len = $data.len();
-    //             let gv = self
-    //                 .module
-    //                 .add_global($ty.array_type(len as u32), None, $name.as_str());
-    //             let arr = $data.iter().map($convert).collect::<Vec<_>>();
-    //             let arr = $ty.const_array(&arr);
-    //             gv.set_initializer(&arr);
-    //             gv
-    //         }};
-    //     }
-    //     for (id, value) in self.graph.initializer.iter() {
-    //         let name = format!("gv.{}", self.graph.values[*id].name);
-    //         let gv = match value.data {
-    //             TensorData::F32(ref data) => {
-    //                 let ty = self.context.f32_type();
-    //                 define_gv!(name, data, ty, |&x| ty.const_float(x.into()))
-    //             }
-    //             TensorData::F64(ref data) => {
-    //                 let ty = self.context.f64_type();
-    //                 define_gv!(name, data, ty, |&x| ty.const_float(x))
-    //             }
-    //             TensorData::I64(ref data) => {
-    //                 let ty = self.context.i64_type();
-    //                 define_gv!(name, data, ty, |&x| ty.const_int(x as u64, false))
-    //             }
-    //         };
-    //         self.ptr_values.insert(*id, gv.as_pointer_value());
-    //     }
-    //     Ok(())
-    // }
+    pub fn write_to_file<P: AsRef<Path>>(&self, ty: FileType, path: P) -> Result<(), CodeGenError> {
+        self.target_machine
+            .write_to_file(&self.unit.module, ty, path.as_ref())
+            .map_err(CodeGenError::LLVMError)
+    }
 
-    fn init_main_args(&mut self) -> Result<(), BuilderError> {
+    fn init_main_args(&self) -> Result<HashMap<ValueId, PointerValue<'ll>>, BuilderError> {
+        let mut ptr_values = HashMap::new();
+        let builder = self.ll_ctx.create_builder();
+        builder.position_at_end(self.unit.entry);
         macro_rules! init_ptr {
             ($value_id: expr, $ptr: expr, $i: expr) => {{
-                let value = &self.graph.values[$value_id];
+                let value = &self.gen_ctx.graph.values[$value_id];
                 let ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        self.context.ptr_type(AddressSpace::default()),
+                    builder.build_in_bounds_gep(
+                        self.ll_ctx.ptr_type(AddressSpace::default()),
                         $ptr,
-                        &[self.context.i64_type().const_int($i as u64, false)],
+                        &[self.ll_ctx.i64_type().const_int($i as u64, false)],
                         value.name.as_str(),
                     )
                 }?;
-                let ptr = self
-                    .builder
+                let ptr = builder
                     .build_load(
-                        self.context.ptr_type(AddressSpace::default()),
+                        self.ll_ctx.ptr_type(AddressSpace::default()),
                         ptr,
                         value.name.as_str(),
                     )?
                     .into_pointer_value();
-                self.ptr_values.insert($value_id, ptr);
+                ptr_values.insert($value_id, ptr);
             }};
         }
 
-        for (i, arr) in [&self.graph.outputs, &self.graph.inputs].iter().enumerate() {
+        for (i, arr) in [&self.gen_ctx.graph.outputs, &self.gen_ctx.graph.inputs]
+            .iter()
+            .enumerate()
+        {
             let ptr = self
-                .main
+                .unit
+                .func
                 .get_nth_param(i as u32)
                 .unwrap()
                 .into_pointer_value();
             for (i, node_id) in arr.iter().enumerate() {
-                let value_id = match self.graph.nodes[*node_id].op {
+                let value_id = match self.gen_ctx.graph.nodes[*node_id].op {
                     Operator::Input(v) | Operator::Output(v) => v,
                     _ => unreachable!(),
                 };
 
                 // TODO: necessary?
-                if self.graph.initializer.contains_key(&value_id) {
+                if self.gen_ctx.graph.initializer.contains_key(&value_id) {
                     continue;
                 }
 
@@ -487,111 +564,94 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         {
-            let ptr = self.main.get_nth_param(2).unwrap().into_pointer_value();
-            for (i, value_id) in self.graph.initializer.keys().enumerate() {
+            let ptr = self
+                .unit
+                .func
+                .get_nth_param(2)
+                .unwrap()
+                .into_pointer_value();
+            for (i, value_id) in self.gen_ctx.graph.initializer.keys().enumerate() {
                 init_ptr!(*value_id, ptr, i);
             }
         }
 
-        Ok(())
+        Ok(ptr_values)
     }
 
-    fn need_to_generate(&self, node: &Node) -> bool {
-        if node.is_dummy() {
-            return false;
-        }
-        if let Operator::Identity = node.op {
-            let chunk_in = self.value2alloc.get(&node.inputs[0]).map(|info| &info.ty);
-            let chunk_out = self.value2alloc.get(&node.outputs[0]).map(|info| &info.ty);
-            // TODO: correct?
-            let res = match (chunk_in, chunk_out) {
-                (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
-                    in_chunk != out_chunk
-                }
-                _ => false,
-            };
-            return res;
-        }
-        true
-    }
-
-    pub fn compile_graph(&mut self) -> Result<(), BuilderError> {
-        // self.init_data()?;
-        // println!("Data initialized");
-        self.init_main_args()?;
-        for (node, alloc) in self
-            .order
-            .iter()
-            .map(|(id, info)| (&self.graph.nodes[*id], info))
-        {
-            let function = if !self.need_to_generate(node) {
+    fn compile_main(&self) -> Result<(), BuilderError> {
+        let mut ptr_values = self.init_main_args()?;
+        let mut chunk2ptr = HashMap::new();
+        let builder = self.ll_ctx.create_builder();
+        for (node_id, alloc) in self.gen_ctx.order.iter() {
+            let function = if !self.gen_ctx.need_to_generate(*node_id) {
                 None
             } else {
-                Some(self.compile_node(node)?)
+                Some(self.gen_ctx.declare_node_func(
+                    *node_id,
+                    self.ll_ctx,
+                    &self.unit.module,
+                    &self.attrs,
+                ))
             };
 
-            self.builder.position_at_end(self.main_entry);
+            builder.position_at_end(self.unit.entry);
             let dst_ptr = match alloc.ty {
                 AllocateType::Chunk(chunk) => {
                     if alloc.is_first_use {
                         // TODO: type
-                        let ptr = self.builder.build_array_malloc(
-                            self.context.f32_type(),
-                            self.context
+                        let ptr = builder.build_array_malloc(
+                            self.ll_ctx.f32_type(),
+                            self.ll_ctx
                                 .i64_type()
-                                .const_int(self.mem_size[chunk], false),
+                                .const_int(self.gen_ctx.mem_size[chunk], false),
                             format!("chunk.{}", chunk).as_str(),
                         )?;
-                        self.chunk2ptr.insert(chunk, ptr);
+                        chunk2ptr.insert(chunk, ptr);
                         ptr
                     } else {
-                        *self.chunk2ptr.get(&chunk).unwrap()
+                        *chunk2ptr.get(&chunk).unwrap()
                     }
                 }
-                AllocateType::Input(v) | AllocateType::Output(v) => {
-                    *self.ptr_values.get(&v).unwrap()
-                }
+                AllocateType::Input(v) | AllocateType::Output(v) => *ptr_values.get(&v).unwrap(),
             };
 
+            let node = &self.gen_ctx.graph.nodes[*node_id];
             for &id in node.outputs.iter() {
-                self.ptr_values.insert(id, dst_ptr);
+                ptr_values.insert(id, dst_ptr);
             }
 
             if let Some(function) = function {
-                let mut args = node.outputs.clone();
-                args.extend(node.inputs.clone());
-                let args = args
+                let args = node
+                    .outputs
                     .iter()
-                    .map(|&id| self.ptr_values.get(&id).unwrap())
+                    .chain(node.inputs.iter())
+                    .map(|&id| ptr_values.get(&id).unwrap())
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
-                let call = self.builder.build_call(function, &args[..], "")?;
+                let call = builder.build_call(function, &args[..], "")?;
                 //call.set_tail_call(true);
             }
         }
-
-        // self.main.print_to_stderr();
-
-        //for ptr in self.chunk2ptr.values() {
-        //    self.builder.build_free(*ptr)?;
-        //}
-        self.builder.position_at_end(self.main_entry);
-        self.builder.build_return(None)?;
+        builder.position_at_end(self.unit.entry);
+        builder.build_return(None)?;
         Ok(())
     }
 
-    fn compile_node(&self, node: &Node) -> Result<FunctionValue<'ctx>, BuilderError> {
-        let mut args = node.outputs.clone();
-        args.extend(node.inputs.clone());
-
-        let function = self.create_function(node.name.as_str(), args.len() as u32);
-        let entry = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(entry);
+    fn compile_node(&self, node_id: NodeId) -> Result<(), BuilderError> {
+        let node = &self.gen_ctx.graph.nodes[node_id];
+        let args = node
+            .outputs
+            .iter()
+            .chain(node.inputs.iter())
+            .collect::<Vec<_>>();
+        let builder = self.ll_ctx.create_builder();
+        let entry = self.unit.entry;
+        builder.position_at_end(entry);
         let translator = FunctionTranslator {
-            context: self.context,
-            module: &self.module,
-            builder: &self.builder,
-            function: &function,
+            context: self.ll_ctx,
+            module: &self.unit.module,
+            builder: &builder,
+            func: &self.unit.func,
             intrinsics: &self.intrinsics,
             blas: &self.blas,
             omp: &self.omp,
@@ -602,13 +662,20 @@ impl<'ctx> CodeGen<'ctx> {
             .iter()
             .enumerate()
             .map(|(i, &id)| {
-                let ptr = function
+                let ptr = self
+                    .unit
+                    .func
                     .get_nth_param(i as u32)
                     .unwrap()
                     .into_pointer_value();
-                let ty = self.graph.get_resolved_tensor_type(id).unwrap().clone();
+                let ty = self
+                    .gen_ctx
+                    .graph
+                    .get_resolved_tensor_type(*id)
+                    .unwrap()
+                    .clone();
                 let name = format!("ptr.{}", i);
-                let offset = self.context.i64_type().const_int(0, false);
+                let offset = self.ll_ctx.i64_type().const_int(0, false);
                 TensorPtr {
                     ptr,
                     ty,
@@ -620,7 +687,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // TODO
         if let Operator::Identity = node.op {
-            self.builder.position_at_end(entry);
+            builder.position_at_end(entry);
             let len = ptrs[0].ty.dims.size();
             let len = len *
                 (match ptrs[0].ty.elem_type {
@@ -628,17 +695,17 @@ impl<'ctx> CodeGen<'ctx> {
                     DataType::F64 => 8,
                     DataType::I64 => 8,
                 });
-            self.builder.build_memcpy(
+            builder.build_memcpy(
                 ptrs[0].ptr,
                 1,
                 ptrs[1].ptr,
                 1,
-                self.context
+                self.ll_ctx
                     .i64_type()
                     .const_int(len.try_into().unwrap(), false),
             )?;
-            self.builder.build_return(None)?;
-            return Ok(function);
+            builder.build_return(None)?;
+            return Ok(());
         }
 
         // TODO
@@ -782,10 +849,10 @@ impl<'ctx> CodeGen<'ctx> {
             _ => todo!("{:?}", node.op),
         }?;
 
-        self.builder.position_at_end(exit);
-        self.builder.build_return(None)?;
+        builder.position_at_end(exit);
+        builder.build_return(None)?;
 
-        Ok(function)
+        Ok(())
     }
 }
 
@@ -815,7 +882,7 @@ impl<'ctx> TensorPtr<'ctx> {
         let i64_type = translator.context.i64_type();
 
         let ptr = translator
-            .function
+            .func
             .get_nth_param(begin)
             .unwrap()
             .into_pointer_value();
@@ -824,7 +891,7 @@ impl<'ctx> TensorPtr<'ctx> {
             .build_load(ptr_type, ptr, "")?
             .into_pointer_value();
         let offset = translator
-            .function
+            .func
             .get_nth_param(begin + 1)
             .unwrap()
             .into_pointer_value();
@@ -1112,16 +1179,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         im2col: &operator::Im2Col,
     ) -> Result<IntValue<'ctx>, BuilderError> {
         if inner_loops.nest as usize == inner_loops.outer_offsets.len() {
-            let prolog = self
-                .context
-                .append_basic_block(*self.function, "inner.prolog");
-            let normal = self
-                .context
-                .append_basic_block(*self.function, "inner.normal");
-            let pad = self.context.append_basic_block(*self.function, "inner.pad");
-            let epilog = self
-                .context
-                .append_basic_block(*self.function, "inner.epilog");
+            let prolog = self.context.append_basic_block(*self.func, "inner.prolog");
+            let normal = self.context.append_basic_block(*self.func, "inner.normal");
+            let pad = self.context.append_basic_block(*self.func, "inner.pad");
+            let epilog = self.context.append_basic_block(*self.func, "inner.epilog");
 
             self.builder.build_unconditional_branch(prolog)?;
             self.builder.position_at_end(prolog);
@@ -1153,12 +1214,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             return Ok(next_dst_offset);
         }
 
-        let head = self
-            .context
-            .append_basic_block(*self.function, "inner.head");
-        let exit = self
-            .context
-            .append_basic_block(*self.function, "inner.exit");
+        let head = self.context.append_basic_block(*self.func, "inner.head");
+        let exit = self.context.append_basic_block(*self.func, "inner.exit");
         let nest = inner_loops.nest;
 
         self.builder.position_at_end(inner_loops.preheader);
@@ -1342,12 +1399,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             return self.build_im2col_by_channel_inner(inner_loops, im2col);
         }
 
-        let head = self
-            .context
-            .append_basic_block(*self.function, "outer.head");
-        let exiting = self
-            .context
-            .append_basic_block(*self.function, "outer.exit");
+        let head = self.context.append_basic_block(*self.func, "outer.head");
+        let exiting = self.context.append_basic_block(*self.func, "outer.exit");
 
         self.builder.build_unconditional_branch(head)?;
 
@@ -1431,19 +1484,17 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         let header_nbatch = self
             .context
-            .append_basic_block(*self.function, "im2col.header.nbatch");
+            .append_basic_block(*self.func, "im2col.header.nbatch");
         let exiting_nbatch = self
             .context
-            .append_basic_block(*self.function, "im2col.exit.nbatch");
+            .append_basic_block(*self.func, "im2col.exit.nbatch");
         let header_channel = self
             .context
-            .append_basic_block(*self.function, "im2col.header.channel");
+            .append_basic_block(*self.func, "im2col.header.channel");
         let exiting_channel = self
             .context
-            .append_basic_block(*self.function, "im2col.exit.channel");
-        let exit = self
-            .context
-            .append_basic_block(*self.function, "im2col.exit");
+            .append_basic_block(*self.func, "im2col.exit.channel");
+        let exit = self.context.append_basic_block(*self.func, "im2col.exit");
 
         self.builder.build_unconditional_branch(header_nbatch)?;
 
@@ -1730,10 +1781,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         let (row, col) = mn;
 
-        let header0 = self.context.append_basic_block(*self.function, "header0");
-        let exiting0 = self.context.append_basic_block(*self.function, "exiting0");
-        let body = self.context.append_basic_block(*self.function, "body");
-        let exit = self.context.append_basic_block(*self.function, "exit");
+        let header0 = self.context.append_basic_block(*self.func, "header0");
+        let exiting0 = self.context.append_basic_block(*self.func, "exiting0");
+        let body = self.context.append_basic_block(*self.func, "body");
+        let exit = self.context.append_basic_block(*self.func, "exit");
 
         self.builder.build_unconditional_branch(header0)?;
 
@@ -1890,9 +1941,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     }
 
     fn init_outlined(&self) -> Result<(OMPContext<'ctx>, LoopBB<'ctx>), BuilderError> {
-        let entry = self.context.append_basic_block(*self.function, "entry");
-        let body = self.context.append_basic_block(*self.function, "body");
-        let exit = self.context.append_basic_block(*self.function, "exit");
+        let entry = self.context.append_basic_block(*self.func, "entry");
+        let body = self.context.append_basic_block(*self.func, "body");
+        let exit = self.context.append_basic_block(*self.func, "exit");
 
         let i32_type = self.context.i32_type();
 
@@ -1909,7 +1960,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(body);
 
         let omp_ctx = OMPContext {
-            global_tid: self.function.get_nth_param(0).unwrap().into_pointer_value(),
+            global_tid: self.func.get_nth_param(0).unwrap().into_pointer_value(),
             is_last,
             lb,
             ub,
@@ -1930,14 +1981,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         max_nest: usize,
     ) -> Result<FunctionValue<'ctx>, BuilderError> {
         let fn_type = op_ctx.operation.outlined_type(self.context);
-        let fn_name = format!("{}.outlined", self.function.get_name().to_str().unwrap());
+        let fn_name = format!("{}.outlined", self.func.get_name().to_str().unwrap());
         let outlined_fn = self.module.add_function(&fn_name, fn_type, None);
 
         let new_builder = self.context.create_builder();
         let translator = {
             let mut translator = self.clone();
             translator.builder = &new_builder;
-            translator.function = &outlined_fn;
+            translator.func = &outlined_fn;
             translator
         };
         let (omp_ctx, loop_bb) = translator.init_outlined()?;
@@ -1956,13 +2007,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     ) -> Result<(), BuilderError> {
         let new_header = self
             .context
-            .append_basic_block(*self.function, "omp.for.header");
+            .append_basic_block(*self.func, "omp.for.header");
         let prolog_bb = self
             .context
-            .append_basic_block(*self.function, "omp.for.prolog");
+            .append_basic_block(*self.func, "omp.for.prolog");
         let epilog_bb = self
             .context
-            .append_basic_block(*self.function, "omp.for.epilog");
+            .append_basic_block(*self.func, "omp.for.epilog");
 
         let i32_type = self.context.i32_type();
         let len: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
@@ -2160,7 +2211,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
         let exiting_bb = self
             .context
-            .append_basic_block(*self.function, format!("exit.{}", nest).as_str());
+            .append_basic_block(*self.func, format!("exit.{}", nest).as_str());
         let bound = match loop_range {
             Some((_, ub)) => ub,
             None => {
@@ -2217,7 +2268,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let next_bb = self
             .context
-            .append_basic_block(*self.function, format!("loop.{}", nest).as_str());
+            .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
         self.builder.build_unconditional_branch(next_bb)?;
         self.builder.position_at_end(exiting_bb);
         let ind_next = self.builder.build_int_add(
@@ -2254,8 +2305,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         preheader: BasicBlock<'ctx>,
         max_nest: usize,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let header = self.context.append_basic_block(*self.function, "header");
-        let exit = self.context.append_basic_block(*self.function, "exit");
+        let header = self.context.append_basic_block(*self.func, "header");
+        let exit = self.context.append_basic_block(*self.func, "exit");
         self.builder.build_unconditional_branch(header)?;
         self.builder.position_at_end(header);
         let loop_bb = LoopBB {
@@ -2298,10 +2349,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let epsilon = fp_type.const_float(batchnorm.epsilon as f64);
 
-        let header = self.context.append_basic_block(*self.function, "entry");
-        let exit = self.context.append_basic_block(*self.function, "exit");
-        let exiting = self.context.append_basic_block(*self.function, "exiting");
-        let body = self.context.append_basic_block(*self.function, "body");
+        let header = self.context.append_basic_block(*self.func, "entry");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+        let exiting = self.context.append_basic_block(*self.func, "exiting");
+        let body = self.context.append_basic_block(*self.func, "body");
 
         self.builder.build_unconditional_branch(header)?;
 
