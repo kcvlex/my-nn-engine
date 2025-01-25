@@ -25,6 +25,8 @@ use std::process::Command;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
+const DEBUG: bool = true;
+
 #[derive(Debug)]
 pub enum SessionError {
     CodeGenError(CodeGenError),
@@ -167,10 +169,14 @@ impl Session {
             .into_par_iter()
             .map(|(path, codegen)| {
                 codegen.compile().unwrap();
-                codegen.run_opt_aggressive().unwrap();
+                if !DEBUG {
+                    codegen.run_opt_aggressive().unwrap();
+                }
                 codegen.write_to_file(FileType::Object, &path).unwrap();
-                // let ll_path = path.with_extension("ll");
-                // codegen.module().print_to_file(&ll_path).unwrap();
+                if DEBUG {
+                    let ll_path = path.with_extension("ll");
+                    codegen.module().print_to_file(&ll_path).unwrap();
+                }
                 path
             })
             .collect::<Vec<_>>();
@@ -203,11 +209,18 @@ impl Session {
 
         println!("Loaded");
 
+        let tmp_dir = if DEBUG {
+            let _ = tmp_dir.into_path();
+            None
+        } else {
+            Some(tmp_dir)
+        };
+
         Ok(Session {
             input_ty: inputs_ty,
             output_ty: outputs_ty,
             codegen_ctx,
-            tmp_dir: Some(tmp_dir),
+            tmp_dir,
             lib,
             func,
             initializer,
