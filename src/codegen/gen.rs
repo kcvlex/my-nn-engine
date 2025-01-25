@@ -106,7 +106,7 @@ enum UnitType {
 
 pub struct CodeGenContext {
     pub graph: Graph,
-    order: Vec<(NodeId, AllocateInfo)>,
+    order: Vec<(NodeId, Vec<AllocateInfo>)>,
     value2alloc: HashMap<ValueId, AllocateInfo>,
     mem_size: Vec<u64>,
 }
@@ -152,8 +152,8 @@ impl CodeGenContext {
         let order = plan::plan(&graph);
         let value2alloc = order
             .iter()
-            .copied()
-            .map(|(id, info)| (graph.nodes[id].outputs[0], info))
+            .flat_map(|(_, v)| v)
+            .map(|info| (info.value_id, *info))
             .collect::<HashMap<_, _>>();
 
         let mem_size = calc_memsize(&graph, &order);
@@ -306,20 +306,23 @@ fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
     (result_ty.dims.size() * data_size).try_into().unwrap()
 }
 
-fn calc_memsize(graph: &Graph, order: &[(NodeId, AllocateInfo)]) -> Vec<u64> {
+fn calc_memsize(graph: &Graph, order: &[(NodeId, Vec<AllocateInfo>)]) -> Vec<u64> {
     let mut mem_size = vec![
         0;
         order
             .iter()
-            .filter_map(|(_, info)| info.ty.chunk_id())
+            .map(|(_, info)| info)
+            .flatten()
+            .filter_map(|info| info.ty.chunk_id())
             .max()
             .map(|x| x + 1)
             .unwrap_or(0)
     ];
-    for (node_id, info) in order.iter() {
-        if let Some(chunk_id) = info.ty.chunk_id() {
-            let output_id = &graph.nodes[*node_id].outputs[0];
-            mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(graph, *output_id));
+    for (_, vec) in order.iter() {
+        for info in vec.iter() {
+            if let Some(chunk_id) = info.ty.chunk_id() {
+                mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(graph, info.value_id));
+            }
         }
     }
     mem_size
@@ -595,31 +598,32 @@ impl<'ll> CodeGen<'ll, '_> {
             };
 
             builder.position_at_end(self.unit.entry);
-            let dst_ptr = match alloc.ty {
-                AllocateType::Chunk(chunk) => {
-                    if alloc.is_first_use {
-                        // TODO: type
-                        let ptr = builder.build_array_malloc(
-                            self.ll_ctx.f32_type(),
-                            self.ll_ctx
-                                .i64_type()
-                                .const_int(self.gen_ctx.mem_size[chunk], false),
-                            format!("chunk.{}", chunk).as_str(),
-                        )?;
-                        chunk2ptr.insert(chunk, ptr);
-                        ptr
-                    } else {
-                        *chunk2ptr.get(&chunk).unwrap()
+            for alloc in alloc.iter() {
+                let dst_ptr = match alloc.ty {
+                    AllocateType::Chunk(chunk) => {
+                        if alloc.is_first_use {
+                            // TODO: type
+                            let ptr = builder.build_array_malloc(
+                                self.ll_ctx.f32_type(),
+                                self.ll_ctx
+                                    .i64_type()
+                                    .const_int(self.gen_ctx.mem_size[chunk], false),
+                                format!("chunk.{}", chunk).as_str(),
+                            )?;
+                            chunk2ptr.insert(chunk, ptr);
+                            ptr
+                        } else {
+                            *chunk2ptr.get(&chunk).unwrap()
+                        }
                     }
-                }
-                AllocateType::Input(v) | AllocateType::Output(v) => *ptr_values.get(&v).unwrap(),
-            };
-
-            let node = &self.gen_ctx.graph.nodes[*node_id];
-            for &id in node.outputs.iter() {
-                ptr_values.insert(id, dst_ptr);
+                    AllocateType::Input(v) | AllocateType::Output(v) => {
+                        *ptr_values.get(&v).unwrap()
+                    }
+                };
+                ptr_values.insert(alloc.value_id, dst_ptr);
             }
 
+            let node = &self.gen_ctx.graph.nodes[*node_id];
             if let Some(function) = function {
                 let args = node
                     .outputs
