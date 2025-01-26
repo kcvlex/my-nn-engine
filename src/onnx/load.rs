@@ -24,6 +24,7 @@ pub enum ModelLoadError {
     UnsupportedOp(String),
     NegativeDimension(i64),
     TypeError(TypeError),
+    Required(String),
     Unexpected(String),
 }
 
@@ -83,6 +84,10 @@ impl Attribute {
         }
     }
 
+    fn index(&self) -> LoadResult<TensorIndex> {
+        self.i().map(|x| TensorIndex::new(x as isize))
+    }
+
     fn b(&self) -> LoadResult<bool> {
         self.i().map(|x| x != 0)
     }
@@ -103,6 +108,11 @@ impl Attribute {
             }
             x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
         }
+    }
+
+    fn indexes(&self) -> LoadResult<Vec<TensorIndex>> {
+        let ints = self.ints()?;
+        Ok(ints.into_iter().map(TensorIndex::new).collect())
     }
 
     fn s(&self) -> LoadResult<&str> {
@@ -231,6 +241,7 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     let data = if tensor.raw_data.is_empty() {
         match elem_type {
             DataType::I64 => TensorData::I64(tensor.int64_data),
+            DataType::U64 => TensorData::U64(tensor.uint64_data),
             DataType::F32 => TensorData::F32(tensor.float_data),
             DataType::F64 => TensorData::F64(tensor.double_data),
         }
@@ -385,6 +396,16 @@ fn load_reduce(attributes: &Attributes) -> LoadResult<Reduce> {
     Ok(Reduce { keepdims, axes })
 }
 
+trait RequiredAttr {
+    fn required(&self, name: &str) -> LoadResult<&Attribute>;
+}
+
+impl RequiredAttr for Attributes {
+    fn required(&self, name: &str) -> LoadResult<&Attribute> {
+        self.get(name).ok_or(ModelLoadError::Required(name.to_string()))
+    }
+}
+
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
@@ -442,6 +463,12 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 strides,
             }))
         }
+        "Concat" => {
+            let axis = attributes
+                .required("axis")?
+                .index()?;
+            Ok(Operator::Concat(Concat { axis }))
+        }
         "MaxPool" => {
             let dilations = attributes
                 .get("dilations")
@@ -454,10 +481,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .transpose()?
                 .unwrap_or(false);
             let kernel_shape = attributes
-                .get("kernel_shape")
-                .ok_or(ModelLoadError::Unexpected(
-                    "kernel_shape is required".to_string(),
-                ))?
+                .required("kernel_shape")?
                 .ints()?
                 .into();
             let strides = attributes
@@ -475,6 +499,54 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             }))
         }
         "Sigmoid" => Ok(Operator::Sigmoid),
+        "Shape" => {
+            let start = attributes
+                .get("start")
+                .map(|x| x.index())
+                .transpose()?
+                .unwrap_or(TensorIndex::new(0));
+            let end = attributes
+                .get("end")
+                .map(|x| x.index())
+                .transpose()?;
+            Ok(Operator::Shape(Shape { start, end }))
+        },
+        "Slice" => {
+            // TODO: Check length of each vector
+            let starts = attributes
+                .required("starts")?
+                .indexes()?;
+            let ends = attributes
+                .required("ends")?
+                .indexes()?;
+            let axes = attributes
+                .get("axes")
+                .map(|x| x.indexes())
+                .transpose()?
+                .unwrap_or((0..starts.len()).map(|x| TensorIndex::new(x as isize)).collect());
+            let steps = attributes
+                .get("steps")
+                .map(|x| x.ints())
+                .transpose()?
+                .unwrap_or(vec![1; starts.len()]);
+            Ok(Operator::Slice(Slice {
+                starts,
+                ends,
+                axes,
+                steps,
+            }))
+        },
+        "Split" => {
+            let axis = attributes
+                .get("axis")
+                .map(|x| x.index())
+                .transpose()?
+                .unwrap_or(TensorIndex::new(0));
+            let num_outputs = attributes
+                .required("num_outputs")?
+                .i()? as usize;
+            Ok(Operator::Split(Split { axis, num_outputs }))
+        },
         "Identity" => Ok(Operator::Identity),
         "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
         "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),

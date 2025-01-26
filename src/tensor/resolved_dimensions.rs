@@ -1,6 +1,6 @@
 use crate::tensor::tensor::TypeError;
 use std::iter::FromIterator;
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTensorDims(Vec<usize>);
@@ -97,6 +97,15 @@ where
     type Output = Idx::Output;
     fn index(&self, index: Idx) -> &Self::Output {
         &self.0[index]
+    }
+}
+
+impl<Idx> IndexMut<Idx> for ResolvedTensorDims
+where
+    Idx: std::slice::SliceIndex<[usize]>,
+{
+    fn index_mut(&mut self, index: Idx) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 

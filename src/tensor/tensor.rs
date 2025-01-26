@@ -1,5 +1,8 @@
+use crate::onnx::operator::TensorIndex;
 use crate::tensor::dimensions::UnresolvedTensorDims;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
+
+use ndarray::ArrayView;
 use itertools::izip;
 
 #[derive(Debug, Clone)]
@@ -9,12 +12,14 @@ pub enum TypeError {
     ReshapeError(ResolvedTensorDims, ResolvedTensorDims),
     InferError(String),
     InconsistentInput,
+    ElementTypeError,
     UnresolvedInput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum DataType {
     I64,
+    U64,
     F32,
     F64,
 }
@@ -35,6 +40,7 @@ impl Tensor {
 #[derive(Debug, Clone)]
 pub enum TensorData {
     I64(Vec<i64>),
+    U64(Vec<u64>),
     F32(Vec<f32>),
     F64(Vec<f64>),
 }
@@ -45,6 +51,7 @@ impl PartialEq for TensorData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (TensorData::I64(a), TensorData::I64(b)) => a == b,
+            (TensorData::U64(a), TensorData::U64(b)) => a == b,
             (TensorData::F32(a), TensorData::F32(b)) => a == b,
             (TensorData::F64(a), TensorData::F64(b)) => a == b,
             _ => false,
@@ -63,6 +70,7 @@ impl TensorData {
         }
         match (self, other) {
             (TensorData::I64(a), TensorData::I64(b)) => a == b,
+            (TensorData::U64(a), TensorData::U64(b)) => a == b,
             (TensorData::F32(a), TensorData::F32(b)) => eq!(a, b),
             (TensorData::F64(a), TensorData::F64(b)) => eq!(a, b),
             _ => false,
@@ -71,9 +79,15 @@ impl TensorData {
 }
 
 impl TensorData {
+    pub fn into_1d_tensor(self) -> Tensor {
+        let dims = ResolvedTensorDims::new(vec![self.size()]);
+        Tensor::new(dims, self).unwrap()
+    }
+
     pub fn size(&self) -> usize {
         match self {
             TensorData::I64(v) => v.len(),
+            TensorData::U64(v) => v.len(),
             TensorData::F32(v) => v.len(),
             TensorData::F64(v) => v.len(),
         }
@@ -82,6 +96,7 @@ impl TensorData {
     pub fn elem_type(&self) -> DataType {
         match self {
             TensorData::I64(_) => DataType::I64,
+            TensorData::U64(_) => DataType::U64,
             TensorData::F32(_) => DataType::F32,
             TensorData::F64(_) => DataType::F64,
         }
@@ -96,6 +111,7 @@ impl TensorData {
 
         match self {
             TensorData::I64(v) => convert!(v),
+            TensorData::U64(v) => convert!(v),
             TensorData::F32(v) => convert!(v),
             TensorData::F64(v) => convert!(v),
         }
@@ -104,6 +120,7 @@ impl TensorData {
     pub fn as_ptr(&self) -> *const u8 {
         match self {
             TensorData::I64(v) => v.as_ptr() as *const u8,
+            TensorData::U64(v) => v.as_ptr() as *const u8,
             TensorData::F32(v) => v.as_ptr() as *const u8,
             TensorData::F64(v) => v.as_ptr() as *const u8,
         }
@@ -112,6 +129,7 @@ impl TensorData {
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         match self {
             TensorData::I64(v) => v.as_mut_ptr() as *mut u8,
+            TensorData::U64(v) => v.as_mut_ptr() as *mut u8,
             TensorData::F32(v) => v.as_mut_ptr() as *mut u8,
             TensorData::F64(v) => v.as_mut_ptr() as *mut u8,
         }
@@ -284,6 +302,21 @@ impl ResolvedTensorType {
             stride: ResolvedTensorDims::new(new_strides),
         })
     }
+
+    pub fn slice_in_place(&mut self, rank: usize, start: isize, end: isize) -> usize {
+        let dim = self.dims[rank];
+        let start = TensorIndex::new(start).index(dim);
+        let end = TensorIndex::new(end).index(dim);
+        assert!(start < dim && dim <= end);
+        self.dims[rank] = end - start;
+        self.stride[rank] * start
+    }
+
+    pub fn slice(&self, rank: usize, start: isize, end: isize) -> (Self, usize) {
+        let mut res = self.clone();
+        let offset = res.slice_in_place(rank, start, end);
+        (res, offset)
+    }
 }
 
 impl TensorType {
@@ -309,6 +342,44 @@ fn calc_stride(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
         acc *= dims[i];
     }
     ResolvedTensorDims::new(stride)
+}
+
+fn ndarray_transpose<T: Clone>(data: &[T], dims: &[usize], perms: &[usize]) -> ndarray::Array<T, ndarray::IxDyn> {
+    ArrayView::from_shape(dims, data)
+        .unwrap()
+        .permuted_axes(perms)
+        .into_dyn()
+        .to_owned()
+}
+
+fn ndarray_slices<T: Clone>(data: &[T], dims: &[usize], starts: &[isize], ends: &[isize]) -> ndarray::Array<T, ndarray::IxDyn> {
+    ArrayView::from_shape(dims, data)
+        .unwrap()
+        .slice_each_axis(|desc| ndarray::Slice {
+            start: starts[desc.axis.index()],
+            end: Some(ends[desc.axis.index()]),
+            step: 1,
+        })
+    .into_dyn()
+        .to_owned()
+}
+
+fn ndarray_concat<T: Clone>(data: &[(&[T], &[usize])], axis: usize) -> ndarray::Array<T, ndarray::IxDyn> {
+    let arrays = data.iter().map(|(data, dims)| ArrayView::from_shape(*dims, data).unwrap()).collect::<Vec<_>>();
+    ndarray::concatenate(ndarray::Axis(axis), &arrays[..])
+        .unwrap()
+        .to_owned()
+}
+
+macro_rules! apply_ndarray_ops {
+    ($data: expr, $func: expr, $($args: expr),*) => {{
+        match $data {
+            TensorData::I64(v) => $func(&v[..], $($args,)*).try_into(),
+            TensorData::U64(v) => $func(&v[..], $($args,)*).try_into(),
+            TensorData::F32(v) => $func(&v[..], $($args,)*).try_into(),
+            TensorData::F64(v) => $func(&v[..], $($args,)*).try_into(),
+        }
+    }}
 }
 
 impl Tensor {
@@ -337,6 +408,38 @@ impl Tensor {
         let data = TensorData::from_bytes(ty.elem_type, raw);
         Self::new(ty.dims, data)
     }
+
+    pub fn transpose(&self, perms: &[usize]) -> Self {
+        apply_ndarray_ops!(&self.data, ndarray_transpose, &self.ty.dims[..], perms).unwrap()
+    }
+
+    pub fn slices(&self, starts: &[isize], ends: &[isize]) -> Self {
+        apply_ndarray_ops!(&self.data, ndarray_slices, &self.ty.dims[..], starts, ends).unwrap()
+    }
+
+    pub fn concat(tensors: &[&Self], axis: usize) -> Result<Self, TypeError> {
+        if tensors.is_empty() {
+            panic!();
+        }
+
+        macro_rules! collect_slices {
+            ($ty: ty) => {{
+        let data = tensors.iter().map(|x| {
+            let data: Result<&[$ty], _> = x.data.try_as_slice();
+            let dims = x.ty.dims.as_slice();
+            data.map(|x| (x, dims))
+        }).collect::<Result<Vec<_>, _>>()?;
+        ndarray_concat(&data, axis).try_into()
+            }}
+        }
+
+        match tensors[0].data {
+            TensorData::I64(_) => collect_slices!(i64),
+            TensorData::U64(_) => collect_slices!(u64),
+            TensorData::F32(_) => collect_slices!(f32),
+            TensorData::F64(_) => collect_slices!(f64),
+        }
+    }
 }
 
 macro_rules! define_try_from {
@@ -355,6 +458,29 @@ macro_rules! define_try_from {
 define_try_from!(f32, F32);
 define_try_from!(f64, F64);
 define_try_from!(i64, I64);
+define_try_from!(u64, U64);
+
+trait TrySlice<T> {
+    fn try_as_slice(&self) -> Result<&[T], TypeError>;
+}
+
+macro_rules! define_try_into_raw {
+    ($ty: ty, $data: ident) => {
+        impl TrySlice<$ty> for TensorData {
+            fn try_as_slice(&self) -> Result<&[$ty], TypeError> {
+                match self {
+                    TensorData::$data(v) => Ok(&v[..]),
+                    _ => Err(TypeError::ElementTypeError),
+                }
+            }
+        }
+    }
+}
+
+define_try_into_raw!(f32, F32);
+define_try_into_raw!(f64, F64);
+define_try_into_raw!(i64, I64);
+define_try_into_raw!(u64, U64);
 
 impl TensorData {
     pub fn from_bytes(ty: DataType, raw: &[u8]) -> Self {
@@ -371,6 +497,7 @@ impl TensorData {
         }
         match ty {
             DataType::I64 => TensorData::I64(convert!(raw, i64)),
+            DataType::U64 => TensorData::U64(convert!(raw, u64)),
             DataType::F32 => TensorData::F32(convert!(raw, f32)),
             DataType::F64 => TensorData::F64(convert!(raw, f64)),
         }
@@ -380,6 +507,7 @@ impl TensorData {
         let size = dims.size();
         match ty {
             DataType::I64 => TensorData::I64(vec![0; size]),
+            DataType::U64 => TensorData::U64(vec![0; size]),
             DataType::F32 => TensorData::F32(vec![0.0; size]),
             DataType::F64 => TensorData::F64(vec![0.0; size]),
         }
@@ -534,5 +662,44 @@ mod test {
         let target = ResolvedTensorDims::new(vec![3, 4, 2, 3, 5, 2]);
         assert_eq!(orig.dims.size(), target.size());
         assert_eq!(orig.try_reshape(&target), None);
+    }
+
+    macro_rules! make_range_tensor {
+        ($ty: ty, $($dim: expr),*) => {{
+            let len = [$($dim),*].iter().product();
+            let orig = ndarray::Array::from_iter((0..len).map(|x| x as $ty))
+                .into_shape_with_order(($($dim),*))
+                .unwrap();
+            let res: Result<(Tensor, _), _> = orig
+                .clone()
+                .into_dyn()
+                .try_into()
+                .map(|t| (t, orig));
+            res.unwrap()
+        }};
+    }
+    
+    macro_rules! tensor_assert_eq {
+        ($left: expr, $right: expr) => {{
+            let right = Tensor::try_from($right).unwrap();
+            assert_eq!($left, right);
+        }};
+    }
+
+    #[test]
+    fn test_slice0() {
+        let (t, orig) = make_range_tensor!(i64, 3, 4, 5);
+        let s = t.slices(&[1, 2, 0], &[2, 4, 5]);
+        let expected = orig.slice(ndarray::s![1..2, 2..4, 0..5]).into_dyn().to_owned();
+        tensor_assert_eq!(s, expected);
+    }
+    
+    #[test]
+    fn test_slice1() {
+        let (t, orig) = make_range_tensor!(i64, 3, 4, 5);
+        let s = t.slices(&[-2, 0, 1], &[3, 4, -1]);
+        let expected = orig.slice(ndarray::s![-2..3, 0..4, 1..-1]).into_dyn().to_owned();
+        println!("{:?}", s);
+        tensor_assert_eq!(s, expected);
     }
 }

@@ -300,6 +300,7 @@ fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
     let result_ty = graph.get_resolved_tensor_type(value).unwrap();
     let data_size = match result_ty.elem_type {
         DataType::I64 => 8,
+        DataType::U64 => 8,
         DataType::F32 => 4,
         DataType::F64 => 8,
     };
@@ -698,6 +699,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     DataType::F32 => 4,
                     DataType::F64 => 8,
                     DataType::I64 => 8,
+                    DataType::U64 => 8,
                 });
             builder.build_memcpy(
                 ptrs[0].ptr,
@@ -930,7 +932,7 @@ impl<'ctx> LLVMScalarType<'ctx> {
         match data_type {
             DataType::F32 => LLVMScalarType::LLVMFloat(context.f32_type()),
             DataType::F64 => LLVMScalarType::LLVMFloat(context.f64_type()),
-            DataType::I64 => LLVMScalarType::LLVMInt(context.i64_type()),
+            DataType::I64 | DataType::U64 => LLVMScalarType::LLVMInt(context.i64_type()),
         }
     }
 }
@@ -1686,6 +1688,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             DataType::F32 => 4,
                             DataType::F64 => 8,
                             DataType::I64 => 8,
+                            DataType::U64 => 8,
                         };
                         let len_int = self
                             .context

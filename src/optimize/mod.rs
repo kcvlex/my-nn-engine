@@ -8,3 +8,4 @@ pub mod omp;
 pub mod optimizer;
 pub mod reduce;
 pub mod util;
+pub mod const_fold;

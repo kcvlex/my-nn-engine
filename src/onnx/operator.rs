@@ -4,9 +4,31 @@ use std::ops::Index;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone)]
+pub struct TensorIndex(isize);
+
+impl TensorIndex {
+    pub fn new(i: isize) -> Self {
+        Self(i)
+    }
+
+    pub fn index(&self, rank: usize) -> usize {
+        if self.0 < 0 {
+            (rank as isize + self.0) as usize
+        } else {
+            self.0 as usize
+        }
+    }
+
+    pub fn raw(&self) -> isize {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Operator {
     Add,
     BatchNormalization(BatchNormalization),
+    Concat(Concat),
     Conv(Conv),
     Gemm(Gemm),
     GlobalAveragePool,
@@ -18,6 +40,9 @@ pub enum Operator {
     ReduceMax(Reduce),
     ReduceMean(Reduce),
     ReduceSum(Reduce),
+    Shape(Shape),
+    Slice(Slice),
+    Split(Split),
     Sigmoid,
     Transpose(Vec<usize>),
 
@@ -63,6 +88,11 @@ impl<T: Clone + Copy> Index<usize> for OptionalVec<T> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Concat {
+    pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone)]
 pub enum ConvPad {
     NotSet(OptionalVec<(usize, usize)>),
     SameUpper,
@@ -93,6 +123,26 @@ pub struct Pooling {
 pub struct Reduce {
     pub axes: Vec<i64>,
     pub keepdims: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Shape {
+    pub start: TensorIndex,
+    pub end: Option<TensorIndex>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Slice {
+    pub starts: Vec<TensorIndex>,
+    pub ends: Vec<TensorIndex>,
+    pub axes: Vec<TensorIndex>,
+    pub steps: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Split {
+    pub axis: TensorIndex,
+    pub num_outputs: usize,
 }
 
 impl Reduce {
@@ -206,6 +256,7 @@ impl Operator {
         match self {
             Operator::Add => "Add",
             Operator::BatchNormalization(_) => "BatchNormalization",
+            Operator::Concat(_) => "Concat",
             Operator::Conv(_) => "Conv",
             Operator::Gemm(_) => "Gemm",
             Operator::GlobalAveragePool => "GlobalAveragePool",
@@ -217,6 +268,9 @@ impl Operator {
             Operator::ReduceMax(_) => "ReduceMax",
             Operator::ReduceMean(_) => "ReduceMean",
             Operator::ReduceSum(_) => "ReduceSum",
+            Operator::Shape(_) => "Shape",
+            Operator::Slice(_) => "Slice",
+            Operator::Split(_) => "Split",
             Operator::Sigmoid => "Sigmoid",
             Operator::Transpose(_) => "Transpose",
 
