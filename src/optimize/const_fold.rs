@@ -1,11 +1,10 @@
-use crate::onnx::model::{Graph, NodeId, ValueId};
-use crate::tensor::{
-    dimensions::{Dimension, ParamKey},
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{ResolvedTensorType, Tensor, TensorType, TensorData, TypeError, UnresolvedTensorType},
-};
+use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
-use crate::optimize::optimizer::{GraphModifier};
+use crate::optimize::optimizer::GraphModifier;
+use crate::tensor::{
+    resolved_dimensions::ResolvedTensorDims,
+    tensor::{Tensor, TensorData},
+};
 use itertools::izip;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
@@ -30,7 +29,7 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let shape = TensorData::U64(shape);
             let shape = shape.into_1d_tensor();
             Some(vec![shape])
-        },
+        }
         Operator::Slice(ref slice) => {
             let input = node.inputs[0];
             let input = &graph.initializer.get(&input)?;
@@ -49,8 +48,11 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 ends[axis] = end.raw();
             }
             Some(vec![input.slices(&starts, &ends)])
-        },
-        Operator::Split(Split { ref axis, ref num_outputs }) => {
+        }
+        Operator::Split(Split {
+            ref axis,
+            ref num_outputs,
+        }) => {
             let input = node.inputs[0];
             let input = &graph.initializer.get(&input)?;
             let (mut starts, mut ends) = all_slice_indices(&input.ty.dims);
@@ -69,7 +71,7 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 cur = end;
             }
             Some(res)
-        },
+        }
         _ => None,
     }
 }

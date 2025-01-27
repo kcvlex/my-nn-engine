@@ -2,8 +2,8 @@ use crate::onnx::operator::TensorIndex;
 use crate::tensor::dimensions::UnresolvedTensorDims;
 use crate::tensor::resolved_dimensions::ResolvedTensorDims;
 
-use ndarray::ArrayView;
 use itertools::izip;
+use ndarray::ArrayView;
 
 #[derive(Debug, Clone)]
 pub enum TypeError {
@@ -344,42 +344,118 @@ fn calc_stride(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
     ResolvedTensorDims::new(stride)
 }
 
-fn ndarray_transpose<T: Clone>(data: &[T], dims: &[usize], perms: &[usize]) -> ndarray::Array<T, ndarray::IxDyn> {
-    ArrayView::from_shape(dims, data)
+struct RawTensor<'a, T> {
+    data: &'a [T],
+    dims: &'a [usize],
+}
+
+macro_rules! into_array_view {
+    ($tensor: expr) => {{
+        ArrayView::from_shape($tensor.dims, $tensor.data)
+    }};
+}
+
+fn ndarray_transpose<T: Clone>(
+    tensor: RawTensor<'_, T>,
+    perms: &[usize],
+) -> ndarray::Array<T, ndarray::IxDyn> {
+    into_array_view!(tensor)
         .unwrap()
         .permuted_axes(perms)
         .into_dyn()
         .to_owned()
 }
 
-fn ndarray_slices<T: Clone>(data: &[T], dims: &[usize], starts: &[isize], ends: &[isize]) -> ndarray::Array<T, ndarray::IxDyn> {
-    ArrayView::from_shape(dims, data)
+fn ndarray_slices<T: Clone>(
+    tensor: RawTensor<'_, T>,
+    starts: &[isize],
+    ends: &[isize],
+) -> ndarray::Array<T, ndarray::IxDyn> {
+    into_array_view!(tensor)
         .unwrap()
         .slice_each_axis(|desc| ndarray::Slice {
             start: starts[desc.axis.index()],
             end: Some(ends[desc.axis.index()]),
             step: 1,
         })
-    .into_dyn()
+        .into_dyn()
         .to_owned()
 }
 
-fn ndarray_concat<T: Clone>(data: &[(&[T], &[usize])], axis: usize) -> ndarray::Array<T, ndarray::IxDyn> {
-    let arrays = data.iter().map(|(data, dims)| ArrayView::from_shape(*dims, data).unwrap()).collect::<Vec<_>>();
+fn ndarray_concat<T: Clone>(
+    data: &[RawTensor<'_, T>],
+    axis: usize,
+) -> ndarray::Array<T, ndarray::IxDyn> {
+    let arrays = data
+        .iter()
+        .map(|tensor| into_array_view!(tensor).unwrap())
+        .collect::<Vec<_>>();
     ndarray::concatenate(ndarray::Axis(axis), &arrays[..])
         .unwrap()
         .to_owned()
 }
 
-macro_rules! apply_ndarray_ops {
-    ($data: expr, $func: expr, $($args: expr),*) => {{
-        match $data {
-            TensorData::I64(v) => $func(&v[..], $($args,)*).try_into(),
-            TensorData::U64(v) => $func(&v[..], $($args,)*).try_into(),
-            TensorData::F32(v) => $func(&v[..], $($args,)*).try_into(),
-            TensorData::F64(v) => $func(&v[..], $($args,)*).try_into(),
+fn ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
+    data: RawTensor<'_, T>,
+    axis: usize,
+    indices: RawTensor<'_, U>,
+) -> ndarray::Array<T, ndarray::IxDyn> {
+    let input = into_array_view!(data).unwrap();
+    let dims = {
+        let mut dims = data.dims.to_vec();
+        let shape = input.shape();
+        dims.extend_from_slice(&shape[..axis]);
+        if axis + 1 < shape.len() {
+            dims.extend_from_slice(&shape[axis + 1..]);
         }
-    }}
+        dims
+    };
+    let axis_dim = input.shape()[axis];
+    let slices = into_array_view!(indices)
+        .unwrap()
+        .flatten()
+        .into_iter()
+        .map(|x| {
+            input.index_axis(
+                ndarray::Axis(axis),
+                TensorIndex::new(x.try_into().map_err(|_| "convert").unwrap()).index(axis_dim),
+            )
+        })
+        .collect::<Vec<_>>();
+    ndarray::stack(ndarray::Axis(axis), &slices[..])
+        .unwrap()
+        .to_shape(dims)
+        .unwrap()
+        .into_dyn()
+        .to_owned()
+}
+
+macro_rules! apply_ndarray_ops {
+    ($self: expr, $func: expr, $($args: expr),*) => {{
+        match &$self.data {
+            TensorData::I64(v) => $func(into_raw_tensor!(v, $self.ty.dims), $($args,)*).try_into(),
+            TensorData::U64(v) => $func(into_raw_tensor!(v, $self.ty.dims), $($args,)*).try_into(),
+            TensorData::F32(v) => $func(into_raw_tensor!(v, $self.ty.dims), $($args,)*).try_into(),
+            TensorData::F64(v) => $func(into_raw_tensor!(v, $self.ty.dims), $($args,)*).try_into(),
+        }
+    }};
+}
+
+macro_rules! into_raw_tensor {
+    ($tensor: expr, $ty: ty) => {{
+        let data: Result<&[$ty], _> = $tensor.data.try_as_slice();
+        data.map(|data| RawTensor {
+            data,
+            dims: $tensor.ty.dims.as_slice(),
+        })
+    }};
+
+    ($data: expr, $dims: expr) => {{
+        RawTensor {
+            data: &$data[..],
+            dims: &$dims[..],
+        }
+    }};
 }
 
 impl Tensor {
@@ -410,11 +486,11 @@ impl Tensor {
     }
 
     pub fn transpose(&self, perms: &[usize]) -> Self {
-        apply_ndarray_ops!(&self.data, ndarray_transpose, &self.ty.dims[..], perms).unwrap()
+        apply_ndarray_ops!(self, ndarray_transpose, perms).unwrap()
     }
 
     pub fn slices(&self, starts: &[isize], ends: &[isize]) -> Self {
-        apply_ndarray_ops!(&self.data, ndarray_slices, &self.ty.dims[..], starts, ends).unwrap()
+        apply_ndarray_ops!(self, ndarray_slices, starts, ends).unwrap()
     }
 
     pub fn concat(tensors: &[&Self], axis: usize) -> Result<Self, TypeError> {
@@ -424,13 +500,12 @@ impl Tensor {
 
         macro_rules! collect_slices {
             ($ty: ty) => {{
-        let data = tensors.iter().map(|x| {
-            let data: Result<&[$ty], _> = x.data.try_as_slice();
-            let dims = x.ty.dims.as_slice();
-            data.map(|x| (x, dims))
-        }).collect::<Result<Vec<_>, _>>()?;
-        ndarray_concat(&data, axis).try_into()
-            }}
+                let data = tensors
+                    .iter()
+                    .map(|x| into_raw_tensor!(x, $ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                ndarray_concat(&data, axis).try_into()
+            }};
         }
 
         match tensors[0].data {
@@ -438,6 +513,20 @@ impl Tensor {
             TensorData::U64(_) => collect_slices!(u64),
             TensorData::F32(_) => collect_slices!(f32),
             TensorData::F64(_) => collect_slices!(f64),
+        }
+    }
+
+    pub fn gather(&self, indices: &Self, axis: usize) -> Self {
+        match &indices.data {
+            TensorData::I64(_) => {
+                let indices = into_raw_tensor!(indices, i64).unwrap();
+                apply_ndarray_ops!(self, ndarray_gather, axis, indices).unwrap()
+            }
+            TensorData::U64(_) => {
+                let indices = into_raw_tensor!(indices, u64).unwrap();
+                apply_ndarray_ops!(self, ndarray_gather, axis, indices).unwrap()
+            }
+            _ => panic!(),
         }
     }
 }
@@ -474,7 +563,7 @@ macro_rules! define_try_into_raw {
                 }
             }
         }
-    }
+    };
 }
 
 define_try_into_raw!(f32, F32);
@@ -678,7 +767,7 @@ mod test {
             res.unwrap()
         }};
     }
-    
+
     macro_rules! tensor_assert_eq {
         ($left: expr, $right: expr) => {{
             let right = Tensor::try_from($right).unwrap();
@@ -690,16 +779,21 @@ mod test {
     fn test_slice0() {
         let (t, orig) = make_range_tensor!(i64, 3, 4, 5);
         let s = t.slices(&[1, 2, 0], &[2, 4, 5]);
-        let expected = orig.slice(ndarray::s![1..2, 2..4, 0..5]).into_dyn().to_owned();
+        let expected = orig
+            .slice(ndarray::s![1..2, 2..4, 0..5])
+            .into_dyn()
+            .to_owned();
         tensor_assert_eq!(s, expected);
     }
-    
+
     #[test]
     fn test_slice1() {
         let (t, orig) = make_range_tensor!(i64, 3, 4, 5);
         let s = t.slices(&[-2, 0, 1], &[3, 4, -1]);
-        let expected = orig.slice(ndarray::s![-2..3, 0..4, 1..-1]).into_dyn().to_owned();
-        println!("{:?}", s);
+        let expected = orig
+            .slice(ndarray::s![-2..3, 0..4, 1..-1])
+            .into_dyn()
+            .to_owned();
         tensor_assert_eq!(s, expected);
     }
 }

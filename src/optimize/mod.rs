@@ -1,4 +1,5 @@
 pub mod batchnorm;
+pub mod const_fold;
 pub mod gemm;
 pub mod identity;
 pub mod im2col;
@@ -8,4 +9,3 @@ pub mod omp;
 pub mod optimizer;
 pub mod reduce;
 pub mod util;
-pub mod const_fold;

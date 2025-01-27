@@ -402,7 +402,8 @@ trait RequiredAttr {
 
 impl RequiredAttr for Attributes {
     fn required(&self, name: &str) -> LoadResult<&Attribute> {
-        self.get(name).ok_or(ModelLoadError::Required(name.to_string()))
+        self.get(name)
+            .ok_or(ModelLoadError::Required(name.to_string()))
     }
 }
 
@@ -464,9 +465,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             }))
         }
         "Concat" => {
-            let axis = attributes
-                .required("axis")?
-                .index()?;
+            let axis = attributes.required("axis")?.index()?;
             Ok(Operator::Concat(Concat { axis }))
         }
         "MaxPool" => {
@@ -480,10 +479,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .map(|x| x.b())
                 .transpose()?
                 .unwrap_or(false);
-            let kernel_shape = attributes
-                .required("kernel_shape")?
-                .ints()?
-                .into();
+            let kernel_shape = attributes.required("kernel_shape")?.ints()?.into();
             let strides = attributes
                 .get("strides")
                 .map(|x| x.ints())
@@ -505,25 +501,22 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .map(|x| x.index())
                 .transpose()?
                 .unwrap_or(TensorIndex::new(0));
-            let end = attributes
-                .get("end")
-                .map(|x| x.index())
-                .transpose()?;
+            let end = attributes.get("end").map(|x| x.index()).transpose()?;
             Ok(Operator::Shape(Shape { start, end }))
-        },
+        }
         "Slice" => {
             // TODO: Check length of each vector
-            let starts = attributes
-                .required("starts")?
-                .indexes()?;
-            let ends = attributes
-                .required("ends")?
-                .indexes()?;
+            let starts = attributes.required("starts")?.indexes()?;
+            let ends = attributes.required("ends")?.indexes()?;
             let axes = attributes
                 .get("axes")
                 .map(|x| x.indexes())
                 .transpose()?
-                .unwrap_or((0..starts.len()).map(|x| TensorIndex::new(x as isize)).collect());
+                .unwrap_or(
+                    (0..starts.len())
+                        .map(|x| TensorIndex::new(x as isize))
+                        .collect(),
+                );
             let steps = attributes
                 .get("steps")
                 .map(|x| x.ints())
@@ -535,18 +528,16 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 axes,
                 steps,
             }))
-        },
+        }
         "Split" => {
             let axis = attributes
                 .get("axis")
                 .map(|x| x.index())
                 .transpose()?
                 .unwrap_or(TensorIndex::new(0));
-            let num_outputs = attributes
-                .required("num_outputs")?
-                .i()? as usize;
+            let num_outputs = attributes.required("num_outputs")?.i()? as usize;
             Ok(Operator::Split(Split { axis, num_outputs }))
-        },
+        }
         "Identity" => Ok(Operator::Identity),
         "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
         "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),

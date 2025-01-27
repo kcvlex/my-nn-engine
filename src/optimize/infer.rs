@@ -361,7 +361,9 @@ impl ShapeInference {
                 ));
             }
 
-            Operator::Concat(_) | Operator::Split(_) | Operator::Slice(_) | Operator::Shape(_) => todo!(),
+            Operator::Concat(_) | Operator::Split(_) | Operator::Slice(_) | Operator::Shape(_) => {
+                todo!()
+            }
 
             // Custom
             Operator::Contiguous => {
