@@ -1,7 +1,7 @@
 use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::GraphModifier;
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
+use crate::tensor::dimensions::ResolvedTensorDims;
 use std::io::{Error, Result};
 
 #[derive(Default)]

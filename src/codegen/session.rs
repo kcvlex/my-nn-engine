@@ -7,8 +7,9 @@ use crate::optimize::{
     reduce,
 };
 use crate::tensor::{
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{ResolvedTensorType, Tensor, TypeError},
+    dimensions::ResolvedTensorDims,
+    types::{ResolvedTensorType, TypeError},
+    Tensor,
 };
 
 use tempfile::TempDir;
@@ -274,7 +275,7 @@ impl Session {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::tensor::tensor::Tensor;
+    use crate::tensor::Tensor;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{

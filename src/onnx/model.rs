@@ -1,8 +1,9 @@
 use crate::onnx::operator::Operator;
 use crate::tensor::{
+    dimensions::ResolvedTensorDims,
     dimensions::{Dimension, ParamKey},
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{ResolvedTensorType, Tensor, TensorType, TypeError, UnresolvedTensorType},
+    types::{ResolvedTensorType, TensorType, TypeError, UnresolvedTensorType},
+    Tensor,
 };
 use id_arena::{Arena, Id};
 use std::collections::{BTreeMap, HashMap};

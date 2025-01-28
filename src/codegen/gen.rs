@@ -5,8 +5,8 @@ use crate::codegen::plan::{AllocateInfo, AllocateType};
 use crate::onnx::model::{Graph, Node, NodeId, ValueId};
 use crate::onnx::operator;
 use crate::onnx::operator::Operator;
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::{DataType, ResolvedTensorType};
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::{DataType, ResolvedTensorType};
 use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::OptimizationLevel;
 

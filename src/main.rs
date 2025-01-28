@@ -1,5 +1,6 @@
 use my_onnx::codegen::session::Session;
-use my_onnx::tensor::tensor::{Tensor, TensorData};
+use my_onnx::tensor::dimensions::ResolvedTensorDims;
+use my_onnx::tensor::{data::TensorData, Tensor};
 use std::env;
 use std::io::{Error, Result};
 
@@ -152,7 +153,6 @@ fn main0() -> Result<()> {
         .into_dyn()
         .try_into()
         .map_err(|e| Error::other(format!("{:?}", e)))?;
-    use my_onnx::tensor::resolved_dimensions::ResolvedTensorDims;
     let session = Session::new(
         &args[1],
         Some(&[&ResolvedTensorDims::new(vec![1, 28, 28])]),

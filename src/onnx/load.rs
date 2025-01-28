@@ -1,9 +1,10 @@
 use crate::onnx::model::{Graph, Model, Node, NodeMeta, Nodes, ValueId, ValueInfo, Values};
 use crate::onnx::operator::*;
 use crate::tensor::{
-    dimensions::{Dimension, UnresolvedTensorDims},
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{DataType, Tensor, TensorData, TensorType, TypeError, UnresolvedTensorType},
+    data::TensorData,
+    dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
+    types::{DataType, TensorType, TypeError, UnresolvedTensorType},
+    Tensor,
 };
 use prost::{DecodeError, Message};
 use std::collections::{BTreeMap, HashMap};

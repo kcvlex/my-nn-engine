@@ -1,5 +1,5 @@
 use crate::onnx::model::ValueId;
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
+use crate::tensor::dimensions::ResolvedTensorDims;
 use std::ops::Index;
 //use strum_macros::EnumString;
 

@@ -1,10 +1,7 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::GraphModifier;
-use crate::tensor::{
-    resolved_dimensions::ResolvedTensorDims,
-    tensor::{Tensor, TensorData},
-};
+use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, Tensor};
 use itertools::izip;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {

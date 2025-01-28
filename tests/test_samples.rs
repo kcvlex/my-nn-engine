@@ -1,6 +1,6 @@
 use my_onnx::codegen::session::{Session, SessionError};
 use my_onnx::onnx::load::*;
-use my_onnx::tensor::tensor::Tensor;
+use my_onnx::tensor::Tensor;
 use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;

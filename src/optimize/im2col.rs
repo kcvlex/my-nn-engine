@@ -2,8 +2,8 @@ use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
-use crate::tensor::resolved_dimensions::ResolvedTensorDims;
-use crate::tensor::tensor::ResolvedTensorType;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 
 #[derive(Default)]
 pub struct InsertIm2Col {}

@@ -1,6 +1,6 @@
 use crate::onnx::model::{Graph, Node, NodeId, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
-use crate::tensor::tensor::{ResolvedTensorType, TensorType};
+use crate::tensor::types::{ResolvedTensorType, TensorType};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 

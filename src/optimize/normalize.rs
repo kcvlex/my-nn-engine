@@ -2,7 +2,7 @@ use crate::onnx::model::{Graph, Node, NodeMeta, ValueInfo};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::ReshapeGenerator;
-use crate::tensor::{resolved_dimensions::ResolvedTensorDims, tensor::ResolvedTensorType};
+use crate::tensor::{dimensions::ResolvedTensorDims, types::ResolvedTensorType};
 
 // TODO: Bundle all passes into a single one
 

@@ -2,7 +2,7 @@ use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::optimize::util::{ReshapeGenerator, TransposeGenerator};
-use crate::tensor::tensor::ResolvedTensorType;
+use crate::tensor::types::ResolvedTensorType;
 
 #[derive(Default)]
 pub struct Reduce2ReduceMatrix {}

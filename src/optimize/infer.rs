@@ -2,8 +2,9 @@ use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
 use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::{
-    resolved_dimensions::{broadcast_shape, ResolvedTensorDims},
-    tensor::{ResolvedTensorType, TensorData, TensorType, TypeError},
+    data::TensorData,
+    dimensions::{broadcast_shape, ResolvedTensorDims},
+    types::{ResolvedTensorType, TensorType, TypeError},
 };
 use itertools::zip_eq;
 
