@@ -31,55 +31,6 @@ pub enum CodeGenError {
     IntrinsicNotFound(String),
 }
 
-pub enum LLVMPass {
-    // Module
-    Attributor,
-
-    // CGSCC
-    ArgPromotion,
-    AttributorCGSCC,
-    Inline,
-
-    // Loop
-    LoopUnroll,
-    LoopVectorize,
-    SLPVectorize,
-
-    // Function
-    InstCombine,
-    Reassociate,
-    GlobalValueNumbering,
-    SimplifyCFG,
-    Mem2Reg,
-}
-
-impl LLVMPass {
-    pub fn to_llvm_pass(&self) -> &'static str {
-        match self {
-            LLVMPass::Attributor => "attributor",
-            LLVMPass::ArgPromotion => "argpromotion",
-            LLVMPass::AttributorCGSCC => "attributor-cgscc",
-            LLVMPass::Inline => "inline",
-            LLVMPass::LoopUnroll => "loop-unroll",
-            LLVMPass::LoopVectorize => "loop-vectorize",
-            LLVMPass::SLPVectorize => "slp-vectorizer",
-            LLVMPass::InstCombine => "instcombine",
-            LLVMPass::Reassociate => "reassociate",
-            LLVMPass::GlobalValueNumbering => "gvn",
-            LLVMPass::SimplifyCFG => "simplifycfg",
-            LLVMPass::Mem2Reg => "mem2reg",
-        }
-    }
-
-    pub fn passes(passes: &[LLVMPass]) -> String {
-        passes
-            .iter()
-            .map(|p| p.to_llvm_pass())
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-}
-
 struct Intrinsics<'ll> {
     fmax_f32: FunctionValue<'ll>,
     fmax_f64: FunctionValue<'ll>,
@@ -312,8 +263,7 @@ fn calc_memsize(graph: &Graph, order: &[(NodeId, Vec<AllocateInfo>)]) -> Vec<u64
         0;
         order
             .iter()
-            .map(|(_, info)| info)
-            .flatten()
+            .flat_map(|(_, info)| info)
             .filter_map(|info| info.ty.chunk_id())
             .max()
             .map(|x| x + 1)
