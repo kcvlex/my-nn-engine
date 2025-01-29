@@ -8,7 +8,7 @@ use inkwell::AddressSpace;
 #[allow(non_camel_case_types)]
 pub enum CBLAS_ORDER {
     RowMajor,
-    ColMajor,
+    // ColMajor,
 }
 
 #[allow(non_camel_case_types)]
@@ -32,7 +32,7 @@ impl CBLAS_ORDER {
     fn to_raw(&self) -> u32 {
         match self {
             Self::RowMajor => 101,
-            Self::ColMajor => 102,
+            // Self::ColMajor => 102,
         }
     }
 }
@@ -72,11 +72,14 @@ pub struct GemmArgs<'ctx> {
     pub a: (PointerValue<'ctx>, bool),
     pub b: (PointerValue<'ctx>, bool),
     pub c: (PointerValue<'ctx>, bool),
-    pub alpha: f64,
-    pub beta: f64,
     pub m: u64,
     pub n: u64,
     pub k: u64,
+
+    #[allow(dead_code)]
+    pub alpha: f64,
+    #[allow(dead_code)]
+    pub beta: f64,
 }
 
 pub struct DotArgs<'ctx> {
@@ -164,6 +167,7 @@ impl<'ctx> Routines<'ctx> {
         let inc_a = if !a_trans { k } else { m };
         let inc_b = if !b_trans { n } else { k };
 
+        // TODO: alpha & beta
         builder.build_call(
             self.gemm,
             &[
@@ -239,6 +243,7 @@ impl<'ctx> BLAS<'ctx> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn call_dot(
         &self,
         precision: Precision,
