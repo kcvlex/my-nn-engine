@@ -1,5 +1,5 @@
-use my_onnx::codegen::session::{Session, SessionError};
 use my_onnx::onnx::load::*;
+use my_onnx::session::{Session, SessionError};
 use my_onnx::tensor::Tensor;
 use std::path::PathBuf;
 

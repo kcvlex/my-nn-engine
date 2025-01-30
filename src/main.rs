@@ -1,4 +1,4 @@
-use my_onnx::codegen::session::Session;
+use my_onnx::session::Session;
 use my_onnx::tensor::dimensions::ResolvedTensorDims;
 use my_onnx::tensor::{data::TensorData, Tensor};
 use std::env;

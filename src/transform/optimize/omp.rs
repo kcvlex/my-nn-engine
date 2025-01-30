@@ -1,5 +1,6 @@
 use crate::onnx::model::Graph;
-use crate::optimize::optimizer::{GraphModifier, Pass};
+use crate::transform::modify::GraphModifier;
+use crate::transform::Pass;
 
 pub struct InnermostOMP {
     pub threshold: usize,

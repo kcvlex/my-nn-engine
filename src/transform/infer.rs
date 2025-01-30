@@ -1,11 +1,14 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
-use crate::optimize::optimizer::{GraphModifier, Pass};
 use crate::tensor::{
     data::TensorData,
     dimensions::{broadcast_shape, ResolvedTensorDims},
     types::{ResolvedTensorType, TensorType, TypeError},
 };
+use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::utils::tensor::ContigousOutput;
+use crate::transform::SimplePassManager;
+use crate::transform::{GraphModifier, Pass, PassManager};
 use itertools::zip_eq;
 
 #[derive(Debug)]
@@ -383,4 +386,11 @@ impl ShapeInference {
         }
         Ok(res)
     }
+}
+
+pub fn create_infer_passes() -> SimplePassManager<SimpleGraphModifier> {
+    let mut pass_manager = SimplePassManager::new("Infer".to_string());
+    pass_manager.add_pass(Box::new(ContigousOutput {}));
+    pass_manager.add_pass(Box::new(ShapeInference {}));
+    pass_manager
 }

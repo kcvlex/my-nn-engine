@@ -5,7 +5,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 pub trait GraphModifier {
-    fn new(graph: &Graph) -> Self;
+    // fn new(graph: &Graph) -> Self;
 
     fn register_new_value(
         &mut self,
@@ -41,41 +41,8 @@ pub trait GraphModifier {
     }
 }
 
-trait NodeDelete {
+pub trait NodeDelete {
     fn update_deleted_nodes(&mut self, graph: &mut Graph);
-}
-
-pub trait Pass<T: GraphModifier> {
-    fn summary(&self) -> &'static str;
-    fn run(&self, graph: &mut Graph, modifier: &mut T);
-}
-
-#[allow(private_bounds)]
-pub struct Optimizer<T: GraphModifier + NodeDelete> {
-    pub name: String,
-    pub passes: Vec<Box<dyn Pass<T>>>,
-    //model: &mut Model,
-}
-
-#[allow(private_bounds)]
-impl<T: GraphModifier + NodeDelete> Optimizer<T> {
-    pub fn new(name: String) -> Self {
-        Optimizer {
-            name,
-            passes: Vec::new(),
-        }
-    }
-
-    pub fn run(&self, graph: &mut Graph) {
-        let mut modifier = T::new(graph);
-        for opt in self.passes.iter() {
-            println!("Running pass: {}", opt.summary());
-            opt.run(graph, &mut modifier);
-            modifier.update_deleted_nodes(graph);
-        }
-
-        graph.delete_nodes();
-    }
 }
 
 type Value2Defined = HashMap<ValueId, (NodeId, usize)>;
@@ -103,15 +70,17 @@ pub struct SimpleGraphModifier {
     value2used: HashMap<ValueId, HashSet<(NodeId, usize)>>,
 }
 
-impl GraphModifier for SimpleGraphModifier {
-    fn new(graph: &Graph) -> Self {
+impl SimpleGraphModifier {
+    pub fn new(graph: &Graph) -> Self {
         let (value2defined, value2used) = calc_value2xx(graph);
         SimpleGraphModifier {
             value2defined,
             value2used,
         }
     }
+}
 
+impl GraphModifier for SimpleGraphModifier {
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId {
         let inputs = v.inputs.clone();
         let outputs = v.outputs.clone();
@@ -258,8 +227,8 @@ pub struct ExperimentalGraphModifier {
     outdegrees: HashMap<NodeId, usize>,
 }
 
-impl GraphModifier for ExperimentalGraphModifier {
-    fn new(graph: &Graph) -> Self {
+impl ExperimentalGraphModifier {
+    pub fn new(graph: &Graph) -> Self {
         let mut modifier = ExperimentalGraphModifier::default();
         let (value2defined, value2used) = calc_value2xx(graph);
         modifier.value2defined = value2defined;
@@ -270,7 +239,9 @@ impl GraphModifier for ExperimentalGraphModifier {
         }
         modifier
     }
+}
 
+impl GraphModifier for ExperimentalGraphModifier {
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId {
         let inputs = v.inputs.clone();
         let outputs = v.outputs.clone();

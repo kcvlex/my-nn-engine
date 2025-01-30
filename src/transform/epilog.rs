@@ -1,6 +1,9 @@
 use crate::onnx::model::Graph;
 use crate::onnx::operator::*;
-use crate::optimize::optimizer::{GraphModifier, Pass};
+use crate::transform::modify::GraphModifier;
+use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::SimplePassManager;
+use crate::transform::{Pass, PassManager};
 
 #[derive(Default)]
 pub struct Ops2Identity {}
@@ -23,4 +26,10 @@ impl<T: GraphModifier> Pass<T> for Ops2Identity {
             modifier.replace_op(graph, *id, Operator::Identity);
         }
     }
+}
+
+pub fn create_epilog_passes() -> SimplePassManager<SimpleGraphModifier> {
+    let mut manager = SimplePassManager::new("Epilog".to_string());
+    manager.add_pass(Box::new(Ops2Identity::default()));
+    manager
 }

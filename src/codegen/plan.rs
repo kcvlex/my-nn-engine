@@ -368,9 +368,8 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
-    use crate::optimize::infer;
-    use crate::optimize::normalize;
-    use crate::optimize::optimizer::{Optimizer, SimpleGraphModifier};
+    use crate::transform::modify::SimpleGraphModifier;
+    use crate::transform::{create_infer_passes, PassManager};
     use std::io::{Error, Result};
     use std::path::PathBuf;
 
@@ -380,14 +379,9 @@ mod test {
             .join(path);
         let mut model =
             Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;
-        let mut optimizer = Optimizer::<SimpleGraphModifier>::new(String::from("diamond"));
-        optimizer
-            .passes
-            .push(Box::new(normalize::ContigousOutput::default()));
-        optimizer
-            .passes
-            .push(Box::new(infer::ShapeInference::default()));
-        optimizer.run(&mut model.graph);
+        let passes = create_infer_passes();
+        let mut modifier = SimpleGraphModifier::new(&model.graph);
+        passes.run(&mut model.graph, &mut modifier);
         Ok(model)
     }
 

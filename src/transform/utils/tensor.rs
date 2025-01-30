@@ -1,7 +1,8 @@
-use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
+use crate::onnx::model::{Graph, Node, NodeMeta, ValueId, ValueInfo};
 use crate::onnx::operator::*;
-use crate::optimize::optimizer::GraphModifier;
 use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::transform::modify::GraphModifier;
+use crate::transform::Pass;
 use std::io::{Error, Result};
 
 #[derive(Default)]
@@ -208,5 +209,44 @@ impl ReshapeGenerator {
             },
         );
         Ok(new_value)
+    }
+}
+
+#[derive(Default)]
+pub struct ContigousOutput {}
+
+// This pass is assumed to be run before shape inference
+impl<T: GraphModifier> Pass<T> for ContigousOutput {
+    fn summary(&self) -> &'static str {
+        "Insert contiguous before all Outputs"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let ids = graph.outputs.clone();
+        for id in ids.iter() {
+            let input = graph.nodes[*id].inputs[0];
+            let input_ty = graph.values[input].ty.clone();
+            let new_value = graph.values.alloc(ValueInfo {
+                name: format!("Contiguous_Output_{}", id.index()),
+                ty: input_ty,
+            });
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![input],
+                    outputs: vec![new_value],
+                    op: Operator::Contiguous,
+                    name: format!("Contiguous_Output_{}", id.index()),
+                    meta: NodeMeta::default(),
+                },
+            );
+            modifier.replace_input_value_if(graph, input, new_value, |_, node| {
+                matches!(node.op, Operator::Output(_))
+            });
+
+            // Forget the dimension information of old output to make shape inference easier
+            // TODO: Maybe incorrect if the Input node is directly connected to the Output node
+            graph.values[input].ty = None;
+        }
     }
 }

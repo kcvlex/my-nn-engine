@@ -1,6 +1,5 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
-use crate::optimize::optimizer::GraphModifier;
 use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, Tensor};
 use itertools::izip;
 
