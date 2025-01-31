@@ -6,6 +6,7 @@ use crate::tensor::{
     types::{DataType, TensorType, TypeError, UnresolvedTensorType},
     Tensor,
 };
+use itertools::izip;
 use prost::{DecodeError, Message};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -523,12 +524,20 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .map(|x| x.ints())
                 .transpose()?
                 .unwrap_or(vec![1; starts.len()]);
-            Ok(Operator::Slice(Slice {
-                starts,
-                ends,
-                axes,
-                steps,
-            }))
+            let slice = izip!(
+                starts.into_iter(),
+                ends.into_iter(),
+                axes.into_iter(),
+                steps.into_iter()
+            )
+            .map(|(start, end, axis, step)| Slice {
+                start,
+                end,
+                axis,
+                step,
+            })
+            .collect::<Vec<_>>();
+            Ok(Operator::Slice(slice))
         }
         "Split" => {
             let axis = attributes
@@ -538,6 +547,14 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 .unwrap_or(TensorIndex::new(0));
             let num_outputs = attributes.required("num_outputs")?.i()? as usize;
             Ok(Operator::Split(Split { axis, num_outputs }))
+        }
+        "Gather" => {
+            let axis = attributes
+                .get("axis")
+                .map(|x| x.index())
+                .transpose()?
+                .unwrap_or(TensorIndex::new(0));
+            Ok(Operator::Gather(Gather { axis }))
         }
         "Identity" => Ok(Operator::Identity),
         "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),

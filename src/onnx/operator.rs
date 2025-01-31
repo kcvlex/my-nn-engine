@@ -30,6 +30,7 @@ pub enum Operator {
     BatchNormalization(BatchNormalization),
     Concat(Concat),
     Conv(Conv),
+    Gather(Gather),
     Gemm(Gemm),
     GlobalAveragePool,
     Identity,
@@ -41,7 +42,7 @@ pub enum Operator {
     ReduceMean(Reduce),
     ReduceSum(Reduce),
     Shape(Shape),
-    Slice(Slice),
+    Slice(Vec<Slice>),
     Split(Split),
     Sigmoid,
     Transpose(Vec<usize>),
@@ -109,6 +110,11 @@ pub struct Conv {
     pub strides: OptionalVec<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Gather {
+    pub axis: TensorIndex,
+}
+
 // TODO: storage_order
 #[derive(Debug, Clone)]
 pub struct Pooling {
@@ -133,10 +139,10 @@ pub struct Shape {
 
 #[derive(Debug, Clone)]
 pub struct Slice {
-    pub starts: Vec<TensorIndex>,
-    pub ends: Vec<TensorIndex>,
-    pub axes: Vec<TensorIndex>,
-    pub steps: Vec<i64>,
+    pub start: TensorIndex,
+    pub end: TensorIndex,
+    pub axis: TensorIndex,
+    pub step: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +264,7 @@ impl Operator {
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Concat(_) => "Concat",
             Operator::Conv(_) => "Conv",
+            Operator::Gather(_) => "Gather",
             Operator::Gemm(_) => "Gemm",
             Operator::GlobalAveragePool => "GlobalAveragePool",
             Operator::Identity => "Identity",

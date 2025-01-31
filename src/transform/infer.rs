@@ -368,7 +368,11 @@ impl ShapeInference {
                 ));
             }
 
-            Operator::Concat(_) | Operator::Split(_) | Operator::Slice(_) | Operator::Shape(_) => {
+            Operator::Concat(_) |
+            Operator::Split(_) |
+            Operator::Slice(_) |
+            Operator::Shape(_) |
+            Operator::Gather(_) => {
                 todo!()
             }
 

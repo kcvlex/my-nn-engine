@@ -1,7 +1,6 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
 use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, Tensor};
-use itertools::izip;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
@@ -21,7 +20,7 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 Some(index) => index.index(ndim),
                 None => ndim,
             };
-            let shape = input[start..end].into_iter().map(|x| *x as u64).collect();
+            let shape = input[start..end].iter().map(|x| *x as u64).collect();
             let shape = TensorData::U64(shape);
             let shape = shape.into_1d_tensor();
             Some(vec![shape])
@@ -30,12 +29,13 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let input = node.inputs[0];
             let input = &graph.initializer.get(&input)?;
             let (mut starts, mut ends) = all_slice_indices(&input.ty.dims);
-            for (start, end, axis, step) in izip!(
-                slice.starts.iter(),
-                slice.ends.iter(),
-                slice.axes.iter(),
-                slice.steps.iter()
-            ) {
+            for Slice {
+                start,
+                end,
+                axis,
+                step,
+            } in slice.iter()
+            {
                 let axis = axis.index(input.ty.dims.ndim());
                 if *step != 1 {
                     unimplemented!();
@@ -67,6 +67,12 @@ pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 cur = end;
             }
             Some(res)
+        }
+        Operator::Gather(Gather { ref axis }) => {
+            let input = &graph.initializer.get(&node.inputs[0])?;
+            let indices = &graph.initializer.get(&node.inputs[1])?;
+            let axis = axis.index(input.ty.dims.ndim());
+            Some(vec![input.gather(indices, axis)])
         }
         _ => None,
     }
