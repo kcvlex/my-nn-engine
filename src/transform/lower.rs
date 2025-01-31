@@ -109,6 +109,7 @@ impl<T: GraphModifier> Pass<T> for DecomposeBatchNormalization {
             );
 
             let new_output = TransposeGenerator::default()
+                .set_contiguous(true)
                 .set_input(bachnorm_pc_value)
                 .set_perms(perms)
                 .set_node_name(format!("Transpose_BatchNormalizationPC{}", node_id.index()))

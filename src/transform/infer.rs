@@ -165,7 +165,10 @@ impl ShapeInference {
                     })??;
 
                 cond_error!(a.dims.size() != shape.size());
-                res.push(ResolvedTensorType::new(a.elem_type, shape));
+                let reshaped = a
+                    .try_reshape(&shape)
+                    .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?;
+                res.push(reshaped);
             }
             Operator::Conv(Conv {
                 pad,

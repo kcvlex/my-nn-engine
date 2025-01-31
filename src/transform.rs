@@ -58,38 +58,16 @@ impl<T: GraphModifier + NodeDelete> PassManager<T> for SimplePassManager<T> {
 }
 
 pub fn transform_graph(graph: &mut Graph, omp_threshold: usize) {
-    // // TODO: Make optimization passes before lowering
-    // let managers = [
-    //     Box::new(create_infer_passes()),
-    //     Box::new(create_lower_passes()),
-    //     Box::new(create_optimize_passes(omp_threshold)),
-    //     Box::new(create_epilog_passes()),
-    // ];
-    // let mut modifier = SimpleGraphModifier::new(graph);
-    // for manager in managers.iter() {
-    //     manager.run(graph, &mut modifier);
-    // }
-
-    // TODO: ResNet fails when the order of InsertIm2Col and DecomposeBatchNormalization is swapped
-    let mut modifier = SimpleGraphModifier::new(graph);
-    let passes: &[Box<dyn Pass<SimpleGraphModifier>>] = &[
-        Box::new(utils::tensor::ContigousOutput::default()),
-        Box::new(infer::ShapeInference::default()),
-        Box::new(optimize::im2col::InsertIm2Col::default()),
-        Box::new(lower::DecomposeBatchNormalization::default()),
-        Box::new(lower::Reduce2ReduceMatrix::default()),
-        Box::new(lower::EliminateGlobalAvgPool::default()),
-        Box::new(lower::MatMul2Gemm::default()),
-        Box::new(optimize::gemm::TransformBLASGemm::default()),
-        Box::new(optimize::gemm::GemmTransComposition::default()),
-        Box::new(optimize::omp::InnermostOMP {
-            threshold: omp_threshold,
-        }),
-        Box::new(epilog::Ops2Identity::default()),
+    // TODO: Make optimization passes before lowering
+    let managers = [
+        Box::new(create_infer_passes()),
+        Box::new(create_lower_passes()),
+        Box::new(create_optimize_passes(omp_threshold)),
+        Box::new(create_epilog_passes()),
     ];
-    for pass in passes.iter() {
-        pass.run(graph, &mut modifier);
-        modifier.update_deleted_nodes(graph);
+    let mut modifier = SimpleGraphModifier::new(graph);
+    for manager in managers.iter() {
+        manager.run(graph, &mut modifier);
     }
 
     graph.delete_nodes();

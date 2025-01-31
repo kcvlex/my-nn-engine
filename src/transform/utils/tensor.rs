@@ -240,9 +240,12 @@ impl<T: GraphModifier> Pass<T> for ContigousOutput {
                     meta: NodeMeta::default(),
                 },
             );
-            modifier.replace_input_value_if(graph, input, new_value, |_, node| {
-                matches!(node.op, Operator::Output(_))
-            });
+            modifier.replace_input_value_if_without_typecheck(
+                graph,
+                input,
+                new_value,
+                |_, node| matches!(node.op, Operator::Output(_)),
+            );
 
             // Forget the dimension information of old output to make shape inference easier
             // TODO: Maybe incorrect if the Input node is directly connected to the Output node

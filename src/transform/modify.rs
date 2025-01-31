@@ -30,6 +30,23 @@ pub trait GraphModifier {
         new_value: ValueId,
         pred: P,
     ) where
+        P: Fn(NodeId, &Node) -> bool,
+    {
+        if graph.get_resolved_tensor_type(old_value).unwrap() !=
+            graph.get_resolved_tensor_type(new_value).unwrap()
+        {
+            panic!("Type mismatch");
+        }
+        self.replace_input_value_if_without_typecheck(graph, old_value, new_value, pred);
+    }
+
+    fn replace_input_value_if_without_typecheck<P>(
+        &mut self,
+        graph: &mut Graph,
+        old_value: ValueId,
+        new_value: ValueId,
+        pred: P,
+    ) where
         P: Fn(NodeId, &Node) -> bool;
 
     fn replace_input_value(&mut self, graph: &mut Graph, old_value: ValueId, new_value: ValueId) {
@@ -97,7 +114,7 @@ impl GraphModifier for SimpleGraphModifier {
         res
     }
 
-    fn replace_input_value_if<P>(
+    fn replace_input_value_if_without_typecheck<P>(
         &mut self,
         graph: &mut Graph,
         old_value: ValueId,
@@ -262,7 +279,7 @@ impl GraphModifier for ExperimentalGraphModifier {
         res
     }
 
-    fn replace_input_value_if<P>(
+    fn replace_input_value_if_without_typecheck<P>(
         &mut self,
         graph: &mut Graph,
         old_value: ValueId,
