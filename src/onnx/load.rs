@@ -428,15 +428,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 momentum,
             }))
         }
-        "Relu" => Ok(Operator::ReLU),
-        "MatMul" => Ok(Operator::MatMul),
-        "Reshape" => Ok(Operator::Reshape),
-        "Transpose" => {
-            let perm = attributes
-                .get("perm")
-                .map(|x| x.ints())
-                .unwrap_or(Ok(Vec::new()))?;
-            Ok(Operator::Transpose(perm))
+        "Concat" => {
+            let axis = attributes.required("axis")?.index()?;
+            Ok(Operator::Concat(Concat { axis }))
         }
         "Conv" => {
             let dilations = attributes
@@ -466,10 +460,47 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 strides,
             }))
         }
-        "Concat" => {
-            let axis = attributes.required("axis")?.index()?;
-            Ok(Operator::Concat(Concat { axis }))
+        "Gather" => {
+            let axis = attributes
+                .get("axis")
+                .map(|x| x.index())
+                .transpose()?
+                .unwrap_or(TensorIndex::new(0));
+            Ok(Operator::Gather(Gather { axis }))
         }
+        "Gemm" => {
+            let trans_a = attributes
+                .get("transA")
+                .map(|x| x.b())
+                .transpose()?
+                .unwrap_or(false);
+            let trans_b = attributes
+                .get("transB")
+                .map(|x| x.b())
+                .transpose()?
+                .unwrap_or(false);
+            let alpha = attributes
+                .get("alpha")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(1.0)
+                .into();
+            let beta = attributes
+                .get("beta")
+                .map(|x| x.f())
+                .transpose()?
+                .unwrap_or(1.0)
+                .into();
+            Ok(Operator::Gemm(Gemm {
+                trans_a,
+                trans_b,
+                alpha,
+                beta,
+            }))
+        }
+        "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
+        "Identity" => Ok(Operator::Identity),
+        "MatMul" => Ok(Operator::MatMul),
         "MaxPool" => {
             let dilations = attributes
                 .get("dilations")
@@ -496,7 +527,11 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
                 strides,
             }))
         }
-        "Sigmoid" => Ok(Operator::Sigmoid),
+        "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
+        "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),
+        "ReduceSum" => Ok(Operator::ReduceSum(load_reduce(attributes)?)),
+        "Relu" => Ok(Operator::ReLU),
+        "Reshape" => Ok(Operator::Reshape),
         "Shape" => {
             let start = attributes
                 .get("start")
@@ -506,6 +541,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             let end = attributes.get("end").map(|x| x.index()).transpose()?;
             Ok(Operator::Shape(Shape { start, end }))
         }
+        "Sigmoid" => Ok(Operator::Sigmoid),
         "Slice" => {
             // TODO: Check length of each vector
             let starts = attributes.required("starts")?.indexes()?;
@@ -548,48 +584,12 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             let num_outputs = attributes.required("num_outputs")?.i()? as usize;
             Ok(Operator::Split(Split { axis, num_outputs }))
         }
-        "Gather" => {
-            let axis = attributes
-                .get("axis")
-                .map(|x| x.index())
-                .transpose()?
-                .unwrap_or(TensorIndex::new(0));
-            Ok(Operator::Gather(Gather { axis }))
-        }
-        "Identity" => Ok(Operator::Identity),
-        "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
-        "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),
-        "ReduceSum" => Ok(Operator::ReduceSum(load_reduce(attributes)?)),
-        "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
-        "Gemm" => {
-            let trans_a = attributes
-                .get("transA")
-                .map(|x| x.b())
-                .transpose()?
-                .unwrap_or(false);
-            let trans_b = attributes
-                .get("transB")
-                .map(|x| x.b())
-                .transpose()?
-                .unwrap_or(false);
-            let alpha = attributes
-                .get("alpha")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(1.0)
-                .into();
-            let beta = attributes
-                .get("beta")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(1.0)
-                .into();
-            Ok(Operator::Gemm(Gemm {
-                trans_a,
-                trans_b,
-                alpha,
-                beta,
-            }))
+        "Transpose" => {
+            let perm = attributes
+                .get("perm")
+                .map(|x| x.ints())
+                .unwrap_or(Ok(Vec::new()))?;
+            Ok(Operator::Transpose(perm))
         }
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
