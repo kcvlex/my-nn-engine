@@ -2,8 +2,9 @@ use crate::codegen::{CodeGenContext, CodeGenError};
 use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::tensor::{
+    data::TensorData,
     dimensions::ResolvedTensorDims,
-    types::{ResolvedTensorType, TypeError},
+    types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType},
     Tensor,
 };
 use crate::transform::transform_graph;
@@ -11,6 +12,8 @@ use crate::transform::transform_graph;
 use tempfile::TempDir;
 
 use rayon::prelude::*;
+
+use itertools::zip_eq;
 
 use inkwell::context::Context;
 use inkwell::targets::FileType;
@@ -24,6 +27,80 @@ type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *c
 
 const DEBUG: bool = true;
 
+enum StrictTensor {
+    I32(Vec<i32>),
+    I64(Vec<i64>),
+    U64(Vec<u64>),
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+}
+
+macro_rules! cast_vec {
+    ($data: expr, $ty: ty) => {{
+        $data.iter().map(|x| *x as $ty).collect::<Vec<_>>()
+    }};
+}
+
+impl StrictTensor {
+    fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
+        match ty {
+            DataType::SInt(SIntType::I32) => StrictTensor::I32(vec![0; dims.size()]),
+            DataType::SInt(SIntType::I64) => StrictTensor::I64(vec![0; dims.size()]),
+            DataType::UInt(UIntType::U64) => StrictTensor::U64(vec![0; dims.size()]),
+            DataType::Float(FloatType::F32) => StrictTensor::F32(vec![0.0; dims.size()]),
+            DataType::Float(FloatType::F64) => StrictTensor::F64(vec![0.0; dims.size()]),
+        }
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            StrictTensor::I32(v) => v.as_ptr() as *const u8,
+            StrictTensor::I64(v) => v.as_ptr() as *const u8,
+            StrictTensor::U64(v) => v.as_ptr() as *const u8,
+            StrictTensor::F32(v) => v.as_ptr() as *const u8,
+            StrictTensor::F64(v) => v.as_ptr() as *const u8,
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        match self {
+            StrictTensor::I32(v) => v.as_mut_ptr() as *mut u8,
+            StrictTensor::I64(v) => v.as_mut_ptr() as *mut u8,
+            StrictTensor::U64(v) => v.as_mut_ptr() as *mut u8,
+            StrictTensor::F32(v) => v.as_mut_ptr() as *mut u8,
+            StrictTensor::F64(v) => v.as_mut_ptr() as *mut u8,
+        }
+    }
+
+    fn into_tensor(self, dims: ResolvedTensorDims) -> Tensor {
+        match self {
+            StrictTensor::I32(v) => {
+                Tensor::new(dims, TensorData::SInt(SIntType::I32, cast_vec!(v, i64))).unwrap()
+            }
+            StrictTensor::I64(v) => Tensor::new(dims, TensorData::SInt(SIntType::I64, v)).unwrap(),
+            StrictTensor::U64(v) => Tensor::new(dims, TensorData::UInt(UIntType::U64, v)).unwrap(),
+            StrictTensor::F32(v) => {
+                Tensor::new(dims, TensorData::Float(FloatType::F32, cast_vec!(v, f64))).unwrap()
+            }
+            StrictTensor::F64(v) => {
+                Tensor::new(dims, TensorData::Float(FloatType::F64, v)).unwrap()
+            }
+        }
+    }
+}
+
+impl From<&Tensor> for StrictTensor {
+    fn from(t: &Tensor) -> Self {
+        match &t.data {
+            TensorData::SInt(SIntType::I32, v) => StrictTensor::I32(cast_vec!(v, i32)),
+            TensorData::SInt(SIntType::I64, v) => StrictTensor::I64(v.clone()),
+            TensorData::UInt(UIntType::U64, v) => StrictTensor::U64(v.clone()),
+            TensorData::Float(FloatType::F32, v) => StrictTensor::F32(cast_vec!(v, f32)),
+            TensorData::Float(FloatType::F64, v) => StrictTensor::F64(v.clone()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SessionError {
     CodeGenError(CodeGenError),
@@ -36,7 +113,7 @@ pub struct Session {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
-    initializer: Vec<Tensor>,
+    initializer: Vec<StrictTensor>,
 
     #[allow(dead_code)]
     codegen_ctx: CodeGenContext,
@@ -63,7 +140,7 @@ fn get_argument_types(
 impl Session {
     pub fn new<P: AsRef<Path>>(
         p: P,
-        input_ty: Option<&[&ResolvedTensorDims]>,
+        input_ty: Option<&[&ResolvedTensorType]>,
         omp_threshold: usize,
     ) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
@@ -86,7 +163,7 @@ impl Session {
             .graph
             .initializer
             .values()
-            .cloned()
+            .map(|t| StrictTensor::from(t))
             .collect::<Vec<_>>();
 
         let codegen_ctx = CodeGenContext::new(model.graph).map_err(SessionError::CodeGenError)?;
@@ -192,20 +269,21 @@ impl Session {
 
     // TODO: Type check
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
-        let mut outputs = self
+        let mut output_bufs = self
             .output_ty
             .iter()
-            .map(|ty| Tensor::zeros(ty.elem_type, ty.dims.clone()))
+            .map(|ty| StrictTensor::zeros(ty.elem_type, &ty.dims))
             .collect::<Vec<_>>();
-        let output_ptrs = outputs
+        let output_ptrs = output_bufs
             .iter_mut()
-            .map(|t| t.data.as_mut_ptr())
+            .map(|x| x.as_mut_ptr())
             .collect::<Vec<_>>();
-        let input_ptrs = inputs.iter().map(|t| t.data.as_ptr()).collect::<Vec<_>>();
+        let input_bufs = inputs.iter().map(StrictTensor::from).collect::<Vec<_>>();
+        let input_ptrs = input_bufs.iter().map(|t| t.as_ptr()).collect::<Vec<_>>();
         let initializer_ptrs = self
             .initializer
             .iter()
-            .map(|t| t.data.as_ptr())
+            .map(|t| t.as_ptr())
             .collect::<Vec<_>>();
         unsafe {
             (self.func)(
@@ -214,6 +292,9 @@ impl Session {
                 initializer_ptrs.as_ptr(),
             )
         };
+        let outputs = zip_eq(self.output_ty.iter(), output_bufs)
+            .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
+            .collect::<Vec<_>>();
         Ok(outputs)
     }
 

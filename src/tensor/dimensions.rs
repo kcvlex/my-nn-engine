@@ -95,7 +95,11 @@ pub fn broadcast_shape(
 
 impl ResolvedTensorDims {
     pub fn new(v: Vec<usize>) -> Self {
-        v.into()
+        if v.iter().sum::<usize>() == 0 {
+            Self(vec![])
+        } else {
+            Self(v)
+        }
     }
 
     pub fn ndim(&self) -> usize {
@@ -103,15 +107,19 @@ impl ResolvedTensorDims {
     }
 
     pub fn size(&self) -> usize {
-        self.0.iter().product()
+        if self.0.is_empty() {
+            0
+        } else {
+            self.0.iter().product()
+        }
     }
 
     pub fn prefix(&self, len: usize) -> Self {
-        Self(self.0[..len].to_vec())
+        Self::new(self.0[..len].to_vec())
     }
 
     pub fn suffix(&self, len: usize) -> Self {
-        Self(self.0[self.0.len() - len..].to_vec())
+        Self::new(self.0[self.0.len() - len..].to_vec())
     }
 
     pub fn push(&mut self, v: usize) {
@@ -159,6 +167,10 @@ impl ResolvedTensorDims {
             res.slice_in_place(slice);
         }
         res
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
-use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, Tensor};
+use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, types::SIntType, Tensor};
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
@@ -11,6 +11,16 @@ fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
 pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
     match node.op {
+        Operator::Concat(Concat { ref axis }) => {
+            let tensors = node
+                .inputs
+                .iter()
+                .map(|x| graph.initializer.get(x))
+                .collect::<Option<Vec<_>>>()?;
+            let axis = axis.index(tensors[0].dims.ndim());
+            dbg!(&tensors);
+            Tensor::concat(&tensors, axis).map(|x| vec![x]).ok()
+        }
         Operator::Shape(Shape { ref start, ref end }) => {
             let input = node.inputs[0];
             let input = &graph.get_resolved_tensor_type(input)?.dims;
@@ -20,23 +30,24 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 Some(index) => index.index(ndim),
                 None => ndim,
             };
-            let shape = input[start..end].iter().map(|x| *x as u64).collect();
-            let shape = TensorData::U64(shape);
+            let shape = input[start..end].iter().map(|x| *x as i64).collect();
+            let shape = TensorData::SInt(SIntType::I64.into(), shape);
             let shape = shape.into_1d_tensor();
             Some(vec![shape])
         }
-        Operator::Slice(ref slice) => {
+        Operator::Slice => {
             let input = node.inputs[0];
             let input = &graph.initializer.get(&input)?;
-            let (mut starts, mut ends) = all_slice_indices(&input.ty.dims);
+            let slices = Slice::collect_slices(graph, node_id)?;
+            let (mut starts, mut ends) = all_slice_indices(&input.dims);
             for Slice {
                 start,
                 end,
                 axis,
                 step,
-            } in slice.iter()
+            } in slices.iter()
             {
-                let axis = axis.index(input.ty.dims.ndim());
+                let axis = axis.index(input.dims.ndim());
                 if *step != 1 {
                     unimplemented!();
                 }
@@ -45,24 +56,17 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             }
             Some(vec![input.slices(&starts, &ends)])
         }
-        Operator::Split(Split {
-            ref axis,
-            ref num_outputs,
-        }) => {
+        Operator::Split(ref split) => {
             let input = node.inputs[0];
             let input = &graph.initializer.get(&input)?;
-            let (mut starts, mut ends) = all_slice_indices(&input.ty.dims);
-            let axis = axis.index(input.ty.dims.ndim());
-            let dim = input.ty.dims[axis];
+            let (mut starts, mut ends) = all_slice_indices(&input.dims);
+            let axis = split.axis.index(input.dims.ndim());
             let mut res = Vec::new();
             let mut cur = 0;
-            let step = (dim / *num_outputs) as isize;
-            let bound = ends[axis];
-            while cur < bound {
-                let start = cur;
-                let end = (cur + step).min(bound);
-                starts[axis] = start;
-                ends[axis] = end;
+            for sdim in split.split(&input.dims)?.into_iter() {
+                let end = cur + sdim;
+                starts[axis] = cur as isize;
+                ends[axis] = end as isize;
                 res.push(input.slices(&starts, &ends));
                 cur = end;
             }
@@ -71,7 +75,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
         Operator::Gather(Gather { ref axis }) => {
             let input = &graph.initializer.get(&node.inputs[0])?;
             let indices = &graph.initializer.get(&node.inputs[1])?;
-            let axis = axis.index(input.ty.dims.ndim());
+            let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(indices, axis)])
         }
         _ => None,

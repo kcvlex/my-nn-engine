@@ -93,10 +93,21 @@ impl OperationContext<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryArithmeticOpcode {
+    Add,
+    Mul,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BinaryArithmetic {
+    pub opcode: BinaryArithmeticOpcode,
+    pub is_float: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum BinaryOpcode {
-    // IntAdd,
-    FloatAdd,
+    BinaryArithmetic(BinaryArithmetic),
     Gemm(Gemm),
 }
 

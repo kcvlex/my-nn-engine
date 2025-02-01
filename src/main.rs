@@ -1,5 +1,5 @@
 use my_onnx::session::Session;
-use my_onnx::tensor::dimensions::ResolvedTensorDims;
+use my_onnx::tensor::types::{FloatType, ResolvedTensorType};
 use my_onnx::tensor::{data::TensorData, Tensor};
 use std::env;
 use std::io::{Error, Result};
@@ -155,7 +155,10 @@ fn main0() -> Result<()> {
         .map_err(|e| Error::other(format!("{:?}", e)))?;
     let session = Session::new(
         &args[1],
-        Some(&[&ResolvedTensorDims::new(vec![1, 28, 28])]),
+        Some(&[&ResolvedTensorType::new(
+            FloatType::F32.into(),
+            vec![1, 28, 28].into(),
+        )]),
         100,
     )
     .map_err(|e| Error::other(format!("{:?}", e)))?;
@@ -561,7 +564,7 @@ fn main_run_resnet() -> Result<()> {
     let session = Session::new(
         //dir.join("models/resnet18-v2-7.onnx"),
         &args[1],
-        Some(&[&input.ty.dims]),
+        Some(&[&input.tensor_type()]),
         100,
     )
     .map_err(|e| Error::other(format!("{:?}", e)))?;
@@ -570,7 +573,7 @@ fn main_run_resnet() -> Result<()> {
         .run(&[input])
         .map_err(|e| Error::other(format!("{:?}", e)))?;
     let output = match output[0].data {
-        TensorData::F32(ref vec) => vec.clone(),
+        TensorData::Float(_, ref vec) => vec.clone(),
         _ => return Err(Error::other("Invalid output data type")),
     };
     // println!("{:?}", vec);

@@ -21,7 +21,7 @@ pub trait GraphModifier {
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId;
 
     fn register_new_tensor(&mut self, graph: &mut Graph, tensor: Tensor, name: String) -> ValueId {
-        let value_id = self.register_new_value(graph, name, tensor.ty.clone());
+        let value_id = self.register_new_value(graph, name, tensor.tensor_type());
         graph.initializer.insert(value_id, tensor);
         value_id
     }

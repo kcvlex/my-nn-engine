@@ -2,13 +2,13 @@ use crate::onnx::operator::TensorIndex;
 use ndarray::{concatenate, stack, Array, ArrayView, Axis, IxDyn, Slice};
 
 pub struct RawTensor<'a, T> {
-    pub data: &'a [T],
+    pub data: Vec<T>,
     pub dims: &'a [usize],
 }
 
 macro_rules! into_array_view {
     ($tensor: expr) => {{
-        ArrayView::from_shape($tensor.dims, $tensor.data)
+        ArrayView::from_shape($tensor.dims, $tensor.data.as_slice())
     }};
 }
 

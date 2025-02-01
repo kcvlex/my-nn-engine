@@ -8,7 +8,7 @@ use std::io::{Error, Result};
 #[derive(Default)]
 pub struct TransposeGenerator {
     input: Option<ValueId>,
-    perms: Option<Vec<usize>>,
+    perm: Option<Vec<usize>>,
     node_name: Option<String>,
     value_name: Option<String>,
     contiguous: Option<bool>,
@@ -20,8 +20,8 @@ impl TransposeGenerator {
         self
     }
 
-    pub fn set_perms(mut self, perms: Vec<usize>) -> Self {
-        self.perms = Some(perms);
+    pub fn set_perm(mut self, perms: Vec<usize>) -> Self {
+        self.perm = Some(perms);
         self
     }
 
@@ -49,7 +49,7 @@ impl TransposeGenerator {
             std::io::ErrorKind::InvalidInput,
             "input is required",
         ))?;
-        let perms = self.perms.ok_or(Error::new(
+        let perm = self.perm.ok_or(Error::new(
             std::io::ErrorKind::InvalidInput,
             "perms is required",
         ))?;
@@ -62,21 +62,22 @@ impl TransposeGenerator {
         let contiguous = self.contiguous.unwrap_or(false);
 
         let input_ty = graph.get_resolved_tensor_type(input).unwrap();
-        if input_ty.dims.ndim() != perms.len() {
+        if input_ty.dims.ndim() != perm.len() {
             return Err(Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "perms length must be equal to input rank",
             ));
         }
 
-        let new_ty = input_ty.transpose(&perms);
+        let new_ty = input_ty.transpose(&perm);
+        let perm = Some(perm);
         let transposed = modifier.register_new_value(graph, value_name.clone(), new_ty.clone());
         modifier.register_new_node(
             graph,
             Node {
                 inputs: vec![input],
                 outputs: vec![transposed],
-                op: Operator::Transpose(perms),
+                op: Operator::Transpose(Transpose { perm }),
                 name: node_name.clone(),
                 meta: NodeMeta::default(),
             },

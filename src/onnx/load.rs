@@ -3,10 +3,9 @@ use crate::onnx::operator::*;
 use crate::tensor::{
     data::TensorData,
     dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
-    types::{DataType, TensorType, TypeError, UnresolvedTensorType},
+    types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
     Tensor,
 };
-use itertools::izip;
 use prost::{DecodeError, Message};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -123,6 +122,10 @@ impl Attribute {
             x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
         }
     }
+
+    fn ty(&self) -> LoadResult<DataType> {
+        self.i().and_then(|x| DataType::try_from(x as i32))
+    }
 }
 
 type Attributes = HashMap<String, Attribute>;
@@ -196,7 +199,7 @@ impl GraphLoader {
             let id = self.entries.entry(name.clone()).or_insert_with(|| {
                 self.values.alloc(ValueInfo {
                     name,
-                    ty: Some(tensor.tensor_type()),
+                    ty: Some(TensorType::Resolved(tensor.tensor_type())),
                 })
             });
             res.insert(*id, tensor);
@@ -242,10 +245,15 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     let elem_type = DataType::try_from(tensor.data_type)?;
     let data = if tensor.raw_data.is_empty() {
         match elem_type {
-            DataType::I64 => TensorData::I64(tensor.int64_data),
-            DataType::U64 => TensorData::U64(tensor.uint64_data),
-            DataType::F32 => TensorData::F32(tensor.float_data),
-            DataType::F64 => TensorData::F64(tensor.double_data),
+            DataType::SInt(ty @ SIntType::I32) => {
+                TensorData::SInt(ty, tensor.int32_data.into_iter().map(i64::from).collect())
+            }
+            DataType::SInt(ty @ SIntType::I64) => TensorData::SInt(ty, tensor.int64_data),
+            DataType::UInt(ty @ UIntType::U64) => TensorData::UInt(ty, tensor.uint64_data),
+            DataType::Float(ty @ FloatType::F32) => {
+                TensorData::Float(ty, tensor.float_data.into_iter().map(f64::from).collect())
+            }
+            DataType::Float(ty @ FloatType::F64) => TensorData::Float(ty, tensor.double_data),
         }
     } else {
         TensorData::from_bytes(elem_type, tensor.raw_data.as_slice())
@@ -302,9 +310,11 @@ impl TryFrom<i32> for DataType {
         let value = tensor_proto::DataType::try_from(value)
             .map_err(|e| ModelLoadError::Unexpected(format!("Invalid DataType: {:?}", e)))?;
         match value {
-            TensorDataTypeProto::Float => Ok(DataType::F32),
-            TensorDataTypeProto::Double => Ok(DataType::F64),
-            TensorDataTypeProto::Int64 => Ok(DataType::I64),
+            TensorDataTypeProto::Float => Ok(FloatType::F32.into()),
+            TensorDataTypeProto::Double => Ok(FloatType::F64.into()),
+            TensorDataTypeProto::Int32 => Ok(SIntType::I32.into()),
+            TensorDataTypeProto::Int64 => Ok(SIntType::I64.into()),
+            TensorDataTypeProto::Uint64 => Ok(UIntType::U64.into()),
             TensorDataTypeProto::Undefined => Err(ModelLoadError::ElemTypeUnspecified),
             x => Err(ModelLoadError::UnsupportedElemType(x)),
         }
@@ -346,35 +356,6 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
     Ok(res)
 }
 
-fn load_pad(attrs: &Attributes) -> LoadResult<ConvPad> {
-    let auto_pad = attrs.get("auto_pad").map_or(Ok("NOTSET"), |x| x.s())?;
-    let pads = attrs
-        .get("pads")
-        .map(|x| x.ints::<usize>())
-        .transpose()?
-        .map(|v| {
-            if v.len() % 2 != 0 {
-                Err(ModelLoadError::Unexpected("Invalid pads".to_string()))
-            } else {
-                let half = v.len() / 2;
-                let mut res = Vec::with_capacity(half);
-                for i in 0..half {
-                    res.push((v[i], v[i + half]));
-                }
-                Ok(res)
-            }
-        })
-        .transpose()?;
-    let pad = match (auto_pad, pads) {
-        ("NOTSET", pads) => ConvPad::NotSet(OptionalVec::new(pads, (0, 0))),
-        ("SAME_UPPER", None) => ConvPad::SameUpper,
-        ("SAME_LOWER", None) => ConvPad::SameLower,
-        ("VALID", None) => ConvPad::Valid,
-        _ => return Err(ModelLoadError::Unexpected("Invalid padding".to_string())),
-    };
-    Ok(pad)
-}
-
 trait OptionalVecExt<T: Clone + Copy> {
     fn with_default(self, default: T) -> OptionalVec<T>;
 }
@@ -383,19 +364,6 @@ impl<T: Clone + Copy> OptionalVecExt<T> for Option<Vec<T>> {
     fn with_default(self, default: T) -> OptionalVec<T> {
         OptionalVec::new(self, default)
     }
-}
-
-fn load_reduce(attributes: &Attributes) -> LoadResult<Reduce> {
-    let keepdims = attributes
-        .get("keepdims")
-        .map(|x| x.b())
-        .transpose()?
-        .unwrap_or(true);
-    let axes = attributes
-        .get("axes")
-        .map(|x| x.ints())
-        .unwrap_or(Ok(Vec::new()))?;
-    Ok(Reduce { keepdims, axes })
 }
 
 trait RequiredAttr {
@@ -409,188 +377,356 @@ impl RequiredAttr for Attributes {
     }
 }
 
+impl BatchNormalization {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let epsilon = attributes
+            .get("epsilon")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(1e-5);
+        let momentum = attributes
+            .get("momentum")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(0.9);
+        Ok(BatchNormalization { epsilon, momentum })
+    }
+}
+
+impl Cast {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        // TODO: saturate
+        let to = attributes.required("to")?.ty()?;
+        Ok(Cast { to })
+    }
+}
+
+impl Concat {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes.required("axis")?.index()?;
+        Ok(Concat { axis })
+    }
+}
+
+impl ConvPad {
+    fn load(attrs: &Attributes) -> LoadResult<Self> {
+        let auto_pad = attrs.get("auto_pad").map_or(Ok("NOTSET"), |x| x.s())?;
+        let pads = attrs
+            .get("pads")
+            .map(|x| x.ints::<usize>())
+            .transpose()?
+            .map(|v| {
+                if v.len() % 2 != 0 {
+                    Err(ModelLoadError::Unexpected("Invalid pads".to_string()))
+                } else {
+                    let half = v.len() / 2;
+                    let mut res = Vec::with_capacity(half);
+                    for i in 0..half {
+                        res.push((v[i], v[i + half]));
+                    }
+                    Ok(res)
+                }
+            })
+            .transpose()?;
+        let pad = match (auto_pad, pads) {
+            ("NOTSET", pads) => Self::NotSet(OptionalVec::new(pads, (0, 0))),
+            ("SAME_UPPER", None) => Self::SameUpper,
+            ("SAME_LOWER", None) => Self::SameLower,
+            ("VALID", None) => Self::Valid,
+            _ => return Err(ModelLoadError::Unexpected("Invalid padding".to_string())),
+        };
+        Ok(pad)
+    }
+}
+
+impl Conv {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let dilations = attributes
+            .get("dilations")
+            .map(|x| x.ints())
+            .transpose()?
+            .with_default(1);
+        let groups = attributes.get("groups").map_or(Ok(1), |x| x.i())?;
+        let kernel_shape = attributes
+            .get("kernel_shape")
+            .ok_or(ModelLoadError::Unexpected(
+                "TODO: support inference of kernel_shape".to_string(),
+            ))?
+            .ints()?
+            .into();
+        let strides = attributes
+            .get("strides")
+            .map(|x| x.ints())
+            .transpose()?
+            .with_default(1);
+        let pad = ConvPad::load(attributes)?;
+        Ok(Conv {
+            pad,
+            dilations,
+            groups: groups as usize,
+            kernel_shape,
+            strides,
+        })
+    }
+}
+
+impl Gather {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|x| x.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(0));
+        Ok(Gather { axis })
+    }
+}
+impl Gemm {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let trans_a = attributes
+            .get("transA")
+            .map(|x| x.b())
+            .transpose()?
+            .unwrap_or(false);
+        let trans_b = attributes
+            .get("transB")
+            .map(|x| x.b())
+            .transpose()?
+            .unwrap_or(false);
+        let alpha = attributes
+            .get("alpha")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(1.0)
+            .into();
+        let beta = attributes
+            .get("beta")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(1.0)
+            .into();
+        Ok(Gemm {
+            trans_a,
+            trans_b,
+            alpha,
+            beta,
+        })
+    }
+}
+
+impl LeakyReLU {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let alpha = attributes
+            .get("alpha")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(0.01)
+            .into();
+        Ok(LeakyReLU { alpha })
+    }
+}
+
+impl Pooling {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let dilations = attributes
+            .get("dilations")
+            .map(|x| x.ints())
+            .transpose()?
+            .with_default(1);
+        let ceil_mode = attributes
+            .get("ceil_mode")
+            .map(|x| x.b())
+            .transpose()?
+            .unwrap_or(false);
+        let kernel_shape = attributes.required("kernel_shape")?.ints()?.into();
+        let strides = attributes
+            .get("strides")
+            .map(|x| x.ints())
+            .transpose()?
+            .with_default(1);
+        let pad = ConvPad::load(attributes)?;
+        Ok(Pooling {
+            pad,
+            ceil_mode,
+            dilations,
+            kernel_shape,
+            strides,
+        })
+    }
+}
+
+impl Reduce {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let keepdims = attributes
+            .get("keepdims")
+            .map(|x| x.b())
+            .transpose()?
+            .unwrap_or(true);
+        let axes = attributes
+            .get("axes")
+            .map(|x| x.ints())
+            .unwrap_or(Ok(Vec::new()))?;
+        Ok(Self { keepdims, axes })
+    }
+}
+
+impl ResizeNearestMode {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let nearest_mode = attributes.get("nearest_mode").map(|x| x.s()).transpose()?;
+        let nearest_mode = match nearest_mode {
+            Some("round_prefer_floor") | None => Self::RoundPreferFloor,
+            Some("round_prefer_ceil") => Self::RoundPreferCeil,
+            Some("floor") => Self::Floor,
+            Some("ceil") => Self::Ceil,
+            Some(_) => {
+                return Err(ModelLoadError::Unexpected(
+                    "Invalid nearest_mode".to_string(),
+                ))
+            }
+        };
+        Ok(nearest_mode)
+    }
+}
+
+impl ResizeMode {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let mode = attributes
+            .get("mode")
+            .map(|x| x.s())
+            .transpose()?
+            .unwrap_or("nearest");
+        match mode {
+            "nearest" => Ok(Self::Nearest(ResizeNearestMode::load(attributes)?)),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ResizeCoordinateTransformationMode {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let mode = attributes
+            .get("coordinate_transformation_mode")
+            .map(|x| x.s())
+            .transpose()?;
+        let mode = match mode {
+            Some("half_pixel") | None => Self::HalfPixel,
+            Some("pytorch_half_pixel") | Some("align_corners") | Some("asymmetric") => {
+                unimplemented!()
+            }
+            Some(_) => {
+                return Err(ModelLoadError::Unexpected(
+                    "Invalid coordinate_transformation_mode".to_string(),
+                ))
+            }
+        };
+        Ok(mode)
+    }
+}
+
+impl ResizeKeepAspectRatioPolicy {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let policy = attributes
+            .get("keep_aspect_ratio")
+            .map(|x| x.s())
+            .transpose()?;
+        let policy = match policy {
+            Some("stretch") | None => Self::Stretch,
+            Some("not_larger") => Self::NotLarger,
+            Some("not_smaller") => Self::NotSmaller,
+            Some(_) => {
+                return Err(ModelLoadError::Unexpected(
+                    "Invalid keep_aspect_ratio".to_string(),
+                ))
+            }
+        };
+        Ok(policy)
+    }
+}
+
+impl Resize {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axes = attributes.get("axes").map(|x| x.indexes()).transpose()?;
+        let coordinate_transformation_mode = ResizeCoordinateTransformationMode::load(attributes)?;
+        let keep_aspect_ratio_policy = ResizeKeepAspectRatioPolicy::load(attributes)?;
+        let mode = ResizeMode::load(attributes)?;
+        Ok(Self {
+            axes,
+            coordinate_transformation_mode,
+            keep_aspect_ratio_policy,
+            mode,
+        })
+    }
+}
+
+impl Shape {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let start = attributes
+            .get("start")
+            .map(|x| x.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(0));
+        let end = attributes.get("end").map(|x| x.index()).transpose()?;
+        Ok(Shape { start, end })
+    }
+}
+
+impl SplitOutputs {
+    // TODO: Support version 18 (num_outputs)
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let split = attributes.required("split")?.ints()?.into_iter().collect();
+        Ok(Self::Split(split))
+    }
+}
+
+impl Split {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|x| x.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(0));
+        let outputs = SplitOutputs::load(attributes)?;
+        Ok(Split { axis, outputs })
+    }
+}
+
+impl Transpose {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let perm = attributes.get("perm").map(|x| x.ints()).transpose()?;
+        Ok(Transpose { perm })
+    }
+}
+
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
-        "BatchNormalization" => {
-            let epsilon = attributes
-                .get("epsilon")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(1e-5);
-            let momentum = attributes
-                .get("momentum")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(0.9);
-            Ok(Operator::BatchNormalization(BatchNormalization {
-                epsilon,
-                momentum,
-            }))
-        }
-        "Concat" => {
-            let axis = attributes.required("axis")?.index()?;
-            Ok(Operator::Concat(Concat { axis }))
-        }
-        "Conv" => {
-            let dilations = attributes
-                .get("dilations")
-                .map(|x| x.ints())
-                .transpose()?
-                .with_default(1);
-            let groups = attributes.get("groups").map_or(Ok(1), |x| x.i())?;
-            let kernel_shape = attributes
-                .get("kernel_shape")
-                .ok_or(ModelLoadError::Unexpected(
-                    "TODO: support inference of kernel_shape".to_string(),
-                ))?
-                .ints()?
-                .into();
-            let strides = attributes
-                .get("strides")
-                .map(|x| x.ints())
-                .transpose()?
-                .with_default(1);
-            let pad = load_pad(attributes)?;
-            Ok(Operator::Conv(Conv {
-                pad,
-                dilations,
-                groups: groups as usize,
-                kernel_shape,
-                strides,
-            }))
-        }
-        "Gather" => {
-            let axis = attributes
-                .get("axis")
-                .map(|x| x.index())
-                .transpose()?
-                .unwrap_or(TensorIndex::new(0));
-            Ok(Operator::Gather(Gather { axis }))
-        }
-        "Gemm" => {
-            let trans_a = attributes
-                .get("transA")
-                .map(|x| x.b())
-                .transpose()?
-                .unwrap_or(false);
-            let trans_b = attributes
-                .get("transB")
-                .map(|x| x.b())
-                .transpose()?
-                .unwrap_or(false);
-            let alpha = attributes
-                .get("alpha")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(1.0)
-                .into();
-            let beta = attributes
-                .get("beta")
-                .map(|x| x.f())
-                .transpose()?
-                .unwrap_or(1.0)
-                .into();
-            Ok(Operator::Gemm(Gemm {
-                trans_a,
-                trans_b,
-                alpha,
-                beta,
-            }))
-        }
+        "BatchNormalization" => Ok(Operator::BatchNormalization(BatchNormalization::load(
+            attributes,
+        )?)),
+        "Cast" => Ok(Operator::Cast(Cast::load(attributes)?)),
+        "Concat" => Ok(Operator::Concat(Concat::load(attributes)?)),
+        "Conv" => Ok(Operator::Conv(Conv::load(attributes)?)),
+        "Exp" => Ok(Operator::Exp),
+        "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
+        "Gemm" => Ok(Operator::Gemm(Gemm::load(attributes)?)),
         "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
+        "LeakyRelu" => Ok(Operator::LeakyReLU(LeakyReLU::load(attributes)?)),
+        "Log" => Ok(Operator::Log),
         "Identity" => Ok(Operator::Identity),
         "MatMul" => Ok(Operator::MatMul),
-        "MaxPool" => {
-            let dilations = attributes
-                .get("dilations")
-                .map(|x| x.ints())
-                .transpose()?
-                .with_default(1);
-            let ceil_mode = attributes
-                .get("ceil_mode")
-                .map(|x| x.b())
-                .transpose()?
-                .unwrap_or(false);
-            let kernel_shape = attributes.required("kernel_shape")?.ints()?.into();
-            let strides = attributes
-                .get("strides")
-                .map(|x| x.ints())
-                .transpose()?
-                .with_default(1);
-            let pad = load_pad(attributes)?;
-            Ok(Operator::MaxPool(Pooling {
-                pad,
-                ceil_mode,
-                dilations,
-                kernel_shape,
-                strides,
-            }))
-        }
-        "ReduceMax" => Ok(Operator::ReduceMax(load_reduce(attributes)?)),
-        "ReduceMean" => Ok(Operator::ReduceMean(load_reduce(attributes)?)),
-        "ReduceSum" => Ok(Operator::ReduceSum(load_reduce(attributes)?)),
+        "MaxPool" => Ok(Operator::MaxPool(Pooling::load(attributes)?)),
+        "Mul" => Ok(Operator::Mul),
+        "ReduceMax" => Ok(Operator::ReduceMax(Reduce::load(attributes)?)),
+        "ReduceMean" => Ok(Operator::ReduceMean(Reduce::load(attributes)?)),
+        "ReduceSum" => Ok(Operator::ReduceSum(Reduce::load(attributes)?)),
         "Relu" => Ok(Operator::ReLU),
         "Reshape" => Ok(Operator::Reshape),
-        "Shape" => {
-            let start = attributes
-                .get("start")
-                .map(|x| x.index())
-                .transpose()?
-                .unwrap_or(TensorIndex::new(0));
-            let end = attributes.get("end").map(|x| x.index()).transpose()?;
-            Ok(Operator::Shape(Shape { start, end }))
-        }
+        "Resize" => Ok(Operator::Resize(Resize::load(attributes)?)),
+        "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
         "Sigmoid" => Ok(Operator::Sigmoid),
-        "Slice" => {
-            // TODO: Check length of each vector
-            let starts = attributes.required("starts")?.indexes()?;
-            let ends = attributes.required("ends")?.indexes()?;
-            let axes = attributes
-                .get("axes")
-                .map(|x| x.indexes())
-                .transpose()?
-                .unwrap_or(
-                    (0..starts.len())
-                        .map(|x| TensorIndex::new(x as isize))
-                        .collect(),
-                );
-            let steps = attributes
-                .get("steps")
-                .map(|x| x.ints())
-                .transpose()?
-                .unwrap_or(vec![1; starts.len()]);
-            let slice = izip!(
-                starts.into_iter(),
-                ends.into_iter(),
-                axes.into_iter(),
-                steps.into_iter()
-            )
-            .map(|(start, end, axis, step)| Slice {
-                start,
-                end,
-                axis,
-                step,
-            })
-            .collect::<Vec<_>>();
-            Ok(Operator::Slice(slice))
-        }
-        "Split" => {
-            let axis = attributes
-                .get("axis")
-                .map(|x| x.index())
-                .transpose()?
-                .unwrap_or(TensorIndex::new(0));
-            let num_outputs = attributes.required("num_outputs")?.i()? as usize;
-            Ok(Operator::Split(Split { axis, num_outputs }))
-        }
-        "Transpose" => {
-            let perm = attributes
-                .get("perm")
-                .map(|x| x.ints())
-                .unwrap_or(Ok(Vec::new()))?;
-            Ok(Operator::Transpose(perm))
-        }
+        "Tanh" => Ok(Operator::Tanh),
+        "Slice" => Ok(Operator::Slice),
+        "Split" => Ok(Operator::Split(Split::load(attributes)?)),
+        "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

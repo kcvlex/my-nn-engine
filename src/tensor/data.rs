@@ -1,13 +1,13 @@
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::*;
+use itertools::zip_eq;
 
 // TODO: Complex
 #[derive(Debug, Clone)]
 pub enum TensorData {
-    I64(Vec<i64>),
-    U64(Vec<u64>),
-    F32(Vec<f32>),
-    F64(Vec<f64>),
+    SInt(SIntType, Vec<i64>),
+    UInt(UIntType, Vec<u64>),
+    Float(FloatType, Vec<f64>),
 }
 
 impl Eq for TensorData {}
@@ -15,10 +15,9 @@ impl Eq for TensorData {}
 impl PartialEq for TensorData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (TensorData::I64(a), TensorData::I64(b)) => a == b,
-            (TensorData::U64(a), TensorData::U64(b)) => a == b,
-            (TensorData::F32(a), TensorData::F32(b)) => a == b,
-            (TensorData::F64(a), TensorData::F64(b)) => a == b,
+            (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => a0 == b0 && a1 == b1,
             _ => false,
         }
     }
@@ -26,37 +25,30 @@ impl PartialEq for TensorData {
 
 impl TensorData {
     pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64) -> bool {
-        macro_rules! eq {
-            ($a: expr, $b: expr) => {
-                $a.iter()
-                    .zip($b.iter())
-                    .all(|(x, y)| ((x - y).abs() as f64) < epsilon)
-            };
-        }
         match (self, other) {
-            (TensorData::I64(a), TensorData::I64(b)) => a == b,
-            (TensorData::U64(a), TensorData::U64(b)) => a == b,
-            (TensorData::F32(a), TensorData::F32(b)) => eq!(a, b),
-            (TensorData::F64(a), TensorData::F64(b)) => eq!(a, b),
+            (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => {
+                a0 == b0 &&
+                    zip_eq(a1.iter(), b1.iter()).all(|(x, y)| ((x - y).abs() as f64) < epsilon)
+            }
             _ => false,
         }
     }
 
     pub fn size(&self) -> usize {
         match self {
-            TensorData::I64(v) => v.len(),
-            TensorData::U64(v) => v.len(),
-            TensorData::F32(v) => v.len(),
-            TensorData::F64(v) => v.len(),
+            TensorData::SInt(_, v) => v.len(),
+            TensorData::UInt(_, v) => v.len(),
+            TensorData::Float(_, v) => v.len(),
         }
     }
 
     pub fn elem_type(&self) -> DataType {
         match self {
-            TensorData::I64(_) => DataType::I64,
-            TensorData::U64(_) => DataType::U64,
-            TensorData::F32(_) => DataType::F32,
-            TensorData::F64(_) => DataType::F64,
+            TensorData::SInt(t, _) => DataType::SInt(*t),
+            TensorData::UInt(t, _) => DataType::UInt(*t),
+            TensorData::Float(t, _) => DataType::Float(*t),
         }
     }
 
@@ -68,58 +60,69 @@ impl TensorData {
         }
 
         match self {
-            TensorData::I64(v) => convert!(v),
-            TensorData::U64(v) => convert!(v),
-            TensorData::F32(v) => convert!(v),
-            TensorData::F64(v) => convert!(v),
-        }
-    }
-
-    pub fn as_ptr(&self) -> *const u8 {
-        match self {
-            TensorData::I64(v) => v.as_ptr() as *const u8,
-            TensorData::U64(v) => v.as_ptr() as *const u8,
-            TensorData::F32(v) => v.as_ptr() as *const u8,
-            TensorData::F64(v) => v.as_ptr() as *const u8,
-        }
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        match self {
-            TensorData::I64(v) => v.as_mut_ptr() as *mut u8,
-            TensorData::U64(v) => v.as_mut_ptr() as *mut u8,
-            TensorData::F32(v) => v.as_mut_ptr() as *mut u8,
-            TensorData::F64(v) => v.as_mut_ptr() as *mut u8,
+            TensorData::SInt(_, v) => convert!(v),
+            TensorData::UInt(_, v) => convert!(v),
+            TensorData::Float(_, v) => convert!(v),
         }
     }
 
     pub fn from_bytes(ty: DataType, raw: &[u8]) -> Self {
         macro_rules! convert {
-            ($v: expr, $ty: ty) => {{
-                raw.chunks_exact(std::mem::size_of::<$ty>())
+            ($v: expr, $from: ty, $to: ty) => {{
+                raw.chunks_exact(std::mem::size_of::<$from>())
                     .map(|x| {
-                        let mut bytes = [0; std::mem::size_of::<$ty>()];
+                        let mut bytes = [0; std::mem::size_of::<$from>()];
                         bytes.copy_from_slice(x);
-                        <$ty>::from_le_bytes(bytes)
+                        <$from>::from_le_bytes(bytes) as $to
                     })
                     .collect()
             }};
         }
         match ty {
-            DataType::I64 => TensorData::I64(convert!(raw, i64)),
-            DataType::U64 => TensorData::U64(convert!(raw, u64)),
-            DataType::F32 => TensorData::F32(convert!(raw, f32)),
-            DataType::F64 => TensorData::F64(convert!(raw, f64)),
+            DataType::SInt(ty @ SIntType::I32) => TensorData::SInt(ty, convert!(raw, i32, i64)),
+            DataType::SInt(ty @ SIntType::I64) => TensorData::SInt(ty, convert!(raw, i64, i64)),
+            DataType::UInt(ty @ UIntType::U64) => TensorData::UInt(ty, convert!(raw, u64, u64)),
+            DataType::Float(ty @ FloatType::F32) => TensorData::Float(ty, convert!(raw, f32, f64)),
+            DataType::Float(ty @ FloatType::F64) => TensorData::Float(ty, convert!(raw, f64, f64)),
         }
     }
 
     pub fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
         let size = dims.size();
         match ty {
-            DataType::I64 => TensorData::I64(vec![0; size]),
-            DataType::U64 => TensorData::U64(vec![0; size]),
-            DataType::F32 => TensorData::F32(vec![0.0; size]),
-            DataType::F64 => TensorData::F64(vec![0.0; size]),
+            DataType::SInt(t) => TensorData::SInt(t, vec![0; size]),
+            DataType::UInt(t) => TensorData::UInt(t, vec![0; size]),
+            DataType::Float(t) => TensorData::Float(t, vec![0.0; size]),
         }
+    }
+}
+
+impl From<Vec<i32>> for TensorData {
+    fn from(v: Vec<i32>) -> Self {
+        TensorData::SInt(SIntType::I32, v.into_iter().map(|x| x as i64).collect())
+    }
+}
+
+impl From<Vec<i64>> for TensorData {
+    fn from(v: Vec<i64>) -> Self {
+        TensorData::SInt(SIntType::I64, v)
+    }
+}
+
+impl From<Vec<u64>> for TensorData {
+    fn from(v: Vec<u64>) -> Self {
+        TensorData::UInt(UIntType::U64, v)
+    }
+}
+
+impl From<Vec<f32>> for TensorData {
+    fn from(v: Vec<f32>) -> Self {
+        TensorData::Float(FloatType::F32, v.into_iter().map(|x| x as f64).collect())
+    }
+}
+
+impl From<Vec<f64>> for TensorData {
+    fn from(v: Vec<f64>) -> Self {
+        TensorData::Float(FloatType::F64, v)
     }
 }

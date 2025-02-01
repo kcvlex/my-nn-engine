@@ -3,7 +3,7 @@ use crate::onnx::operator::*;
 use crate::tensor::{
     data::TensorData,
     dimensions::{broadcast_shape, ResolvedTensorDims},
-    types::{DataType, ResolvedTensorType, TensorType, TypeError},
+    types::{ResolvedTensorType, SIntType, TensorType, TypeError},
 };
 use crate::transform::modify::SimpleGraphModifier;
 use crate::transform::utils::const_fold::fold_constant;
@@ -60,20 +60,12 @@ impl ShapeInference {
             let types = self.infer_node_output(graph, id)?;
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
-                let cur_ty = &mut graph.values[*value_id].ty;
-                if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
-                    if *cur_ty != inferred {
-                        return Err(TypeError::InferError(format!(
-                            "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
-                            graph.nodes[id].name, cur_ty, inferred
-                        )));
-                    }
-                } else {
-                    *cur_ty = Some(inferred.into());
-                }
+                dbg!(&inferred);
+                graph.try_unify_type(*value_id, &inferred)?;
             }
 
             if let Some(constants) = fold_constant(graph, id) {
+                dbg!(&constants);
                 for (old_value, tensor) in zip_eq(outputs.iter(), constants.into_iter()) {
                     let new_value = modifier.register_new_tensor(
                         graph,
@@ -90,7 +82,7 @@ impl ShapeInference {
 
     fn infer_node_output(
         &self,
-        graph: &mut Graph,
+        graph: &Graph,
         node_id: NodeId,
     ) -> Result<Vec<ResolvedTensorType>, TypeError> {
         macro_rules! cond_error {
@@ -101,7 +93,9 @@ impl ShapeInference {
             }};
         }
 
-        let node = &mut graph.nodes[node_id];
+        let node = &graph.nodes[node_id];
+
+        dbg!(node);
 
         let inputs: Vec<&ResolvedTensorType> = node
             .inputs
@@ -116,78 +110,85 @@ impl ShapeInference {
             .ok_or(TypeError::UnresolvedInput)?;
 
         let mut res: Vec<ResolvedTensorType> = Vec::new();
-        match &mut node.op {
-            Operator::Add => {
-                let a = &inputs[args::ADD_LHS];
-                let b = &inputs[args::ADD_RHS];
+        match &node.op {
+            Operator::Add | Operator::Mul => {
+                let a = &inputs[0];
+                let b = &inputs[1];
 
                 cond_error!(a.elem_type != b.elem_type);
                 let dims = broadcast_shape(&a.dims, &b.dims)?;
                 res.push(ResolvedTensorType::new(a.elem_type, dims));
             }
+            Operator::BatchNormalization(_) |
+            Operator::Exp |
+            Operator::Identity |
+            Operator::LeakyReLU(_) |
+            Operator::Log |
             Operator::ReLU |
             Operator::Sigmoid |
-            Operator::Identity |
-            Operator::BatchNormalization(_) => {
+            Operator::Tanh => {
                 res.push(inputs[0].clone());
             }
-            Operator::Transpose(perms) => {
+            Operator::Cast(Cast { to }) => {
+                // TODO: Check for element type
+                let input = &inputs[0];
+                res.push(ResolvedTensorType::new(*to, input.dims.clone()));
+            }
+            Operator::Transpose(ref transpose) => {
                 let data = &inputs[args::TRANSPOSE_DATA];
-
-                // TODO: Move this to another place
-                if perms.is_empty() {
-                    *perms = (0..data.dims.ndim()).rev().collect();
-                }
-                let mut flags = vec![false; perms.len()];
-                for p in perms.iter() {
-                    if perms.len() <= *p || flags[*p] {
-                        return Err(TypeError::InferError("Invalid permutation".to_string()));
-                    }
-                    flags[*p] = true;
-                }
-                res.push(data.transpose(perms.as_slice()));
+                let perm = transpose
+                    .perm(data.dims.ndim())
+                    .ok_or(TypeError::InferError("Invalid permutation".to_string()))?;
+                res.push(data.transpose(perm.as_slice()));
             }
             Operator::Reshape => {
                 let a = &inputs[args::RESHAPE_DATA];
                 let shape = node.inputs[args::RESHAPE_SHAPE];
-                let shape = graph
+                let shape = &graph
                     .initializer
                     .get(&shape)
-                    .ok_or(TypeError::UnresolvedInput)
-                    .map(|x| match x.data {
-                        TensorData::I64(ref v) => {
-                            let prod0 = a.dims.size();
-                            let prod1 = v
-                                .iter()
+                    .ok_or(TypeError::UnresolvedInput)?
+                    .data;
+                let shape = match shape {
+                    TensorData::SInt(_, ref v) => {
+                        let prod0 = a.dims.size();
+                        let prod1 = v
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .filter(|(_, x)| *x != -1)
+                            .map(|(i, x)| if x == 0 { a.dims[i] } else { x as usize })
+                            .product::<usize>();
+                        Ok(ResolvedTensorDims::new(
+                            v.iter()
                                 .copied()
                                 .enumerate()
-                                .filter(|(_, x)| *x != -1)
-                                .map(|(i, x)| if x == 0 { a.dims[i] } else { x as usize })
-                                .product::<usize>();
-                            Ok(ResolvedTensorDims::new(
-                                v.iter()
-                                    .copied()
-                                    .enumerate()
-                                    .map(|(i, x)| {
-                                        if x == -1 {
-                                            prod0 / prod1
-                                        } else if x == 0 {
-                                            a.dims[i]
-                                        } else {
-                                            x as usize
-                                        }
-                                    })
-                                    .collect(),
-                            ))
-                        }
-                        _ => Err(TypeError::InferError("Invalid shape".to_string())),
-                    })??;
+                                .map(|(i, x)| {
+                                    if x == -1 {
+                                        prod0 / prod1
+                                    } else if x == 0 {
+                                        a.dims[i]
+                                    } else {
+                                        x as usize
+                                    }
+                                })
+                                .collect(),
+                        ))
+                    }
+                    _ => Err(TypeError::InferError("Invalid shape".to_string())),
+                }?;
 
                 cond_error!(a.dims.size() != shape.size());
                 let reshaped = a
                     .try_reshape(&shape)
                     .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?;
                 res.push(reshaped);
+            }
+            Operator::Resize(resize) => {
+                let dims = resize
+                    .resized_shape(graph, node_id)
+                    .ok_or(TypeError::InferError("Invalid resized shape".to_string()))?;
+                res.push(ResolvedTensorType::new(inputs[0].elem_type, dims));
             }
             Operator::Conv(Conv {
                 pad,
@@ -405,59 +406,46 @@ impl ShapeInference {
                 res.push(ResolvedTensorType::new(inputs[0].elem_type, dims));
             }
 
-            Operator::Split(Split {
-                ref axis,
-                ref num_outputs,
-            }) => {
-                let input = &inputs[0];
-                let axis = axis.index(input.dims.ndim());
-                let dim = input.dims[axis];
-                let mut res = Vec::new();
-                let mut cur = 0;
-                let step = dim / *num_outputs;
-                let bound = dim;
-                while cur < bound {
-                    let start = cur;
-                    let end = (cur + step).min(bound);
-                    let mut dims = input.dims.clone();
-                    dims[axis] = end - start;
-                    res.push(ResolvedTensorType::new(input.elem_type, dims));
-                    cur = end;
-                }
-            }
-
-            Operator::Slice(ref slices) => {
-                res.push(inputs[0].slices(slices));
-            }
-
             Operator::Shape(Shape { start, end }) => {
                 let ndim = inputs[0].dims.ndim();
                 let start = start.index(ndim);
                 let end = end.map(|x| x.index(ndim)).unwrap_or(ndim);
                 res.push(ResolvedTensorType::new(
-                    DataType::U64,
+                    SIntType::I64.into(),
                     ResolvedTensorDims::new(vec![end - start]),
                 ));
             }
 
+            Operator::Slice => {
+                let slices = Slice::collect_slices(graph, node_id)
+                    .ok_or(TypeError::InferError("Invalid slices".to_string()))?;
+                res.push(inputs[0].slices(&slices));
+            }
+
+            Operator::Split(ref split) => {
+                let input = &inputs[0];
+                let axis = split.axis.index(input.dims.ndim());
+                split
+                    .split(&input.dims)
+                    .ok_or(TypeError::InferError("Invalid split dims".to_string()))?
+                    .into_iter()
+                    .for_each(|x| {
+                        let mut dims = input.dims.clone();
+                        dims[axis] = x;
+                        res.push(ResolvedTensorType::new(input.elem_type, dims));
+                    });
+            }
+
             Operator::Gather(Gather { axis }) => {
                 let input = &inputs[0].dims;
+                let indices = &inputs[1].dims;
                 let ndim = input.ndim();
-                let indices = graph
-                    .initializer
-                    .get(&node.inputs[1])
-                    .ok_or(TypeError::UnresolvedInput)?
-                    .to_indices()
-                    .ok_or(TypeError::InferError("Invalid indices".to_string()))?
-                    .into_iter()
-                    .map(|x| x.index(ndim))
-                    .collect::<Vec<_>>();
                 let axis = axis.index(ndim);
-                let mut dims = Vec::with_capacity(ndim - 1 + indices.len());
+                let mut dims = Vec::with_capacity(ndim - 1 + indices.ndim());
                 let mut indices = Some(indices);
                 for (i, dim) in input.iter().copied().enumerate() {
                     if i == axis {
-                        dims.extend(indices.take().unwrap());
+                        dims.extend(&(indices.take().unwrap())[..]);
                     } else {
                         dims.push(dim);
                     }
@@ -492,4 +480,34 @@ pub fn create_infer_passes() -> SimplePassManager<SimpleGraphModifier> {
     pass_manager.add_pass(Box::new(ContigousOutput {}));
     pass_manager.add_pass(Box::new(ShapeInference {}));
     pass_manager
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::onnx::load::*;
+    use crate::onnx::model::*;
+    use crate::tensor::types::FloatType;
+    use crate::transform::modify::SimpleGraphModifier;
+    use std::path::PathBuf;
+
+    #[test]
+    fn infer_yolov4() {
+        let model = "yolov4";
+        let model = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/validated")
+            .join(model)
+            .join(format!("{model}.onnx"));
+        let model = Model::load_from_path(&model).unwrap();
+        let mut graph = model.graph;
+        graph
+            .resolve_input_types(&[&ResolvedTensorType::new(
+                FloatType::F32.into(),
+                ResolvedTensorDims::new(vec![1, 416, 416, 3]),
+            )])
+            .unwrap();
+        let mut modifier = SimpleGraphModifier::new(&graph);
+        let pass_manager = create_infer_passes();
+        pass_manager.run(&mut graph, &mut modifier);
+    }
 }

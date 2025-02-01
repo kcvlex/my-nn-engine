@@ -14,7 +14,7 @@ use crate::codegen::translator::*;
 use crate::onnx::model::{Graph, Node, NodeId, ValueId};
 use crate::onnx::operator;
 use crate::onnx::operator::Operator;
-use crate::tensor::types::DataType;
+use crate::tensor::types::{DataType, FloatType, SIntType, UIntType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::BuilderError;
 use inkwell::context::Context;
@@ -145,10 +145,11 @@ impl CodeGenContext {
 fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
     let result_ty = graph.get_resolved_tensor_type(value).unwrap();
     let data_size = match result_ty.elem_type {
-        DataType::I64 => 8,
-        DataType::U64 => 8,
-        DataType::F32 => 4,
-        DataType::F64 => 8,
+        DataType::SInt(SIntType::I32) => 4,
+        DataType::SInt(SIntType::I64) => 8,
+        DataType::UInt(UIntType::U64) => 8,
+        DataType::Float(FloatType::F32) => 4,
+        DataType::Float(FloatType::F64) => 8,
     };
     (result_ty.dims.size() * data_size).try_into().unwrap()
 }
@@ -450,7 +451,7 @@ impl<'ll> CodeGen<'ll, '_> {
                         if alloc.is_first_use {
                             // TODO: type
                             let ptr = builder.build_array_malloc(
-                                self.ll_ctx.f32_type(),
+                                self.ll_ctx.i128_type(),
                                 self.ll_ctx
                                     .i64_type()
                                     .const_int(self.gen_ctx.mem_size[chunk], false),
@@ -538,23 +539,20 @@ impl<'ll> CodeGen<'ll, '_> {
         // TODO
         if let Operator::Identity = node.op {
             builder.position_at_end(entry);
-            let len = ptrs[0].ty.dims.size();
-            let len = len *
-                (match ptrs[0].ty.elem_type {
-                    DataType::F32 => 4,
-                    DataType::F64 => 8,
-                    DataType::I64 => 8,
-                    DataType::U64 => 8,
-                });
-            builder.build_memcpy(
-                ptrs[0].ptr,
-                1,
-                ptrs[1].ptr,
-                1,
+            let len = ptrs[0]
+                .ty
+                .elem_type
+                .llvm_type(self.ll_ctx)
+                .size_of()
+                .unwrap();
+            let len = builder.build_int_mul(
+                len,
                 self.ll_ctx
                     .i64_type()
-                    .const_int(len.try_into().unwrap(), false),
+                    .const_int(ptrs[0].ty.dims.size().try_into().unwrap(), false),
+                "len",
             )?;
+            builder.build_memcpy(ptrs[0].ptr, 1, ptrs[1].ptr, 1, len)?;
             builder.build_return(None)?;
             return Ok(());
         }
@@ -608,8 +606,8 @@ impl<'ll> CodeGen<'ll, '_> {
         macro_rules! gen_gemm {
             ($gemm: expr, $nest: expr) => {{
                 let prec = match ptrs[0].ty.elem_type {
-                    DataType::F32 => Precision::Single,
-                    DataType::F64 => Precision::Double,
+                    DataType::Float(FloatType::F32) => Precision::Single,
+                    DataType::Float(FloatType::F64) => Precision::Double,
                     _ => unreachable!(),
                 };
                 let m = ptrs[0].ty.dims[$nest] as u32;
@@ -644,7 +642,18 @@ impl<'ll> CodeGen<'ll, '_> {
         }
 
         let exit = match node.op {
-            Operator::Add => gen_binaryop!(BinaryOpcode::FloatAdd),
+            Operator::Add | Operator::Mul => {
+                let is_float = matches!(ptrs[0].ty.elem_type, DataType::Float(_));
+                let opcode = match node.op {
+                    Operator::Add => BinaryArithmeticOpcode::Add,
+                    Operator::Mul => BinaryArithmeticOpcode::Mul,
+                    _ => unreachable!(),
+                };
+                gen_binaryop!(BinaryOpcode::BinaryArithmetic(BinaryArithmetic {
+                    opcode,
+                    is_float
+                }))
+            }
             Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());

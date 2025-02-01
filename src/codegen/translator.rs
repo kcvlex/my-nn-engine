@@ -5,7 +5,7 @@ use crate::codegen::omp::*;
 use crate::codegen::op::*;
 use crate::onnx::operator;
 use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::types::{DataType, ResolvedTensorType};
+use crate::tensor::types::{DataType, FloatType, ResolvedTensorType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
@@ -29,41 +29,23 @@ pub struct FunctionTranslator<'a, 'ctx> {
 
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
-        macro_rules! gep {
-            ($ty: expr) => {{
-                unsafe {
-                    self.builder.build_in_bounds_gep(
-                        $ty,
-                        ptr.ptr,
-                        &[ptr.offset],
-                        format!("gep.{}", ptr.name).as_str(),
-                    )
-                }
-            }};
-        }
-        let ty = LLVMScalarType::from_data_type(self.context, ptr.ty.elem_type);
-        match ty {
-            LLVMScalarType::LLVMFloat(ty) => gep!(ty),
-            LLVMScalarType::LLVMInt(ty) => gep!(ty),
+        unsafe {
+            self.builder.build_in_bounds_gep(
+                ptr.ty.elem_type.llvm_type(self.context),
+                ptr.ptr,
+                &[ptr.offset],
+                format!("gep.{}", ptr.name).as_str(),
+            )
         }
     }
 
     fn build_load(&self, ptr: &TensorPtr<'ctx>) -> Result<BasicValueEnum<'ctx>, BuilderError> {
-        macro_rules! load {
-            ($ty: expr) => {{
-                let res: Result<_, BuilderError> = {
-                    let gep = self.build_gep(ptr)?;
-                    self.builder
-                        .build_load($ty, gep, format!("load.{}", ptr.name).as_str())
-                };
-                res
-            }};
-        }
-        let ty = LLVMScalarType::from_data_type(self.context, ptr.ty.elem_type);
-        match ty {
-            LLVMScalarType::LLVMFloat(ty) => load!(ty),
-            LLVMScalarType::LLVMInt(ty) => load!(ty),
-        }
+        let gep = self.build_gep(ptr)?;
+        self.builder.build_load(
+            ptr.ty.elem_type.llvm_type(self.context),
+            gep,
+            format!("load.{}", ptr.name).as_str(),
+        )
     }
 
     fn build_store<V: BasicValue<'ctx>>(
@@ -308,11 +290,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 })
                 .map(|x| x.try_into().unwrap())
                 .collect::<Vec<u64>>();
-            let elem_ty = match src_ptr.ty.elem_type {
-                DataType::F32 => self.context.f32_type(),
-                DataType::F64 => self.context.f64_type(),
-                _ => todo!(),
-            };
+            let elem_ty = src_ptr.ty.elem_type.llvm_type(self.context);
 
             let inner_loops = Im2ColsInnerLoop {
                 preheader,
@@ -588,92 +566,57 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         match op {
-            Operation::UnaryOp(op, opcode) => {
-                match opcode {
-                    UnaryOpcode::ReLU => {
-                        let (fmax, zero) = match op.dst.ty.elem_type {
-                            DataType::F32 => (
-                                self.intrinsics.fmax_f32,
-                                self.context.f32_type().const_float(0.0),
-                            ),
-                            DataType::F64 => (
-                                self.intrinsics.fmax_f64,
-                                self.context.f64_type().const_float(0.0),
-                            ),
-                            _ => todo!(),
-                        };
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        let res = self
-                            .build_tail_call(fmax, &[src.into(), zero.into()], "res")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap();
-                        self.build_store(&op.dst, res)
-                    }
-                    UnaryOpcode::Transfer => {
-                        // TODO
-                        let len = match op.src.ty.elem_type {
-                            DataType::F32 => 4,
-                            DataType::F64 => 8,
-                            DataType::I64 => 8,
-                            DataType::U64 => 8,
-                        };
-                        let len_int = self
-                            .context
-                            .i64_type()
-                            .const_int(len.try_into().unwrap(), false);
-                        let src_offset =
-                            self.builder
-                                .build_int_mul(op.src.offset, len_int, "src.offset")?;
-                        let dst_offset =
-                            self.builder
-                                .build_int_mul(op.dst.offset, len_int, "dst.offset")?;
-                        for i in 0..len {
-                            let src_offset = self.builder.build_int_add(
-                                src_offset,
-                                self.context
-                                    .i64_type()
-                                    .const_int(i.try_into().unwrap(), false),
-                                "src.offset",
-                            )?;
-                            let dst_offset = self.builder.build_int_add(
-                                dst_offset,
-                                self.context
-                                    .i64_type()
-                                    .const_int(i.try_into().unwrap(), false),
-                                "dst.offset",
-                            )?;
-                            let src_gep = unsafe {
-                                self.builder.build_in_bounds_gep(
-                                    self.context.i8_type(),
-                                    op.src.ptr,
-                                    &[src_offset],
-                                    "src.gep",
-                                )
-                            }?;
-                            let dst_gep = unsafe {
-                                self.builder.build_in_bounds_gep(
-                                    self.context.i8_type(),
-                                    op.dst.ptr,
-                                    &[dst_offset],
-                                    "dst.gep",
-                                )
-                            }?;
-                            let load =
-                                self.builder
-                                    .build_load(self.context.i8_type(), src_gep, "load")?;
-                            self.builder.build_store(dst_gep, load)?;
-                        }
-                        Ok(())
-                    }
-                }
-            }
-            Operation::BinaryOp(op, opcode) => match opcode {
-                BinaryOpcode::FloatAdd => {
-                    let lhs = self.build_load(&op.lhs)?.into_float_value();
-                    let rhs = self.build_load(&op.rhs)?.into_float_value();
-                    let res = self.builder.build_float_add(lhs, rhs, "res")?;
+            Operation::UnaryOp(op, opcode) => match opcode {
+                UnaryOpcode::ReLU => {
+                    let (fmax, zero) = match op.dst.ty.elem_type {
+                        DataType::Float(FloatType::F32) => (
+                            self.intrinsics.fmax_f32,
+                            self.context.f32_type().const_float(0.0),
+                        ),
+                        DataType::Float(FloatType::F64) => (
+                            self.intrinsics.fmax_f64,
+                            self.context.f64_type().const_float(0.0),
+                        ),
+                        _ => todo!(),
+                    };
+                    let src = self.build_load(&op.src)?.into_float_value();
+                    let res = self
+                        .build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
                     self.build_store(&op.dst, res)
+                }
+                UnaryOpcode::Transfer => {
+                    let src = self.build_load(&op.src)?;
+                    self.build_store(&op.dst, src)
+                }
+            },
+            Operation::BinaryOp(op, opcode) => match opcode {
+                BinaryOpcode::BinaryArithmetic(BinaryArithmetic { opcode, is_float }) => {
+                    macro_rules! body {
+                        ($into: ident, $arith: ident) => {{
+                            let lhs = self.build_load(&op.lhs)?.$into();
+                            let rhs = self.build_load(&op.rhs)?.$into();
+                            let res = self.builder.$arith(lhs, rhs, "res")?;
+                            self.build_store(&op.dst, res)
+                        }};
+                    }
+
+                    match (opcode, is_float) {
+                        (BinaryArithmeticOpcode::Add, true) => {
+                            body!(into_float_value, build_float_add)
+                        }
+                        (BinaryArithmeticOpcode::Mul, true) => {
+                            body!(into_float_value, build_float_mul)
+                        }
+                        (BinaryArithmeticOpcode::Add, false) => {
+                            body!(into_int_value, build_int_add)
+                        }
+                        (BinaryArithmeticOpcode::Mul, false) => {
+                            body!(into_int_value, build_int_mul)
+                        }
+                    }
                 }
                 // BinaryOpcode::IntAdd => todo!(),
                 BinaryOpcode::Gemm(ref gemm) => {
@@ -731,8 +674,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(body);
         let ind1 = self.builder.build_phi(self.context.i64_type(), "ind1")?;
         let fp_ty = match elem_ty {
-            DataType::F32 => self.context.f32_type(),
-            DataType::F64 => self.context.f64_type(),
+            DataType::Float(t) => t.llvm_type(self.context),
             _ => todo!(),
         };
         let acc = self.builder.build_phi(fp_ty, "acc")?;
@@ -759,11 +701,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let (id_v, res) = match op {
             operator::ReduceOp::Max => {
                 let (id_v, fmax) = match elem_ty {
-                    DataType::F32 => (
+                    DataType::Float(FloatType::F32) => (
                         self.context.f32_type().const_float(f32::MIN as f64),
                         self.intrinsics.fmax_f32,
                     ),
-                    DataType::F64 => (
+                    DataType::Float(FloatType::F64) => (
                         self.context.f64_type().const_float(f64::MIN),
                         self.intrinsics.fmax_f64,
                     ),
@@ -779,8 +721,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             operator::ReduceOp::Sum | operator::ReduceOp::Mean | operator::ReduceOp::Variance => {
                 let fp_ty = match elem_ty {
-                    DataType::F32 => self.context.f32_type(),
-                    DataType::F64 => self.context.f64_type(),
+                    DataType::Float(t) => t.llvm_type(self.context),
                     _ => todo!(),
                 };
                 let zero = fp_ty.const_zero();
@@ -1270,12 +1211,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let variance_ptr = inputs[operator::args::BATCHNORM_VAR];
         let (m, n) = mn;
         let (fp_type, sqrt, fma) = match elem_ty {
-            DataType::F32 => (
+            DataType::Float(FloatType::F32) => (
                 self.context.f32_type(),
                 self.intrinsics.sqrt_f32,
                 self.intrinsics.fma_f32,
             ),
-            DataType::F64 => (
+            DataType::Float(FloatType::F64) => (
                 self.context.f64_type(),
                 self.intrinsics.sqrt_f64,
                 self.intrinsics.fma_f64,
@@ -1388,21 +1329,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     }
 }
 
-enum LLVMScalarType<'ctx> {
-    LLVMInt(IntType<'ctx>),
-    LLVMFloat(FloatType<'ctx>),
-}
-
-impl<'ctx> LLVMScalarType<'ctx> {
-    fn from_data_type(context: &'ctx Context, data_type: DataType) -> Self {
-        match data_type {
-            DataType::F32 => LLVMScalarType::LLVMFloat(context.f32_type()),
-            DataType::F64 => LLVMScalarType::LLVMFloat(context.f64_type()),
-            DataType::I64 | DataType::U64 => LLVMScalarType::LLVMInt(context.i64_type()),
-        }
-    }
-}
-
 struct LoopBB<'ctx> {
     preheader: BasicBlock<'ctx>,
     header: BasicBlock<'ctx>,
@@ -1422,6 +1348,6 @@ struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
     pads: &'a [u64],
     outer_offsets: &'a [IntValue<'ctx>],
 
-    elem_ty: FloatType<'ctx>,
+    elem_ty: BasicTypeEnum<'ctx>,
     nest: u64,
 }

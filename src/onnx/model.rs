@@ -6,6 +6,7 @@ use crate::tensor::{
     Tensor,
 };
 use id_arena::{Arena, Id};
+use itertools::zip_eq;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{Index, IndexMut};
 
@@ -62,7 +63,7 @@ fn unify_types(
 impl Graph {
     pub fn resolve_input_types(
         &mut self,
-        input_tys: &[&ResolvedTensorDims],
+        input_tys: &[&ResolvedTensorType],
     ) -> Result<(), TypeError> {
         let ids = self
             .inputs
@@ -77,25 +78,42 @@ impl Graph {
             return Err(TypeError::InconsistentInput);
         }
 
-        for (i, id) in ids.iter().enumerate() {
-            match self.values[*id].ty.as_ref().unwrap() {
-                TensorType::Resolved(_) => (), // TODO: check if consistent
-                TensorType::Unresolved(ref ty) => {
-                    let ty = ty.clone();
-                    let res = unify_types(
-                        ty.dims.unwrap().inner().as_slice(),
-                        &input_tys[i][..],
-                        &mut self.resolved_params,
-                    )
-                    .ok_or(TypeError::InconsistentInput)?;
-                    self.values[*id].ty = Some(TensorType::Resolved(ResolvedTensorType::new(
-                        ty.elem_type,
-                        res,
-                    )));
-                }
-            };
+        for (id, ty) in zip_eq(ids.iter(), input_tys.iter()) {
+            self.try_unify_type(*id, ty)?;
         }
         Ok(())
+    }
+
+    pub fn try_unify_type(
+        &mut self,
+        value_id: ValueId,
+        resolved: &ResolvedTensorType,
+    ) -> Result<(), TypeError> {
+        match &self.values[value_id].ty.as_ref() {
+            Some(TensorType::Resolved(ref ty)) => {
+                // TODO: Should strides also be checked?
+                if ty.dims == resolved.dims {
+                    Ok(())
+                } else {
+                    Err(TypeError::InconsistentInput)
+                }
+            }
+            Some(TensorType::Unresolved(ref ty)) => {
+                let ty = ty.clone();
+                let _ = unify_types(
+                    ty.dims.unwrap().inner().as_slice(),
+                    &resolved.dims[..],
+                    &mut self.resolved_params,
+                )
+                .ok_or(TypeError::InconsistentInput)?;
+                self.values[value_id].ty = Some(TensorType::Resolved(resolved.clone()));
+                Ok(())
+            }
+            None => {
+                self.values[value_id].ty = Some(TensorType::Resolved(resolved.clone()));
+                Ok(())
+            }
+        }
     }
 
     pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {

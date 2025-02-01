@@ -15,7 +15,7 @@ fn run_test(model: &str, epsilon: f64) -> Result {
     let output_path = data_dir.join("output_0.pb");
 
     let input = Tensor::load_from_path(input_path).map_err(SessionError::ModelLoadError)?;
-    let session = Session::new(&model_path, Some(&[&input.ty.dims]), 100)?;
+    let session = Session::new(&model_path, Some(&[&input.tensor_type()]), 100)?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
     if !output[0].eq_with_epsilon(&expected, epsilon) {

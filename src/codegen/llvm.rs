@@ -1,8 +1,10 @@
+use crate::tensor::types::{DataType, FloatType, SIntType, UIntType};
 use inkwell::attributes::*;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::TargetMachine;
+use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 
@@ -101,6 +103,42 @@ impl<'ll> DebugStuff<'ll> {
             i64_fmt,
             i64_i64_fmt,
             stdout,
+        }
+    }
+}
+
+impl SIntType {
+    pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::IntType<'ctx> {
+        match self {
+            SIntType::I32 => ctx.i32_type(),
+            SIntType::I64 => ctx.i64_type(),
+        }
+    }
+}
+
+impl UIntType {
+    pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::IntType<'ctx> {
+        match self {
+            UIntType::U64 => ctx.i64_type(),
+        }
+    }
+}
+
+impl FloatType {
+    pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::FloatType<'ctx> {
+        match self {
+            FloatType::F32 => ctx.f32_type(),
+            FloatType::F64 => ctx.f64_type(),
+        }
+    }
+}
+
+impl DataType {
+    pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> BasicTypeEnum<'ctx> {
+        match self {
+            DataType::SInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
+            DataType::UInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
+            DataType::Float(t) => t.llvm_type(ctx).as_basic_type_enum(),
         }
     }
 }

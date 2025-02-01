@@ -199,7 +199,7 @@ fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId
             let transposed_output = TransposeGenerator::default()
                 .set_contiguous(true)
                 .set_input(reshaped_output)
-                .set_perms(perm)
+                .set_perm(perm)
                 .set_node_name(format!("Im2Col_{index}_TransposeOutput"))
                 .set_value_name(format!("Im2Col_{index}_TransposeOutput"))
                 .generate(graph, modifier)
