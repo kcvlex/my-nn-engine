@@ -3,6 +3,7 @@ pub mod dimensions;
 mod ops;
 pub mod types;
 
+use crate::onnx::operator::TensorIndex;
 use data::TensorData;
 use dimensions::ResolvedTensorDims;
 use ops::*;
@@ -18,6 +19,27 @@ impl Tensor {
     pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64) -> bool {
         self.ty == other.ty && self.data.eq_with_epsillong(&other.data, epsilon)
     }
+
+    pub fn to_indices(&self) -> Option<Vec<TensorIndex>> {
+        macro_rules! to_indices {
+            ($data: expr, $ty: ty) => {{
+                $data
+                    .iter()
+                    .map(|x| TensorIndex::new(*x as isize))
+                    .collect()
+            }};
+        }
+
+        if self.ty.dims.ndim() != 1 {
+            return None;
+        }
+
+        match &self.data {
+            TensorData::I64(ref v) => Some(to_indices!(v, i64)),
+            TensorData::U64(ref v) => Some(to_indices!(v, u64)),
+            _ => None,
+        }
+    }
 }
 
 impl TensorData {
@@ -32,7 +54,7 @@ macro_rules! into_raw_tensor {
         let data: Result<&[$ty], _> = $tensor.data.try_as_slice();
         data.map(|data| RawTensor {
             data,
-            dims: $tensor.ty.dims.as_slice(),
+            dims: &$tensor.ty.dims[..],
         })
     }};
 

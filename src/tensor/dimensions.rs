@@ -1,3 +1,4 @@
+use crate::onnx::operator::Slice;
 use crate::tensor::types::TypeError;
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
@@ -137,12 +138,27 @@ impl ResolvedTensorDims {
         res
     }
 
-    pub fn as_slice(&self) -> &[usize] {
+    pub fn raw(&self) -> &Vec<usize> {
         &self.0
     }
 
-    pub fn raw(&self) -> &Vec<usize> {
-        &self.0
+    pub fn slice_in_place(&mut self, slice: &Slice) {
+        if slice.step != 1 {
+            unimplemented!();
+        }
+
+        let axis = slice.axis.index(self.ndim());
+        let start = slice.start.index(self[axis]);
+        let end = slice.end.index(self[axis]);
+        self[axis] = end - start;
+    }
+
+    pub fn slices(&self, slices: &[Slice]) -> Self {
+        let mut res = self.clone();
+        for slice in slices {
+            res.slice_in_place(slice);
+        }
+        res
     }
 }
 

@@ -3,9 +3,10 @@ use crate::onnx::operator::*;
 use crate::tensor::{
     data::TensorData,
     dimensions::{broadcast_shape, ResolvedTensorDims},
-    types::{ResolvedTensorType, TensorType, TypeError},
+    types::{DataType, ResolvedTensorType, TensorType, TypeError},
 };
 use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::utils::const_fold::fold_constant;
 use crate::transform::utils::tensor::ContigousOutput;
 use crate::transform::SimplePassManager;
 use crate::transform::{GraphModifier, Pass, PassManager};
@@ -38,13 +39,17 @@ impl<T: GraphModifier> Pass<T> for ShapeInference {
         "Infer shape of each node"
     }
 
-    fn run(&self, graph: &mut Graph, _modifier: &mut T) {
-        self.infer(graph).unwrap();
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        self.infer(graph, modifier).unwrap();
     }
 }
 
 impl ShapeInference {
-    fn infer(&self, graph: &mut Graph) -> Result<(), TypeError> {
+    fn infer<T: GraphModifier>(
+        &self,
+        graph: &mut Graph,
+        modifier: &mut T,
+    ) -> Result<(), TypeError> {
         let ids = graph
             .nodes
             .iter()
@@ -53,21 +58,33 @@ impl ShapeInference {
             .collect::<Vec<_>>();
         for id in ids {
             let types = self.infer_node_output(graph, id)?;
-            let node = &graph.nodes[id];
-            for (value_id, inferred) in zip_eq(node.outputs.iter(), types.into_iter()) {
+            let outputs = graph.nodes[id].outputs.clone();
+            for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
                 let cur_ty = &mut graph.values[*value_id].ty;
                 if let Some(TensorType::Resolved(cur_ty)) = cur_ty {
                     if *cur_ty != inferred {
                         return Err(TypeError::InferError(format!(
                             "Mismatched type:\n\tnode_name={:?}\n\texpected={:?}\n\tinferred={:?}",
-                            node.name, cur_ty, inferred
+                            graph.nodes[id].name, cur_ty, inferred
                         )));
                     }
                 } else {
                     *cur_ty = Some(inferred.into());
                 }
             }
+
+            if let Some(constants) = fold_constant(graph, id) {
+                for (old_value, tensor) in zip_eq(outputs.iter(), constants.into_iter()) {
+                    let new_value = modifier.register_new_tensor(
+                        graph,
+                        tensor,
+                        format!("folded_{}", graph.nodes[id].name),
+                    );
+                    modifier.replace_input_value(graph, *old_value, new_value);
+                }
+            }
         }
+
         Ok(())
     }
 
@@ -116,6 +133,8 @@ impl ShapeInference {
             }
             Operator::Transpose(perms) => {
                 let data = &inputs[args::TRANSPOSE_DATA];
+
+                // TODO: Move this to another place
                 if perms.is_empty() {
                     *perms = (0..data.dims.ndim()).rev().collect();
                 }
@@ -368,12 +387,85 @@ impl ShapeInference {
                 ));
             }
 
-            Operator::Concat(_) |
-            Operator::Split(_) |
-            Operator::Slice(_) |
-            Operator::Shape(_) |
-            Operator::Gather(_) => {
-                todo!()
+            Operator::Concat(Concat { ref axis }) => {
+                let mut dims = inputs[0].dims.clone();
+                let axis = axis.index(dims.ndim());
+                for input in inputs.iter().skip(1) {
+                    if dims.ndim() != input.dims.ndim() {
+                        return Err(TypeError::InferError("Concat: Different ranks".to_string()));
+                    }
+                    for i in 0..dims.ndim() {
+                        if i == axis {
+                            dims[i] += input.dims[i];
+                        } else if dims[i] != input.dims[i] {
+                            return Err(TypeError::InferError("Concat: Different dim".to_string()));
+                        }
+                    }
+                }
+                res.push(ResolvedTensorType::new(inputs[0].elem_type, dims));
+            }
+
+            Operator::Split(Split {
+                ref axis,
+                ref num_outputs,
+            }) => {
+                let input = &inputs[0];
+                let axis = axis.index(input.dims.ndim());
+                let dim = input.dims[axis];
+                let mut res = Vec::new();
+                let mut cur = 0;
+                let step = dim / *num_outputs;
+                let bound = dim;
+                while cur < bound {
+                    let start = cur;
+                    let end = (cur + step).min(bound);
+                    let mut dims = input.dims.clone();
+                    dims[axis] = end - start;
+                    res.push(ResolvedTensorType::new(input.elem_type, dims));
+                    cur = end;
+                }
+            }
+
+            Operator::Slice(ref slices) => {
+                res.push(inputs[0].slices(slices));
+            }
+
+            Operator::Shape(Shape { start, end }) => {
+                let ndim = inputs[0].dims.ndim();
+                let start = start.index(ndim);
+                let end = end.map(|x| x.index(ndim)).unwrap_or(ndim);
+                res.push(ResolvedTensorType::new(
+                    DataType::U64,
+                    ResolvedTensorDims::new(vec![end - start]),
+                ));
+            }
+
+            Operator::Gather(Gather { axis }) => {
+                let input = &inputs[0].dims;
+                let ndim = input.ndim();
+                let indices = graph
+                    .initializer
+                    .get(&node.inputs[1])
+                    .ok_or(TypeError::UnresolvedInput)?
+                    .to_indices()
+                    .ok_or(TypeError::InferError("Invalid indices".to_string()))?
+                    .into_iter()
+                    .map(|x| x.index(ndim))
+                    .collect::<Vec<_>>();
+                let axis = axis.index(ndim);
+                let mut dims = Vec::with_capacity(ndim - 1 + indices.len());
+                let mut indices = Some(indices);
+                for (i, dim) in input.iter().copied().enumerate() {
+                    if i == axis {
+                        dims.extend(indices.take().unwrap());
+                    } else {
+                        dims.push(dim);
+                    }
+                }
+                res.push(ResolvedTensorType::new(
+                    inputs[0].elem_type,
+                    ResolvedTensorDims::new(dims),
+                ));
             }
 
             // Custom

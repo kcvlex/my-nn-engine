@@ -1,4 +1,4 @@
-use crate::onnx::operator::TensorIndex;
+use crate::onnx::operator::{Slice, TensorIndex};
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::dimensions::UnresolvedTensorDims;
 
@@ -199,10 +199,10 @@ impl ResolvedTensorType {
         self.stride[rank] * start
     }
 
-    pub fn slice(&self, rank: usize, start: isize, end: isize) -> (Self, usize) {
+    pub fn slices(&self, slices: &[Slice]) -> Self {
         let mut res = self.clone();
-        let offset = res.slice_in_place(rank, start, end);
-        (res, offset)
+        res.dims = res.dims.slices(slices);
+        res
     }
 }
 

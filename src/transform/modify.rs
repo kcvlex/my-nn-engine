@@ -1,6 +1,7 @@
 use crate::onnx::model::{Graph, Node, NodeId, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
 use crate::tensor::types::{ResolvedTensorType, TensorType};
+use crate::tensor::Tensor;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +19,12 @@ pub trait GraphModifier {
     }
 
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId;
+
+    fn register_new_tensor(&mut self, graph: &mut Graph, tensor: Tensor, name: String) -> ValueId {
+        let value_id = self.register_new_value(graph, name, tensor.ty.clone());
+        graph.initializer.insert(value_id, tensor);
+        value_id
+    }
 
     fn defined_node(&self, value: ValueId) -> Option<(NodeId, usize)>;
 

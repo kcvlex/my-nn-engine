@@ -3,7 +3,7 @@ use crate::tensor::dimensions::ResolvedTensorDims;
 use std::ops::Index;
 //use strum_macros::EnumString;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct TensorIndex(isize);
 
 impl TensorIndex {

@@ -84,7 +84,7 @@ impl Graph {
                     let ty = ty.clone();
                     let res = unify_types(
                         ty.dims.unwrap().inner().as_slice(),
-                        input_tys[i].as_slice(),
+                        &input_tys[i][..],
                         &mut self.resolved_params,
                     )
                     .ok_or(TypeError::InconsistentInput)?;

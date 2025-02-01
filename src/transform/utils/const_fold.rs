@@ -4,11 +4,11 @@ use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, Tensor};
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
-    let ends = dims.as_slice().iter().map(|x| *x as isize).collect();
+    let ends = dims[..].iter().map(|x| *x as isize).collect();
     (starts, ends)
 }
 
-pub fn constant_fold(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
+pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
     match node.op {
         Operator::Shape(Shape { ref start, ref end }) => {
