@@ -670,6 +670,7 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
             Operator::LeakyReLU(v) => gen_unaryop!(UnaryOpcode::LeakyReLU(v)),
             Operator::Exp => gen_unaryop!(UnaryOpcode::Exp),
+            Operator::Log => gen_unaryop!(UnaryOpcode::Log),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());
             //     gen_unaryop!(UnaryOpcode::Transpose)

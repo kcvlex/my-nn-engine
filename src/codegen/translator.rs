@@ -599,6 +599,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         let rhs = src;
                         self.builder.build_select(lt, lhs, rhs, "res")?
                     }
+                    UnaryOpcode::Log => {
+                        let ty = op.dst.ty.elem_type.float_type().unwrap();
+                        let log = self.intrinsics.log.get(ty);
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        self.build_tail_call(log, &[src.into()], "res")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                    }
                     UnaryOpcode::ReLU => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
                         let fmax = self.intrinsics.fmax.get(ty);
