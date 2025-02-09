@@ -900,4 +900,19 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn tanh() -> TestResult {
+        with_session("tanh.onnx", |session| {
+            let (input, orig) = make_tensor_3x2x4!()?;
+            let expected: Tensor = orig
+                .map(|x| x.tanh())
+                .into_dyn()
+                .try_into()
+                .map_err(SessionError::TypeError)?;
+            let output = session.run(&[input])?;
+            assert_eq_epsilon!(output[0], expected, 1e-6);
+            Ok(())
+        })
+    }
 }

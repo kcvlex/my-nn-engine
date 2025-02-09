@@ -29,6 +29,8 @@ pub struct Intrinsics<'ll> {
     pub log: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
 
+    // llvm.tanh.* seems not to be available
+    // pub tanh: FloatIntrinsics<'ll>,
     pub smin_i32: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,

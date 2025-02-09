@@ -568,11 +568,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         match op {
             Operation::UnaryOp(op, opcode) => {
                 let res = match opcode {
-                    UnaryOpcode::Exp => {
+                    opcode @ (UnaryOpcode::Exp | UnaryOpcode::Log) => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let exp = self.intrinsics.exp.get(ty);
+                        let f = match opcode {
+                            UnaryOpcode::Exp => self.intrinsics.exp.get(ty),
+                            UnaryOpcode::Log => self.intrinsics.log.get(ty),
+                            _ => unreachable!(),
+                        };
                         let src = self.build_load(&op.src)?.into_float_value();
-                        self.build_tail_call(exp, &[src.into()], "res")?
+                        self.build_tail_call(f, &[src.into()], "res")?
                             .try_as_basic_value()
                             .left()
                             .unwrap()
@@ -599,15 +603,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         let rhs = src;
                         self.builder.build_select(lt, lhs, rhs, "res")?
                     }
-                    UnaryOpcode::Log => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let log = self.intrinsics.log.get(ty);
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        self.build_tail_call(log, &[src.into()], "res")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                    }
                     UnaryOpcode::ReLU => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
                         let fmax = self.intrinsics.fmax.get(ty);
@@ -618,6 +613,28 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             .try_as_basic_value()
                             .left()
                             .unwrap()
+                    }
+                    UnaryOpcode::Tanh => {
+                        let ty = op.dst.ty.elem_type.float_type().unwrap();
+                        let exp = self.intrinsics.exp.get(ty);
+                        let ty = ty.llvm_type(self.context);
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        let exp_p = self
+                            .build_tail_call(exp, &[src.into()], "exp.p")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_float_value();
+                        let neg = self.builder.build_float_neg(src, "neg")?;
+                        let exp_m = self
+                            .build_tail_call(exp, &[neg.into()], "exp.m")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_float_value();
+                        let num = self.builder.build_float_sub(exp_p, exp_m, "num")?;
+                        let den = self.builder.build_float_add(exp_p, exp_m, "den")?;
+                        self.builder.build_float_div(num, den, "res")?.into()
                     }
                     UnaryOpcode::Transfer => self.build_load(&op.src)?,
                 };
