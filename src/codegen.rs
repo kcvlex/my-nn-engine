@@ -255,6 +255,8 @@ impl CodeGenContext {
         let sqrt_f64 = get_intrinsic!("llvm.sqrt", &[f64_ty])?;
         let fma_f32 = get_intrinsic!("llvm.fma", &[f32_ty, f32_ty, f32_ty])?;
         let fma_f64 = get_intrinsic!("llvm.fma", &[f64_ty, f64_ty, f64_ty])?;
+        let exp_f32 = get_intrinsic!("llvm.exp", &[f32_ty])?;
+        let exp_f64 = get_intrinsic!("llvm.exp", &[f64_ty])?;
         let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
         // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
@@ -266,6 +268,8 @@ impl CodeGenContext {
             sqrt_f64,
             fma_f32,
             fma_f64,
+            exp_f32,
+            exp_f64,
             smin_i32,
             // lifetime_start,
             // lifetime_end,
@@ -656,6 +660,7 @@ impl<'ll> CodeGen<'ll, '_> {
             }
             Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
             Operator::LeakyReLU(v) => gen_unaryop!(UnaryOpcode::LeakyReLU(v)),
+            Operator::Exp => gen_unaryop!(UnaryOpcode::Exp),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());
             //     gen_unaryop!(UnaryOpcode::Transpose)

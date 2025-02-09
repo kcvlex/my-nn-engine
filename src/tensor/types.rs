@@ -28,6 +28,15 @@ pub enum FloatType {
     F64,
 }
 
+impl DataType {
+    pub fn float_type(&self) -> Option<FloatType> {
+        match self {
+            DataType::Float(t) => Some(*t),
+            _ => None,
+        }
+    }
+}
+
 impl From<SIntType> for DataType {
     fn from(val: SIntType) -> Self {
         DataType::SInt(val)

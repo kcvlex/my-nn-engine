@@ -15,6 +15,8 @@ pub struct Intrinsics<'ll> {
     pub sqrt_f64: FunctionValue<'ll>,
     pub fma_f32: FunctionValue<'ll>,
     pub fma_f64: FunctionValue<'ll>,
+    pub exp_f32: FunctionValue<'ll>,
+    pub exp_f64: FunctionValue<'ll>,
     pub smin_i32: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,
@@ -32,6 +34,13 @@ impl<'ctx> Intrinsics<'ctx> {
         match ty {
             FloatType::F32 => self.sqrt_f32,
             FloatType::F64 => self.sqrt_f64,
+        }
+    }
+
+    pub fn exp(&self, ty: FloatType) -> FunctionValue<'ctx> {
+        match ty {
+            FloatType::F32 => self.exp_f32,
+            FloatType::F64 => self.exp_f64,
         }
     }
 }

@@ -568,11 +568,17 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         match op {
             Operation::UnaryOp(op, opcode) => {
                 let res = match opcode {
+                    UnaryOpcode::Exp => {
+                        let ty = op.dst.ty.elem_type.float_type().unwrap();
+                        let exp = self.intrinsics.exp(ty);
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        self.build_tail_call(exp, &[src.into()], "res")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                    },
                     UnaryOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
-                        let ty = match op.dst.ty.elem_type {
-                            DataType::Float(ty) => ty.llvm_type(self.context),
-                            _ => unreachable!(),
-                        };
+                        let ty = op.dst.ty.elem_type.float_type().unwrap().llvm_type(self.context);
                         let zero = ty.const_zero();
                         let src = self.build_load(&op.src)?.into_float_value();
                         let lt = self.builder.build_float_compare(

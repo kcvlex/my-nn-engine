@@ -127,7 +127,7 @@ pub struct Gemm {
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOpcode {
-    // Exp,
+    Exp,
     LeakyReLU(LeakyReLU),
     ReLU,
     // TanH,

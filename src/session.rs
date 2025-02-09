@@ -346,7 +346,7 @@ mod test {
                     [0.8480, 0.5366, -0.0574, -0.5479],
                 ],
                 [
-                    [0.5928, -1.7610, 1.4378, -1.8061],
+                    [0.5928, -1.7610, 1.4378, 0.0],
                     [0.2030, 0.0264, 1.3788, 0.0953],
                 ],
             )
@@ -848,11 +848,22 @@ mod test {
     }
 
     #[test]
-    fn test_leaky_relu() -> TestResult {
+    fn leaky_relu() -> TestResult {
         with_session("leakyrelu.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
             let alpha = 0.42;
-            let expected = orig.map(|x| if *x > 0.0 { *x } else { *x * alpha });
+            let expected = orig.map(|x| if *x < 0.0 { *x * alpha } else { *x });
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected.into_dyn());
+            Ok(())
+        })
+    }
+    
+    #[test]
+    fn exp() -> TestResult {
+        with_session("exp.onnx", |session| {
+            let (input, orig) = make_tensor_3x2x4!()?;
+            let expected = orig.map(|x| x.exp());
             let output = session.run(&[input])?;
             tensor_assert_eq!(output[0], expected.into_dyn());
             Ok(())
