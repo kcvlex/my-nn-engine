@@ -570,15 +570,21 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let res = match opcode {
                     UnaryOpcode::Exp => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let exp = self.intrinsics.exp(ty);
+                        let exp = self.intrinsics.exp.get(ty);
                         let src = self.build_load(&op.src)?.into_float_value();
                         self.build_tail_call(exp, &[src.into()], "res")?
                             .try_as_basic_value()
                             .left()
                             .unwrap()
-                    },
+                    }
                     UnaryOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap().llvm_type(self.context);
+                        let ty = op
+                            .dst
+                            .ty
+                            .elem_type
+                            .float_type()
+                            .unwrap()
+                            .llvm_type(self.context);
                         let zero = ty.const_zero();
                         let src = self.build_load(&op.src)?.into_float_value();
                         let lt = self.builder.build_float_compare(
@@ -594,17 +600,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         self.builder.build_select(lt, lhs, rhs, "res")?
                     }
                     UnaryOpcode::ReLU => {
-                        let (fmax, zero) = match op.dst.ty.elem_type {
-                            DataType::Float(FloatType::F32) => (
-                                self.intrinsics.fmax_f32,
-                                self.context.f32_type().const_float(0.0),
-                            ),
-                            DataType::Float(FloatType::F64) => (
-                                self.intrinsics.fmax_f64,
-                                self.context.f64_type().const_float(0.0),
-                            ),
-                            _ => unreachable!(),
-                        };
+                        let ty = op.dst.ty.elem_type.float_type().unwrap();
+                        let fmax = self.intrinsics.fmax.get(ty);
+                        let ty = ty.llvm_type(self.context);
+                        let zero = ty.const_zero();
                         let src = self.build_load(&op.src)?.into_float_value();
                         self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                             .try_as_basic_value()
@@ -723,17 +722,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         let (id_v, res) = match op {
             operator::ReduceOp::Max => {
-                let (id_v, fmax) = match elem_ty {
-                    DataType::Float(FloatType::F32) => (
-                        self.context.f32_type().const_float(f32::MIN as f64),
-                        self.intrinsics.fmax_f32,
-                    ),
-                    DataType::Float(FloatType::F64) => (
-                        self.context.f64_type().const_float(f64::MIN),
-                        self.intrinsics.fmax_f64,
-                    ),
-                    _ => todo!(),
+                let ty = elem_ty.float_type().unwrap();
+                let fmax = self.intrinsics.fmax.get(ty);
+                let id_v = match ty {
+                    FloatType::F32 => f32::MIN as f64,
+                    FloatType::F64 => f64::MIN,
                 };
+                let ty = ty.llvm_type(self.context);
+                let id_v = ty.const_float(id_v);
                 let val = load!();
                 let res = self
                     .build_tail_call(fmax, &[acc.as_basic_value().into(), val.into()], "res")?
@@ -1233,19 +1229,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let mean_ptr = inputs[operator::args::BATCHNORM_MEAN];
         let variance_ptr = inputs[operator::args::BATCHNORM_VAR];
         let (m, n) = mn;
-        let (fp_type, sqrt, fma) = match elem_ty {
-            DataType::Float(FloatType::F32) => (
-                self.context.f32_type(),
-                self.intrinsics.sqrt_f32,
-                self.intrinsics.fma_f32,
-            ),
-            DataType::Float(FloatType::F64) => (
-                self.context.f64_type(),
-                self.intrinsics.sqrt_f64,
-                self.intrinsics.fma_f64,
-            ),
-            _ => unreachable!(),
-        };
+        let fp_type = elem_ty.float_type().unwrap();
+        let sqrt = self.intrinsics.sqrt.get(fp_type);
+        let fma = self.intrinsics.fma.get(fp_type);
+        let fp_type = fp_type.llvm_type(self.context);
         let epsilon = fp_type.const_float(batchnorm.epsilon as f64);
 
         let header = self.context.append_basic_block(*self.func, "entry");

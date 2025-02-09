@@ -129,6 +129,7 @@ pub struct Gemm {
 pub enum UnaryOpcode {
     Exp,
     LeakyReLU(LeakyReLU),
+    //Log,
     ReLU,
     // TanH,
     Transfer,

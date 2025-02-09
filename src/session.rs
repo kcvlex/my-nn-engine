@@ -858,7 +858,7 @@ mod test {
             Ok(())
         })
     }
-    
+
     #[test]
     fn exp() -> TestResult {
         with_session("exp.onnx", |session| {

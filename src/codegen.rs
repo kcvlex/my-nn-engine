@@ -249,27 +249,36 @@ impl CodeGenContext {
             }};
         }
 
-        let fmax_f32 = get_intrinsic!("llvm.maximum", &[f32_ty, f32_ty])?;
-        let fmax_f64 = get_intrinsic!("llvm.maximum", &[f64_ty, f64_ty])?;
-        let sqrt_f32 = get_intrinsic!("llvm.sqrt", &[f32_ty])?;
-        let sqrt_f64 = get_intrinsic!("llvm.sqrt", &[f64_ty])?;
-        let fma_f32 = get_intrinsic!("llvm.fma", &[f32_ty, f32_ty, f32_ty])?;
-        let fma_f64 = get_intrinsic!("llvm.fma", &[f64_ty, f64_ty, f64_ty])?;
-        let exp_f32 = get_intrinsic!("llvm.exp", &[f32_ty])?;
-        let exp_f64 = get_intrinsic!("llvm.exp", &[f64_ty])?;
+        let exp = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.exp", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.exp", &[f64_ty])?,
+        };
+        let fma = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.fma", &[f32_ty, f32_ty, f32_ty])?,
+            f_f64: get_intrinsic!("llvm.fma", &[f64_ty, f64_ty, f64_ty])?,
+        };
+        let fmax = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.maxnum", &[f32_ty, f32_ty])?,
+            f_f64: get_intrinsic!("llvm.maxnum", &[f64_ty, f64_ty])?,
+        };
+        let log = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.log", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.log", &[f64_ty])?,
+        };
+        let sqrt = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.sqrt", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.sqrt", &[f64_ty])?,
+        };
         let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
         // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
 
         let intrinsics = Intrinsics {
-            fmax_f32,
-            fmax_f64,
-            sqrt_f32,
-            sqrt_f64,
-            fma_f32,
-            fma_f64,
-            exp_f32,
-            exp_f64,
+            exp,
+            fma,
+            fmax,
+            log,
+            sqrt,
             smin_i32,
             // lifetime_start,
             // lifetime_end,

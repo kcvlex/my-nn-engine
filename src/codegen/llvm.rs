@@ -8,41 +8,30 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 
+pub struct FloatIntrinsics<'ll> {
+    pub f_f32: FunctionValue<'ll>,
+    pub f_f64: FunctionValue<'ll>,
+}
+
+impl<'ctx> FloatIntrinsics<'ctx> {
+    pub fn get(&self, ty: FloatType) -> FunctionValue<'ctx> {
+        match ty {
+            FloatType::F32 => self.f_f32,
+            FloatType::F64 => self.f_f64,
+        }
+    }
+}
+
 pub struct Intrinsics<'ll> {
-    pub fmax_f32: FunctionValue<'ll>,
-    pub fmax_f64: FunctionValue<'ll>,
-    pub sqrt_f32: FunctionValue<'ll>,
-    pub sqrt_f64: FunctionValue<'ll>,
-    pub fma_f32: FunctionValue<'ll>,
-    pub fma_f64: FunctionValue<'ll>,
-    pub exp_f32: FunctionValue<'ll>,
-    pub exp_f64: FunctionValue<'ll>,
+    pub exp: FloatIntrinsics<'ll>,
+    pub fma: FloatIntrinsics<'ll>,
+    pub fmax: FloatIntrinsics<'ll>,
+    pub log: FloatIntrinsics<'ll>,
+    pub sqrt: FloatIntrinsics<'ll>,
+
     pub smin_i32: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,
-}
-
-impl<'ctx> Intrinsics<'ctx> {
-    pub fn fmax(&self, ty: FloatType) -> FunctionValue<'ctx> {
-        match ty {
-            FloatType::F32 => self.fmax_f32,
-            FloatType::F64 => self.fmax_f64,
-        }
-    }
-
-    pub fn sqrt(&self, ty: FloatType) -> FunctionValue<'ctx> {
-        match ty {
-            FloatType::F32 => self.sqrt_f32,
-            FloatType::F64 => self.sqrt_f64,
-        }
-    }
-
-    pub fn exp(&self, ty: FloatType) -> FunctionValue<'ctx> {
-        match ty {
-            FloatType::F32 => self.exp_f32,
-            FloatType::F64 => self.exp_f64,
-        }
-    }
 }
 
 pub struct Attributes {
