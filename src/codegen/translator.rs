@@ -614,10 +614,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             .left()
                             .unwrap()
                     }
-                    UnaryOpcode::Tanh => {
+                    UnaryOpcode::Sigmoid => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
                         let exp = self.intrinsics.exp.get(ty);
                         let ty = ty.llvm_type(self.context);
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        let src = self.builder.build_float_neg(src, "neg")?;
+                        let exp = self
+                            .build_tail_call(exp, &[src.into()], "exp")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_float_value();
+                        let one = ty.const_float(1.0);
+                        let den = self.builder.build_float_add(one, exp, "den")?;
+                        self.builder.build_float_div(one, den, "res")?.into()
+                    }
+                    UnaryOpcode::Tanh => {
+                        let ty = op.dst.ty.elem_type.float_type().unwrap();
+                        let exp = self.intrinsics.exp.get(ty);
                         let src = self.build_load(&op.src)?.into_float_value();
                         let exp_p = self
                             .build_tail_call(exp, &[src.into()], "exp.p")?

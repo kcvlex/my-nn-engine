@@ -131,6 +131,7 @@ pub enum UnaryOpcode {
     LeakyReLU(LeakyReLU),
     Log,
     ReLU,
+    Sigmoid,
     Tanh,
     Transfer,
 }
