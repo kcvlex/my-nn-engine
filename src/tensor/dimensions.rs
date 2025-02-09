@@ -102,6 +102,10 @@ impl ResolvedTensorDims {
         }
     }
 
+    pub fn new_direct(v: Vec<usize>) -> Self {
+        Self(v)
+    }
+
     pub fn ndim(&self) -> usize {
         self.0.len()
     }

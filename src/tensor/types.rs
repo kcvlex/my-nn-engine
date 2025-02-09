@@ -28,21 +28,21 @@ pub enum FloatType {
     F64,
 }
 
-impl Into<DataType> for SIntType {
-    fn into(self) -> DataType {
-        DataType::SInt(self)
+impl From<SIntType> for DataType {
+    fn from(val: SIntType) -> Self {
+        DataType::SInt(val)
     }
 }
 
-impl Into<DataType> for UIntType {
-    fn into(self) -> DataType {
-        DataType::UInt(self)
+impl From<UIntType> for DataType {
+    fn from(val: UIntType) -> Self {
+        DataType::UInt(val)
     }
 }
 
-impl Into<DataType> for FloatType {
-    fn into(self) -> DataType {
-        DataType::Float(self)
+impl From<FloatType> for DataType {
+    fn from(val: FloatType) -> Self {
+        DataType::Float(val)
     }
 }
 
@@ -108,7 +108,7 @@ impl ResolvedTensorType {
             stride.push(0);
         }
         stride.extend(self.stride.iter().copied());
-        let stride = ResolvedTensorDims::new(stride);
+        let stride = ResolvedTensorDims::new_direct(stride);
         Self {
             elem_type,
             dims,
@@ -217,10 +217,11 @@ impl ResolvedTensorType {
             assert_eq!(i, new_strides.len());
             buf
         };
+        let stride = ResolvedTensorDims::new(new_strides);
         Some(Self {
             elem_type: self.elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(new_strides),
+            stride,
         })
     }
 
@@ -233,9 +234,18 @@ impl ResolvedTensorType {
         self.stride[rank] * start
     }
 
+    fn normalize_strides(&mut self) {
+        for (dim, stride) in izip!(self.dims.iter(), self.stride.iter_mut()) {
+            if *dim == 1 {
+                *stride = 0;
+            }
+        }
+    }
+
     pub fn slices(&self, slices: &[Slice]) -> Self {
         let mut res = self.clone();
         res.dims = res.dims.slices(slices);
+        res.normalize_strides();
         res
     }
 
@@ -266,7 +276,7 @@ fn calc_stride(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
         stride[i] = if dims[i] == 1 { 0 } else { acc };
         acc *= dims[i];
     }
-    ResolvedTensorDims::new(stride)
+    ResolvedTensorDims::new_direct(stride)
 }
 
 #[cfg(test)]

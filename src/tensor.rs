@@ -47,7 +47,7 @@ impl Tensor {
         }
 
         match &self.data {
-            TensorData::Float(_, ref v) => Some(v.iter().map(|x| *x as f64).collect()),
+            TensorData::Float(_, ref v) => Some(v.clone()),
             _ => None,
         }
     }

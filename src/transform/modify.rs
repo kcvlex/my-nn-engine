@@ -42,6 +42,8 @@ pub trait GraphModifier {
         if graph.get_resolved_tensor_type(old_value).unwrap() !=
             graph.get_resolved_tensor_type(new_value).unwrap()
         {
+            dbg!(graph.get_resolved_tensor_type(old_value));
+            dbg!(graph.get_resolved_tensor_type(new_value));
             panic!("Type mismatch");
         }
         self.replace_input_value_if_without_typecheck(graph, old_value, new_value, pred);

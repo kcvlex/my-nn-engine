@@ -1,6 +1,11 @@
 use crate::onnx::model::{Graph, NodeId};
 use crate::onnx::operator::*;
-use crate::tensor::{data::TensorData, dimensions::ResolvedTensorDims, types::SIntType, Tensor};
+use crate::tensor::{
+    data::TensorData,
+    dimensions::ResolvedTensorDims,
+    types::{DataType, SIntType},
+    Tensor,
+};
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
@@ -11,6 +16,23 @@ fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
 pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
     match node.op {
+        Operator::Cast(Cast { ref to }) => {
+            let Tensor { data, dims } = &graph.initializer.get(&node.inputs[0])?;
+            let data = match (data, to) {
+                (TensorData::SInt(_, data), DataType::SInt(to)) => {
+                    TensorData::SInt(*to, data.to_vec())
+                }
+                (TensorData::UInt(_, data), DataType::UInt(to)) => {
+                    TensorData::UInt(*to, data.to_vec())
+                }
+                (TensorData::Float(_, data), DataType::Float(to)) => {
+                    TensorData::Float(*to, data.to_vec())
+                }
+                _ => return None,
+            };
+            let tensor = Tensor::new(dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
         Operator::Concat(Concat { ref axis }) => {
             let tensors = node
                 .inputs
@@ -31,7 +53,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 None => ndim,
             };
             let shape = input[start..end].iter().map(|x| *x as i64).collect();
-            let shape = TensorData::SInt(SIntType::I64.into(), shape);
+            let shape = TensorData::SInt(SIntType::I64, shape);
             let shape = shape.into_1d_tensor();
             Some(vec![shape])
         }

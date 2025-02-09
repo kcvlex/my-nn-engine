@@ -25,7 +25,7 @@ use std::process::Command;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 
 enum StrictTensor {
     I32(Vec<i32>),
@@ -163,7 +163,7 @@ impl Session {
             .graph
             .initializer
             .values()
-            .map(|t| StrictTensor::from(t))
+            .map(StrictTensor::from)
             .collect::<Vec<_>>();
 
         let codegen_ctx = CodeGenContext::new(model.graph).map_err(SessionError::CodeGenError)?;

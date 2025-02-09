@@ -60,12 +60,10 @@ impl ShapeInference {
             let types = self.infer_node_output(graph, id)?;
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
-                dbg!(&inferred);
                 graph.try_unify_type(*value_id, &inferred)?;
             }
 
             if let Some(constants) = fold_constant(graph, id) {
-                dbg!(&constants);
                 for (old_value, tensor) in zip_eq(outputs.iter(), constants.into_iter()) {
                     let new_value = modifier.register_new_tensor(
                         graph,
