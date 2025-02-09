@@ -129,7 +129,7 @@ pub struct Gather {
     pub axis: TensorIndex,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct LeakyReLU {
     pub alpha: f64,
 }

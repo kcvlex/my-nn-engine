@@ -20,6 +20,22 @@ pub struct Intrinsics<'ll> {
     // lifetime_end: FunctionValue<'ctx>,
 }
 
+impl<'ctx> Intrinsics<'ctx> {
+    pub fn fmax(&self, ty: FloatType) -> FunctionValue<'ctx> {
+        match ty {
+            FloatType::F32 => self.fmax_f32,
+            FloatType::F64 => self.fmax_f64,
+        }
+    }
+
+    pub fn sqrt(&self, ty: FloatType) -> FunctionValue<'ctx> {
+        match ty {
+            FloatType::F32 => self.sqrt_f32,
+            FloatType::F64 => self.sqrt_f64,
+        }
+    }
+}
+
 pub struct Attributes {
     pub noalias: Attribute,
     pub noundef: Attribute,

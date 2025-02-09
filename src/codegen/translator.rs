@@ -566,32 +566,49 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         match op {
-            Operation::UnaryOp(op, opcode) => match opcode {
-                UnaryOpcode::ReLU => {
-                    let (fmax, zero) = match op.dst.ty.elem_type {
-                        DataType::Float(FloatType::F32) => (
-                            self.intrinsics.fmax_f32,
-                            self.context.f32_type().const_float(0.0),
-                        ),
-                        DataType::Float(FloatType::F64) => (
-                            self.intrinsics.fmax_f64,
-                            self.context.f64_type().const_float(0.0),
-                        ),
-                        _ => todo!(),
-                    };
-                    let src = self.build_load(&op.src)?.into_float_value();
-                    let res = self
-                        .build_tail_call(fmax, &[src.into(), zero.into()], "res")?
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap();
-                    self.build_store(&op.dst, res)
-                }
-                UnaryOpcode::Transfer => {
-                    let src = self.build_load(&op.src)?;
-                    self.build_store(&op.dst, src)
-                }
-            },
+            Operation::UnaryOp(op, opcode) => {
+                let res = match opcode {
+                    UnaryOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
+                        let ty = match op.dst.ty.elem_type {
+                            DataType::Float(ty) => ty.llvm_type(self.context),
+                            _ => unreachable!(),
+                        };
+                        let zero = ty.const_zero();
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        let lt = self.builder.build_float_compare(
+                            inkwell::FloatPredicate::OLT,
+                            src,
+                            zero,
+                            "lt",
+                        )?;
+                        let lhs =
+                            self.builder
+                                .build_float_mul(src, ty.const_float(*alpha), "lhs")?;
+                        let rhs = src;
+                        self.builder.build_select(lt, lhs, rhs, "res")?
+                    }
+                    UnaryOpcode::ReLU => {
+                        let (fmax, zero) = match op.dst.ty.elem_type {
+                            DataType::Float(FloatType::F32) => (
+                                self.intrinsics.fmax_f32,
+                                self.context.f32_type().const_float(0.0),
+                            ),
+                            DataType::Float(FloatType::F64) => (
+                                self.intrinsics.fmax_f64,
+                                self.context.f64_type().const_float(0.0),
+                            ),
+                            _ => unreachable!(),
+                        };
+                        let src = self.build_load(&op.src)?.into_float_value();
+                        self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                    }
+                    UnaryOpcode::Transfer => self.build_load(&op.src)?,
+                };
+                self.build_store(&op.dst, res)
+            }
             Operation::BinaryOp(op, opcode) => match opcode {
                 BinaryOpcode::BinaryArithmetic(BinaryArithmetic { opcode, is_float }) => {
                     macro_rules! body {

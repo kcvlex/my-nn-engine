@@ -333,6 +333,26 @@ mod test {
         }};
     }
 
+    macro_rules! make_tensor_3x2x4 {
+        () => {{
+            make_tensor!(
+                f32,
+                [
+                    [-0.7736, 1.1965, 0.6127, 1.7081],
+                    [-0.1194, 0.2656, -0.3478, 0.0629],
+                ],
+                [
+                    [0.1489, -0.4435, -0.9640, -1.7148],
+                    [0.8480, 0.5366, -0.0574, -0.5479],
+                ],
+                [
+                    [0.5928, -1.7610, 1.4378, -1.8061],
+                    [0.2030, 0.0264, 1.3788, 0.0953],
+                ],
+            )
+        }};
+    }
+
     macro_rules! make_range_tensor {
         ($ty: ty, $($dim: expr),*) => {{
             let len = [$($dim),*].iter().product();
@@ -823,6 +843,18 @@ mod test {
 
             let output = session.run(&[input])?;
             assert_eq_epsilon!(output[0], expected, 0.001);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_leaky_relu() -> TestResult {
+        with_session("leakyrelu.onnx", |session| {
+            let (input, orig) = make_tensor_3x2x4!()?;
+            let alpha = 0.42;
+            let expected = orig.map(|x| if *x > 0.0 { *x } else { *x * alpha });
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected.into_dyn());
             Ok(())
         })
     }

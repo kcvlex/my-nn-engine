@@ -1,5 +1,6 @@
 use crate::codegen::blas::Precision;
 use crate::codegen::translator::FunctionTranslator;
+use crate::onnx::operator::LeakyReLU;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use inkwell::builder::BuilderError;
@@ -126,7 +127,10 @@ pub struct Gemm {
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOpcode {
+    // Exp,
+    LeakyReLU(LeakyReLU),
     ReLU,
+    // TanH,
     Transfer,
 }
 
