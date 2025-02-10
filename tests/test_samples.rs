@@ -39,3 +39,9 @@ fn test_resnet18() -> Result {
 fn test_resnet152() -> Result {
     run_test("resnet152-v2-7", 1e-3)
 }
+
+#[ignore]
+#[test]
+fn test_yolov4() -> Result {
+    run_test("yolov4", 1e-3)
+}

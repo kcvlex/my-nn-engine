@@ -107,7 +107,7 @@ impl Chunks {
 struct MemoryPlanner<'graph> {
     graph: &'graph Graph,
     deps: DependencyGraph,
-    liveness_counter: IndexMap<ValueId, usize>,
+    liveness_counter: IndexMap<ChunkId, usize>,
     chunks: Chunks,
     allocations: HashMap<ValueId, AllocateType>,
 }
@@ -115,13 +115,11 @@ struct MemoryPlanner<'graph> {
 impl<'graph> MemoryPlanner<'graph> {
     fn new(graph: &'graph Graph) -> Self {
         let deps = DependencyGraph::new(graph);
-        let liveness_counter: IndexMap<ValueId, usize> =
-            deps.value2used.iter().map(|(k, v)| (*k, v.len())).collect();
 
         MemoryPlanner {
             graph,
             deps,
-            liveness_counter,
+            liveness_counter: IndexMap::new(),
             chunks: Chunks::default(),
             allocations: HashMap::new(),
         }
@@ -218,21 +216,31 @@ impl<'graph> MemoryPlanner<'graph> {
 
     fn run_node(&mut self, node_id: NodeId) -> Vec<(ValueId, AllocateType)> {
         let mut res = Vec::new();
-        let mut reused = HashSet::new();
-        for output in self.graph.nodes[node_id].outputs.iter() {
-            let chunk = if self.deps.outputs.contains(output) {
-                AllocateType::Output(*output)
-            } else {
-                match self.try_in_place(*output) {
-                    Some(prev) => {
-                        let res = *self.allocations.get(&prev).unwrap();
-                        reused.insert(res);
-                        res
+        let node = &self.graph.nodes[node_id];
+        for output in node.outputs.iter() {
+            let chunk = match node.op {
+                // TODO: When the input is `Input` or initializer
+                Operator::Split(_) => {
+                    let res = *self.allocations.get(&node.inputs[0]).unwrap();
+                    assert!(matches!(res, AllocateType::Chunk(_)));
+                    res
+                }
+                _ => {
+                    if self.deps.outputs.contains(output) {
+                        AllocateType::Output(*output)
+                    } else {
+                        match self.try_in_place(*output) {
+                            Some(prev) => *self.allocations.get(&prev).unwrap(),
+                            None => AllocateType::Chunk(self.chunks.reuse_or_new()),
+                        }
                     }
-                    None => AllocateType::Chunk(self.chunks.reuse_or_new()),
                 }
             };
             res.push((*output, chunk));
+            if let AllocateType::Chunk(chunk) = chunk {
+                let used = self.deps.value2used.get(output).unwrap().len();
+                *self.liveness_counter.entry(chunk).or_insert(0) += used;
+            }
         }
 
         for input in self.graph.nodes[node_id]
@@ -240,18 +248,14 @@ impl<'graph> MemoryPlanner<'graph> {
             .iter()
             .filter(|x| !self.deps.inputs.contains(x))
         {
-            let counter = self.liveness_counter.get_mut(input).unwrap();
+            let chunk_id = match self.allocations.get(input).and_then(|x| x.chunk_id()) {
+                Some(v) => v,
+                None => continue,
+            };
+            let counter = self.liveness_counter.get_mut(&chunk_id).unwrap();
             *counter -= 1;
             if *counter == 0 {
-                let used_now = reused.contains(self.allocations.get(input).unwrap());
-                if !used_now {
-                    let chunk_id = self
-                        .allocations
-                        .get(input)
-                        .and_then(|x| x.chunk_id())
-                        .unwrap();
-                    self.chunks.free(chunk_id);
-                }
+                self.chunks.free(chunk_id);
             }
         }
         res
@@ -270,7 +274,11 @@ impl<'graph> MemoryPlanner<'graph> {
             .iter()
             .filter(|x| !self.deps.inputs.contains(x))
         {
-            if self.liveness_counter[input] != 1 {
+            let chunk_id = match self.allocations.get(input).and_then(|x| x.chunk_id()) {
+                Some(v) => v,
+                None => continue,
+            };
+            if self.liveness_counter[chunk_id] != 1 {
                 continue;
             }
 

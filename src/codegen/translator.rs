@@ -12,6 +12,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
+use inkwell::AddressSpace;
 
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {
