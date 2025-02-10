@@ -1128,7 +1128,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let outlined = self.build_omp_outlined(op_ctx, nest, max_nest)?;
             let args = ForkCallArgs { outlined, args };
             let call = self.omp.fork_call(self.builder, &args)?;
-            //call.set_tail_call(true);
+            call.set_tail_call(true);
             self.builder.build_unconditional_branch(loop_bb.exit)?;
 
             return Ok(());
