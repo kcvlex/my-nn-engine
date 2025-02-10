@@ -117,6 +117,9 @@ impl CodeGenContext {
         if node.is_dummy() {
             return false;
         }
+        if matches!(node.op, Operator::Split(_)) {
+            return false;
+        }
         if let Operator::Identity = node.op {
             let chunk_in = self.value2alloc.get(&node.inputs[0]).map(|info| &info.ty);
             let chunk_out = self.value2alloc.get(&node.outputs[0]).map(|info| &info.ty);
@@ -471,32 +474,64 @@ impl<'ll> CodeGen<'ll, '_> {
             };
 
             builder.position_at_end(self.unit.entry);
-            for alloc in alloc.iter() {
-                let dst_ptr = match alloc.ty {
-                    AllocateType::Chunk(chunk) => {
-                        if alloc.is_first_use {
-                            // TODO: type
-                            let ptr = builder.build_array_malloc(
-                                self.ll_ctx.i128_type(),
-                                self.ll_ctx
-                                    .i64_type()
-                                    .const_int(self.gen_ctx.mem_size[chunk], false),
-                                format!("chunk.{}", chunk).as_str(),
-                            )?;
-                            chunk2ptr.insert(chunk, ptr);
-                            ptr
-                        } else {
-                            *chunk2ptr.get(&chunk).unwrap()
+            let node = &self.gen_ctx.graph.nodes[*node_id];
+
+            if let Operator::Split(ref split) = node.op {
+                let src_ty = self
+                    .gen_ctx
+                    .graph
+                    .get_resolved_tensor_type(node.inputs[0])
+                    .unwrap();
+                let src = *ptr_values.get(&node.inputs[0]).unwrap();
+                let axis = split.axis.index(src_ty.dims.ndim());
+                let mut acc = 0;
+                let elem_ty = src_ty.elem_type.llvm_type(self.ll_ctx);
+                for output in node.outputs.iter() {
+                    let ptr = unsafe {
+                        builder.build_in_bounds_gep(
+                            elem_ty,
+                            src,
+                            &[self.ll_ctx.i64_type().const_int(acc, false)],
+                            format!("split.{}", output.index()).as_str(),
+                        )
+                    }?;
+                    ptr_values.insert(*output, ptr);
+                    let len = self
+                        .gen_ctx
+                        .graph
+                        .get_resolved_tensor_type(*output)
+                        .unwrap()
+                        .dims[axis];
+                    dbg!(src_ty.stride(axis), len);
+                    acc += (src_ty.stride(axis) * len) as u64;
+                }
+            } else {
+                for alloc in alloc.iter() {
+                    let dst_ptr = match alloc.ty {
+                        AllocateType::Chunk(chunk) => {
+                            if alloc.is_first_use {
+                                // TODO: type
+                                let ptr = builder.build_array_malloc(
+                                    self.ll_ctx.i128_type(),
+                                    self.ll_ctx
+                                        .i64_type()
+                                        .const_int(self.gen_ctx.mem_size[chunk], false),
+                                    format!("chunk.{}", chunk).as_str(),
+                                )?;
+                                chunk2ptr.insert(chunk, ptr);
+                                ptr
+                            } else {
+                                *chunk2ptr.get(&chunk).unwrap()
+                            }
                         }
-                    }
-                    AllocateType::Input(v) | AllocateType::Output(v) => {
-                        *ptr_values.get(&v).unwrap()
-                    }
-                };
-                ptr_values.insert(alloc.value_id, dst_ptr);
+                        AllocateType::Input(v) | AllocateType::Output(v) => {
+                            *ptr_values.get(&v).unwrap()
+                        }
+                    };
+                    ptr_values.insert(alloc.value_id, dst_ptr);
+                }
             }
 
-            let node = &self.gen_ctx.graph.nodes[*node_id];
             if let Some(function) = function {
                 let args = node
                     .outputs

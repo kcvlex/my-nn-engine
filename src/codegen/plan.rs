@@ -219,6 +219,7 @@ impl<'graph> MemoryPlanner<'graph> {
         let node = &self.graph.nodes[node_id];
         for output in node.outputs.iter() {
             let chunk = match node.op {
+                // Split is a special case.
                 // TODO: When the input is `Input` or initializer
                 Operator::Split(_) => {
                     let res = *self.allocations.get(&node.inputs[0]).unwrap();

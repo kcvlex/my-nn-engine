@@ -1080,4 +1080,52 @@ mod test {
             },
         )
     }
+
+    #[test]
+    fn split_axis_2() -> TestResult {
+        with_session("split_axis_2.onnx", |session| {
+            let (input, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0, 12.0],
+                    [13.0, 14.0, 15.0, 16.0],
+                ]],
+            )?;
+            let (expected0, _) =
+                make_tensor!(f32, [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],]],)?;
+            let (expected1, _) = make_tensor!(f32, [[[9.0, 10.0, 11.0, 12.0],]],)?;
+            let (expected2, _) = make_tensor!(f32, [[[13.0, 14.0, 15.0, 16.0],]],)?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected0);
+            assert_eq!(output[1], expected1);
+            assert_eq!(output[2], expected2);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn split_axis_3() -> TestResult {
+        with_session("split_axis_3.onnx", |session| {
+            let (input, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0, 12.0],
+                    [13.0, 14.0, 15.0, 16.0],
+                ]],
+            )?;
+            let (expected0, _) =
+                make_tensor!(f32, [[[1.0, 2.0], [5.0, 6.0], [9.0, 10.0], [13.0, 14.0],]],)?;
+            let (expected1, _) = make_tensor!(f32, [[[3.0], [7.0], [11.0], [15.0],]],)?;
+            let (expected2, _) = make_tensor!(f32, [[[4.0], [8.0], [12.0], [16.0],]],)?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected0);
+            assert_eq!(output[1], expected1);
+            assert_eq!(output[2], expected2);
+            Ok(())
+        })
+    }
 }

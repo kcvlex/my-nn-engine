@@ -421,16 +421,17 @@ impl ShapeInference {
             }
 
             Operator::Split(ref split) => {
-                let input = &inputs[0];
+                let input = inputs[0];
                 let axis = split.axis.index(input.dims.ndim());
                 split
                     .split(&input.dims)
                     .ok_or(TypeError::InferError("Invalid split dims".to_string()))?
                     .into_iter()
                     .for_each(|x| {
-                        let mut dims = input.dims.clone();
-                        dims[axis] = x;
-                        res.push(ResolvedTensorType::new(input.elem_type, dims));
+                        // Use the same strides as the input tensor
+                        let mut ty = input.clone();
+                        ty.dims[axis] = x;
+                        res.push(ty);
                     });
             }
 

@@ -1,0 +1,33 @@
+
+:’
+!
+InputIntermediate"Relu:main
+U
+IntermediateOutput0Output1Output2"Split*
+axis *
+split@@@ :mainsplit_axis_3Z
+Input
+
+
+
+
+b!
+Output0
+
+
+
+
+b!
+Output1
+
+
+
+
+b!
+Output2
+
+
+
+
+B
+main
