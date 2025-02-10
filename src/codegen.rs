@@ -238,6 +238,7 @@ impl CodeGenContext {
         let f32_ty = ll_ctx.f32_type().into();
         let f64_ty = ll_ctx.f64_type().into();
         let i32_ty = ll_ctx.i32_type().into();
+        let i64_ty = ll_ctx.i64_type().into();
         let builder = ll_ctx.create_builder();
         builder.position_at_end(entry);
 
@@ -249,6 +250,10 @@ impl CodeGenContext {
             }};
         }
 
+        let ceil = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.ceil", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.ceil", &[f64_ty])?,
+        };
         let exp = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.exp", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.exp", &[f64_ty])?,
@@ -261,6 +266,10 @@ impl CodeGenContext {
             f_f32: get_intrinsic!("llvm.maxnum", &[f32_ty, f32_ty])?,
             f_f64: get_intrinsic!("llvm.maxnum", &[f64_ty, f64_ty])?,
         };
+        let floor = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.floor", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.floor", &[f64_ty])?,
+        };
         let log = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.log", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.log", &[f64_ty])?,
@@ -270,16 +279,20 @@ impl CodeGenContext {
             f_f64: get_intrinsic!("llvm.sqrt", &[f64_ty])?,
         };
         let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
+        let smin_i64 = get_intrinsic!("llvm.smin", &[i64_ty, i64_ty])?;
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
         // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
 
         let intrinsics = Intrinsics {
+            ceil,
             exp,
+            floor,
             fma,
             fmax,
             log,
             sqrt,
             smin_i32,
+            smin_i64,
             // lifetime_start,
             // lifetime_end,
         };
@@ -724,6 +737,14 @@ impl<'ll> CodeGen<'ll, '_> {
                     batchnorm,
                 )
             }
+            Operator::Resize(ref resize) => translator.build_resize(
+                ptrs[0].clone(),
+                ptrs[1].clone(),
+                ptrs.get(1 + operator::args::RESIZE_SCALES),
+                ptrs.get(1 + operator::args::RESIZE_SIZES),
+                entry,
+                resize,
+            ),
             _ => todo!("{:?}", node.op),
         }?;
 

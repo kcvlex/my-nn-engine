@@ -25,7 +25,8 @@ use std::process::Command;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
-const DEBUG: bool = false;
+const WRITE_LL: bool = true;
+const DEBUG: bool = true;
 
 enum StrictTensor {
     I32(Vec<i32>),
@@ -154,7 +155,7 @@ impl Session {
         transform_graph(&mut model.graph, omp_threshold);
 
         // TODO: remove
-        Self::_write_model(&model.graph, "model.dot");
+        //Self::_write_model(&model.graph, "model.dot");
         //panic!("a");
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
@@ -212,11 +213,11 @@ impl Session {
                 if !DEBUG {
                     codegen.run_opt_aggressive().unwrap();
                 }
-                codegen.write_to_file(FileType::Object, &path).unwrap();
-                if DEBUG {
+                if WRITE_LL {
                     let ll_path = path.with_extension("ll");
                     codegen.module().print_to_file(&ll_path).unwrap();
                 }
+                codegen.write_to_file(FileType::Object, &path).unwrap();
                 path
             })
             .collect::<Vec<_>>();
@@ -249,7 +250,7 @@ impl Session {
 
         println!("Loaded");
 
-        let tmp_dir = if DEBUG {
+        let tmp_dir = if WRITE_LL {
             let _ = tmp_dir.into_path();
             None
         } else {
@@ -932,5 +933,151 @@ mod test {
             assert_eq_epsilon!(output[0], expected, 1e-6);
             Ok(())
         })
+    }
+
+    #[test]
+    fn resize_downsample_sizes_nearest() -> TestResult {
+        with_session("resize_downsample_sizes_nearest.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],]],)?;
+            let (expected, _) = make_tensor!(f32, [[[1.0, 2.0, 4.0]]],)?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_scales_nearest() -> TestResult {
+        with_session("resize_upsample_scales_nearest.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                ]],
+            )?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_scales_nearest_axes_2_3() -> TestResult {
+        with_session("resize_upsample_scales_nearest_axes_2_3.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                ]],
+            )?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_scales_nearest_axes_3_2() -> TestResult {
+        with_session("resize_upsample_scales_nearest_axes_3_2.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                ]],
+            )?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_sizes_nearest_axes_2_3() -> TestResult {
+        with_session("resize_upsample_sizes_nearest_axes_2_3.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                ]],
+            )?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_sizes_nearest_axes_3_2() -> TestResult {
+        with_session("resize_upsample_sizes_nearest_axes_3_2.onnx", |session| {
+            let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                    [3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+                ]],
+            )?;
+            let output = session.run(&[input])?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn resize_upsample_sizes_nearest_ceil_half_pixel() -> TestResult {
+        with_session(
+            "resize_upsample_sizes_nearest_ceil_half_pixel.onnx",
+            |session| {
+                let (input, _) = make_tensor!(
+                    f32,
+                    [[
+                        [1.0, 2.0, 3.0, 4.0],
+                        [5.0, 6.0, 7.0, 8.0],
+                        [9.0, 10.0, 11.0, 12.0],
+                        [13.0, 14.0, 15.0, 16.0],
+                    ]],
+                )?;
+                let (expected, _) = make_tensor!(
+                    f32,
+                    [[
+                        [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0],
+                        [5.0, 6.0, 6.0, 7.0, 7.0, 8.0, 8.0, 8.0],
+                        [5.0, 6.0, 6.0, 7.0, 7.0, 8.0, 8.0, 8.0],
+                        [9.0, 10.0, 10.0, 11.0, 11.0, 12.0, 12.0, 12.0],
+                        [9.0, 10.0, 10.0, 11.0, 11.0, 12.0, 12.0, 12.0],
+                        [13.0, 14.0, 14.0, 15.0, 15.0, 16.0, 16.0, 16.0],
+                        [13.0, 14.0, 14.0, 15.0, 15.0, 16.0, 16.0, 16.0],
+                        [13.0, 14.0, 14.0, 15.0, 15.0, 16.0, 16.0, 16.0],
+                    ]],
+                )?;
+                let output = session.run(&[input])?;
+                assert_eq!(output[0], expected);
+                Ok(())
+            },
+        )
     }
 }

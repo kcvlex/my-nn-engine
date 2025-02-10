@@ -40,7 +40,6 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 .map(|x| graph.initializer.get(x))
                 .collect::<Option<Vec<_>>>()?;
             let axis = axis.index(tensors[0].dims.ndim());
-            dbg!(&tensors);
             Tensor::concat(&tensors, axis).map(|x| vec![x]).ok()
         }
         Operator::Shape(Shape { ref start, ref end }) => {

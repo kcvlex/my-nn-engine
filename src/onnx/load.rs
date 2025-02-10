@@ -6,8 +6,9 @@ use crate::tensor::{
     types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
     Tensor,
 };
+use itertools::Itertools;
 use prost::{DecodeError, Message};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
@@ -163,6 +164,35 @@ impl GraphLoader {
                 nodes.alloc(node)
             })
             .collect();
+
+        // Fill dummy values
+        let mut initializer = initializer;
+        let defined: HashSet<ValueId> = initializer
+            .keys()
+            .copied()
+            .chain(inputs.iter().map(|&x| nodes[x].outputs[0]))
+            .chain(initializer.keys().copied())
+            .chain(
+                nodes
+                    .iter()
+                    .flat_map(|(_, node)| node.outputs.iter().copied()),
+            )
+            .collect();
+        let tensor = Tensor::new(
+            ResolvedTensorDims::new(vec![]),
+            TensorData::Float(FloatType::F32, vec![]),
+        )
+        .unwrap();
+        for value_id in nodes
+            .iter()
+            .flat_map(|(_, node)| node.inputs.iter())
+            .filter(|&x| !defined.contains(x))
+            .unique()
+        {
+            initializer.insert(*value_id, tensor.clone());
+            self.values[*value_id].ty = Some(TensorType::Resolved(tensor.tensor_type()));
+        }
+
         Ok(Graph {
             name: graph.name,
             initializer,

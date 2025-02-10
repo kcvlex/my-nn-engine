@@ -93,7 +93,7 @@ impl ShapeInference {
 
         let node = &graph.nodes[node_id];
 
-        dbg!(node);
+        // dbg!(node);
 
         let inputs: Vec<&ResolvedTensorType> = node
             .inputs

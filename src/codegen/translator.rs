@@ -1378,8 +1378,234 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(exit);
         Ok(exit)
     }
+
+    fn build_resize_rec(&self, param: ResizeParam<'_, 'ctx>) -> Result<(), BuilderError> {
+        let ResizeParam {
+            mut dst,
+            mut src,
+            scale,
+            axes,
+            loop_bb,
+            dim,
+            resize,
+        } = param;
+
+        self.builder.position_at_end(loop_bb.header);
+
+        if dim == dst.ty.dims.ndim() {
+            let val = self.build_load(&src)?;
+            self.build_store(&dst, val)?;
+            self.builder.build_unconditional_branch(loop_bb.exit)?;
+            return Ok(());
+        }
+
+        let next_preheader = loop_bb.header;
+        let next_header = self.context.append_basic_block(*self.func, "header");
+        let next_exit = self.context.append_basic_block(*self.func, "exit");
+
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let dst_offset_add = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(dst.ty.stride(dim).try_into().unwrap(), false),
+            "dst.offset",
+        )?;
+        dst.offset = self
+            .builder
+            .build_int_add(dst.offset, dst_offset_add, "dst.offset")?;
+
+        let nth_resize = axes.iter().position(|&x| x == dim);
+        let x_original = match nth_resize {
+            Some(n) => {
+                let idx = self
+                    .context
+                    .i64_type()
+                    .const_int(n.try_into().unwrap(), false);
+                let scale = match scale {
+                    ResizeScale::Scale(s) => self
+                        .build_raw_load(self.context.f32_type(), s, idx)?
+                        .into_float_value(),
+                    ResizeScale::Size(resized) => {
+                        let resized = self.build_raw_load(self.context.i64_type(), resized, idx)?;
+                        let resized = self.builder.build_signed_int_to_float(
+                            resized.into_int_value(),
+                            self.context.f32_type(),
+                            "resized",
+                        )?;
+                        self.builder.build_float_div(
+                            resized,
+                            self.context.f32_type().const_float(src.ty.dims[dim] as f64),
+                            "scale",
+                        )?
+                    }
+                };
+                let x_resized = self.builder.build_signed_int_to_float(
+                    ind.as_basic_value().into_int_value(),
+                    self.context.f32_type(),
+                    "x_resized",
+                )?;
+                let half = self.context.f32_type().const_float(0.5);
+                let x_original = match resize.coordinate_transformation_mode {
+                    operator::ResizeCoordinateTransformationMode::HalfPixel => {
+                        // (x_resized + 0.5) * scale - 0.5
+                        let res = self.builder.build_float_add(x_resized, half, "res")?;
+                        let res = self.builder.build_float_div(res, scale, "res")?;
+                        self.builder.build_float_sub(res, half, "res")?
+                    }
+                };
+                let x_original = match resize.mode {
+                    operator::ResizeMode::Nearest(nearest) => {
+                        let res = match nearest {
+                            operator::ResizeNearestMode::RoundPreferFloor => {
+                                let x =
+                                    self.builder
+                                        .build_float_sub(x_original, half, "x_original")?;
+                                self.build_tail_call(
+                                    self.intrinsics.ceil.get(FloatType::F32),
+                                    &[x.into()],
+                                    "x_original",
+                                )
+                            }
+                            operator::ResizeNearestMode::Floor => self.build_tail_call(
+                                self.intrinsics.floor.get(FloatType::F32),
+                                &[x_original.into()],
+                                "x_original",
+                            ),
+                            operator::ResizeNearestMode::Ceil => self.build_tail_call(
+                                self.intrinsics.ceil.get(FloatType::F32),
+                                &[x_original.into()],
+                                "x_original",
+                            ),
+                            _ => unimplemented!(),
+                        }?;
+                        res.try_as_basic_value().left().unwrap().into_float_value()
+                    }
+                };
+                let x_original = self.builder.build_float_to_signed_int(
+                    x_original,
+                    self.context.i64_type(),
+                    "x_original",
+                )?;
+                self.build_tail_call(
+                    self.intrinsics.smin_i64,
+                    &[
+                        x_original.into(),
+                        self.context
+                            .i64_type()
+                            .const_int((src.ty.dims[dim] - 1).try_into().unwrap(), false)
+                            .into(),
+                    ],
+                    "x_original",
+                )?
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value()
+            }
+            None => ind.as_basic_value().into_int_value(),
+        };
+        let src_offset_add = self.builder.build_int_mul(
+            x_original,
+            self.context
+                .i64_type()
+                .const_int(src.ty.stride(dim).try_into().unwrap(), false),
+            "src.offset",
+        )?;
+        src.offset = self
+            .builder
+            .build_int_add(src.offset, src_offset_add, "src.offset")?;
+        self.builder.build_unconditional_branch(next_header)?;
+
+        self.builder.position_at_end(next_exit);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind_next,
+            self.context
+                .i64_type()
+                .const_int(dst.ty.dims[dim].try_into().unwrap(), false),
+            "cond",
+        )?;
+        self.builder
+            .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
+        ind.add_incoming(&[
+            (&self.context.i64_type().const_zero(), loop_bb.preheader),
+            (&ind_next, next_exit),
+        ]);
+
+        let loop_bb = LoopBB {
+            preheader: next_preheader,
+            header: next_header,
+            exit: next_exit,
+        };
+
+        let param = ResizeParam {
+            dst,
+            src,
+            scale,
+            axes,
+            loop_bb,
+            dim: dim + 1,
+            resize,
+        };
+
+        self.build_resize_rec(param)
+    }
+
+    pub fn build_resize(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        scales: Option<&TensorPtr<'ctx>>,
+        sizes: Option<&TensorPtr<'ctx>>,
+        entry: BasicBlock<'ctx>,
+        resize: &operator::Resize,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let resize_scale = match (scales, sizes) {
+            (Some(scales), None) => ResizeScale::Scale(scales.ptr),
+            (Some(scales), Some(sizes)) if scales.ty.dims.is_scalar() => {
+                ResizeScale::Size(sizes.ptr)
+            }
+            _ => unreachable!(),
+        };
+        let ndim = dst.ty.dims.ndim();
+        let axes: Vec<_> = match resize.axes {
+            Some(ref axes) => axes.iter().map(|x| x.index(ndim)).collect(),
+            None => (0..ndim).collect(),
+        };
+
+        let preheader = entry;
+        let header = self.context.append_basic_block(*self.func, "header");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+        let loop_bb = LoopBB {
+            preheader,
+            header,
+            exit,
+        };
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(header)?;
+
+        let param = ResizeParam {
+            dst,
+            src,
+            scale: resize_scale,
+            axes,
+            loop_bb,
+            dim: 0,
+            resize,
+        };
+        self.build_resize_rec(param)?;
+        Ok(exit)
+    }
 }
 
+#[derive(Debug)]
 struct LoopBB<'ctx> {
     preheader: BasicBlock<'ctx>,
     header: BasicBlock<'ctx>,
@@ -1401,4 +1627,21 @@ struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
 
     elem_ty: BasicTypeEnum<'ctx>,
     nest: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ResizeScale<'ctx> {
+    Scale(PointerValue<'ctx>),
+    Size(PointerValue<'ctx>),
+}
+
+#[derive(Debug)]
+struct ResizeParam<'a, 'ctx> {
+    dst: TensorPtr<'ctx>,
+    src: TensorPtr<'ctx>,
+    scale: ResizeScale<'ctx>,
+    axes: Vec<usize>,
+    loop_bb: LoopBB<'ctx>,
+    dim: usize,
+    resize: &'a operator::Resize,
 }

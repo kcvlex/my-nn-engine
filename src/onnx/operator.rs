@@ -1,6 +1,7 @@
 use crate::onnx::model::{Graph, NodeId, ValueId};
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::Tensor;
 use itertools::{izip, zip_eq};
 use std::ops::Index;
 //use strum_macros::EnumString;
@@ -395,24 +396,23 @@ impl Resize {
             .inputs
             .get(args::RESIZE_SIZES)
             .and_then(|x| graph.initializer.get(x));
-        dbg!(scales, sizes);
+        let sizes2scales = |sizes: &Tensor| {
+            let res = zip_eq(axes.iter(), sizes.to_indices()?.iter())
+                .map(|(dim, size)| {
+                    let old = dims[*dim] as f64;
+                    let new = size.raw() as f64;
+                    new / old
+                })
+                .collect::<Vec<_>>();
+            Some(res)
+        };
         let scales = match (scales, sizes) {
             (Some(scales), None) => scales.to_1d_floats(),
-            (Some(scales), Some(sizes)) if scales.dims.is_scalar() => {
-                let scales = zip_eq(axes.iter(), sizes.to_indices()?.iter())
-                    .map(|(dim, size)| {
-                        let old = dims[*dim] as f64;
-                        let new = size.raw() as f64;
-                        new / old
-                    })
-                    .collect();
-                Some(scales)
-            }
+            (Some(scales), Some(sizes)) if scales.dims.is_scalar() => sizes2scales(sizes),
+            (None, Some(sizes)) => sizes2scales(sizes),
 
             // Invalid inputs
             (Some(_), Some(_)) | (None, None) => None,
-
-            (None, Some(_)) => unreachable!(),
         }?;
 
         if !matches!(

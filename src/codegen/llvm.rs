@@ -23,15 +23,18 @@ impl<'ctx> FloatIntrinsics<'ctx> {
 }
 
 pub struct Intrinsics<'ll> {
+    pub ceil: FloatIntrinsics<'ll>,
     pub exp: FloatIntrinsics<'ll>,
     pub fma: FloatIntrinsics<'ll>,
     pub fmax: FloatIntrinsics<'ll>,
+    pub floor: FloatIntrinsics<'ll>,
     pub log: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
 
     // llvm.tanh.* seems not to be available
     // pub tanh: FloatIntrinsics<'ll>,
     pub smin_i32: FunctionValue<'ll>,
+    pub smin_i64: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,
 }
@@ -120,6 +123,21 @@ impl<'ll> DebugStuff<'ll> {
             i64_i64_fmt,
             stdout,
         }
+    }
+
+    pub fn print_float(
+        &self,
+        ctx: &'ll Context,
+        builder: &Builder<'ll>,
+        value: FloatValue<'ll>,
+    ) -> Result<(), inkwell::builder::BuilderError> {
+        let v = builder.build_float_ext(value, ctx.f64_type(), "v")?;
+        builder.build_call(
+            self.printf,
+            &[self.float_fmt.as_pointer_value().into(), v.into()],
+            "printf",
+        )?;
+        Ok(())
     }
 }
 
