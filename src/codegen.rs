@@ -715,6 +715,11 @@ impl<'ll> CodeGen<'ll, '_> {
                     is_float
                 }))
             }
+            Operator::Concat(ref concat) => {
+                let dst = ptrs[0].clone();
+                let axis = concat.axis.index(dst.ty.dims.ndim());
+                translator.build_concat(dst, &ptrs[1..], entry, axis)
+            }
             Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
             Operator::LeakyReLU(v) => gen_unaryop!(UnaryOpcode::LeakyReLU(v)),
             Operator::Exp => gen_unaryop!(UnaryOpcode::Exp),

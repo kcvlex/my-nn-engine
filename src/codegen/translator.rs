@@ -1604,6 +1604,49 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_resize_rec(param)?;
         Ok(exit)
     }
+
+    pub fn build_concat(
+        &self,
+        dst: TensorPtr<'ctx>,
+        srcs: &[TensorPtr<'ctx>],
+        entry: BasicBlock<'ctx>,
+        axis: usize,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let max_nest = dst.ty.dims.ndim();
+        let mut acc = 0;
+        let mut entry = entry;
+        let stride = dst.ty.stride(axis);
+        for src in srcs {
+            let mut dst = dst.clone();
+            dst.ptr = unsafe {
+                self.builder.build_gep(
+                    dst.ty.elem_type.llvm_type(self.context),
+                    dst.ptr,
+                    &[self
+                        .context
+                        .i64_type()
+                        .const_int(acc.try_into().unwrap(), false)],
+                    "dst.ptr",
+                )
+            }?;
+            let op = Operation::UnaryOp(
+                UnaryOps {
+                    dst,
+                    src: src.clone(),
+                },
+                UnaryOpcode::Transfer,
+            );
+            let op = OperationContext {
+                operation: op,
+                omp_ctx: None,
+                omp_for: None,
+                omp_parallel: None,
+            };
+            entry = self.build_nested_loop(op, entry, max_nest)?;
+            acc += src.ty.dims[axis] * stride;
+        }
+        Ok(entry)
+    }
 }
 
 #[derive(Debug)]
