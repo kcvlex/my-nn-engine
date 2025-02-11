@@ -31,8 +31,8 @@ pub struct Intrinsics<'ll> {
     pub log: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
 
-    // llvm.tanh.* seems not to be available
-    // pub tanh: FloatIntrinsics<'ll>,
+    // TODO: Replace with llvm..tanh.* after bumping to llvm-19
+    pub tanh: FunctionValue<'ll>,
     pub smin_i32: FunctionValue<'ll>,
     pub smin_i64: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
@@ -125,6 +125,7 @@ impl<'ll> DebugStuff<'ll> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn print_float(
         &self,
         ctx: &'ll Context,

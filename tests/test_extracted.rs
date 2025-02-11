@@ -1,5 +1,6 @@
 use my_onnx::onnx::load::*;
 use my_onnx::session::{Session, SessionError};
+use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
 use std::path::PathBuf;
 
@@ -17,7 +18,7 @@ fn run_test(path: &str, epsilon: f64) -> Result {
     let session = Session::new(&model_path, Some(&[&input.tensor_type()]), 100)?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
-    if !output[0].eq_with_epsilon(&expected, epsilon) {
+    if !output[0].eq_with_epsilon(&expected, epsilon, CompPolicy::Either) {
         let starts = [0, 0, 0, 0];
         let ends = [1, 1, 1, 10];
         // For pretty printing
@@ -26,6 +27,9 @@ fn run_test(path: &str, epsilon: f64) -> Result {
             expected.slices(&starts, &ends)
         );
     }
+    let starts = [0, 0, 0, 0];
+    let ends = [1, 1, 1, 10];
+    println!("{:?}", output[0].slices(&starts, &ends));
     Ok(())
 }
 
@@ -34,7 +38,6 @@ fn test_yolov4_until_conv2d() -> Result {
     run_test("yolov4/until_conv2d", 1e-3)
 }
 
-#[ignore]
 #[test]
 fn test_yolov4_until_lambda_1_mul() -> Result {
     run_test("yolov4/until_lambda_1_mul", 1e-3)

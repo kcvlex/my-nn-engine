@@ -4,7 +4,7 @@ mod ops;
 pub mod types;
 
 use crate::onnx::operator::TensorIndex;
-use data::TensorData;
+use data::{CompPolicy, TensorData};
 use dimensions::ResolvedTensorDims;
 use ops::*;
 use types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType};
@@ -16,8 +16,8 @@ pub struct Tensor {
 }
 
 impl Tensor {
-    pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64) -> bool {
-        self.dims == other.dims && self.data.eq_with_epsillong(&other.data, epsilon)
+    pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64, policy: CompPolicy) -> bool {
+        self.dims == other.dims && self.data.eq_with_epsillong(&other.data, epsilon, policy)
     }
 
     pub fn to_indices(&self) -> Option<Vec<TensorIndex>> {

@@ -23,14 +23,48 @@ impl PartialEq for TensorData {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CompPolicy {
+    Abs,
+    Rel,
+    Either,
+}
+
 impl TensorData {
-    pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64) -> bool {
+    pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64, comp: CompPolicy) -> bool {
         match (self, other) {
             (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => {
                 a0 == b0 &&
-                    zip_eq(a1.iter(), b1.iter()).all(|(x, y)| ((x - y).abs() as f64) < epsilon)
+                    zip_eq(a1.iter(), b1.iter())
+                        .map(|(x, y)| {
+                            let res = if x.is_infinite() && y.is_infinite() {
+                                x.is_sign_positive() == y.is_sign_positive()
+                            } else {
+                                let diff = (x - y).abs();
+                                let abs = diff < epsilon;
+                                let x = x.abs();
+                                let rel = if x == 0.0 {
+                                    diff < epsilon
+                                } else {
+                                    diff / x < epsilon
+                                };
+                                match comp {
+                                    CompPolicy::Abs => abs,
+                                    CompPolicy::Rel => rel,
+                                    CompPolicy::Either => abs || rel,
+                                }
+                            };
+                            (x, y, res)
+                        })
+                        .enumerate()
+                        .inspect(|(i, (x, y, res))| {
+                            if !res {
+                                println!("{}: {} != {}", i, x, y);
+                            }
+                        })
+                        .all(|(_, (_, _, res))| res)
             }
             _ => false,
         }

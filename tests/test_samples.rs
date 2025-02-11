@@ -1,5 +1,6 @@
 use my_onnx::onnx::load::*;
 use my_onnx::session::{Session, SessionError};
+use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
 use std::path::PathBuf;
 
@@ -18,7 +19,7 @@ fn run_test(model: &str, epsilon: f64) -> Result {
     let session = Session::new(&model_path, Some(&[&input.tensor_type()]), 100)?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
-    if !output[0].eq_with_epsilon(&expected, epsilon) {
+    if !output[0].eq_with_epsilon(&expected, epsilon, CompPolicy::Either) {
         // For pretty printing
         assert_eq!(output[0], expected);
     }

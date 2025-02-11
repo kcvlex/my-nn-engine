@@ -94,6 +94,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         im2col: &operator::Im2Col,
     ) -> Result<IntValue<'ctx>, BuilderError> {
         if inner_loops.nest as usize == inner_loops.outer_offsets.len() {
+            dbg!(&inner_loops);
             let prolog = self.context.append_basic_block(*self.func, "inner.prolog");
             let normal = self.context.append_basic_block(*self.func, "inner.normal");
             let pad = self.context.append_basic_block(*self.func, "inner.pad");
@@ -183,6 +184,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(inner_loops.pads[nest as usize], false),
             "src.offset",
         )?;
+        dbg!(
+            nest,
+            inner_loops.src_ptr.stride(nest as usize + 2),
+            &inner_loops.src_ptr.ty
+        );
         let src_offset = self.builder.build_int_mul(
             src_offset,
             self.context.i64_type().const_int(
@@ -382,17 +388,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(next_dst_offset)
     }
 
+    // We assume that `dst` is contiguous.
     pub fn build_im2col(
         &self,
-        dst_info: (PointerValue<'ctx>, &ResolvedTensorDims),
-        src_info: (PointerValue<'ctx>, &ResolvedTensorDims),
-        elem_type: DataType,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
         im2col: &operator::Im2Col,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let (dst_ptr, dst_shape) = dst_info;
-        let (src_ptr, src_shape) = src_info;
-
         let header_nbatch = self
             .context
             .append_basic_block(*self.func, "im2col.header.nbatch");
@@ -416,11 +419,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let offset_dst_nbatch = self
             .builder
             .build_phi(self.context.i64_type(), "offset.dst.nbatch")?;
-        let offset_src_nbatch = self
-            .builder
-            .build_phi(self.context.i64_type(), "offset.src.nbatch")?;
-        let offset_dst_nbatch_int = offset_dst_nbatch.as_basic_value().into_int_value();
-        let offset_src_nbatch_int = offset_src_nbatch.as_basic_value().into_int_value();
         self.builder.build_unconditional_branch(header_channel)?;
 
         self.builder.position_at_end(header_channel);
@@ -430,32 +428,35 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let offset_dst_channel = self
             .builder
             .build_phi(self.context.i64_type(), "offset.dst.channel")?;
-        let offset_src_channel = self
-            .builder
-            .build_phi(self.context.i64_type(), "offset.src.channel")?;
-        let offset_dst_channel_int = offset_dst_channel.as_basic_value().into_int_value();
-        let offset_src_channel_int = offset_src_channel.as_basic_value().into_int_value();
         let offset_dst = self.builder.build_int_add(
-            offset_dst_nbatch_int,
-            offset_dst_channel_int,
+            offset_dst_nbatch.as_basic_value().into_int_value(),
+            offset_dst_channel.as_basic_value().into_int_value(),
             "offset.dst",
         )?;
-        let offset_src = self.builder.build_int_add(
-            offset_src_nbatch_int,
-            offset_src_channel_int,
-            "offset.src",
+        let offset_src_nbatch = self.builder.build_int_mul(
+            ind_nbatch.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(src.ty.stride(0).try_into().unwrap(), false),
+            "offset.src.nbatch",
         )?;
+        let offset_src_channel = self.builder.build_int_mul(
+            ind_channel.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(src.ty.stride(1).try_into().unwrap(), false),
+            "offset.src.channel",
+        )?;
+        let offset_src =
+            self.builder
+                .build_int_add(offset_src_nbatch, offset_src_channel, "offset.src")?;
 
-        let src_ptr = TensorPtr {
-            ptr: src_ptr,
-            ty: ResolvedTensorType::new(elem_type, src_shape.clone()),
-            offset: offset_src,
-            name: "src".to_string(),
-        };
+        let mut src = src.clone();
+        src.offset = offset_src;
 
         self.build_im2col_by_channel_outer(
-            (dst_ptr, offset_dst),
-            src_ptr,
+            (dst.ptr, offset_dst),
+            src.clone(),
             vec![],
             0,
             (header_channel, exiting_channel),
@@ -475,21 +476,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
         };
         let next_offset_dst_channel = self.builder.build_int_add(
-            offset_dst_channel_int,
+            offset_dst_channel.as_basic_value().into_int_value(),
             self.context
                 .i64_type()
                 .const_int(next_offset_dst_channel.try_into().unwrap(), false),
             "offset.dst.channel.next",
-        )?;
-        let next_offset_src_channel = self.builder.build_int_add(
-            offset_src_channel_int,
-            self.context.i64_type().const_int(
-                (src_shape.size() / im2col.nbatch / im2col.channel.inner())
-                    .try_into()
-                    .unwrap(),
-                false,
-            ),
-            "offset.src.channel.next",
         )?;
         let cond = self.builder.build_int_compare(
             inkwell::IntPredicate::SLT,
@@ -507,10 +498,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         ]);
         offset_dst_channel.add_incoming(&[
             (&next_offset_dst_channel, exiting_channel),
-            (&offset_dst_nbatch_int, header_nbatch),
-        ]);
-        offset_src_channel.add_incoming(&[
-            (&next_offset_src_channel, exiting_channel),
             (&self.context.i64_type().const_zero(), header_nbatch),
         ]);
 
@@ -521,20 +508,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             "ind.nbatch.next",
         )?;
         let next_offset_dst_nbatch = self.builder.build_int_add(
-            offset_dst_nbatch_int,
+            offset_dst_nbatch.as_basic_value().into_int_value(),
             self.context.i64_type().const_int(
-                (dst_shape.size() / im2col.nbatch).try_into().unwrap(),
+                (dst.ty.dims.size() / im2col.nbatch).try_into().unwrap(),
                 false,
             ),
             "offset.dst.nbatch.next",
-        )?;
-        let next_offset_src_nbatch = self.builder.build_int_add(
-            offset_src_nbatch_int,
-            self.context.i64_type().const_int(
-                (src_shape.size() / im2col.nbatch).try_into().unwrap(),
-                false,
-            ),
-            "offset.src.nbatch.next",
         )?;
         let cond = self.builder.build_int_compare(
             inkwell::IntPredicate::SLT,
@@ -548,15 +527,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_conditional_branch(cond, header_nbatch, exit)?;
         ind_nbatch.add_incoming(&[
             (&next_ind_nbatch, exiting_nbatch),
-            (&self.context.i64_type().const_int(0, false), entry),
+            (&self.context.i64_type().const_zero(), entry),
         ]);
         offset_dst_nbatch.add_incoming(&[
             (&next_offset_dst_nbatch, exiting_nbatch),
-            (&self.context.i64_type().const_int(0, false), entry),
-        ]);
-        offset_src_nbatch.add_incoming(&[
-            (&next_offset_src_nbatch, exiting_nbatch),
-            (&self.context.i64_type().const_int(0, false), entry),
+            (&self.context.i64_type().const_zero(), entry),
         ]);
 
         self.builder.position_at_end(exit);
@@ -631,24 +606,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     }
                     UnaryOpcode::Tanh => {
                         let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let exp = self.intrinsics.exp.get(ty);
+                        let ty = ty.llvm_type(self.context);
                         let src = self.build_load(&op.src)?.into_float_value();
-                        let exp_p = self
-                            .build_tail_call(exp, &[src.into()], "exp.p")?
+                        let src =
+                            self.builder
+                                .build_float_ext(src, self.context.f64_type(), "ext")?;
+                        let res = self
+                            .build_tail_call(self.intrinsics.tanh, &[src.into()], "res")?
                             .try_as_basic_value()
                             .left()
-                            .unwrap()
-                            .into_float_value();
-                        let neg = self.builder.build_float_neg(src, "neg")?;
-                        let exp_m = self
-                            .build_tail_call(exp, &[neg.into()], "exp.m")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                            .into_float_value();
-                        let num = self.builder.build_float_sub(exp_p, exp_m, "num")?;
-                        let den = self.builder.build_float_add(exp_p, exp_m, "den")?;
-                        self.builder.build_float_div(num, den, "res")?.into()
+                            .unwrap();
+                        self.builder
+                            .build_float_trunc(res.into_float_value(), ty, "res")?
+                            .as_basic_value_enum()
                     }
                     UnaryOpcode::Transfer => self.build_load(&op.src)?,
                 };

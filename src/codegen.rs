@@ -283,6 +283,8 @@ impl CodeGenContext {
         };
         let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
         let smin_i64 = get_intrinsic!("llvm.smin", &[i64_ty, i64_ty])?;
+        let tanh = f64_ty.fn_type(&[f64_ty.into()], false);
+        let tanh = unit.module.add_function("tanh", tanh, None);
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
         // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
 
@@ -296,6 +298,7 @@ impl CodeGenContext {
             sqrt,
             smin_i32,
             smin_i64,
+            tanh,
             // lifetime_start,
             // lifetime_end,
         };
@@ -550,7 +553,7 @@ impl<'ll> CodeGen<'ll, '_> {
 
     fn compile_node(&self, node_id: NodeId) -> Result<(), BuilderError> {
         let node = &self.gen_ctx.graph.nodes[node_id];
-        dbg!(&node);
+        // dbg!(&node);
         let args = node
             .outputs
             .iter()
@@ -664,43 +667,6 @@ impl<'ll> CodeGen<'ll, '_> {
             }};
         }
 
-        macro_rules! gen_gemm {
-            ($gemm: expr, $nest: expr) => {{
-                let prec = match ptrs[0].ty.elem_type {
-                    DataType::Float(FloatType::F32) => Precision::Single,
-                    DataType::Float(FloatType::F64) => Precision::Double,
-                    _ => unreachable!(),
-                };
-                let m = ptrs[0].ty.dims[$nest] as u32;
-                let n = ptrs[0].ty.dims[$nest + 1] as u32;
-                let k = ptrs[1].ty.dims[$nest + 1] as u32;
-                let gemm = Gemm {
-                    prec,
-                    alpha: $gemm.alpha,
-                    beta: $gemm.beta,
-                    trans_a: $gemm.trans_a,
-                    trans_b: $gemm.trans_b,
-                    m,
-                    n,
-                    k,
-                };
-                let op = Operation::BinaryOp(
-                    BinaryOps {
-                        dst: ptrs[0].clone(),
-                        lhs: ptrs[1].clone(),
-                        rhs: ptrs[2].clone(),
-                    },
-                    BinaryOpcode::Gemm(gemm),
-                );
-                OperationContext {
-                    operation: op,
-                    omp_ctx,
-                    omp_parallel,
-                    omp_for,
-                }
-            }};
-        }
-
         let exit = match node.op {
             Operator::Add | Operator::Mul => {
                 let is_float = matches!(ptrs[0].ty.elem_type, DataType::Float(_));
@@ -747,13 +713,9 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::Gemm(ref gemm) => {
                 translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
             }
-            Operator::Im2Col(ref im2col) => translator.build_im2col(
-                (ptrs[0].ptr, &ptrs[0].ty.dims),
-                (ptrs[1].ptr, &ptrs[1].ty.dims),
-                ptrs[0].ty.elem_type,
-                im2col,
-                entry,
-            ),
+            Operator::Im2Col(ref im2col) => {
+                translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
+            }
             Operator::ReduceMatrix(op) => {
                 let m = ptrs[1].ty.dims[0] as u64;
                 let n = ptrs[1].ty.dims[1] as u64;
