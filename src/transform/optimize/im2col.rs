@@ -75,6 +75,7 @@ fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId
         Operator::Conv(ref conv) => {
             let data_value = node.inputs[args::CONV_DATA];
             let kernel_value = node.inputs[args::CONV_WEIGHT];
+            let bias_value = node.inputs.get(args::CONV_BIAS).copied();
             let old_output_value = node.outputs[0];
             let kernel = graph
                 .get_resolved_tensor_type(kernel_value)
@@ -153,18 +154,21 @@ fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId
                 format!("Im2Col_{index}_GemmOutput"),
                 ResolvedTensorType::new(kernel.elem_type, dims),
             );
+            let mut inputs = vec![im2col_data, reshaped_kernel];
+            if let Some(bias) = bias_value {
+                inputs.push(bias);
+            }
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![im2col_data, reshaped_kernel],
+                    inputs,
                     outputs: vec![gemm_output],
                     name: format!("Im2Col_{index}_Gemm"),
-                    op: Operator::BLASGemm(BLASGemm {
+                    op: Operator::Gemm(Gemm {
                         trans_a: false,
                         trans_b: true,
-                        trans_c: false,
                         alpha: 1.0,
-                        beta: 0.0,
+                        beta: 1.0,
                     }),
                     meta: NodeMeta::default(),
                 },
@@ -195,7 +199,7 @@ fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId
                 vec
             };
 
-            // TODO: Avoid to force contiguous when replacing with different shape (strides) is supported.
+            // TODO: Avoid to force contiguous after the feature for the replacement with a different shape (strides) is supported.
             let transposed_output = TransposeGenerator::default()
                 .set_contiguous(true)
                 .set_input(reshaped_output)

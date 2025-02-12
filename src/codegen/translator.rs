@@ -1,4 +1,3 @@
-use crate::codegen::blas::BLAS;
 use crate::codegen::blas::*;
 use crate::codegen::llvm::*;
 use crate::codegen::omp::*;
@@ -12,7 +11,6 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
-use inkwell::AddressSpace;
 
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {
@@ -682,35 +680,69 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         }
                     }
                 }
-                // BinaryOpcode::IntAdd => todo!(),
-                BinaryOpcode::Gemm(ref gemm) => {
-                    let prec = gemm.prec;
-                    // TODO: Transpose
-                    let mut trans_a = gemm.trans_a;
-                    let mut trans_b = gemm.trans_b;
-                    assert!(op.lhs.ty.dims.ndim() == 2);
-                    assert!(op.rhs.ty.dims.ndim() == 2);
-                    if op.lhs.ty.stride(0) < op.lhs.ty.stride(1) {
-                        trans_a = !trans_a;
-                    }
-                    if op.rhs.ty.stride(0) < op.rhs.ty.stride(1) {
-                        trans_b = !trans_b;
-                    }
-                    let gemm = GemmArgs {
-                        a: (op.lhs.ptr, trans_a),
-                        b: (op.rhs.ptr, trans_b),
-                        c: (op.dst.ptr, gemm.trans_c),
-                        alpha: gemm.alpha,
-                        beta: gemm.beta,
-                        m: gemm.m as u64,
-                        n: gemm.n as u64,
-                        k: gemm.k as u64,
-                    };
-                    self.blas.call_gemm(prec, &gemm, self.builder)?;
-                    Ok(())
-                }
             },
         }
+    }
+
+    pub fn build_gemm(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        a: &TensorPtr<'ctx>,
+        b: &TensorPtr<'ctx>,
+        c: Option<&TensorPtr<'ctx>>,
+        entry: BasicBlock<'ctx>,
+        gemm: &operator::Gemm,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let entry = if let Some(c) = c {
+            let mut c = c.clone();
+            c.ty = c.ty.broadcast(&dst.ty.dims);
+            let op = Operation::UnaryOp(
+                UnaryOps {
+                    dst: dst.clone(),
+                    src: c,
+                },
+                UnaryOpcode::Transfer,
+            );
+            let op = OperationContext {
+                operation: op,
+                omp_ctx: None,
+                omp_parallel: None,
+                omp_for: None,
+            };
+            self.build_nested_loop(op, entry, dst.ty.dims.ndim())?
+        } else {
+            entry
+        };
+
+        let m = dst.ty.dims[0] as u64;
+        let n = dst.ty.dims[1] as u64;
+        let k = a.ty.dims[1] as u64;
+        let beta = if c.is_some() { gemm.beta } else { 0.0 };
+        let mut trans_a = gemm.trans_a;
+        let mut trans_b = gemm.trans_b;
+        assert!(a.ty.dims.ndim() == 2);
+        assert!(b.ty.dims.ndim() == 2);
+        if a.ty.stride(0) < a.ty.stride(1) {
+            trans_a = !trans_a;
+        }
+        if b.ty.stride(0) < b.ty.stride(1) {
+            trans_b = !trans_b;
+        }
+        let gemm = GemmArgs {
+            a: (a.ptr, trans_a),
+            b: (b.ptr, trans_b),
+            c: dst.ptr,
+            alpha: gemm.alpha,
+            beta,
+            m,
+            n,
+            k,
+        };
+
+        self.builder.position_at_end(entry);
+        self.blas
+            .call_gemm(dst.ty.elem_type.float_type().unwrap(), &gemm, self.builder)?;
+        Ok(entry)
     }
 
     pub fn build_matrix_reduce(

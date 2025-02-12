@@ -61,6 +61,7 @@ impl ShapeInference {
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
                 graph.try_unify_type(*value_id, &inferred)?;
+                dbg!(&graph.values[*value_id]);
             }
 
             if let Some(constants) = fold_constant(graph, id) {
@@ -463,7 +464,6 @@ impl ShapeInference {
             Operator::Input(_) |
             Operator::Output(_) |
             Operator::BatchNormalizationPerChannel(_) |
-            Operator::BLASGemm(_) |
             Operator::Im2Col(_) |
             Operator::ReduceMatrix(_) |
             Operator::ForceReshape => {

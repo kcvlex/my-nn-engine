@@ -1149,4 +1149,18 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn bias_gemm() -> TestResult {
+        with_session("bias_gemm.onnx", |session| {
+            let (input0, orig0) = make_range_tensor!(f32, 4, 7)?;
+            let (input1, orig1) = make_range_tensor!(f32, 7, 2)?;
+            let bias = ndarray::array![[0.42, 0.63]];
+            let mut expected = orig0.dot(&orig1);
+            expected.scaled_add(0.5, &bias);
+            let output = session.run(&[input0, input1])?;
+            tensor_assert_eq!(output[0], expected.into_dyn());
+            Ok(())
+        })
+    }
 }

@@ -59,7 +59,6 @@ pub enum Operator {
 
     // Custom
     BatchNormalizationPerChannel(BatchNormalization),
-    BLASGemm(BLASGemm),
     Contiguous,
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
@@ -296,44 +295,6 @@ impl Default for Gemm {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BLASGemm {
-    pub alpha: f64,
-    pub beta: f64,
-    pub trans_a: bool,
-    pub trans_b: bool,
-    pub trans_c: bool,
-}
-
-impl Default for BLASGemm {
-    fn default() -> Self {
-        Self {
-            alpha: 1.0,
-            beta: 0.0,
-            trans_a: false,
-            trans_b: false,
-            trans_c: false,
-        }
-    }
-}
-
-impl TryInto<BLASGemm> for &Gemm {
-    type Error = String;
-
-    fn try_into(self) -> Result<BLASGemm, Self::Error> {
-        if self.alpha != self.beta {
-            return Err("alpha and beta must be the same".to_string());
-        }
-        Ok(BLASGemm {
-            alpha: self.alpha,
-            beta: 0.0,
-            trans_a: self.trans_a,
-            trans_b: self.trans_b,
-            trans_c: false,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum Channel {
     Meld(usize),  // Conv
@@ -509,7 +470,6 @@ impl Operator {
 
             // Custom
             Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
-            Operator::BLASGemm(_) => "BLASGemm (Custom)",
             Operator::Contiguous => "Contiguous (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",

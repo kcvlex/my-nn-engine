@@ -502,7 +502,6 @@ impl<'ll> CodeGen<'ll, '_> {
                         .get_resolved_tensor_type(*output)
                         .unwrap()
                         .dims[axis];
-                    dbg!(src_ty.stride(axis), len);
                     acc += (src_ty.stride(axis) * len) as u64;
                 }
             } else {
@@ -551,6 +550,7 @@ impl<'ll> CodeGen<'ll, '_> {
 
     fn compile_node(&self, node_id: NodeId) -> Result<(), BuilderError> {
         let node = &self.gen_ctx.graph.nodes[node_id];
+        dbg!(&node);
         let args = node
             .outputs
             .iter()
@@ -680,7 +680,6 @@ impl<'ll> CodeGen<'ll, '_> {
                     beta: $gemm.beta,
                     trans_a: $gemm.trans_a,
                     trans_b: $gemm.trans_b,
-                    trans_c: $gemm.trans_c,
                     m,
                     n,
                     k,
@@ -731,23 +730,22 @@ impl<'ll> CodeGen<'ll, '_> {
             //     gen_unaryop!(UnaryOpcode::Transpose)
             // }
             Operator::Contiguous => gen_unaryop!(UnaryOpcode::Transfer),
-            Operator::MatMul => {
-                let nest = ptrs[0].ty.dims.ndim() - 2;
-                let gemm = gen_gemm!(
-                    &operator::BLASGemm {
-                        trans_a: false,
-                        trans_b: false,
-                        trans_c: false,
-                        alpha: 1.0,
-                        beta: 0.0,
-                    },
-                    nest
-                );
-                translator.build_nested_loop(gemm, entry, nest)
-            }
-            Operator::BLASGemm(ref gemm) => {
-                let gemm = gen_gemm!(gemm, 0);
-                translator.build_nested_loop(gemm, entry, 0)
+            // Operator::MatMul => {
+            //     let nest = ptrs[0].ty.dims.ndim() - 2;
+            //     let gemm = gen_gemm!(
+            //         &operator::Gemm {
+            //             trans_a: false,
+            //             trans_b: false,
+            //             alpha: 1.0,
+            //             beta: 0.0,
+            //         },
+            //         nest
+            //     );
+            //     translator.build_nested_loop(gemm, entry, nest)
+            // }
+            Operator::MatMul => todo!(),
+            Operator::Gemm(ref gemm) => {
+                translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
             }
             Operator::Im2Col(ref im2col) => translator.build_im2col(
                 (ptrs[0].ptr, &ptrs[0].ty.dims),

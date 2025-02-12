@@ -1,7 +1,7 @@
+use crate::tensor::types::FloatType;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 
@@ -45,33 +45,19 @@ impl CBLAS_TRANSPOSE {
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
-pub enum Precision {
-    Single,
-    Double,
-}
-
-impl Precision {
-    fn char(&self) -> char {
-        match self {
-            Self::Single => 's',
-            Self::Double => 'd',
-        }
-    }
-}
 
 struct Routines<'ctx> {
     gemm: FunctionValue<'ctx>,
     dot: FunctionValue<'ctx>,
-    i32_ty: IntType<'ctx>,
-    fp_ty: FloatType<'ctx>,
+    i32_ty: inkwell::types::IntType<'ctx>,
+    fp_ty: inkwell::types::FloatType<'ctx>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GemmArgs<'ctx> {
     pub a: (PointerValue<'ctx>, bool),
     pub b: (PointerValue<'ctx>, bool),
-    pub c: (PointerValue<'ctx>, bool),
+    pub c: PointerValue<'ctx>,
     pub m: u64,
     pub n: u64,
     pub k: u64,
@@ -89,11 +75,12 @@ pub struct DotArgs<'ctx> {
 }
 
 impl<'ctx> Routines<'ctx> {
-    fn new(ctx: &'ctx Context, module: &Module<'ctx>, precision: Precision) -> Self {
-        let fp_ty = match precision {
-            Precision::Single => ctx.f32_type(),
-            Precision::Double => ctx.f64_type(),
+    fn new(ctx: &'ctx Context, module: &Module<'ctx>, fp_ty: FloatType) -> Self {
+        let prefix = match fp_ty {
+            FloatType::F32 => 's',
+            FloatType::F64 => 'd',
         };
+        let fp_ty = fp_ty.llvm_type(ctx);
 
         let void_ty = ctx.void_type();
         let ptr_ty = ctx.ptr_type(AddressSpace::default());
@@ -119,7 +106,7 @@ impl<'ctx> Routines<'ctx> {
             false,
         );
         let gemm = module.add_function(
-            format!("cblas_{}gemm", precision.char()).as_str(),
+            format!("cblas_{}gemm", prefix).as_str(),
             gemm,
             Some(Linkage::External),
         );
@@ -135,7 +122,7 @@ impl<'ctx> Routines<'ctx> {
             false,
         );
         let dot = module.add_function(
-            format!("cblas_{}dot", precision.char()).as_str(),
+            format!("cblas_{}dot", prefix).as_str(),
             dot,
             Some(Linkage::External),
         );
@@ -155,11 +142,7 @@ impl<'ctx> Routines<'ctx> {
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
         let (a_ptr, a_trans) = gemm.a;
         let (b_ptr, b_trans) = gemm.b;
-        let (c_ptr, c_trans) = gemm.c;
-
-        if c_trans {
-            unimplemented!()
-        }
+        let c_ptr = gemm.c;
 
         let m = self.i32_ty.const_int(gemm.m, false);
         let n = self.i32_ty.const_int(gemm.n, false);
@@ -167,7 +150,6 @@ impl<'ctx> Routines<'ctx> {
         let inc_a = if !a_trans { k } else { m };
         let inc_b = if !b_trans { n } else { k };
 
-        // TODO: alpha & beta
         builder.build_call(
             self.gemm,
             &[
@@ -183,12 +165,12 @@ impl<'ctx> Routines<'ctx> {
                 m.into(),
                 n.into(),
                 k.into(),
-                self.fp_ty.const_float(1.0).into(),
+                self.fp_ty.const_float(gemm.alpha).into(),
                 a_ptr.into(),
                 inc_a.into(),
                 b_ptr.into(),
                 inc_b.into(),
-                self.fp_ty.const_float(0.0).into(),
+                self.fp_ty.const_float(gemm.beta).into(),
                 c_ptr.into(),
                 n.into(),
             ],
@@ -226,33 +208,33 @@ pub struct BLAS<'ctx> {
 impl<'ctx> BLAS<'ctx> {
     pub fn new(ctx: &'ctx Context, module: &'_ Module<'ctx>) -> Self {
         Self {
-            s_routines: Routines::new(ctx, module, Precision::Single),
-            d_routines: Routines::new(ctx, module, Precision::Double),
+            s_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F32),
+            d_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F64),
         }
     }
 
     pub fn call_gemm(
         &self,
-        precision: Precision,
+        ty: FloatType,
         gemm: &GemmArgs<'ctx>,
         builder: &Builder<'ctx>,
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
-        match precision {
-            Precision::Single => self.s_routines.call_gemm(gemm, builder),
-            Precision::Double => self.d_routines.call_gemm(gemm, builder),
+        match ty {
+            FloatType::F32 => self.s_routines.call_gemm(gemm, builder),
+            FloatType::F64 => self.d_routines.call_gemm(gemm, builder),
         }
     }
 
     #[allow(dead_code)]
     pub fn call_dot(
         &self,
-        precision: Precision,
+        ty: FloatType,
         dot: &DotArgs<'ctx>,
         builder: &Builder<'ctx>,
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
-        match precision {
-            Precision::Single => self.s_routines.call_dot(dot, builder),
-            Precision::Double => self.d_routines.call_dot(dot, builder),
+        match ty {
+            FloatType::F32 => self.s_routines.call_dot(dot, builder),
+            FloatType::F64 => self.d_routines.call_dot(dot, builder),
         }
     }
 }

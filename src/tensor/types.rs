@@ -2,7 +2,7 @@ use crate::onnx::operator::{Slice, TensorIndex};
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::dimensions::UnresolvedTensorDims;
 
-use itertools::izip;
+use itertools::{izip, zip_eq};
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum DataType {
@@ -112,11 +112,16 @@ impl ResolvedTensorType {
     pub fn broadcast(&self, target: &ResolvedTensorDims) -> Self {
         let elem_type = self.elem_type;
         let dims = target.clone();
-        let mut stride = Vec::with_capacity(target.ndim());
-        for _ in 0..(target.ndim() - self.dims.ndim()) {
-            stride.push(0);
-        }
-        stride.extend(self.stride.iter().copied());
+        let mut stride = vec![0; target.ndim()];
+        if !self.stride.is_scalar() {
+            for (dst, src) in zip_eq(
+                stride.iter_mut().skip(target.ndim() - self.dims.ndim()),
+                self.stride.iter(),
+            ) {
+                *dst = *src;
+            }
+        };
+        assert_eq!(target.ndim(), stride.len());
         let stride = ResolvedTensorDims::new_direct(stride);
         Self {
             elem_type,

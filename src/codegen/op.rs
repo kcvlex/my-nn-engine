@@ -1,4 +1,3 @@
-use crate::codegen::blas::Precision;
 use crate::codegen::translator::FunctionTranslator;
 use crate::onnx::operator::LeakyReLU;
 use crate::tensor::dimensions::ResolvedTensorDims;
@@ -109,20 +108,6 @@ pub struct BinaryArithmetic {
 #[derive(Debug, Clone)]
 pub enum BinaryOpcode {
     BinaryArithmetic(BinaryArithmetic),
-    Gemm(Gemm),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Gemm {
-    pub prec: Precision,
-    pub trans_a: bool,
-    pub trans_b: bool,
-    pub trans_c: bool,
-    pub alpha: f64,
-    pub beta: f64,
-    pub m: u32,
-    pub n: u32,
-    pub k: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

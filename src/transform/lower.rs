@@ -334,7 +334,7 @@ impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
                 inputs: vec![lhs, rhs],
                 outputs: vec![new_output],
                 name: format!("MatMul2Gemm_{index}"),
-                op: Operator::BLASGemm(BLASGemm::default()),
+                op: Operator::Gemm(Gemm::default()),
                 meta: NodeMeta::default(),
             };
             modifier.register_new_node(graph, new_node);
