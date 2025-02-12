@@ -301,6 +301,12 @@ pub enum Channel {
     Split(usize), // MaxPool
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PadVal {
+    Zero,
+    NInf,
+}
+
 impl Channel {
     pub fn inner(&self) -> usize {
         match self {
@@ -319,6 +325,7 @@ pub struct Im2Col {
     pub dilations: OptionalVec<usize>,
     pub one_kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+    pub pad_val: PadVal,
 }
 
 impl Im2Col {

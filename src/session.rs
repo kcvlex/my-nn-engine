@@ -207,8 +207,8 @@ impl Session {
 
         println!("Compiling");
         let objs = codegens
-            // .into_par_iter()
-            .into_iter()
+            .into_par_iter()
+            //.into_iter()
             .map(|(path, codegen)| {
                 codegen.compile().unwrap();
                 if !DEBUG {

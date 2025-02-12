@@ -38,6 +38,7 @@ fn gen_im2col_from_conv(
         dilations: conv.dilations.clone(),
         one_kernel_shape,
         strides: conv.strides.clone(),
+        pad_val: PadVal::Zero,
     };
     (im2col, im2col_output_shape)
 }
@@ -64,6 +65,7 @@ fn gen_im2col_from_pooling(
         dilations: pooling.dilations.clone(),
         one_kernel_shape: kernel_shape.clone(),
         strides: pooling.strides.clone(),
+        pad_val: PadVal::NInf,
     };
     (im2col, im2col_output_shape)
 }

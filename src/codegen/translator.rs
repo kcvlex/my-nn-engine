@@ -3,8 +3,7 @@ use crate::codegen::llvm::*;
 use crate::codegen::omp::*;
 use crate::codegen::op::*;
 use crate::onnx::operator;
-use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::types::{DataType, FloatType, ResolvedTensorType};
+use crate::tensor::types::{DataType, FloatType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
@@ -113,10 +112,27 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             self.builder.build_unconditional_branch(epilog)?;
 
             self.builder.position_at_end(epilog);
-            let store_v = self.builder.build_phi(inner_loops.elem_ty, "store.v")?;
-            store_v.add_incoming(&[(&load_v, normal), (&inner_loops.elem_ty.const_zero(), pad)]);
+            let ty = inner_loops.src_ptr.ty.elem_type;
+            let (ty, id_v) = match (ty, im2col.pad_val) {
+                (ty, operator::PadVal::Zero) => {
+                    let ty = ty.llvm_type(self.context);
+                    (ty, ty.const_zero())
+                }
+                (DataType::Float(ty), operator::PadVal::NInf) => {
+                    let id_v = match ty {
+                        FloatType::F32 => f32::NEG_INFINITY as f64,
+                        FloatType::F64 => f64::NEG_INFINITY,
+                    };
+                    let ty = ty.llvm_type(self.context);
+                    let id_v = ty.const_float(id_v).as_basic_value_enum();
+                    (ty.as_basic_type_enum(), id_v)
+                }
+                _ => unreachable!(),
+            };
+            let store_v = self.builder.build_phi(ty, "store.v")?;
+            store_v.add_incoming(&[(&load_v, normal), (&id_v, pad)]);
             self.build_raw_store(
-                inner_loops.elem_ty,
+                ty,
                 inner_loops.dst_ptr,
                 inner_loops.dst_offset,
                 store_v.as_basic_value(),
@@ -184,11 +200,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(inner_loops.pads[nest as usize], false),
             "src.offset",
         )?;
-        dbg!(
-            nest,
-            inner_loops.src_ptr.stride(nest as usize + 2),
-            &inner_loops.src_ptr.ty
-        );
         let src_offset = self.builder.build_int_mul(
             src_offset,
             self.context.i64_type().const_int(
@@ -219,7 +230,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             is_pad,
             pads: inner_loops.pads,
             outer_offsets: inner_loops.outer_offsets,
-            elem_ty: inner_loops.elem_ty,
             nest: nest + 1,
         };
 
@@ -295,7 +305,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 })
                 .map(|x| x.try_into().unwrap())
                 .collect::<Vec<u64>>();
-            let elem_ty = src_ptr.ty.elem_type.llvm_type(self.context);
 
             let inner_loops = Im2ColsInnerLoop {
                 preheader,
@@ -309,7 +318,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 pads: &pads,
                 outer_offsets: &offsets,
 
-                elem_ty,
                 nest: 0,
             };
 
@@ -1671,7 +1679,6 @@ struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
     pads: &'a [u64],
     outer_offsets: &'a [IntValue<'ctx>],
 
-    elem_ty: BasicTypeEnum<'ctx>,
     nest: u64,
 }
 
