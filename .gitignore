@@ -9,3 +9,4 @@
 *.so
 models/*.onnx
 download
+venv

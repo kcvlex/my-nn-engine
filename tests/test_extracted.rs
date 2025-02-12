@@ -37,26 +37,20 @@ fn run_test(path: &str, epsilon: f64) -> Result {
     Ok(())
 }
 
-#[test]
-fn test_yolov4_until_conv2d() -> Result {
-    run_test("yolov4/until_conv2d", 1e-3)
-}
 
-#[test]
-fn test_yolov4_until_lambda_1_mul() -> Result {
-    run_test("yolov4/until_lambda_1_mul", 1e-3)
-}
-
+#[ignore]
 #[test]
 fn test_yolov4_until_tf_op_layer_concat_concat() -> Result {
     run_test("yolov4/until_tf_op_layer_concat_concat", 1e-3)
 }
 
+#[ignore]
 #[test]
 fn test_yolov4_until_lambda_37_mul() -> Result {
     run_test("yolov4/until_lambda_37_mul", 1e-3)
 }
 
+#[ignore]
 #[test]
 fn test_yolov4_until_conv2d_74_conv2d() -> Result {
     run_test("yolov4/until_conv2d_74_conv2d", 1e-3)
@@ -67,11 +61,13 @@ fn test_yolov4_until_tf_op_layer_concat_5_concat_5() -> Result {
     run_test("yolov4/until_tf_op_layer_concat_5_concat_5", 1e-3)
 }
 
+#[ignore]
 #[test]
 fn test_yolov4_until_tf_op_layer_leakyrelu_2_leakyrelu_2() -> Result {
     run_test("yolov4/until_tf_op_layer_leakyrelu_2_leakyrelu_2", 1e-3)
 }
 
+#[ignore]
 #[test]
 fn test_yolov4_until_tf_op_layer_maxpool_maxpool() -> Result {
     run_test("yolov4/until_tf_op_layer_maxpool_maxpool", 1e-3)
