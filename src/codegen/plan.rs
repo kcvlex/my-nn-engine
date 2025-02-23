@@ -220,7 +220,7 @@ impl<'graph> MemoryPlanner<'graph> {
         for output in node.outputs.iter() {
             let chunk = match node.op {
                 // Split is a special case.
-                // TODO: When the input is `Input` or initializer
+                // TODO: When the input is `Input` or initializer.
                 Operator::Split(_) => {
                     let res = *self.allocations.get(&node.inputs[0]).unwrap();
                     assert!(matches!(res, AllocateType::Chunk(_)));
@@ -239,8 +239,11 @@ impl<'graph> MemoryPlanner<'graph> {
             };
             res.push((*output, chunk));
             if let AllocateType::Chunk(chunk) = chunk {
-                let used = self.deps.value2used.get(output).unwrap().len();
-                *self.liveness_counter.entry(chunk).or_insert(0) += used;
+                // It is possible that the value is not used by any other nodes, e.g., the output
+                // of splitted one.
+                if let Some(used) = self.deps.value2used.get(output) {
+                    *self.liveness_counter.entry(chunk).or_insert(0) += used.len();
+                }
             }
         }
 

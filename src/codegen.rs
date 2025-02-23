@@ -489,6 +489,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     .graph
                     .get_resolved_tensor_type(node.inputs[0])
                     .unwrap();
+                dbg!(&src_ty);
                 let src = *ptr_values.get(&node.inputs[0]).unwrap();
                 let axis = split.axis.index(src_ty.dims.ndim());
                 let mut acc = 0;

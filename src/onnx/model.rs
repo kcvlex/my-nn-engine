@@ -99,13 +99,18 @@ impl Graph {
                 }
             }
             Some(TensorType::Unresolved(ref ty)) => {
+                dbg!(&self.values[value_id]);
                 let ty = ty.clone();
-                let _ = unify_types(
-                    ty.dims.unwrap().inner().as_slice(),
-                    &resolved.dims[..],
-                    &mut self.resolved_params,
-                )
-                .ok_or(TypeError::InconsistentInput)?;
+
+                // E.g., Outputs of yolov4
+                if let Some(ref dims) = &ty.dims {
+                    let _ = unify_types(
+                        dims.inner().as_slice(),
+                        &resolved.dims[..],
+                        &mut self.resolved_params,
+                    )
+                    .ok_or(TypeError::InconsistentInput)?;
+                }
                 self.values[value_id].ty = Some(TensorType::Resolved(resolved.clone()));
                 Ok(())
             }

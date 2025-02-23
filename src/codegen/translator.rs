@@ -1643,17 +1643,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let stride = dst.ty.stride(axis);
         for src in srcs {
             let mut dst = dst.clone();
-            dst.ptr = unsafe {
-                self.builder.build_gep(
-                    dst.ty.elem_type.llvm_type(self.context),
-                    dst.ptr,
-                    &[self
-                        .context
-                        .i64_type()
-                        .const_int(acc.try_into().unwrap(), false)],
-                    "dst.ptr",
-                )
-            }?;
+            dst.offset = self.builder.build_int_add(
+                dst.offset,
+                self.context
+                    .i64_type()
+                    .const_int(acc.try_into().unwrap(), false),
+                "dst.offset",
+            )?;
+            dst.ty.dims[axis] = src.ty.dims[axis];
             let op = Operation::UnaryOp(
                 UnaryOps {
                     dst,

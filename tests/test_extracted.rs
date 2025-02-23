@@ -16,17 +16,17 @@ fn run_test(path: &str, epsilon: f64) -> Result {
     let input = Tensor::load_from_path(input_path).map_err(SessionError::ModelLoadError)?;
     let session = Session::new(&model_path, Some(&[&input.tensor_type()]), 100)?;
     let outputs = session.run(&[input])?;
-    for output in outputs.iter() {
-        let starts = [0, 0, 0, 0];
-        let ends = [1, 1, 1, 10];
-        println!("{:?}", output.slices(&starts, &ends));
-    }
+    //for output in outputs.iter() {
+    //    let starts = [0, 0, 0, 0];
+    //    let ends = [1, 1, 1, 10];
+    //    println!("{:?}", output.slices(&starts, &ends));
+    //}
     for (i, output) in outputs.into_iter().enumerate() {
         let output_path = root_dir.join(format!("output_{i}.pb"));
         let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
         if !output.eq_with_epsilon(&expected, epsilon, CompPolicy::Either) {
-            let starts = [0, 0, 0, 0];
-            let ends = [1, 1, 1, 10];
+            let starts = [0, 0, 0, 0, 0];
+            let ends = [1, 1, 1, 2, 10];
             // For pretty printing
             assert_eq!(
                 output.slices(&starts, &ends),
@@ -55,7 +55,7 @@ fn test_yolov4_until_Concat__696() -> Result {
     run_test("yolov4/until_Concat__696", 1e-3)
 }
 
-// #[ignore]
+#[ignore]
 #[test]
 fn test_yolov4_until_Resize__697() -> Result {
     run_test("yolov4/until_Resize__697", 1e-3)
@@ -71,4 +71,52 @@ fn test_yolov4_until_tf_op_layer_LeakyRelu_6_LeakyRelu_6() -> Result {
 #[test]
 fn test_yolov4_until_tf_op_layer_concat_6_concat_6() -> Result {
     run_test("yolov4/until_tf_op_layer_concat_6_concat_6", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_concat_10_concat_10() -> Result {
+    run_test("yolov4/until_tf_op_layer_concat_10_concat_10", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_LeakyRelu_19_LeakyRelu_19() -> Result {
+    run_test("yolov4/until_tf_op_layer_LeakyRelu_19_LeakyRelu_19", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_Transpose__1294() -> Result {
+    run_test("yolov4/until_Transpose__1294", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_LeakyRelu_34_LeakyRelu_34() -> Result {
+    run_test("yolov4/until_tf_op_layer_LeakyRelu_34_LeakyRelu_34", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_Reshape_2_Reshape_2__915() -> Result {
+    run_test("yolov4/until_tf_op_layer_Reshape_2_Reshape_2__915", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_Reshape_Reshape() -> Result {
+    run_test("yolov4/until_tf_op_layer_Reshape_Reshape", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_Sigmoid_Sigmoid() -> Result {
+    run_test("yolov4/until_tf_op_layer_Sigmoid_Sigmoid", 1e-3)
+}
+
+#[ignore]
+#[test]
+fn test_yolov4_until_tf_op_layer_Sigmoid_1_Sigmoid_1() -> Result {
+    run_test("yolov4/until_tf_op_layer_Sigmoid_1_Sigmoid_1", 1e-3)
 }

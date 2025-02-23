@@ -248,8 +248,8 @@ impl<T: GraphModifier> Pass<T> for ContigousOutput {
                 |_, node| matches!(node.op, Operator::Output(_)),
             );
 
-            // Forget the dimension information of old output to make shape inference easier
-            // TODO: Maybe incorrect if the Input node is directly connected to the Output node
+            // Forget the dimension information of old output to make shape inference easier.
+            // TODO: Maybe incorrect if the Input node is directly connected to the Output node.
             graph.values[input].ty = None;
         }
     }
