@@ -283,6 +283,8 @@ impl CodeGenContext {
         };
         let smin_i32 = get_intrinsic!("llvm.smin", &[i32_ty, i32_ty])?;
         let smin_i64 = get_intrinsic!("llvm.smin", &[i64_ty, i64_ty])?;
+        let smax_i32 = get_intrinsic!("llvm.smax", &[i32_ty, i32_ty])?;
+        let smax_i64 = get_intrinsic!("llvm.smax", &[i64_ty, i64_ty])?;
         let tanh = f64_ty.fn_type(&[f64_ty.into()], false);
         let tanh = unit.module.add_function("tanh", tanh, None);
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
@@ -298,6 +300,8 @@ impl CodeGenContext {
             sqrt,
             smin_i32,
             smin_i64,
+            smax_i32,
+            smax_i64,
             tanh,
             // lifetime_start,
             // lifetime_end,

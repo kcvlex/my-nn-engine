@@ -35,6 +35,8 @@ pub struct Intrinsics<'ll> {
     pub tanh: FunctionValue<'ll>,
     pub smin_i32: FunctionValue<'ll>,
     pub smin_i64: FunctionValue<'ll>,
+    pub smax_i32: FunctionValue<'ll>,
+    pub smax_i64: FunctionValue<'ll>,
     // lifetime_start: FunctionValue<'ctx>,
     // lifetime_end: FunctionValue<'ctx>,
 }

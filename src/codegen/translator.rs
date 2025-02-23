@@ -93,7 +93,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         im2col: &operator::Im2Col,
     ) -> Result<IntValue<'ctx>, BuilderError> {
         if inner_loops.nest as usize == inner_loops.outer_offsets.len() {
-            dbg!(&inner_loops);
+            // dbg!(&inner_loops);
             let prolog = self.context.append_basic_block(*self.func, "inner.prolog");
             let normal = self.context.append_basic_block(*self.func, "inner.normal");
             let pad = self.context.append_basic_block(*self.func, "inner.pad");
@@ -1498,21 +1498,36 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     self.context.i64_type(),
                     "x_original",
                 )?;
-                self.build_tail_call(
-                    self.intrinsics.smin_i64,
-                    &[
-                        x_original.into(),
-                        self.context
-                            .i64_type()
-                            .const_int((src.ty.dims[dim] - 1).try_into().unwrap(), false)
-                            .into(),
-                    ],
-                    "x_original",
-                )?
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_int_value()
+                let x_original = self
+                    .build_tail_call(
+                        self.intrinsics.smin_i64,
+                        &[
+                            x_original.into(),
+                            self.context
+                                .i64_type()
+                                .const_int((src.ty.dims[dim] - 1).try_into().unwrap(), false)
+                                .into(),
+                        ],
+                        "x_original",
+                    )?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                let x_original = self
+                    .build_tail_call(
+                        self.intrinsics.smax_i64,
+                        &[
+                            x_original.into(),
+                            self.context.i64_type().const_zero().into(),
+                        ],
+                        "x_original",
+                    )?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                x_original
             }
             None => ind.as_basic_value().into_int_value(),
         };
