@@ -142,7 +142,6 @@ impl<'graph> MemoryPlanner<'graph> {
             }
         }
 
-        self.coalesce_input(order);
         self.coalesce_output(order);
 
         let mut last_user = vec![None; self.chunks.slot];
@@ -180,23 +179,6 @@ impl<'graph> MemoryPlanner<'graph> {
         info_v
     }
 
-    fn coalesce_input(&mut self, order: &[NodeId]) {
-        let mut input_set: HashMap<_, _> = self.deps.inputs.iter().map(|v| (*v, *v)).collect();
-
-        for node_id in order.iter().copied() {
-            for (i, input) in self.graph.nodes[node_id].inputs.iter().enumerate() {
-                if let Some(v) = input_set.get(input) {
-                    *self.allocations.get_mut(input).unwrap() = AllocateType::Input(*v);
-
-                    // i == 0 is necessary because Reshape takes two arguments
-                    if i == 0 && matches!(self.graph.nodes[node_id].op, Operator::Identity) {
-                        input_set.insert(self.graph.nodes[node_id].outputs[0], *v);
-                    }
-                }
-            }
-        }
-    }
-
     fn coalesce_output(&mut self, order: &[NodeId]) {
         let mut output_set: HashMap<_, _> = self.deps.outputs.iter().map(|v| (*v, *v)).collect();
 
@@ -223,7 +205,7 @@ impl<'graph> MemoryPlanner<'graph> {
                 // TODO: When the input is `Input` or initializer.
                 Operator::Split(_) => {
                     let res = *self.allocations.get(&node.inputs[0]).unwrap();
-                    assert!(matches!(res, AllocateType::Chunk(_)));
+                    // assert!(matches!(res, AllocateType::Chunk(_)));
                     res
                 }
                 _ => {
@@ -273,22 +255,25 @@ impl<'graph> MemoryPlanner<'graph> {
         }
 
         let node_id = self.deps.value2defined[&value_id];
-        for input in self.graph.nodes[node_id]
-            .inputs
-            .iter()
-            .filter(|x| !self.deps.inputs.contains(x))
-        {
-            let chunk_id = match self.allocations.get(input).and_then(|x| x.chunk_id()) {
-                Some(v) => v,
-                None => continue,
+        for input in self.graph.nodes[node_id].inputs.iter() {
+            let is_input = match self.allocations.get(input) {
+                Some(AllocateType::Input(_)) => true,
+                Some(AllocateType::Chunk(chunk_id)) => {
+                    if self.liveness_counter[chunk_id] != 1 {
+                        continue;
+                    }
+                    false
+                }
+                Some(_) | None => continue,
             };
-            if self.liveness_counter[chunk_id] != 1 {
-                continue;
-            }
 
             // TODO: correct?
             if matches!(self.graph.nodes[node_id].op, Operator::Identity) {
                 return Some(*input);
+            }
+
+            if is_input {
+                continue;
             }
 
             if self
