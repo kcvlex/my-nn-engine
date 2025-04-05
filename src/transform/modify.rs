@@ -4,6 +4,7 @@ use crate::tensor::types::{ResolvedTensorType, TensorType};
 use crate::tensor::Tensor;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use indexmap::IndexSet;
 
 pub trait GraphModifier {
     // fn new(graph: &Graph) -> Self;
@@ -28,7 +29,7 @@ pub trait GraphModifier {
 
     fn defined_node(&self, value: ValueId) -> Option<(NodeId, usize)>;
 
-    fn used_node(&self, value: ValueId) -> Option<&HashSet<(NodeId, usize)>>;
+    fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>>;
 
     fn replace_input_value_if<P>(
         &mut self,
@@ -72,7 +73,7 @@ pub trait NodeDelete {
 }
 
 type Value2Defined = HashMap<ValueId, (NodeId, usize)>;
-type Value2Used = HashMap<ValueId, HashSet<(NodeId, usize)>>;
+type Value2Used = HashMap<ValueId, IndexSet<(NodeId, usize)>>;
 
 fn calc_value2xx(graph: &Graph) -> (Value2Defined, Value2Used) {
     let mut value2defined = HashMap::new();
@@ -81,7 +82,7 @@ fn calc_value2xx(graph: &Graph) -> (Value2Defined, Value2Used) {
         for (index, &value) in node.inputs.iter().enumerate() {
             value2used
                 .entry(value)
-                .or_insert_with(HashSet::new)
+                .or_insert_with(IndexSet::new)
                 .insert((node_id, index));
         }
         for (index, &value) in node.outputs.iter().enumerate() {
@@ -93,7 +94,7 @@ fn calc_value2xx(graph: &Graph) -> (Value2Defined, Value2Used) {
 
 pub struct SimpleGraphModifier {
     value2defined: HashMap<ValueId, (NodeId, usize)>,
-    value2used: HashMap<ValueId, HashSet<(NodeId, usize)>>,
+    value2used: HashMap<ValueId, IndexSet<(NodeId, usize)>>,
 }
 
 impl SimpleGraphModifier {
@@ -147,7 +148,7 @@ impl GraphModifier for SimpleGraphModifier {
 
         if let Entry::Occupied(mut old) = self.value2used.entry(old_value) {
             for v in changed.iter() {
-                old.get_mut().remove(v);
+                old.get_mut().shift_remove(v);
             }
             if old.get().is_empty() {
                 old.remove();
@@ -173,7 +174,7 @@ impl GraphModifier for SimpleGraphModifier {
         self.value2defined.get(&value).cloned()
     }
 
-    fn used_node(&self, value: ValueId) -> Option<&HashSet<(NodeId, usize)>> {
+    fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>> {
         self.value2used.get(&value)
     }
 }
@@ -197,7 +198,7 @@ impl NodeDelete for SimpleGraphModifier {
             node.meta.mark_as_deleted = true;
             for (i, used) in node.inputs.iter().enumerate() {
                 if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
-                    e.get_mut().remove(&(id, i));
+                    e.get_mut().shift_remove(&(id, i));
                     if e.get().is_empty() {
                         e.remove();
                     }
@@ -247,7 +248,7 @@ impl SimpleGraphModifier {
 #[derive(Default)]
 pub struct ExperimentalGraphModifier {
     value2defined: HashMap<ValueId, (NodeId, usize)>,
-    value2used: HashMap<ValueId, HashSet<(NodeId, usize)>>,
+    value2used: HashMap<ValueId, IndexSet<(NodeId, usize)>>,
 
     to_delete_nodes: Vec<NodeId>,
     outdegrees: HashMap<NodeId, usize>,
@@ -301,7 +302,7 @@ impl GraphModifier for ExperimentalGraphModifier {
         let new_defines = self.value2defined.get(&new_value).cloned();
 
         if let Some(used) = self.value2used.get(&old_value).cloned() {
-            let mut replaced = HashSet::new();
+            let mut replaced = IndexSet::new();
             for &(node, index) in used.iter() {
                 if !pred(node, &graph.nodes[node]) {
                     continue;
@@ -331,7 +332,7 @@ impl GraphModifier for ExperimentalGraphModifier {
         self.value2defined.get(&value).cloned()
     }
 
-    fn used_node(&self, value: ValueId) -> Option<&HashSet<(NodeId, usize)>> {
+    fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>> {
         self.value2used.get(&value)
     }
 }
