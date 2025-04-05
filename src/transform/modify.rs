@@ -2,9 +2,9 @@ use crate::onnx::model::{Graph, Node, NodeId, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
 use crate::tensor::types::{ResolvedTensorType, TensorType};
 use crate::tensor::Tensor;
+use indexmap::IndexSet;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use indexmap::IndexSet;
 
 pub trait GraphModifier {
     // fn new(graph: &Graph) -> Self;

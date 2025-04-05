@@ -366,7 +366,8 @@ mod test {
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
     use crate::transform::modify::SimpleGraphModifier;
-    use crate::transform::{create_infer_passes, PassManager};
+    use crate::transform::shape::*;
+    use crate::transform::*;
     use std::io::{Error, Result};
     use std::path::PathBuf;
 
@@ -376,9 +377,11 @@ mod test {
             .join(path);
         let mut model =
             Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;
-        let passes = create_infer_passes();
+        let mut pass_manager = SimplePassManager::new("Shape".to_string());
+        pass_manager.add_pass(Box::new(infer::ShapeInference::default()));
+        pass_manager.add_pass(Box::new(strides::AssignStrides::default()));
         let mut modifier = SimpleGraphModifier::new(&model.graph);
-        passes.run(&mut model.graph, &mut modifier);
+        pass_manager.run(&mut model.graph, &mut modifier);
         Ok(model)
     }
 
@@ -425,7 +428,7 @@ mod test {
             "/layer2/layer2.1/MaxPool",
             "/Add",
             "/Transpose",
-            "Contiguous_Output_7",
+            "Contiguous_6",
         ];
         let order = to_node_order(&model.graph, &order)?;
         let mem = MemoryPlanner::new(&model.graph)

@@ -109,6 +109,10 @@ impl ResolvedTensorType {
         self.stride[i]
     }
 
+    pub fn strides(&self) -> &ResolvedTensorDims {
+        &self.stride
+    }
+
     pub fn broadcast(&self, target: &ResolvedTensorDims) -> Self {
         let elem_type = self.elem_type;
         let dims = target.clone();
@@ -148,6 +152,17 @@ impl ResolvedTensorType {
 
     pub fn contiguous(&self) -> Self {
         Self::new(self.elem_type, self.dims.clone())
+    }
+
+    pub fn is_contiguous(&self) -> bool {
+        let mut acc = 1;
+        for (i, stride) in self.stride.iter().enumerate().rev() {
+            if *stride != 0 && *stride != acc {
+                return false;
+            }
+            acc *= self.dims[i];
+        }
+        true
     }
 
     pub fn drop_head(&mut self) {
@@ -231,7 +246,8 @@ impl ResolvedTensorType {
             assert_eq!(i, new_strides.len());
             buf
         };
-        let stride = ResolvedTensorDims::new(new_strides);
+        let stride = ResolvedTensorDims::new_direct(new_strides);
+        assert!(stride.ndim() == target.ndim());
         Some(Self {
             elem_type: self.elem_type,
             dims: target.clone(),

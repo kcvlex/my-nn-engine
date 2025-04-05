@@ -1,0 +1,112 @@
+use crate::onnx::model::{Graph, UnifyMode, ValueId};
+use crate::onnx::operator::*;
+use crate::tensor::{
+    dimensions::ResolvedTensorDims,
+    types::{ResolvedTensorType, TypeError},
+};
+use crate::transform::shape::util;
+use crate::transform::{GraphModifier, Pass};
+use itertools::zip_eq;
+
+#[derive(Default)]
+pub struct VerifyShape {
+    pub check_strides: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum VerifyShapeError {
+    OutputContiguous(ValueId, ResolvedTensorType),
+    InconsistentShape(ValueId, ResolvedTensorDims, ResolvedTensorDims),
+    InconsistentStrides(ValueId, ResolvedTensorType, ResolvedTensorType),
+    UnresolvedShape(ValueId),
+    TypeError(TypeError),
+    Other(String),
+}
+
+impl<T: GraphModifier> Pass<T> for VerifyShape {
+    fn summary(&self) -> &'static str {
+        "Verify shapes"
+    }
+
+    fn run(&self, graph: &mut Graph, _modifier: &mut T) {
+        self.run_impl(graph).expect("Shape verification failed");
+    }
+}
+
+impl VerifyShape {
+    fn run_impl(&self, graph: &Graph) -> Result<(), VerifyShapeError> {
+        for (node_id, node) in graph.nodes.iter() {
+            match node.op {
+                Operator::Input(_) => (),
+                Operator::Output(value) if self.check_strides => {
+                    let resolved = graph
+                        .get_resolved_tensor_type(value)
+                        .ok_or(VerifyShapeError::UnresolvedShape(value))?;
+                    if !resolved.is_contiguous() {
+                        return Err(VerifyShapeError::OutputContiguous(value, resolved.clone()));
+                    }
+                }
+                _ => {
+                    let resolved = util::infer_node_output(graph, node_id, UnifyMode::CheckStrides)
+                        .map_err(VerifyShapeError::TypeError)?;
+                    for (value_id, inferred) in zip_eq(node.outputs.iter(), resolved.into_iter()) {
+                        let cur = graph
+                            .get_resolved_tensor_type(*value_id)
+                            .ok_or(VerifyShapeError::UnresolvedShape(*value_id))?;
+                        if cur.dims != inferred.dims {
+                            return Err(VerifyShapeError::InconsistentShape(
+                                *value_id,
+                                cur.dims.clone(),
+                                inferred.dims.clone(),
+                            ));
+                        }
+                        if self.check_strides && cur.strides() != inferred.strides() {
+                            return Err(VerifyShapeError::InconsistentStrides(
+                                *value_id,
+                                cur.clone(),
+                                inferred.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::onnx::load::*;
+    use crate::onnx::model::*;
+    use crate::tensor::types::FloatType;
+    use crate::transform::modify::SimpleGraphModifier;
+    use crate::transform::shape::infer::ShapeInference;
+    use crate::transform::shape::strides::AssignStrides;
+    use crate::transform::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn infer_yolov4() {
+        let model = "yolov4";
+        let model = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/validated")
+            .join(model)
+            .join(format!("{model}.onnx"));
+        let model = Model::load_from_path(&model).unwrap();
+        let mut graph = model.graph;
+        graph
+            .resolve_input_types(&[&ResolvedTensorType::new(
+                FloatType::F32.into(),
+                ResolvedTensorDims::new(vec![1, 416, 416, 3]),
+            )])
+            .unwrap();
+        let mut modifier = SimpleGraphModifier::new(&graph);
+        let mut pass_manager = SimplePassManager::new("Shape".to_string());
+        pass_manager.add_pass(Box::new(ShapeInference::default()));
+        pass_manager.add_pass(Box::new(AssignStrides::default()));
+        pass_manager.add_pass(Box::new(VerifyShape::default()));
+        pass_manager.run(&mut graph, &mut modifier);
+    }
+}

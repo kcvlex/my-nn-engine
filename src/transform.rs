@@ -1,17 +1,18 @@
 pub mod epilog;
-pub mod infer;
 pub mod lower;
 pub mod modify;
 pub mod optimize;
+pub mod shape;
 mod utils;
 
 use crate::onnx::model::Graph;
 use modify::{GraphModifier, NodeDelete, SimpleGraphModifier};
 
 pub use epilog::create_epilog_passes;
-pub use infer::create_infer_passes;
 pub use lower::create_lower_passes;
 pub use optimize::create_optimize_passes;
+pub use shape::infer::create_infer_passes;
+pub use shape::strides::create_strides_passes;
 
 pub trait Pass<T: GraphModifier> {
     fn summary(&self) -> &str;
@@ -58,11 +59,13 @@ impl<T: GraphModifier + NodeDelete> PassManager<T> for SimplePassManager<T> {
 }
 
 pub fn transform_graph(graph: &mut Graph, omp_threshold: usize) {
+    let verify = true;
     // TODO: Make optimization passes before lowering
     let managers = [
-        Box::new(create_infer_passes()),
+        Box::new(create_infer_passes(verify)),
         Box::new(create_lower_passes()),
         Box::new(create_optimize_passes(omp_threshold)),
+        Box::new(create_strides_passes(verify)),
         Box::new(create_epilog_passes()),
     ];
     let mut modifier = SimpleGraphModifier::new(graph);

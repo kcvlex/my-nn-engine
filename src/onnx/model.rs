@@ -60,6 +60,13 @@ fn unify_types(
     Some(res.into())
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum UnifyMode {
+    CheckStrides,
+    OverwriteStrides,
+    IgnoreStrides,
+}
+
 impl Graph {
     pub fn resolve_input_types(
         &mut self,
@@ -79,7 +86,7 @@ impl Graph {
         }
 
         for (id, ty) in zip_eq(ids.iter(), input_tys.iter()) {
-            self.try_unify_type(*id, ty)?;
+            self.try_unify_type(*id, ty, UnifyMode::IgnoreStrides)?;
         }
         Ok(())
     }
@@ -88,18 +95,35 @@ impl Graph {
         &mut self,
         value_id: ValueId,
         resolved: &ResolvedTensorType,
+        mode: UnifyMode,
     ) -> Result<(), TypeError> {
         match &self.values[value_id].ty.as_ref() {
             Some(TensorType::Resolved(ref ty)) => {
-                // TODO: Should strides also be checked?
-                if ty.dims == resolved.dims {
-                    Ok(())
-                } else {
-                    Err(TypeError::InconsistentInput)
+                if ty.dims != resolved.dims {
+                    return Err(TypeError::InconsistentInput);
                 }
+
+                match mode {
+                    UnifyMode::CheckStrides => {
+                        if ty.strides() != resolved.strides() {
+                            return Err(TypeError::InconsistentInput);
+                        }
+                    }
+                    UnifyMode::OverwriteStrides => {
+                        self.values[value_id].ty = Some(TensorType::Resolved(resolved.clone()));
+                    }
+                    UnifyMode::IgnoreStrides => {}
+                };
+
+                Ok(())
             }
+
             Some(TensorType::Unresolved(ref ty)) => {
-                dbg!(&self.values[value_id]);
+                if matches!(mode, UnifyMode::CheckStrides) {
+                    return Err(TypeError::InconsistentInput);
+                }
+
+                // dbg!(&self.values[value_id]);
                 let ty = ty.clone();
 
                 // E.g., Outputs of yolov4

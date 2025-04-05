@@ -198,11 +198,13 @@ impl ReshapeGenerator {
             }
         };
 
+        let shape_name = format!("{value_name}_Shape");
+        let shape_input = modifier.register_new_tensor(graph, dims.to_tensor(), shape_name.clone());
         let new_value = modifier.register_new_value(graph, value_name, reshaped_ty);
         modifier.register_new_node(
             graph,
             Node {
-                inputs: vec![input_value],
+                inputs: vec![input_value, shape_input],
                 outputs: vec![new_value],
                 op: Operator::Reshape,
                 name: node_name,

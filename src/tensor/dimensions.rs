@@ -1,5 +1,7 @@
 use crate::onnx::operator::Slice;
+use crate::tensor::types;
 use crate::tensor::types::TypeError;
+use crate::tensor::{Tensor, TensorData};
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 
@@ -175,6 +177,15 @@ impl ResolvedTensorDims {
 
     pub fn is_scalar(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        let data = TensorData::SInt(
+            types::SIntType::I64,
+            self.0.iter().map(|x| *x as i64).collect(),
+        );
+        let dims = ResolvedTensorDims::new(vec![self.ndim()]);
+        Tensor::new(dims, data).unwrap()
     }
 }
 
