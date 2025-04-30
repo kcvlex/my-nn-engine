@@ -1,0 +1,40 @@
+pytorch2.7.0:½
+*
+input0
+input1/Add_output_0/Add"Add
+C
+/Add_output_0/layer0/Sigmoid_output_0/layer0/Sigmoid"Sigmoid
+.
+input2
+input3/Add_1_output_0/Add_1"Add
+E
+/layer0/Sigmoid_output_0
+/Add_1_output_0/Sub_output_0/Sub"Sub
+1
+/Sub_output_0output/layer1/Sigmoid"Sigmoid
+main_graphZ
+input0
+
+
+
+Z
+input1
+
+
+
+Z
+input2
+
+
+
+Z
+input3
+
+
+
+b
+output
+
+
+
+B

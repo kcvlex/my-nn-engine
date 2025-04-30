@@ -230,13 +230,11 @@ mod comp {
                 (None, None) => (),
             }
 
-            if left.name == right.name {
-                if self.left.inputs.contains_key(&left.name) && self.right.inputs.contains_key(&right.name) {
-                    return Ok(());
-                }
-                if self.left.outputs.contains_key(&left.name) && self.right.outputs.contains_key(&right.name) {
-                    return Ok(());
-                }
+            if left.name == right.name &&
+                self.left.inputs.contains_key(&left.name) &&
+                self.right.inputs.contains_key(&right.name)
+            {
+                return Ok(());
             }
 
             let (left_node_id, left_idx) = *self.left.defined.get(&left_id).unwrap();
@@ -326,5 +324,32 @@ mod test {
             .join("models/validated/mnist-12/mnist-12.onnx");
         let model = Model::load_from_path(model).expect("failed to load");
         assert_eq!(compare_graphs(&model.graph, &model.graph), Ok(()));
+    }
+
+    #[test]
+    fn test_equiv() {
+        assert_eq!(
+            compare_models("add_add_sub0.onnx", "add_add_sub1.onnx"),
+            Ok(())
+        )
+    }
+
+    #[test]
+    fn test_noncomutative() {
+        assert_eq!(
+            compare_models("add_add_sub0.onnx", "add_add_sub2.onnx"),
+            Err(InequalityError::DifferentComputations(
+                vec![
+                    "/layer0/Sigmoid".to_string(),
+                    "/Sub".to_string(),
+                    "/layer1/Sigmoid".to_string(),
+                ],
+                vec![
+                    "/Add".to_string(),
+                    "/Sub".to_string(),
+                    "/layer0/Sigmoid".to_string(),
+                ],
+            ),)
+        )
     }
 }

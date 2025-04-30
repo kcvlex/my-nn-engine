@@ -56,7 +56,7 @@ pub fn infer_node_output(
 
     let mut res: Vec<ResolvedTensorType> = Vec::new();
     match &node.op {
-        Operator::Add | Operator::Mul => {
+        Operator::Add | Operator::Sub | Operator::Mul => {
             let a = &inputs[0];
             let b = &inputs[1];
 

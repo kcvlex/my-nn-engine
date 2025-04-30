@@ -54,6 +54,7 @@ pub enum Operator {
     Slice,
     Split(Split),
     Sigmoid,
+    Sub,
     Tanh,
     Transpose(Transpose),
 
@@ -472,6 +473,7 @@ impl Operator {
             Operator::Slice => "Slice",
             Operator::Split(_) => "Split",
             Operator::Sigmoid => "Sigmoid",
+            Operator::Sub => "Sub",
             Operator::Tanh => "Tanh",
             Operator::Transpose(_) => "Transpose",
 
@@ -490,7 +492,10 @@ impl Operator {
     }
 
     pub fn is_elementwise(&self) -> bool {
-        matches!(self, Operator::Add | Operator::ReLU | Operator::Sigmoid)
+        matches!(
+            self,
+            Operator::Add | Operator::ReLU | Operator::Sigmoid | Operator::Sub
+        )
     }
 }
 

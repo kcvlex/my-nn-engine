@@ -751,6 +751,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Resize" => Ok(Operator::Resize(Resize::load(attributes)?)),
         "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
         "Sigmoid" => Ok(Operator::Sigmoid),
+        "Sub" => Ok(Operator::Sub),
         "Tanh" => Ok(Operator::Tanh),
         "Slice" => Ok(Operator::Slice),
         "Split" => Ok(Operator::Split(Split::load(attributes)?)),
