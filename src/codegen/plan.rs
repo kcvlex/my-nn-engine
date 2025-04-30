@@ -1,5 +1,6 @@
-use crate::onnx::model::{Graph, NodeId, Nodes, ValueId};
+use crate::onnx::model::{Graph, NodeId, ValueId};
 use crate::onnx::operator::Operator;
+use crate::onnx::utils;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{HashMap, HashSet};
 
@@ -300,58 +301,8 @@ impl<'graph> MemoryPlanner<'graph> {
     }
 }
 
-fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
-    fn dfs(
-        node: NodeId,
-        res: &mut Vec<NodeId>,
-        visited: &mut HashSet<NodeId>,
-        adj: &HashMap<NodeId, HashSet<NodeId>>,
-        nodes: &Nodes,
-    ) {
-        if visited.contains(&node) {
-            return;
-        }
-        visited.insert(node);
-        if let Some(neighbors) = adj.get(&node) {
-            for &next in neighbors.iter() {
-                dfs(next, res, visited, adj, nodes);
-            }
-        }
-        if !nodes[node].is_dummy() {
-            res.push(node);
-        }
-    }
-
-    let mut res = Vec::new();
-    let mut visited = HashSet::new();
-    let mut defined = HashMap::new();
-    for (id, node) in graph.nodes.iter() {
-        for value in node.outputs.iter() {
-            defined.insert(value, id);
-        }
-    }
-    let mut adj = HashMap::new();
-    for (id, node) in graph.nodes.iter() {
-        for value in node.inputs.iter() {
-            if let Some(defines) = defined.get(value) {
-                adj.entry(*defines).or_insert(HashSet::new()).insert(id);
-            } else {
-                assert!(graph.initializer.contains_key(value));
-            }
-        }
-    }
-
-    for (id, _) in graph.nodes.iter().filter(|(_, node)| !node.is_dummy()) {
-        if !visited.contains(&id) {
-            dfs(id, &mut res, &mut visited, &adj, &graph.nodes);
-        }
-    }
-    res.reverse();
-    res
-}
-
 pub fn plan(graph: &Graph) -> Vec<(NodeId, Vec<AllocateInfo>)> {
-    let order = simple_topological_order(graph);
+    let order = utils::simple_topological_order(graph);
     MemoryPlanner::new(graph)
         .run(&order)
         .into_iter()

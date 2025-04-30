@@ -6,7 +6,7 @@ use itertools::{izip, zip_eq};
 use std::ops::Index;
 //use strum_macros::EnumString;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TensorIndex(isize);
 
 impl TensorIndex {
@@ -27,7 +27,7 @@ impl TensorIndex {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Add,
     BatchNormalization(BatchNormalization),
@@ -71,25 +71,25 @@ pub enum Operator {
     Output(ValueId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BatchNormalization {
     pub epsilon: f32,
     pub momentum: f32,
 }
 
-#[derive(Debug, Clone)]
-pub struct OptionalVec<T: Copy + Clone> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptionalVec<T: Copy + Clone + PartialEq> {
     vec: Option<Vec<T>>,
     default: T,
 }
 
-impl<T: Clone + Copy> OptionalVec<T> {
+impl<T: Clone + Copy + PartialEq> OptionalVec<T> {
     pub fn new(vec: Option<Vec<T>>, default: T) -> Self {
         Self { vec, default }
     }
 }
 
-impl<T: Clone + Copy> Index<usize> for OptionalVec<T> {
+impl<T: Clone + Copy + PartialEq> Index<usize> for OptionalVec<T> {
     type Output = T;
 
     fn index(&self, i: usize) -> &Self::Output {
@@ -97,17 +97,17 @@ impl<T: Clone + Copy> Index<usize> for OptionalVec<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cast {
     pub to: DataType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Concat {
     pub axis: TensorIndex,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConvPad {
     NotSet(OptionalVec<(usize, usize)>),
     SameUpper,
@@ -115,7 +115,7 @@ pub enum ConvPad {
     Valid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Conv {
     pub pad: ConvPad,
     pub dilations: OptionalVec<usize>,
@@ -124,18 +124,18 @@ pub struct Conv {
     pub strides: OptionalVec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Gather {
     pub axis: TensorIndex,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeakyReLU {
     pub alpha: f64,
 }
 
 // TODO: storage_order
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Pooling {
     pub pad: ConvPad,
     pub ceil_mode: bool,
@@ -144,13 +144,13 @@ pub struct Pooling {
     pub strides: OptionalVec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Reduce {
     pub axes: Vec<i64>,
     pub keepdims: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResizeNearestMode {
     RoundPreferFloor,
     RoundPreferCeil,
@@ -158,24 +158,24 @@ pub enum ResizeNearestMode {
     Ceil,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResizeCoordinateTransformationMode {
     HalfPixel,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResizeKeepAspectRatioPolicy {
     Stretch,
     NotLarger,
     NotSmaller,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResizeMode {
     Nearest(ResizeNearestMode),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Resize {
     pub axes: Option<Vec<TensorIndex>>,
     pub coordinate_transformation_mode: ResizeCoordinateTransformationMode,
@@ -183,13 +183,13 @@ pub struct Resize {
     pub mode: ResizeMode,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Shape {
     pub start: TensorIndex,
     pub end: Option<TensorIndex>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Slice {
     pub start: TensorIndex,
     pub end: TensorIndex,
@@ -197,7 +197,7 @@ pub struct Slice {
     pub step: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Transpose {
     pub perm: Option<Vec<usize>>,
 }
@@ -248,13 +248,13 @@ impl Slice {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SplitOutputs {
     NumOutputs(usize),
     Split(Vec<usize>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Split {
     pub axis: TensorIndex,
     pub outputs: SplitOutputs,
@@ -276,7 +276,7 @@ impl Reduce {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Gemm {
     pub alpha: f64,
     pub beta: f64,
@@ -295,13 +295,13 @@ impl Default for Gemm {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Channel {
     Meld(usize),  // Conv
     Split(usize), // MaxPool
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PadVal {
     Zero,
     NInf,
@@ -316,7 +316,7 @@ impl Channel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Im2Col {
     pub nbatch: usize,
     pub one_fm_shape: ResolvedTensorDims, // convolution of one image and one kernel (feature map)
@@ -494,7 +494,7 @@ impl Operator {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReduceOp {
     Max,
     Mean,

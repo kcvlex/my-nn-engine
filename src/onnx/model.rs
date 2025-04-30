@@ -255,7 +255,7 @@ impl IndexMut<NodeId> for Nodes {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueInfo {
     pub name: String,
     pub ty: Option<TensorType>,

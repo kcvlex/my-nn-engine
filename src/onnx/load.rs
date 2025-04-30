@@ -384,11 +384,11 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
     Ok(res)
 }
 
-trait OptionalVecExt<T: Clone + Copy> {
+trait OptionalVecExt<T: Clone + Copy + PartialEq> {
     fn with_default(self, default: T) -> OptionalVec<T>;
 }
 
-impl<T: Clone + Copy> OptionalVecExt<T> for Option<Vec<T>> {
+impl<T: Clone + Copy + PartialEq> OptionalVecExt<T> for Option<Vec<T>> {
     fn with_default(self, default: T) -> OptionalVec<T> {
         OptionalVec::new(self, default)
     }
