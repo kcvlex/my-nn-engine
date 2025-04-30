@@ -152,7 +152,7 @@ impl ResolvedTensorDims {
         res
     }
 
-    pub fn raw(&self) -> &Vec<usize> {
+    pub fn inner(&self) -> &Vec<usize> {
         &self.0
     }
 

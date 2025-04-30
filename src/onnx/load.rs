@@ -12,15 +12,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
-type TensorDataTypeProto = tensor_proto::DataType;
-
 #[derive(Debug)]
 pub enum ModelLoadError {
     FileRead(std::io::Error),
     Decode(DecodeError),
     ElemTypeUnspecified,
     NoGraph,
-    UnsupportedElemType(TensorDataTypeProto),
+    UnsupportedElemType(tensor_proto::DataType),
     UnsupportedValueType(type_proto::Value),
     UnsupportedAttributeType(attribute_proto::AttributeType),
     UnsupportedOp(String),
@@ -340,12 +338,12 @@ impl TryFrom<i32> for DataType {
         let value = tensor_proto::DataType::try_from(value)
             .map_err(|e| ModelLoadError::Unexpected(format!("Invalid DataType: {:?}", e)))?;
         match value {
-            TensorDataTypeProto::Float => Ok(FloatType::F32.into()),
-            TensorDataTypeProto::Double => Ok(FloatType::F64.into()),
-            TensorDataTypeProto::Int32 => Ok(SIntType::I32.into()),
-            TensorDataTypeProto::Int64 => Ok(SIntType::I64.into()),
-            TensorDataTypeProto::Uint64 => Ok(UIntType::U64.into()),
-            TensorDataTypeProto::Undefined => Err(ModelLoadError::ElemTypeUnspecified),
+            tensor_proto::DataType::Float => Ok(FloatType::F32.into()),
+            tensor_proto::DataType::Double => Ok(FloatType::F64.into()),
+            tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),
+            tensor_proto::DataType::Int64 => Ok(SIntType::I64.into()),
+            tensor_proto::DataType::Uint64 => Ok(UIntType::U64.into()),
+            tensor_proto::DataType::Undefined => Err(ModelLoadError::ElemTypeUnspecified),
             x => Err(ModelLoadError::UnsupportedElemType(x)),
         }
     }
