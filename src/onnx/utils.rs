@@ -295,7 +295,9 @@ mod comp {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::path::PathBuf;
+    use crate::onnx::model::Model;
+    use crate::onnx::load::*;
+    use std::path::{Path, PathBuf};
 
     fn compare_models<P0: AsRef<Path>, P1: AsRef<Path>>(
         p0: P0,
