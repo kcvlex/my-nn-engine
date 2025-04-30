@@ -1,16 +1,7 @@
-use crate::onnx::load::*;
-use crate::onnx::model::{Graph, Model, Node, NodeId, NodeMeta, Nodes, ValueId, ValueInfo, Values};
+use crate::onnx::model::{Graph, NodeId, Nodes, ValueId, ValueInfo};
 use crate::onnx::operator::*;
-use crate::tensor::{
-    data::TensorData,
-    dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
-    types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
-    Tensor,
-};
 use itertools::Itertools;
-use prost::{DecodeError, Message};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
 
 pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     fn dfs(
