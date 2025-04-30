@@ -1,19 +1,21 @@
 use crate::onnx::model::*;
 use crate::onnx::operator::*;
+use crate::onnx::utils;
 use crate::tensor::{
     data::TensorData,
-    dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
+    dimensions::Dimension,
     types::{
-        DataType, FloatType, ResolvedTensorType, SIntType, TensorType, TypeError, UIntType,
+        DataType, FloatType, ResolvedTensorType, SIntType, TensorType, UIntType,
         UnresolvedTensorType,
     },
     Tensor,
 };
 use itertools::Itertools;
-use prost::{DecodeError, Message};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use prost::Message;
+use std::collections::HashSet;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
+
+// FIXME: This module is not tested at all!
 
 impl From<SIntType> for tensor_proto::DataType {
     fn from(ty: SIntType) -> Self {
@@ -253,7 +255,9 @@ impl Graph {
                     .inspect(|v| {
                         dummy.insert(*v);
                     })
-                    .map(|v| self.values[v].to_proto())
+                    .map(|v| &self.values[v])
+                    .sorted_by_key(|x| &x.name)
+                    .map(|v| v.to_proto())
                     .collect()
             }};
         }
@@ -271,13 +275,17 @@ impl Graph {
             .initializer
             .iter()
             .filter(|(k, _)| !dummy.contains(k))
+            .sorted_by_key(|(k, _)| *k)
             .map(|(_, v)| v.to_proto())
             .collect();
-        let node = self
-            .nodes
+
+        let node: Vec<_> = utils::simple_topological_order(self)
             .iter()
-            .map(|(_, n)| n.to_proto(&self.values))
+            .map(|x| self.nodes[*x].to_proto(&self.values))
             .collect();
+
+        assert!(node.len() == self.nodes.iter().filter(|(_, v)| !v.is_dummy()).count());
+
         GraphProto {
             name,
             input,
