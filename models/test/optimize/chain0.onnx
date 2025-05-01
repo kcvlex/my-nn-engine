@@ -1,0 +1,20 @@
+pytorch2.7.0:¤
+<
+input0/layer0/Sigmoid_output_0/layer0/Sigmoid"Sigmoid
+4
+/layer0/Sigmoid_output_0/Exp_output_0/Exp"Exp
+:
+/Exp_output_0/layer1/Tanh_output_0/layer1/Tanh"Tanh
+*
+/layer1/Tanh_output_0output/Log"Log
+main_graphZ
+input0
+
+
+
+b
+output
+
+
+
+B
