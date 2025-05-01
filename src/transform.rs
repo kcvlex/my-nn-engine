@@ -81,14 +81,15 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
-    use crate::onnx::save::*;
     use crate::transform::optimize::elementwise_fuse::FuseElementwiseOps;
     use std::path::PathBuf;
 
+    #[ignore]
     #[test]
-    fn test_chain0() {
+    fn test_save() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/test/optimize");
-        let input = dir.join("chain0.onnx");
+        let input_name = "elementwise_complex0";
+        let input = dir.join(format!("{}.onnx", input_name));
         let mut model = Model::load_from_path(&input).unwrap();
         let graph = &mut model.graph;
         let mut modifier = SimpleGraphModifier::new(graph);
@@ -98,7 +99,7 @@ mod test {
         fusion.run(graph, &mut modifier);
         modifier.update_deleted_nodes(graph);
         graph.delete_nodes();
-        let output = dir.join("chain0_out.onnx");
+        let output = dir.join(format!("{}.out.onnx", input_name));
         model.save_to_path(&output).unwrap();
     }
 }

@@ -183,3 +183,51 @@ impl FuseElementwiseOpsImpl {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::onnx;
+    use crate::onnx::load::*;
+    use crate::onnx::model::Model;
+    use crate::transform::*;
+    use std::path::PathBuf;
+
+    fn create_fusion_pass() -> SimplePassManager<SimpleGraphModifier> {
+        let mut manager = SimplePassManager::new("Fusion".to_string());
+        manager.add_pass(Box::new(FuseElementwiseOps::default()));
+        manager
+    }
+
+    type ResultType = Result<(), String>;
+
+    fn compare_graphs(input: &str, expected: &str) -> ResultType {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/test/optimize");
+        let input = dir.join(input);
+        let mut model = Model::load_from_path(&input).map_err(|e| format!("{:?}", e))?;
+        let obtained = &mut model.graph;
+        let mut modifier = SimpleGraphModifier::new(obtained);
+        for manager in [create_infer_passes(true), create_fusion_pass()] {
+            manager.run(obtained, &mut modifier);
+        }
+
+        let expected = dir.join(expected);
+        let expected = Model::load_from_path(&expected).map_err(|e| format!("{:?}", e))?;
+        onnx::utils::compare_graphs(obtained, &expected.graph).map_err(|e| format!("{:?}", e))
+    }
+
+    #[test]
+    fn test_elementwise_chain_single() -> ResultType {
+        compare_graphs("chain_single.onnx", "chain_single.out.onnx")
+    }
+
+    #[test]
+    fn test_elementwise_chain_branch() -> ResultType {
+        compare_graphs("chain_branch.onnx", "chain_branch.out.onnx")
+    }
+
+    #[test]
+    fn test_elementwise_complex0() -> ResultType {
+        compare_graphs("elementwise_complex0.onnx", "elementwise_complex0.out.onnx")
+    }
+}

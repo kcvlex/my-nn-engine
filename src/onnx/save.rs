@@ -232,9 +232,10 @@ impl Node {
         let (opname, attrs) = match &self.op {
             Operator::Add => ("Add", vec![]),
             Operator::BatchNormalization(attrs) => ("BatchNormalization", attrs.to_proto()),
+            Operator::MatMul => ("MatMul", vec![]),
 
             // Custom
-            Operator::ElementwiseOps(attrs) => ("Elementwise", attrs.to_proto()),
+            Operator::ElementwiseOps(attrs) => ("ElementwiseOps", attrs.to_proto()),
 
             _ => todo!(),
         };
