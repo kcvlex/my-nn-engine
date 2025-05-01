@@ -6,7 +6,7 @@ use crate::tensor::{
     types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
     Tensor,
 };
-use itertools::Itertools;
+use itertools::{zip_eq, Itertools};
 use prost::{DecodeError, Message};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -67,6 +67,7 @@ enum Attribute {
     Int(i64),
     Ints(Vec<i64>),
     Str(String),
+    Strings(Vec<String>),
 }
 
 impl Attribute {
@@ -124,6 +125,13 @@ impl Attribute {
 
     fn ty(&self) -> LoadResult<DataType> {
         self.i().and_then(|x| DataType::try_from(x as i32))
+    }
+
+    fn strings(&self) -> LoadResult<Vec<String>> {
+        match self {
+            Attribute::Strings(x) => Ok(x.clone()),
+            x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
+        }
     }
 }
 
@@ -364,6 +372,10 @@ impl TryFrom<tensor_shape_proto::dimension::Value> for Dimension {
     }
 }
 
+fn load_utf8(v: Vec<u8>) -> LoadResult<String> {
+    String::from_utf8(v).map_err(|err| ModelLoadError::Unexpected(err.to_string()))
+}
+
 fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
     let mut res = HashMap::new();
     for attr in v.into_iter() {
@@ -374,9 +386,13 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
             attribute_proto::AttributeType::Float => Ok(Attribute::Float(attr.f)),
             attribute_proto::AttributeType::Int => Ok(Attribute::Int(attr.i)),
             attribute_proto::AttributeType::Ints => Ok(Attribute::Ints(attr.ints)),
-            attribute_proto::AttributeType::String => String::from_utf8(attr.s)
-                .map(Attribute::Str)
-                .map_err(|err| ModelLoadError::Unexpected(err.to_string())),
+            attribute_proto::AttributeType::String => load_utf8(attr.s).map(Attribute::Str),
+            attribute_proto::AttributeType::Strings => attr
+                .strings
+                .into_iter()
+                .map(load_utf8)
+                .collect::<Result<Vec<_>, _>>()
+                .map(|x| Attribute::Strings(x)),
             x => Err(ModelLoadError::UnsupportedAttributeType(x)),
         }?;
         res.insert(name, value);
@@ -508,6 +524,7 @@ impl Gather {
         Ok(Gather { axis })
     }
 }
+
 impl Gemm {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let trans_a = attributes
@@ -724,6 +741,106 @@ impl Transpose {
     }
 }
 
+/// # Attributes
+///
+/// - **operators - STRINGS:** \
+///   A list of elementwise operators.
+///
+/// - **num_arguments - INTS:** \
+///   A list of the number of arguments for each operator. The length of this list must be equal to
+///   the length of `operators`.
+///
+/// - **argument_types - STRINGS:** \
+///   A list of a type of each argument. Each element must be either "input" or "intermediate". The
+///   arguments for the i-th operator corresponds to `argument_types[l..r]`, where `l` and `r` is
+///   as follows.
+///
+///   ```text
+///   l = sum(num_arguments[0..i])
+///   r = l + num_arguments[i]
+///   ```
+///
+///   The following values must be equal.
+///
+///   - The sum of the values of `num_arguments`.
+///   - The length of `argument_types`.
+///   - The sum of the length of `input_indices` and `intermediate_indices`.
+///
+/// - **input_indices - INTS:** \
+///   TODO: Write
+///
+/// - **intermediate_indices - INTS:** \
+///   TODO: Write
+impl ElementwiseOps {
+    fn load_elementwise_op(op: &str) -> LoadResult<Operator> {
+        match op {
+            "Add" => Ok(Operator::Add),
+            "Exp" => Ok(Operator::Exp),
+            "Log" => Ok(Operator::Log),
+            "Mul" => Ok(Operator::Mul),
+            "Sigmoid" => Ok(Operator::Sigmoid),
+            "Sub" => Ok(Operator::Sub),
+            "Tanh" => Ok(Operator::Tanh),
+            x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
+        }
+    }
+
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let operators = attributes
+            .get("operators")
+            .ok_or(ModelLoadError::Required("operators".to_string()))?
+            .strings()?;
+        let num_arguments = attributes
+            .get("num_arguments")
+            .ok_or(ModelLoadError::Required("num_arguments".to_string()))?
+            .ints::<usize>()?;
+        let argument_types = attributes
+            .get("argument_types")
+            .ok_or(ModelLoadError::Required("argument_types".to_string()))?
+            .strings()?;
+        let input_indices = attributes
+            .get("input_indices")
+            .ok_or(ModelLoadError::Required("input_indices".to_string()))?
+            .ints::<usize>()?;
+        let intermediate_indices = attributes
+            .get("intermediate_indices")
+            .ok_or(ModelLoadError::Required("intermediate_indices".to_string()))?
+            .ints::<usize>()?;
+
+        let mut ops = Vec::with_capacity(operators.len());
+        let mut arg_types_index = 0;
+        let mut input_index = 0;
+        let mut intermediate_index = 0;
+        for (op, num_arg) in zip_eq(operators, num_arguments) {
+            let op = Self::load_elementwise_op(&op)?;
+            let mut args = Vec::with_capacity(num_arg);
+            for ty in &argument_types[arg_types_index..arg_types_index + num_arg] {
+                match ty.as_str() {
+                    "input" => {
+                        args.push(ElementwiseOpArg::Input(input_indices[input_index]));
+                        input_index += 1;
+                    }
+                    "intermediate" => {
+                        args.push(ElementwiseOpArg::NthResult(
+                            intermediate_indices[intermediate_index],
+                        ));
+                        intermediate_index += 1;
+                    }
+                    _ => {
+                        return Err(ModelLoadError::Unexpected(
+                            "Invalid argument type".to_string(),
+                        ))
+                    }
+                }
+            }
+            arg_types_index += num_arg;
+            ops.push((Box::new(op), args));
+        }
+
+        Ok(Self { ops })
+    }
+}
+
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
@@ -756,6 +873,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Slice" => Ok(Operator::Slice),
         "Split" => Ok(Operator::Split(Split::load(attributes)?)),
         "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
+
+        // Custom
+        "ElementwiseOps" => Ok(Operator::ElementwiseOps(ElementwiseOps::load(attributes)?)),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

@@ -61,6 +61,7 @@ pub enum Operator {
     // Custom
     BatchNormalizationPerChannel(BatchNormalization),
     Contiguous,
+    ElementwiseOps(ElementwiseOps),
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
 
@@ -480,6 +481,7 @@ impl Operator {
             // Custom
             Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
             Operator::Contiguous => "Contiguous (Custom)",
+            Operator::ElementwiseOps(_) => "ElementwiseOps (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
 
@@ -494,9 +496,24 @@ impl Operator {
     pub fn is_elementwise(&self) -> bool {
         matches!(
             self,
-            Operator::Add | Operator::ReLU | Operator::Sigmoid | Operator::Sub
+            Operator::Add |
+                Operator::ReLU |
+                Operator::Sigmoid |
+                Operator::Sub |
+                Operator::ElementwiseOps(_)
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ElementwiseOpArg {
+    Input(usize),
+    NthResult(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ElementwiseOps {
+    pub ops: Vec<(Box<Operator>, Vec<ElementwiseOpArg>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

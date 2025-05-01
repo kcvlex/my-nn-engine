@@ -414,6 +414,7 @@ pub fn infer_node_output(
         Operator::BatchNormalizationPerChannel(_) |
         Operator::Im2Col(_) |
         Operator::ReduceMatrix(_) |
+        Operator::ElementwiseOps(_) |
         Operator::ForceReshape => {
             for output in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(*output);

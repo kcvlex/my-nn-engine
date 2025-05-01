@@ -1,3 +1,4 @@
+pub mod elementwise_fuse;
 pub mod gemm;
 pub mod im2col;
 pub mod omp;

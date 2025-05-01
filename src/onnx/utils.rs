@@ -295,8 +295,8 @@ mod comp {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::onnx::model::Model;
     use crate::onnx::load::*;
+    use crate::onnx::model::Model;
     use std::path::{Path, PathBuf};
 
     fn compare_models<P0: AsRef<Path>, P1: AsRef<Path>>(
@@ -316,7 +316,7 @@ mod test {
         let model = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/validated/mnist-12/mnist-12.onnx");
         let model = Model::load_from_path(model).expect("failed to load");
-        assert_eq!(compare_graphs(&model.graph, &model.graph), Ok(()));
+        assert!(compare_graphs(&model.graph, &model.graph).is_ok());
     }
 
     #[test]
@@ -344,5 +344,16 @@ mod test {
                 ],
             ),)
         )
+    }
+
+    #[test]
+    fn test_same_const() {
+        assert!(compare_models("add_const0.onnx", "add_const0.onnx").is_ok());
+    }
+
+    #[test]
+    fn test_different_const() {
+        let err = compare_models("add_const0.onnx", "add_const1.onnx");
+        assert!(err.is_err());
     }
 }
