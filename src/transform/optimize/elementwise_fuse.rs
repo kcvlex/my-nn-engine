@@ -1,10 +1,7 @@
 use crate::onnx::model::{Graph, Node, NodeId, NodeMeta, ValueId};
 use crate::onnx::operator::*;
 use crate::onnx::utils;
-use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphModifier;
-use crate::transform::utils::tensor::*;
 use crate::transform::Pass;
 use crate::utils::UnionFind;
 use std::collections::HashMap;
