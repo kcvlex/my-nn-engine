@@ -639,8 +639,8 @@ impl<'ll> CodeGen<'ll, '_> {
                 let mut rhs = ptrs[2].clone();
                 rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
                 let op = Operation {
-                    opcode: $op,
-                    operands: smallvec![ptrs[0].clone(), lhs, rhs],
+                    opcode: $op.into(),
+                    operands: smallvec![ptrs[0].clone(), lhs, rhs].into(),
                 };
                 let op = OperationContext {
                     operation: op,
@@ -655,8 +655,8 @@ impl<'ll> CodeGen<'ll, '_> {
         macro_rules! gen_unaryop {
             ($op: expr) => {{
                 let op = Operation {
-                    opcode: $op,
-                    operands: smallvec![ptrs[0].clone(), ptrs[1].clone()],
+                    opcode: $op.into(),
+                    operands: smallvec![ptrs[0].clone(), ptrs[1].clone()].into(),
                 };
                 let op = OperationContext {
                     operation: op,
@@ -669,24 +669,24 @@ impl<'ll> CodeGen<'ll, '_> {
         }
 
         let exit = match node.op {
-            Operator::Add => gen_binaryop!(Opcode::Add),
+            Operator::Add => gen_binaryop!(SingleOpcode::Add),
             Operator::Concat(ref concat) => {
                 let dst = ptrs[0].clone();
                 let axis = concat.axis.index(dst.ty.dims.ndim());
                 translator.build_concat(dst, &ptrs[1..], entry, axis)
             }
-            Operator::Exp => gen_unaryop!(Opcode::Exp),
-            Operator::LeakyReLU(v) => gen_unaryop!(Opcode::LeakyReLU(v)),
-            Operator::Log => gen_unaryop!(Opcode::Log),
-            Operator::Mul => gen_binaryop!(Opcode::Mul),
-            Operator::ReLU => gen_unaryop!(Opcode::ReLU),
-            Operator::Sigmoid => gen_unaryop!(Opcode::Sigmoid),
-            Operator::Tanh => gen_unaryop!(Opcode::Tanh),
+            Operator::Exp => gen_unaryop!(SingleOpcode::Exp),
+            Operator::LeakyReLU(v) => gen_unaryop!(SingleOpcode::LeakyReLU(v)),
+            Operator::Log => gen_unaryop!(SingleOpcode::Log),
+            Operator::Mul => gen_binaryop!(SingleOpcode::Mul),
+            Operator::ReLU => gen_unaryop!(SingleOpcode::ReLU),
+            Operator::Sigmoid => gen_unaryop!(SingleOpcode::Sigmoid),
+            Operator::Tanh => gen_unaryop!(SingleOpcode::Tanh),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());
             //     gen_unaryop!(UnaryOpcode::Transpose)
             // }
-            Operator::Contiguous => gen_unaryop!(Opcode::Transfer),
+            Operator::Contiguous => gen_unaryop!(SingleOpcode::Transfer),
             // Operator::MatMul => {
             //     let nest = ptrs[0].ty.dims.ndim() - 2;
             //     let gemm = gen_gemm!(

@@ -547,43 +547,62 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
-    fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
-        let res = match op.opcode {
-            opcode @ (Opcode::Add | Opcode::Mul) => {
+    fn build_single_op(
+        &self,
+        opcode: SingleOpcode,
+        ty: DataType,
+        operands: &[TensorPtr<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
+        macro_rules! unary_op {
+            ($ops: expr) => {{
+                assert!(operands.len() == 1);
+                &operands[0]
+            }};
+        }
+
+        macro_rules! binary_op {
+            ($ops: expr) => {{
+                assert!(operands.len() == 2);
+                (&operands[0], &operands[1])
+            }};
+        }
+
+        let res = match opcode {
+            opcode @ (SingleOpcode::Add | SingleOpcode::Mul) => {
                 macro_rules! body {
                     ($into: ident, $arith: ident) => {{
-                        let (lhs, rhs) = op.binary_operands();
+                        let (lhs, rhs) = binary_op!(operands);
                         let lhs = self.build_load(lhs)?.$into();
                         let rhs = self.build_load(rhs)?.$into();
                         self.builder.$arith(lhs, rhs, "res")?.as_basic_value_enum()
                     }};
                 }
 
-                let is_float = matches!(op.result_type(), DataType::Float(_));
+                let is_float = matches!(ty, DataType::Float(_));
 
                 match (opcode, is_float) {
-                    (Opcode::Add, true) => {
+                    (SingleOpcode::Add, true) => {
                         body!(into_float_value, build_float_add)
                     }
-                    (Opcode::Mul, true) => {
+                    (SingleOpcode::Mul, true) => {
                         body!(into_float_value, build_float_mul)
                     }
-                    (Opcode::Add, false) => {
+                    (SingleOpcode::Add, false) => {
                         body!(into_int_value, build_int_add)
                     }
-                    (Opcode::Mul, false) => {
+                    (SingleOpcode::Mul, false) => {
                         body!(into_int_value, build_int_mul)
                     }
                     _ => unreachable!(),
                 }
             }
 
-            opcode @ (Opcode::Exp | Opcode::Log) => {
-                let src = op.unary_operand();
-                let ty = op.result_type().float_type().unwrap();
+            opcode @ (SingleOpcode::Exp | SingleOpcode::Log) => {
+                let src = unary_op!(operands);
+                let ty = ty.float_type().unwrap();
                 let f = match opcode {
-                    Opcode::Exp => self.intrinsics.exp.get(ty),
-                    Opcode::Log => self.intrinsics.log.get(ty),
+                    SingleOpcode::Exp => self.intrinsics.exp.get(ty),
+                    SingleOpcode::Log => self.intrinsics.log.get(ty),
                     _ => unreachable!(),
                 };
                 let src = self.build_load(src)?.into_float_value();
@@ -593,14 +612,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap()
             }
 
-            Opcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
-                let ty = op
-                    .result_type()
-                    .float_type()
-                    .unwrap()
-                    .llvm_type(self.context);
+            SingleOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
+                let ty = ty.float_type().unwrap().llvm_type(self.context);
                 let zero = ty.const_zero();
-                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let src = self.build_load(unary_op!(operands))?.into_float_value();
                 let lt = self.builder.build_float_compare(
                     inkwell::FloatPredicate::OLT,
                     src,
@@ -614,23 +629,23 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder.build_select(lt, lhs, rhs, "res")?
             }
 
-            Opcode::ReLU => {
-                let ty = op.result_type().float_type().unwrap();
+            SingleOpcode::ReLU => {
+                let ty = ty.float_type().unwrap();
                 let fmax = self.intrinsics.fmax.get(ty);
                 let ty = ty.llvm_type(self.context);
                 let zero = ty.const_zero();
-                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let src = self.build_load(unary_op!(operands))?.into_float_value();
                 self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                     .try_as_basic_value()
                     .left()
                     .unwrap()
             }
 
-            Opcode::Sigmoid => {
-                let ty = op.result_type().float_type().unwrap();
+            SingleOpcode::Sigmoid => {
+                let ty = ty.float_type().unwrap();
                 let exp = self.intrinsics.exp.get(ty);
                 let ty = ty.llvm_type(self.context);
-                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let src = self.build_load(unary_op!(operands))?.into_float_value();
                 let src = self.builder.build_float_neg(src, "neg")?;
                 let exp = self
                     .build_tail_call(exp, &[src.into()], "exp")?
@@ -643,10 +658,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder.build_float_div(one, den, "res")?.into()
             }
 
-            Opcode::Tanh => {
-                let ty = op.result_type().float_type().unwrap();
-                let ty = ty.llvm_type(self.context);
-                let src = self.build_load(op.unary_operand())?.into_float_value();
+            SingleOpcode::Tanh => {
+                let ty = ty.float_type().unwrap().llvm_type(self.context);
+                let src = self.build_load(unary_op!(operands))?.into_float_value();
                 let src = self
                     .builder
                     .build_float_ext(src, self.context.f64_type(), "ext")?;
@@ -660,9 +674,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .as_basic_value_enum()
             }
 
-            Opcode::Transfer => self.build_load(op.unary_operand())?,
+            SingleOpcode::Transfer => self.build_load(unary_op!(operands))?,
         };
 
+        Ok(res)
+    }
+
+    fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
+        let res = match op.opcode {
+            Opcode::Single(opcode) => {
+                self.build_single_op(opcode, op.result_type(), op.src_operands())?
+            }
+            Opcode::Fused(_) => todo!(),
+        };
         self.build_store(&op.dst_operand(), res)
     }
 
@@ -679,8 +703,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let mut c = c.clone();
             c.ty = c.ty.broadcast(&dst.ty.dims);
             let op = Operation {
-                opcode: Opcode::Transfer,
-                operands: smallvec![dst.clone(), c.clone()],
+                opcode: SingleOpcode::Transfer.into(),
+                operands: smallvec![dst.clone(), c.clone()].into(),
             };
             let op = OperationContext {
                 operation: op,
@@ -1063,7 +1087,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         loop_range: Option<(IntValue<'ctx>, IntValue<'ctx>)>,
     ) -> Result<(), BuilderError> {
         if op_ctx.to_paralleize(nest) {
-            let tensors = op_ctx.operation.operands_as_vec();
+            let tensors = op_ctx.operation.operands.to_vec();
             let mut args = Vec::with_capacity(tensors.len() * 2);
             for (i, tensor) in tensors.iter().enumerate() {
                 let ptr_ptr = self
@@ -1596,8 +1620,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             )?;
             dst.ty.dims[axis] = src.ty.dims[axis];
             let op = Operation {
-                opcode: Opcode::Transfer,
-                operands: smallvec![dst, src.clone()],
+                opcode: SingleOpcode::Transfer.into(),
+                operands: smallvec![dst, src.clone()].into(),
             };
             let op = OperationContext {
                 operation: op,

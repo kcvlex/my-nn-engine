@@ -1,5 +1,5 @@
 use crate::codegen::translator::FunctionTranslator;
-use crate::onnx::operator::LeakyReLU;
+use crate::onnx::operator::{ElementwiseOpArg, LeakyReLU};
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::{DataType, ResolvedTensorType};
 use inkwell::builder::BuilderError;
@@ -69,7 +69,7 @@ pub struct Operation<'ctx> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Opcode {
+pub enum SingleOpcode {
     Add,
     Exp,
     LeakyReLU(LeakyReLU),
@@ -79,6 +79,18 @@ pub enum Opcode {
     Sigmoid,
     Tanh,
     Transfer,
+}
+
+#[derive(Debug, Clone)]
+pub enum Opcode {
+    Single(SingleOpcode),
+    Fused(Vec<(SingleOpcode, Vec<ElementwiseOpArg>)>),
+}
+
+impl Into<Opcode> for SingleOpcode {
+    fn into(self) -> Opcode {
+        Opcode::Single(self)
+    }
 }
 
 #[derive(Clone)]
@@ -109,7 +121,7 @@ impl OperationContext<'_> {
 
 impl<'ctx> Operation<'ctx> {
     pub fn result_dims(&self) -> &ResolvedTensorDims {
-        &self.operands[0].ty.dims
+        &self.dst_operand().ty.dims
     }
 
     pub fn to_outlined(
@@ -124,7 +136,7 @@ impl<'ctx> Operation<'ctx> {
             .collect::<Result<_, _>>()?;
         Ok(Self {
             operands,
-            opcode: self.opcode,
+            opcode: self.opcode.clone(),
         })
     }
 
@@ -148,30 +160,16 @@ impl<'ctx> Operation<'ctx> {
         void_type.fn_type(&vec, false)
     }
 
-    pub fn operands_as_vec(&self) -> Vec<TensorPtr<'ctx>> {
-        self.operands.to_vec()
+    pub fn result_type(&self) -> DataType {
+        self.dst_operand().ty.elem_type
     }
 
     pub fn dst_operand(&self) -> &TensorPtr<'ctx> {
         &self.operands[0]
     }
 
-    pub fn unary_operand(&self) -> &TensorPtr<'ctx> {
-        assert!(self.operands.len() == 2);
-        &self.operands[1]
-    }
-
-    pub fn binary_operands(&self) -> (&TensorPtr<'ctx>, &TensorPtr<'ctx>) {
-        assert!(self.operands.len() == 3);
-        (&self.operands[1], &self.operands[2])
-    }
-
     pub fn src_operands(&self) -> &[TensorPtr<'ctx>] {
         &self.operands[1..]
-    }
-
-    pub fn result_type(&self) -> DataType {
-        self.dst_operand().ty.elem_type
     }
 }
 
