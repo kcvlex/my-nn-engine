@@ -10,6 +10,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
+use smallvec::smallvec;
 
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {
@@ -547,119 +548,122 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     }
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
-        match op {
-            Operation::UnaryOp(op, opcode) => {
-                let res = match opcode {
-                    opcode @ (UnaryOpcode::Exp | UnaryOpcode::Log) => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let f = match opcode {
-                            UnaryOpcode::Exp => self.intrinsics.exp.get(ty),
-                            UnaryOpcode::Log => self.intrinsics.log.get(ty),
-                            _ => unreachable!(),
-                        };
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        self.build_tail_call(f, &[src.into()], "res")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                    }
-                    UnaryOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
-                        let ty = op
-                            .dst
-                            .ty
-                            .elem_type
-                            .float_type()
-                            .unwrap()
-                            .llvm_type(self.context);
-                        let zero = ty.const_zero();
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        let lt = self.builder.build_float_compare(
-                            inkwell::FloatPredicate::OLT,
-                            src,
-                            zero,
-                            "lt",
-                        )?;
-                        let lhs =
-                            self.builder
-                                .build_float_mul(src, ty.const_float(*alpha), "lhs")?;
-                        let rhs = src;
-                        self.builder.build_select(lt, lhs, rhs, "res")?
-                    }
-                    UnaryOpcode::ReLU => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let fmax = self.intrinsics.fmax.get(ty);
-                        let ty = ty.llvm_type(self.context);
-                        let zero = ty.const_zero();
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                    }
-                    UnaryOpcode::Sigmoid => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let exp = self.intrinsics.exp.get(ty);
-                        let ty = ty.llvm_type(self.context);
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        let src = self.builder.build_float_neg(src, "neg")?;
-                        let exp = self
-                            .build_tail_call(exp, &[src.into()], "exp")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                            .into_float_value();
-                        let one = ty.const_float(1.0);
-                        let den = self.builder.build_float_add(one, exp, "den")?;
-                        self.builder.build_float_div(one, den, "res")?.into()
-                    }
-                    UnaryOpcode::Tanh => {
-                        let ty = op.dst.ty.elem_type.float_type().unwrap();
-                        let ty = ty.llvm_type(self.context);
-                        let src = self.build_load(&op.src)?.into_float_value();
-                        let src =
-                            self.builder
-                                .build_float_ext(src, self.context.f64_type(), "ext")?;
-                        let res = self
-                            .build_tail_call(self.intrinsics.tanh, &[src.into()], "res")?
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap();
-                        self.builder
-                            .build_float_trunc(res.into_float_value(), ty, "res")?
-                            .as_basic_value_enum()
-                    }
-                    UnaryOpcode::Transfer => self.build_load(&op.src)?,
-                };
-                self.build_store(&op.dst, res)
-            }
-            Operation::BinaryOp(op, opcode) => match opcode {
-                BinaryOpcode::BinaryArithmetic(BinaryArithmetic { opcode, is_float }) => {
-                    macro_rules! body {
-                        ($into: ident, $arith: ident) => {{
-                            let lhs = self.build_load(&op.lhs)?.$into();
-                            let rhs = self.build_load(&op.rhs)?.$into();
-                            let res = self.builder.$arith(lhs, rhs, "res")?;
-                            self.build_store(&op.dst, res)
-                        }};
-                    }
-
-                    match (opcode, is_float) {
-                        (BinaryArithmeticOpcode::Add, true) => {
-                            body!(into_float_value, build_float_add)
-                        }
-                        (BinaryArithmeticOpcode::Mul, true) => {
-                            body!(into_float_value, build_float_mul)
-                        }
-                        (BinaryArithmeticOpcode::Add, false) => {
-                            body!(into_int_value, build_int_add)
-                        }
-                        (BinaryArithmeticOpcode::Mul, false) => {
-                            body!(into_int_value, build_int_mul)
-                        }
-                    }
+        let res = match op.opcode {
+            opcode @ (Opcode::Add | Opcode::Mul) => {
+                macro_rules! body {
+                    ($into: ident, $arith: ident) => {{
+                        let (lhs, rhs) = op.binary_operands();
+                        let lhs = self.build_load(lhs)?.$into();
+                        let rhs = self.build_load(rhs)?.$into();
+                        self.builder.$arith(lhs, rhs, "res")?.as_basic_value_enum()
+                    }};
                 }
-            },
-        }
+
+                let is_float = matches!(op.result_type(), DataType::Float(_));
+
+                match (opcode, is_float) {
+                    (Opcode::Add, true) => {
+                        body!(into_float_value, build_float_add)
+                    }
+                    (Opcode::Mul, true) => {
+                        body!(into_float_value, build_float_mul)
+                    }
+                    (Opcode::Add, false) => {
+                        body!(into_int_value, build_int_add)
+                    }
+                    (Opcode::Mul, false) => {
+                        body!(into_int_value, build_int_mul)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            opcode @ (Opcode::Exp | Opcode::Log) => {
+                let src = op.unary_operand();
+                let ty = op.result_type().float_type().unwrap();
+                let f = match opcode {
+                    Opcode::Exp => self.intrinsics.exp.get(ty),
+                    Opcode::Log => self.intrinsics.log.get(ty),
+                    _ => unreachable!(),
+                };
+                let src = self.build_load(src)?.into_float_value();
+                self.build_tail_call(f, &[src.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+
+            Opcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
+                let ty = op
+                    .result_type()
+                    .float_type()
+                    .unwrap()
+                    .llvm_type(self.context);
+                let zero = ty.const_zero();
+                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let lt = self.builder.build_float_compare(
+                    inkwell::FloatPredicate::OLT,
+                    src,
+                    zero,
+                    "lt",
+                )?;
+                let lhs = self
+                    .builder
+                    .build_float_mul(src, ty.const_float(alpha), "lhs")?;
+                let rhs = src;
+                self.builder.build_select(lt, lhs, rhs, "res")?
+            }
+
+            Opcode::ReLU => {
+                let ty = op.result_type().float_type().unwrap();
+                let fmax = self.intrinsics.fmax.get(ty);
+                let ty = ty.llvm_type(self.context);
+                let zero = ty.const_zero();
+                let src = self.build_load(op.unary_operand())?.into_float_value();
+                self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+
+            Opcode::Sigmoid => {
+                let ty = op.result_type().float_type().unwrap();
+                let exp = self.intrinsics.exp.get(ty);
+                let ty = ty.llvm_type(self.context);
+                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let src = self.builder.build_float_neg(src, "neg")?;
+                let exp = self
+                    .build_tail_call(exp, &[src.into()], "exp")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value();
+                let one = ty.const_float(1.0);
+                let den = self.builder.build_float_add(one, exp, "den")?;
+                self.builder.build_float_div(one, den, "res")?.into()
+            }
+
+            Opcode::Tanh => {
+                let ty = op.result_type().float_type().unwrap();
+                let ty = ty.llvm_type(self.context);
+                let src = self.build_load(op.unary_operand())?.into_float_value();
+                let src = self
+                    .builder
+                    .build_float_ext(src, self.context.f64_type(), "ext")?;
+                let res = self
+                    .build_tail_call(self.intrinsics.tanh, &[src.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
+                self.builder
+                    .build_float_trunc(res.into_float_value(), ty, "res")?
+                    .as_basic_value_enum()
+            }
+
+            Opcode::Transfer => self.build_load(op.unary_operand())?,
+        };
+
+        self.build_store(&op.dst_operand(), res)
     }
 
     pub fn build_gemm(
@@ -674,13 +678,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let entry = if let Some(c) = c {
             let mut c = c.clone();
             c.ty = c.ty.broadcast(&dst.ty.dims);
-            let op = Operation::UnaryOp(
-                UnaryOps {
-                    dst: dst.clone(),
-                    src: c,
-                },
-                UnaryOpcode::Transfer,
-            );
+            let op = Operation {
+                opcode: Opcode::Transfer,
+                operands: smallvec![dst.clone(), c.clone()],
+            };
             let op = OperationContext {
                 operation: op,
                 omp_ctx: None,
@@ -1031,27 +1032,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let lb = self.builder.build_int_s_extend(lb, i64_type, "lb")?;
         let ub = self.builder.build_int_s_extend(ub, i64_type, "ub")?;
 
-        macro_rules! update_offset {
-            ($ptr: expr) => {{
-                let add = self.builder.build_int_mul(
-                    lb,
-                    i64_type.const_int($ptr.stride(nest).try_into().unwrap(), false),
-                    "add",
-                )?;
-                $ptr.offset = self.builder.build_int_add($ptr.offset, add, "offset")?;
-            }};
-        }
         let mut op_ctx = op_ctx;
-        match op_ctx.operation {
-            Operation::UnaryOp(ref mut op, _) => {
-                update_offset!(op.dst);
-                update_offset!(op.src);
-            }
-            Operation::BinaryOp(ref mut op, _) => {
-                update_offset!(op.dst);
-                update_offset!(op.lhs);
-                update_offset!(op.rhs);
-            }
+        for op in op_ctx.operation.operands.iter_mut() {
+            let add = self.builder.build_int_mul(
+                lb,
+                i64_type.const_int(op.stride(nest).try_into().unwrap(), false),
+                "add",
+            )?;
+            op.offset = self.builder.build_int_add(op.offset, add, "offset")?;
         }
         self.builder.build_unconditional_branch(new_header)?;
 
@@ -1074,41 +1062,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         max_nest: usize,
         loop_range: Option<(IntValue<'ctx>, IntValue<'ctx>)>,
     ) -> Result<(), BuilderError> {
-        macro_rules! update_offset {
-            ($ptr: expr, $offset_phi: expr, $exiting: expr) => {{
-                let offset_int = $offset_phi.as_basic_value().into_int_value();
-                self.builder.position_at_end($exiting);
-                let stride = self
-                    .context
-                    .i64_type()
-                    .const_int($ptr.stride(nest).try_into().unwrap(), false);
-                let offset_next = self.builder.build_int_add(
-                    offset_int,
-                    stride,
-                    format!("offset.{}.{}.next", $ptr.name, nest).as_str(),
-                )?;
-                self.builder.position_at_end(loop_bb.header);
-                $offset_phi.add_incoming(&[
-                    (
-                        &self.context.i64_type().const_int(0, false),
-                        loop_bb.preheader,
-                    ),
-                    (&offset_next, $exiting),
-                ]);
-                let offset_sum = self.builder.build_int_add(
-                    $ptr.offset,
-                    offset_int,
-                    format!("offset.sum.{}.{}", $ptr.name, nest).as_str(),
-                )?;
-                TensorPtr {
-                    ptr: $ptr.ptr,
-                    ty: $ptr.ty,
-                    offset: offset_sum,
-                    name: $ptr.name,
-                }
-            }};
-        }
-
         if op_ctx.to_paralleize(nest) {
             let tensors = op_ctx.operation.operands_as_vec();
             let mut args = Vec::with_capacity(tensors.len() * 2);
@@ -1167,52 +1120,43 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
         };
         let mut next_op_ctx = op_ctx;
-        next_op_ctx.operation = match next_op_ctx.operation {
-            Operation::UnaryOp(op, opcode) => {
-                let offset_phi_dst = self.builder.build_phi(
-                    self.context.i64_type(),
-                    format!("offset.dst.{}", nest).as_str(),
-                )?;
-                let offset_phi_src = self.builder.build_phi(
-                    self.context.i64_type(),
-                    format!("offset.src.{}", nest).as_str(),
-                )?;
-                let next_dst = update_offset!(op.dst, offset_phi_dst, exiting_bb);
-                let next_src = update_offset!(op.src, offset_phi_src, exiting_bb);
-                Operation::UnaryOp(
-                    UnaryOps {
-                        dst: next_dst,
-                        src: next_src,
-                    },
-                    opcode,
+        let phis = next_op_ctx
+            .operation
+            .operands
+            .iter()
+            .map(|op| {
+                self.builder.build_phi(
+                    op.offset.get_type(),
+                    format!("offset.{}.{}", op.name, nest).as_str(),
                 )
-            }
-            Operation::BinaryOp(op, opcode) => {
-                let offset_phi_dst = self.builder.build_phi(
-                    self.context.i64_type(),
-                    format!("offset.dst.{}", nest).as_str(),
-                )?;
-                let offset_phi_lhs = self.builder.build_phi(
-                    self.context.i64_type(),
-                    format!("offset.lhs.{}", nest).as_str(),
-                )?;
-                let offset_phi_rhs = self.builder.build_phi(
-                    self.context.i64_type(),
-                    format!("offset.rhs.{}", nest).as_str(),
-                )?;
-                let next_dst = update_offset!(op.dst, offset_phi_dst, exiting_bb);
-                let next_lhs = update_offset!(op.lhs, offset_phi_lhs, exiting_bb);
-                let next_rhs = update_offset!(op.rhs, offset_phi_rhs, exiting_bb);
-                Operation::BinaryOp(
-                    BinaryOps {
-                        dst: next_dst,
-                        lhs: next_lhs,
-                        rhs: next_rhs,
-                    },
-                    opcode,
-                )
-            }
-        };
+            })
+            .collect::<Result<Vec<_>, BuilderError>>()?;
+        for (op, offset_phi) in next_op_ctx.operation.operands.iter_mut().zip(phis) {
+            let offset_int = offset_phi.as_basic_value().into_int_value();
+            self.builder.position_at_end(exiting_bb);
+            let stride = self
+                .context
+                .i64_type()
+                .const_int(op.stride(nest).try_into().unwrap(), false);
+            let offset_next = self.builder.build_int_add(
+                offset_int,
+                stride,
+                format!("offset.{}.{}.next", op.name, nest).as_str(),
+            )?;
+            self.builder.position_at_end(loop_bb.header);
+            offset_phi.add_incoming(&[
+                (
+                    &self.context.i64_type().const_int(0, false),
+                    loop_bb.preheader,
+                ),
+                (&offset_next, exiting_bb),
+            ]);
+            op.offset = self.builder.build_int_add(
+                op.offset,
+                offset_int,
+                format!("offset.sum.{}.{}", op.name, nest).as_str(),
+            )?;
+        }
         let next_bb = self
             .context
             .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
@@ -1651,13 +1595,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 "dst.offset",
             )?;
             dst.ty.dims[axis] = src.ty.dims[axis];
-            let op = Operation::UnaryOp(
-                UnaryOps {
-                    dst,
-                    src: src.clone(),
-                },
-                UnaryOpcode::Transfer,
-            );
+            let op = Operation {
+                opcode: Opcode::Transfer,
+                operands: smallvec![dst, src.clone()],
+            };
             let op = OperationContext {
                 operation: op,
                 omp_ctx: None,

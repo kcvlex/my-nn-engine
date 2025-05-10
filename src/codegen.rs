@@ -26,6 +26,7 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
+use smallvec::smallvec;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -637,12 +638,10 @@ impl<'ll> CodeGen<'ll, '_> {
                 lhs.ty = lhs.ty.broadcast(&ptrs[0].ty.dims);
                 let mut rhs = ptrs[2].clone();
                 rhs.ty = rhs.ty.broadcast(&ptrs[0].ty.dims);
-                let binop = BinaryOps {
-                    dst: ptrs[0].clone(),
-                    lhs,
-                    rhs,
+                let op = Operation {
+                    opcode: $op,
+                    operands: smallvec![ptrs[0].clone(), lhs, rhs],
                 };
-                let op = Operation::BinaryOp(binop, $op);
                 let op = OperationContext {
                     operation: op,
                     omp_ctx,
@@ -655,13 +654,10 @@ impl<'ll> CodeGen<'ll, '_> {
 
         macro_rules! gen_unaryop {
             ($op: expr) => {{
-                let op = Operation::UnaryOp(
-                    UnaryOps {
-                        dst: ptrs[0].clone(),
-                        src: ptrs[1].clone(),
-                    },
-                    $op,
-                );
+                let op = Operation {
+                    opcode: $op,
+                    operands: smallvec![ptrs[0].clone(), ptrs[1].clone()],
+                };
                 let op = OperationContext {
                     operation: op,
                     omp_ctx,
@@ -673,34 +669,24 @@ impl<'ll> CodeGen<'ll, '_> {
         }
 
         let exit = match node.op {
-            Operator::Add | Operator::Mul => {
-                let is_float = matches!(ptrs[0].ty.elem_type, DataType::Float(_));
-                let opcode = match node.op {
-                    Operator::Add => BinaryArithmeticOpcode::Add,
-                    Operator::Mul => BinaryArithmeticOpcode::Mul,
-                    _ => unreachable!(),
-                };
-                gen_binaryop!(BinaryOpcode::BinaryArithmetic(BinaryArithmetic {
-                    opcode,
-                    is_float
-                }))
-            }
+            Operator::Add => gen_binaryop!(Opcode::Add),
             Operator::Concat(ref concat) => {
                 let dst = ptrs[0].clone();
                 let axis = concat.axis.index(dst.ty.dims.ndim());
                 translator.build_concat(dst, &ptrs[1..], entry, axis)
             }
-            Operator::ReLU => gen_unaryop!(UnaryOpcode::ReLU),
-            Operator::LeakyReLU(v) => gen_unaryop!(UnaryOpcode::LeakyReLU(v)),
-            Operator::Exp => gen_unaryop!(UnaryOpcode::Exp),
-            Operator::Log => gen_unaryop!(UnaryOpcode::Log),
-            Operator::Sigmoid => gen_unaryop!(UnaryOpcode::Sigmoid),
-            Operator::Tanh => gen_unaryop!(UnaryOpcode::Tanh),
+            Operator::Exp => gen_unaryop!(Opcode::Exp),
+            Operator::LeakyReLU(v) => gen_unaryop!(Opcode::LeakyReLU(v)),
+            Operator::Log => gen_unaryop!(Opcode::Log),
+            Operator::Mul => gen_binaryop!(Opcode::Mul),
+            Operator::ReLU => gen_unaryop!(Opcode::ReLU),
+            Operator::Sigmoid => gen_unaryop!(Opcode::Sigmoid),
+            Operator::Tanh => gen_unaryop!(Opcode::Tanh),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());
             //     gen_unaryop!(UnaryOpcode::Transpose)
             // }
-            Operator::Contiguous => gen_unaryop!(UnaryOpcode::Transfer),
+            Operator::Contiguous => gen_unaryop!(Opcode::Transfer),
             // Operator::MatMul => {
             //     let nest = ptrs[0].ty.dims.ndim() - 2;
             //     let gemm = gen_gemm!(

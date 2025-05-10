@@ -1,12 +1,13 @@
 use crate::codegen::translator::FunctionTranslator;
 use crate::onnx::operator::LeakyReLU;
 use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::{DataType, ResolvedTensorType};
 use inkwell::builder::BuilderError;
 use inkwell::context::Context;
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
+use smallvec::SmallVec;
 
 // TODO: Change `ty` to reference
 #[derive(Debug, Clone)]
@@ -62,9 +63,22 @@ impl<'ctx> TensorPtr<'ctx> {
     }
 }
 
-pub enum Operation<'ctx> {
-    UnaryOp(UnaryOps<'ctx>, UnaryOpcode),
-    BinaryOp(BinaryOps<'ctx>, BinaryOpcode),
+pub struct Operation<'ctx> {
+    pub opcode: Opcode,
+    pub operands: SmallVec<[TensorPtr<'ctx>; 4]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Opcode {
+    Add,
+    Exp,
+    LeakyReLU(LeakyReLU),
+    Log,
+    Mul,
+    ReLU,
+    Sigmoid,
+    Tanh,
+    Transfer,
 }
 
 #[derive(Clone)]
@@ -93,82 +107,31 @@ impl OperationContext<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum BinaryArithmeticOpcode {
-    Add,
-    Mul,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct BinaryArithmetic {
-    pub opcode: BinaryArithmeticOpcode,
-    pub is_float: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum BinaryOpcode {
-    BinaryArithmetic(BinaryArithmetic),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UnaryOpcode {
-    Exp,
-    LeakyReLU(LeakyReLU),
-    Log,
-    ReLU,
-    Sigmoid,
-    Tanh,
-    Transfer,
-}
-
-pub struct UnaryOps<'ctx> {
-    pub dst: TensorPtr<'ctx>,
-    pub src: TensorPtr<'ctx>,
-}
-
-pub struct BinaryOps<'ctx> {
-    pub dst: TensorPtr<'ctx>,
-    pub lhs: TensorPtr<'ctx>,
-    pub rhs: TensorPtr<'ctx>,
-}
-
 impl<'ctx> Operation<'ctx> {
     pub fn result_dims(&self) -> &ResolvedTensorDims {
-        match self {
-            Operation::UnaryOp(op, _) => &op.dst.ty.dims,
-            Operation::BinaryOp(op, _) => &op.dst.ty.dims,
-        }
+        &self.operands[0].ty.dims
     }
 
     pub fn to_outlined(
         &self,
         translator: &FunctionTranslator<'_, 'ctx>,
     ) -> Result<Self, BuilderError> {
-        match self {
-            Operation::UnaryOp(op, opcode) => {
-                let dst = op.dst.to_outlined_nth_tensor(translator, 0)?;
-                let src = op.src.to_outlined_nth_tensor(translator, 1)?;
-                Ok(Operation::UnaryOp(UnaryOps { dst, src }, *opcode))
-            }
-            Operation::BinaryOp(op, opcode) => {
-                let dst = op.dst.to_outlined_nth_tensor(translator, 0)?;
-                let lhs = op.lhs.to_outlined_nth_tensor(translator, 1)?;
-                let rhs = op.rhs.to_outlined_nth_tensor(translator, 2)?;
-                Ok(Operation::BinaryOp(
-                    BinaryOps { dst, lhs, rhs },
-                    opcode.clone(),
-                ))
-            }
-        }
+        let operands = self
+            .operands
+            .iter()
+            .enumerate()
+            .map(|(i, tensor)| tensor.to_outlined_nth_tensor(translator, i as u32))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            operands,
+            opcode: self.opcode,
+        })
     }
 
     pub fn outlined_type(&self, context: &'ctx Context) -> FunctionType<'ctx> {
         let void_type = context.void_type();
         let ptr_type = context.ptr_type(AddressSpace::default());
-        let argc = match self {
-            Operation::UnaryOp(_, _) => 2,
-            Operation::BinaryOp(_, _) => 3,
-        };
+        let argc = self.operands.len();
         let mut vec = Vec::with_capacity(2 + argc * 2);
 
         // global_tid
@@ -186,12 +149,29 @@ impl<'ctx> Operation<'ctx> {
     }
 
     pub fn operands_as_vec(&self) -> Vec<TensorPtr<'ctx>> {
-        match self {
-            Operation::UnaryOp(UnaryOps { dst, src }, _) => vec![dst.clone(), src.clone()],
-            Operation::BinaryOp(BinaryOps { dst, lhs, rhs }, _) => {
-                vec![dst.clone(), lhs.clone(), rhs.clone()]
-            }
-        }
+        self.operands.to_vec()
+    }
+
+    pub fn dst_operand(&self) -> &TensorPtr<'ctx> {
+        &self.operands[0]
+    }
+
+    pub fn unary_operand(&self) -> &TensorPtr<'ctx> {
+        assert!(self.operands.len() == 2);
+        &self.operands[1]
+    }
+
+    pub fn binary_operands(&self) -> (&TensorPtr<'ctx>, &TensorPtr<'ctx>) {
+        assert!(self.operands.len() == 3);
+        (&self.operands[1], &self.operands[2])
+    }
+
+    pub fn src_operands(&self) -> &[TensorPtr<'ctx>] {
+        &self.operands[1..]
+    }
+
+    pub fn result_type(&self) -> DataType {
+        self.dst_operand().ty.elem_type
     }
 }
 
