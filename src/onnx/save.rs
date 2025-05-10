@@ -62,7 +62,7 @@ impl From<DataType> for i32 {
 }
 
 impl Tensor {
-    fn to_proto(&self) -> TensorProto {
+    pub fn to_proto(&self) -> TensorProto {
         let mut res = TensorProto {
             data_type: self.data.elem_type().into(),
             ..Default::default()
@@ -86,6 +86,13 @@ impl Tensor {
         }
         res.dims = self.dims.iter().map(|x| *x as i64).collect();
         res
+    }
+    
+    pub fn save_to_path<P: AsRef<Path>>(&self, p: P) -> std::io::Result<usize> {
+        let tensor = self.to_proto();
+        let vec = tensor.encode_to_vec();
+        let mut f = std::fs::File::create(p).unwrap();
+        f.write(&vec)
     }
 }
 
