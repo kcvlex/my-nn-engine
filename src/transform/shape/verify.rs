@@ -97,7 +97,7 @@ mod test {
         let model = Model::load_from_path(&model).unwrap();
         let mut graph = model.graph;
         graph
-            .resolve_input_types(&[&ResolvedTensorType::new(
+            .resolve_input_types(&[ResolvedTensorType::new(
                 FloatType::F32.into(),
                 ResolvedTensorDims::new(vec![1, 416, 416, 3]),
             )])

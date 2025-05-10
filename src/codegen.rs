@@ -632,6 +632,18 @@ impl<'ll> CodeGen<'ll, '_> {
         let omp_parallel = node.meta.omp_parallel;
         let omp_for = node.meta.omp_for;
 
+        macro_rules! nested_loop {
+            ($op: expr) => {{
+                let op = OperationContext {
+                    operation: $op,
+                    omp_ctx,
+                    omp_parallel,
+                    omp_for,
+                };
+                translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+            }};
+        }
+
         macro_rules! gen_binaryop {
             ($op: expr) => {{
                 let mut lhs = ptrs[1].clone();
@@ -642,13 +654,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     opcode: $op.into(),
                     operands: smallvec![ptrs[0].clone(), lhs, rhs].into(),
                 };
-                let op = OperationContext {
-                    operation: op,
-                    omp_ctx,
-                    omp_parallel,
-                    omp_for,
-                };
-                translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+                nested_loop!(op)
             }};
         }
 
@@ -658,30 +664,39 @@ impl<'ll> CodeGen<'ll, '_> {
                     opcode: $op.into(),
                     operands: smallvec![ptrs[0].clone(), ptrs[1].clone()].into(),
                 };
-                let op = OperationContext {
-                    operation: op,
-                    omp_ctx,
-                    omp_parallel,
-                    omp_for,
-                };
-                translator.build_nested_loop(op, entry, ptrs[0].ty.dims.ndim())
+                nested_loop!(op)
             }};
         }
 
-        let exit = match node.op {
-            Operator::Add => gen_binaryop!(SingleOpcode::Add),
+        let convert_op = |op: &Operator| -> SingleOpcode {
+            match op {
+                Operator::Add => SingleOpcode::Add,
+                Operator::Exp => SingleOpcode::Exp,
+                Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
+                Operator::Log => SingleOpcode::Log,
+                Operator::Mul => SingleOpcode::Mul,
+                Operator::ReLU => SingleOpcode::ReLU,
+                Operator::Sigmoid => SingleOpcode::Sigmoid,
+                Operator::Tanh => SingleOpcode::Tanh,
+                _ => unreachable!(),
+            }
+        };
+
+        let exit = match &node.op {
+            operator @ (Operator::Add | Operator::Mul) => gen_binaryop!(convert_op(operator)),
+            operator @ (Operator::Exp |
+            Operator::LeakyReLU(_) |
+            Operator::Log |
+            Operator::ReLU |
+            Operator::Sigmoid |
+            Operator::Tanh) => {
+                gen_unaryop!(convert_op(operator))
+            }
             Operator::Concat(ref concat) => {
                 let dst = ptrs[0].clone();
                 let axis = concat.axis.index(dst.ty.dims.ndim());
                 translator.build_concat(dst, &ptrs[1..], entry, axis)
             }
-            Operator::Exp => gen_unaryop!(SingleOpcode::Exp),
-            Operator::LeakyReLU(v) => gen_unaryop!(SingleOpcode::LeakyReLU(v)),
-            Operator::Log => gen_unaryop!(SingleOpcode::Log),
-            Operator::Mul => gen_binaryop!(SingleOpcode::Mul),
-            Operator::ReLU => gen_unaryop!(SingleOpcode::ReLU),
-            Operator::Sigmoid => gen_unaryop!(SingleOpcode::Sigmoid),
-            Operator::Tanh => gen_unaryop!(SingleOpcode::Tanh),
             // Operator::Transpose(ref perm) => {
             //     ptrs[1].perms = Some(perm.clone());
             //     gen_unaryop!(UnaryOpcode::Transpose)
@@ -711,7 +726,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 let m = ptrs[1].ty.dims[0] as u64;
                 let n = ptrs[1].ty.dims[1] as u64;
                 let elem_type = ptrs[0].ty.elem_type;
-                translator.build_matrix_reduce(&ptrs, elem_type, (m, n), op, entry)
+                translator.build_matrix_reduce(&ptrs, elem_type, (m, n), *op, entry)
             }
             Operator::BatchNormalizationPerChannel(ref batchnorm) => {
                 let dst = ptrs[0].ptr;
@@ -736,6 +751,17 @@ impl<'ll> CodeGen<'ll, '_> {
                 entry,
                 resize,
             ),
+            Operator::ElementwiseOps(operator::ElementwiseOps { ops }) => {
+                let ops: Vec<_> = ops
+                    .iter()
+                    .map(|(op, args)| (convert_op(op), args.clone()))
+                    .collect();
+                let op = Operation {
+                    opcode: Opcode::Fused(ops),
+                    operands: ptrs.clone().into(),
+                };
+                nested_loop!(op)
+            }
             _ => todo!("{:?}", node.op),
         }?;
 

@@ -3,6 +3,7 @@ use crate::codegen::llvm::*;
 use crate::codegen::omp::*;
 use crate::codegen::op::*;
 use crate::onnx::operator;
+use crate::onnx::operator::ElementwiseOpArg;
 use crate::tensor::types::{DataType, FloatType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
@@ -551,19 +552,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         &self,
         opcode: SingleOpcode,
         ty: DataType,
-        operands: &[TensorPtr<'ctx>],
+        operands: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
         macro_rules! unary_op {
             ($ops: expr) => {{
                 assert!(operands.len() == 1);
-                &operands[0]
+                operands[0]
             }};
         }
 
         macro_rules! binary_op {
             ($ops: expr) => {{
                 assert!(operands.len() == 2);
-                (&operands[0], &operands[1])
+                (operands[0], operands[1])
             }};
         }
 
@@ -572,8 +573,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 macro_rules! body {
                     ($into: ident, $arith: ident) => {{
                         let (lhs, rhs) = binary_op!(operands);
-                        let lhs = self.build_load(lhs)?.$into();
-                        let rhs = self.build_load(rhs)?.$into();
+                        let lhs = lhs.$into();
+                        let rhs = rhs.$into();
                         self.builder.$arith(lhs, rhs, "res")?.as_basic_value_enum()
                     }};
                 }
@@ -605,7 +606,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     SingleOpcode::Log => self.intrinsics.log.get(ty),
                     _ => unreachable!(),
                 };
-                let src = self.build_load(src)?.into_float_value();
+                let src = src.into_float_value();
                 self.build_tail_call(f, &[src.into()], "res")?
                     .try_as_basic_value()
                     .left()
@@ -615,7 +616,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             SingleOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
                 let ty = ty.float_type().unwrap().llvm_type(self.context);
                 let zero = ty.const_zero();
-                let src = self.build_load(unary_op!(operands))?.into_float_value();
+                let src = unary_op!(operands).into_float_value();
                 let lt = self.builder.build_float_compare(
                     inkwell::FloatPredicate::OLT,
                     src,
@@ -634,7 +635,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let fmax = self.intrinsics.fmax.get(ty);
                 let ty = ty.llvm_type(self.context);
                 let zero = ty.const_zero();
-                let src = self.build_load(unary_op!(operands))?.into_float_value();
+                let src = unary_op!(operands).into_float_value();
                 self.build_tail_call(fmax, &[src.into(), zero.into()], "res")?
                     .try_as_basic_value()
                     .left()
@@ -645,7 +646,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let ty = ty.float_type().unwrap();
                 let exp = self.intrinsics.exp.get(ty);
                 let ty = ty.llvm_type(self.context);
-                let src = self.build_load(unary_op!(operands))?.into_float_value();
+                let src = unary_op!(operands).into_float_value();
                 let src = self.builder.build_float_neg(src, "neg")?;
                 let exp = self
                     .build_tail_call(exp, &[src.into()], "exp")?
@@ -660,7 +661,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
             SingleOpcode::Tanh => {
                 let ty = ty.float_type().unwrap().llvm_type(self.context);
-                let src = self.build_load(unary_op!(operands))?.into_float_value();
+                let src = unary_op!(operands).into_float_value();
                 let src = self
                     .builder
                     .build_float_ext(src, self.context.f64_type(), "ext")?;
@@ -674,20 +675,43 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .as_basic_value_enum()
             }
 
-            SingleOpcode::Transfer => self.build_load(unary_op!(operands))?,
+            SingleOpcode::Transfer => unary_op!(operands),
         };
 
         Ok(res)
     }
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
+        let ty = op.result_type();
         let res = match op.opcode {
             Opcode::Single(opcode) => {
-                self.build_single_op(opcode, op.result_type(), op.src_operands())?
+                let operands = op
+                    .src_operands()
+                    .iter()
+                    .map(|op| self.build_load(op))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.build_single_op(opcode, ty, &operands)?
             }
-            Opcode::Fused(_) => todo!(),
+            Opcode::Fused(ref ops) => {
+                let mut intermediates = Vec::with_capacity(ops.len());
+                let srcs = op.src_operands();
+                let ty = op.result_type();
+                for (opcode, args) in ops.iter() {
+                    let opcode = *opcode;
+                    let operands = args
+                        .iter()
+                        .map(|arg| match arg {
+                            ElementwiseOpArg::Input(i) => self.build_load(&srcs[*i]),
+                            ElementwiseOpArg::NthResult(i) => Ok(intermediates[*i]),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let res = self.build_single_op(opcode, ty, &operands)?;
+                    intermediates.push(res);
+                }
+                *intermediates.last().unwrap()
+            }
         };
-        self.build_store(&op.dst_operand(), res)
+        self.build_store(op.dst_operand(), res)
     }
 
     pub fn build_gemm(
@@ -704,7 +728,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             c.ty = c.ty.broadcast(&dst.ty.dims);
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
-                operands: smallvec![dst.clone(), c.clone()].into(),
+                operands: smallvec![dst.clone(), c.clone()],
             };
             let op = OperationContext {
                 operation: op,
@@ -1621,7 +1645,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             dst.ty.dims[axis] = src.ty.dims[axis];
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
-                operands: smallvec![dst, src.clone()].into(),
+                operands: smallvec![dst, src.clone()],
             };
             let op = OperationContext {
                 operation: op,

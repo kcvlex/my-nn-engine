@@ -70,7 +70,7 @@ pub enum UnifyMode {
 impl Graph {
     pub fn resolve_input_types(
         &mut self,
-        input_tys: &[&ResolvedTensorType],
+        input_tys: &[ResolvedTensorType],
     ) -> Result<(), TypeError> {
         let ids = self
             .inputs

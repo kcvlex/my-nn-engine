@@ -7,7 +7,7 @@ use crate::tensor::{
     types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType},
     Tensor,
 };
-use crate::transform::transform_graph;
+use crate::transform::{transform_graph, Options};
 
 use tempfile::TempDir;
 
@@ -141,8 +141,8 @@ fn get_argument_types(
 impl Session {
     pub fn new<P: AsRef<Path>>(
         p: P,
-        input_ty: Option<&[&ResolvedTensorType]>,
-        omp_threshold: usize,
+        input_ty: Option<&[ResolvedTensorType]>,
+        options: &Options,
     ) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         if let Some(input_ty) = input_ty {
@@ -152,11 +152,11 @@ impl Session {
                 .map_err(SessionError::TypeError)?;
         }
 
-        transform_graph(&mut model.graph, omp_threshold);
+        transform_graph(&mut model.graph, options);
 
         // TODO: remove
-        //Self::_write_model(&model.graph, "model.dot");
-        //panic!("a");
+        // Self::_write_model(&model.graph, "model.dot");
+        // panic!("a");
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
@@ -378,6 +378,36 @@ mod test {
         }};
     }
 
+    macro_rules! make_tensor_2x3x4 {
+        () => {{
+            make_tensor!(
+                f32,
+                [
+                    [0.7736, 1.1965, 0.6127, 1.7081],
+                    [0.1194, 0.2656, 0.3478, 0.0629],
+                    [0.1489, 0.4435, 0.9640, 1.7148],
+                ],
+                [
+                    [0.8480, 0.5366, 0.0574, 0.5479],
+                    [0.5928, -1.7610, 1.4378, 0.0],
+                    [0.2030, 0.0264, 1.3788, f32::INFINITY],
+                ],
+            )
+        }};
+    }
+
+    macro_rules! make_tensor_4x4 {
+        () => {{
+            make_tensor!(
+                f32,
+                [0.7736, 1.1965, 0.6127, 1.7081],
+                [0.1194, 0.2656, 0.3478, 0.0629],
+                [0.1489, 0.4435, 0.9640, 1.7148],
+                [0.8480, 0.5366, 0.0574, 0.5479],
+            )
+        }};
+    }
+
     macro_rules! make_range_tensor {
         ($ty: ty, $($dim: expr),*) => {{
             let len = [$($dim),*].iter().product();
@@ -411,7 +441,7 @@ mod test {
         }};
     }
 
-    fn with_session<P, F>(path: P, f: F) -> TestResult
+    fn with_session<P, F>(p: P, f: F) -> TestResult
     where
         P: AsRef<std::path::Path>,
         F: FnOnce(Session) -> TestResult,
@@ -419,8 +449,8 @@ mod test {
         use std::path::PathBuf;
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")
-            .join(path);
-        let session = Session::new(path, None, 10)?;
+            .join(p);
+        let session = Session::new(path, None, &Options::builder().omp_threshold(10).build())?;
         f(session)?;
         Ok(())
     }

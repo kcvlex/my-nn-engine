@@ -7,10 +7,11 @@ mod utils;
 
 use crate::onnx::model::Graph;
 use modify::{GraphModifier, NodeDelete, SimpleGraphModifier};
+use typed_builder::TypedBuilder;
 
 pub use epilog::create_epilog_passes;
 pub use lower::create_lower_passes;
-pub use optimize::create_optimize_passes;
+pub use optimize::{create_optimize_passes0, create_optimize_passes1, create_optimize_passes2};
 pub use shape::infer::create_infer_passes;
 pub use shape::strides::create_strides_passes;
 
@@ -58,16 +59,32 @@ impl<T: GraphModifier + NodeDelete> PassManager<T> for SimplePassManager<T> {
     }
 }
 
-pub fn transform_graph(graph: &mut Graph, omp_threshold: usize) {
-    let verify = true;
-    // TODO: Make optimization passes before lowering
+#[derive(TypedBuilder)]
+pub struct Options {
+    #[builder(default = 100)]
+    pub omp_threshold: usize,
+
+    #[builder(default = true)]
+    pub enable_fuse_ops: bool,
+
+    #[builder(default = true)]
+    pub verify_after_inferrence: bool,
+
+    #[builder(default = true)]
+    pub verify_after_strides: bool,
+}
+
+pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
-        Box::new(create_infer_passes(verify)),
-        Box::new(create_lower_passes()),
-        Box::new(create_optimize_passes(omp_threshold)),
-        Box::new(create_strides_passes(verify)),
-        Box::new(create_epilog_passes()),
+        create_infer_passes(options.verify_after_inferrence),
+        create_optimize_passes0(options.enable_fuse_ops),
+        create_lower_passes(),
+        create_optimize_passes1(),
+        create_strides_passes(options.verify_after_strides),
+        create_optimize_passes2(options.omp_threshold),
+        create_epilog_passes(),
     ];
+
     let mut modifier = SimpleGraphModifier::new(graph);
     for manager in managers.iter() {
         manager.run(graph, &mut modifier);
