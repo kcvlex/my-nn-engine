@@ -87,7 +87,7 @@ impl Tensor {
         res.dims = self.dims.iter().map(|x| *x as i64).collect();
         res
     }
-    
+
     pub fn save_to_path<P: AsRef<Path>>(&self, p: P) -> std::io::Result<usize> {
         let tensor = self.to_proto();
         let vec = tensor.encode_to_vec();

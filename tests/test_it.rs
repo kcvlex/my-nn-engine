@@ -1,7 +1,7 @@
 use my_onnx::onnx::load::*;
 use my_onnx::session::{Session, SessionError};
-use my_onnx::tensor::Tensor;
 use my_onnx::tensor::data::CompPolicy;
+use my_onnx::tensor::Tensor;
 use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;
@@ -27,6 +27,11 @@ fn run_test(dir: &str, epsilon: f64) -> Result {
 
 #[test]
 fn test_transpose_conv2d() -> Result {
-    // TODO: Disable optimizations after they are implemented
     run_test("transpose_conv2d", 1e-3)
+}
+
+#[test]
+fn test_add_same_tensor() -> Result {
+    // TODO: Disable optimizations after they are implemented
+    run_test("add_same_tensor", 1e-5)
 }

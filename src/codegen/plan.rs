@@ -33,7 +33,7 @@ impl AllocateType {
 #[derive(Debug)]
 struct DependencyGraph {
     value2defined: IndexMap<ValueId, NodeId>,
-    value2used: IndexMap<ValueId, IndexSet<NodeId>>,
+    value2used: IndexMap<ValueId, IndexSet<(NodeId, usize)>>,
     inputs: HashSet<ValueId>,
     outputs: HashSet<ValueId>,
 }
@@ -64,11 +64,11 @@ impl DependencyGraph {
             if node.is_dummy() {
                 continue;
             }
-            for &input in node.inputs.iter().filter(|x| !ignore(x)) {
+            for (i, &input) in node.inputs.iter().enumerate().filter(|(_, x)| !ignore(x)) {
                 value2used
                     .entry(input)
                     .or_insert_with(IndexSet::new)
-                    .insert(node_id);
+                    .insert((node_id, i));
             }
             for &output in node.outputs.iter().filter(|x| !ignore(x)) {
                 value2defined.insert(output, node_id);

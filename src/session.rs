@@ -427,6 +427,16 @@ mod test {
 
     type TestResult = Result<(), SessionError>;
 
+    trait Sigmoid {
+        fn sigmoid(self) -> Self;
+    }
+
+    impl Sigmoid for f32 {
+        fn sigmoid(self) -> Self {
+            1.0 / (1.0 + (-self).exp())
+        }
+    }
+
     #[test]
     fn add() -> TestResult {
         with_session("add.onnx", |session| {
@@ -926,10 +936,7 @@ mod test {
         with_session("sigmoid.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
             let expected: Tensor = orig
-                .map(|x| {
-                    let den = 1.0 + (-x).exp();
-                    1.0 / den
-                })
+                .map(|x| x.sigmoid())
                 .into_dyn()
                 .try_into()
                 .map_err(SessionError::TypeError)?;
