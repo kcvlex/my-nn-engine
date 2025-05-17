@@ -42,23 +42,23 @@ impl FuseElementwiseOpsImpl {
                 }
 
                 // Reject if the node requires broadcast.
-                if 1 < node.inputs.len() {
-                    let shape0 = &graph
-                        .get_resolved_tensor_type(node.inputs[0])
-                        .as_ref()
-                        .unwrap()
-                        .dims;
-                    for input in &node.inputs[1..] {
-                        let shape = &graph
-                            .get_resolved_tensor_type(*input)
-                            .as_ref()
-                            .unwrap()
-                            .dims;
-                        if shape != shape0 {
-                            return false;
-                        }
-                    }
-                }
+                // if 1 < node.inputs.len() {
+                //     let shape0 = &graph
+                //         .get_resolved_tensor_type(node.inputs[0])
+                //         .as_ref()
+                //         .unwrap()
+                //         .dims;
+                //     for input in &node.inputs[1..] {
+                //         let shape = &graph
+                //             .get_resolved_tensor_type(*input)
+                //             .as_ref()
+                //             .unwrap()
+                //             .dims;
+                //         if shape != shape0 {
+                //             return false;
+                //         }
+                //     }
+                // }
 
                 true
             })
