@@ -158,6 +158,12 @@ impl Session {
         // Self::_write_model(&model.graph, "model.dot");
         // panic!("a");
 
+        {
+            model
+                .save_to_path("model.onnx")
+                .map_err(|e| SessionError::OtherError(format!("Failed to save model: {:?}", e)))?;
+        }
+
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let initializer: Vec<_> = model

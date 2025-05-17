@@ -124,10 +124,10 @@ impl AttributeProto {
         self
     }
 
-    fn with_ints<T>(mut self, ints: &[T]) -> Self 
-        where
-            T: TryInto<i64> + Copy,
-            <T as TryInto<i64>>::Error: std::fmt::Debug,
+    fn with_ints<T>(mut self, ints: &[T]) -> Self
+    where
+        T: TryInto<i64> + Copy,
+        <T as TryInto<i64>>::Error: std::fmt::Debug,
     {
         self.r#type = attribute_proto::AttributeType::Ints.into();
         self.ints = ints
@@ -198,27 +198,47 @@ impl Conv {
                             pads[v.len() + i] = *v1;
                         }
                         Some(pads)
-                    },
+                    }
                     None => None,
                 };
                 ("NOTSET", pads)
-            },
+            }
             ConvPad::SameUpper => ("SAME_UPPER", None),
             ConvPad::SameLower => ("SAME_LOWER", None),
             ConvPad::Valid => ("VALID", None),
         };
 
-        vec.push(AttributeProto::default().with_name("auto_pad").with_s(auto_pad));
+        vec.push(
+            AttributeProto::default()
+                .with_name("auto_pad")
+                .with_s(auto_pad),
+        );
         if let Some(pads) = pads {
             vec.push(AttributeProto::default().with_name("pads").with_ints(&pads));
         }
         if let Some(dilations) = self.dilations.inner() {
-            vec.push(AttributeProto::default().with_name("dilations").with_ints(dilations));
+            vec.push(
+                AttributeProto::default()
+                    .with_name("dilations")
+                    .with_ints(dilations),
+            );
         }
-        vec.push(AttributeProto::default().with_name("groups").with_i(self.groups as i64));
-        vec.push(AttributeProto::default().with_name("kernel_shape").with_ints(self.kernel_shape.inner()));
+        vec.push(
+            AttributeProto::default()
+                .with_name("groups")
+                .with_i(self.groups as i64),
+        );
+        vec.push(
+            AttributeProto::default()
+                .with_name("kernel_shape")
+                .with_ints(self.kernel_shape.inner()),
+        );
         if let Some(strides) = self.strides.inner() {
-            vec.push(AttributeProto::default().with_name("strides").with_ints(strides));
+            vec.push(
+                AttributeProto::default()
+                    .with_name("strides")
+                    .with_ints(strides),
+            );
         }
 
         vec
@@ -260,19 +280,14 @@ impl LeakyReLU {
     }
 }
 
-impl Resize {
+impl Transpose {
     fn to_proto(&self) -> Vec<AttributeProto> {
-        let mut vec = Vec::new();
-        vec.push(AttributeProto::default().with_name("mode").with_s(&self.mode));
-        if let Some(roi) = &self.roi {
-            vec.push(AttributeProto::default().with_name("roi").with_ints(roi));
+        let mut vec = Vec::with_capacity(1);
+
+        if let Some(perm) = &self.perm {
+            vec.push(AttributeProto::default().with_name("perm").with_ints(&perm));
         }
-        if let Some(scales) = &self.scales {
-            vec.push(AttributeProto::default().with_name("scales").with_ints(scales));
-        }
-        if let Some(sizes) = &self.sizes {
-            vec.push(AttributeProto::default().with_name("sizes").with_ints(sizes));
-        }
+
         vec
     }
 }
@@ -285,9 +300,11 @@ impl ElementwiseOps {
         let mut input_indices = Vec::new();
         let mut intermediate_indices = Vec::new();
 
+        // TODO: Attributes of each operator
         for (op, args) in self.ops.iter() {
             let op = match **op {
                 Operator::Add => "Add",
+                Operator::BatchNormalization(_) => "BatchNormalization",
                 Operator::Exp => "Exp",
                 Operator::Log => "Log",
                 Operator::Mul => "Mul",
@@ -334,18 +351,37 @@ impl ElementwiseOps {
     }
 }
 
+impl ReduceOp {
+    fn to_proto(self) -> Vec<AttributeProto> {
+        let name = match self {
+            ReduceOp::Max => "max",
+            ReduceOp::Mean => "mean",
+            ReduceOp::Variance => "variance",
+            ReduceOp::Sum => "sum",
+        };
+        vec![AttributeProto::default().with_name("op").with_s(name)]
+    }
+}
+
 impl Node {
     fn to_proto(&self, values: &Values) -> NodeProto {
-        dbg!(&self.op);
         let (opname, attrs) = match &self.op {
             Operator::Add => ("Add", vec![]),
             Operator::BatchNormalization(attrs) => ("BatchNormalization", attrs.to_proto()),
+            Operator::Gemm(attrs) => ("Gemm", attrs.to_proto()),
+            Operator::Identity => ("Identity", vec![]),
             Operator::MatMul => ("MatMul", vec![]),
+            Operator::ReLU => ("Relu", vec![]),
+            Operator::Reshape => ("Reshape", vec![]),
 
             // Custom
+            // TODO: Im2Col
+            Operator::Contiguous => ("Contiguous", vec![]),
             Operator::ElementwiseOps(attrs) => ("ElementwiseOps", attrs.to_proto()),
+            Operator::Im2Col(_) => ("Im2Col", vec![]),
+            Operator::ReduceMatrix(op) => ("ReduceMatrix", op.to_proto()),
 
-            _ => todo!(),
+            _ => todo!("Unimplemented operator: {:?}", self.op),
         };
         NodeProto {
             input: self
