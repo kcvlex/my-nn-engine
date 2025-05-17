@@ -27,7 +27,6 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
-use smallvec::smallvec;
 use std::collections::HashMap;
 use std::path::Path;
 
