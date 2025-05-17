@@ -59,7 +59,6 @@ pub enum Operator {
     Transpose(Transpose),
 
     // Custom
-    BatchNormalizationPerChannel(BatchNormalization),
     Contiguous,
     ElementwiseOps(ElementwiseOps),
     Im2Col(Im2Col),
@@ -73,7 +72,7 @@ pub enum Operator {
     Output(ValueId),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub struct BatchNormalization {
     pub epsilon: f32,
     pub momentum: f32,
@@ -483,7 +482,6 @@ impl Operator {
             Operator::Transpose(_) => "Transpose",
 
             // Custom
-            Operator::BatchNormalizationPerChannel(_) => "BatchNormalizationPerChannel (Custom)",
             Operator::Contiguous => "Contiguous (Custom)",
             Operator::ElementwiseOps(_) => "ElementwiseOps (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
@@ -501,7 +499,9 @@ impl Operator {
         matches!(
             self,
             Operator::Add |
+                Operator::BatchNormalization(_) |
                 Operator::Exp |
+                Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
                 Operator::ReLU |

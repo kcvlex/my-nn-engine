@@ -1,5 +1,5 @@
 use crate::codegen::translator::FunctionTranslator;
-use crate::onnx::operator::{ElementwiseOpArg, LeakyReLU};
+use crate::onnx::operator::{BatchNormalization, ElementwiseOpArg, LeakyReLU};
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::{DataType, ResolvedTensorType};
 use inkwell::builder::BuilderError;
@@ -71,6 +71,7 @@ pub struct Operation<'ctx> {
 #[derive(Debug, Clone, Copy)]
 pub enum SingleOpcode {
     Add,
+    BatchNorm(BatchNormalization),
     Exp,
     LeakyReLU(LeakyReLU),
     Log,

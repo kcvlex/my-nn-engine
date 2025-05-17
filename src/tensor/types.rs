@@ -139,6 +139,17 @@ impl ResolvedTensorType {
         self.dims != *target
     }
 
+    pub fn extend_per_channel_params(&self, target: &ResolvedTensorDims) -> Self {
+        assert!(self.dims.inner().len() == 1);
+        let mut strides = vec![0; target.ndim()];
+        strides[1] = 1;
+        Self {
+            elem_type: self.elem_type,
+            dims: target.clone(),
+            stride: ResolvedTensorDims::new_direct(strides),
+        }
+    }
+
     pub fn transpose(&self, perms: &[usize]) -> Self {
         let elem_type = self.elem_type;
         let dims = self.dims.transpose(perms);

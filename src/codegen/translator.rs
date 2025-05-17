@@ -598,6 +598,33 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
             }
 
+            SingleOpcode::BatchNorm(operator::BatchNormalization { epsilon, .. }) => {
+                let src = operands[operator::args::BATCHNORM_DATA].into_float_value();
+                let scale = operands[operator::args::BATCHNORM_SCALE].into_float_value();
+                let bias = operands[operator::args::BATCHNORM_BIAS].into_float_value();
+                let mean = operands[operator::args::BATCHNORM_MEAN].into_float_value();
+                let variance = operands[operator::args::BATCHNORM_VAR].into_float_value();
+                let fp_type = ty.float_type().unwrap();
+                let sqrt = self.intrinsics.sqrt.get(fp_type);
+                let fma = self.intrinsics.fma.get(fp_type);
+                let fp_type = fp_type.llvm_type(self.context);
+                let epsilon = fp_type.const_float(epsilon as f64);
+
+                let factor = self.builder.build_float_add(variance, epsilon, "factor")?;
+                let factor = self
+                    .build_tail_call(sqrt, &[factor.into()], "factor")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value();
+                let factor = self.builder.build_float_div(scale, factor, "factor")?;
+                let val = self.builder.build_float_sub(src, mean, "val.sub.mean")?;
+                self.build_tail_call(fma, &[val.into(), factor.into(), bias.into()], "val")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+
             opcode @ (SingleOpcode::Exp | SingleOpcode::Log) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();
@@ -1167,6 +1194,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.context.i64_type().const_int(bound, false)
             }
         };
+
+        // Update op
         let mut next_op_ctx = op_ctx;
         let phis = next_op_ctx
             .operation
@@ -1205,6 +1234,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 format!("offset.sum.{}.{}", op.name, nest).as_str(),
             )?;
         }
+
+        // Comp and branch
         let next_bb = self
             .context
             .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
@@ -1254,130 +1285,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             exit,
         };
         self.build_nested_loop_rec(op_ctx, loop_bb, 0, max_nest, None)?;
-        self.builder.position_at_end(exit);
-        Ok(exit)
-    }
-
-    pub fn build_batchnorm_by_channel(
-        &self,
-        dst: PointerValue<'ctx>,
-        inputs: &[PointerValue<'ctx>],
-        elem_ty: DataType,
-        mn: (u64, u64),
-        preheader: BasicBlock<'ctx>,
-        batchnorm: &operator::BatchNormalization,
-    ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let src = inputs[operator::args::BATCHNORM_DATA];
-        let scale_ptr = inputs[operator::args::BATCHNORM_SCALE];
-        let bias_ptr = inputs[operator::args::BATCHNORM_BIAS];
-        let mean_ptr = inputs[operator::args::BATCHNORM_MEAN];
-        let variance_ptr = inputs[operator::args::BATCHNORM_VAR];
-        let (m, n) = mn;
-        let fp_type = elem_ty.float_type().unwrap();
-        let sqrt = self.intrinsics.sqrt.get(fp_type);
-        let fma = self.intrinsics.fma.get(fp_type);
-        let fp_type = fp_type.llvm_type(self.context);
-        let epsilon = fp_type.const_float(batchnorm.epsilon as f64);
-
-        let header = self.context.append_basic_block(*self.func, "entry");
-        let exit = self.context.append_basic_block(*self.func, "exit");
-        let exiting = self.context.append_basic_block(*self.func, "exiting");
-        let body = self.context.append_basic_block(*self.func, "body");
-
-        self.builder.build_unconditional_branch(header)?;
-
-        self.builder.position_at_end(header);
-
-        let ind0 = self.builder.build_phi(self.context.i64_type(), "ind0")?;
-        let offset0 = self.builder.build_phi(self.context.i64_type(), "offset0")?;
-        let ind0_int = ind0.as_basic_value().into_int_value();
-        let offset0_int = offset0.as_basic_value().into_int_value();
-        let scale = self
-            .build_raw_load(fp_type, scale_ptr, ind0_int)?
-            .into_float_value();
-        let bias = self
-            .build_raw_load(fp_type, bias_ptr, ind0_int)?
-            .into_float_value();
-        let mean = self
-            .build_raw_load(fp_type, mean_ptr, ind0_int)?
-            .into_float_value();
-        let variance = self
-            .build_raw_load(fp_type, variance_ptr, ind0_int)?
-            .into_float_value();
-        let factor = self.builder.build_float_add(variance, epsilon, "factor")?;
-        let factor = self
-            .build_tail_call(sqrt, &[factor.into()], "factor")?
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_float_value();
-        let factor = self.builder.build_float_div(scale, factor, "factor")?;
-
-        self.builder.build_unconditional_branch(body)?;
-
-        self.builder.position_at_end(body);
-        let ind1 = self.builder.build_phi(self.context.i64_type(), "ind1")?;
-        let offset1 = self.builder.build_int_add(
-            offset0_int,
-            ind1.as_basic_value().into_int_value(),
-            "offset1",
-        )?;
-        let val = self
-            .build_raw_load(fp_type, src, offset1)?
-            .into_float_value();
-        let val = self.builder.build_float_sub(val, mean, "val.sub.mean")?;
-        let val = self
-            .build_tail_call(fma, &[val.into(), factor.into(), bias.into()], "val")?
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_float_value();
-        self.build_raw_store(fp_type, dst, offset1, val)?;
-        let ind1_next = self.builder.build_int_add(
-            ind1.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind1.next",
-        )?;
-        let cond1 = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            ind1_next,
-            self.context.i64_type().const_int(n, false),
-            "cond1",
-        )?;
-        self.builder
-            .build_conditional_branch(cond1, body, exiting)?;
-        ind1.add_incoming(&[
-            (&ind1_next, body),
-            (&self.context.i64_type().const_zero(), header),
-        ]);
-
-        self.builder.position_at_end(exiting);
-        let ind0_next = self.builder.build_int_add(
-            ind0_int,
-            self.context.i64_type().const_int(1, false),
-            "ind0.next",
-        )?;
-        let offset0_next = self.builder.build_int_add(
-            offset0_int,
-            self.context.i64_type().const_int(n, false),
-            "offset0.next",
-        )?;
-        let cond0 = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            ind0_next,
-            self.context.i64_type().const_int(m, false),
-            "cond0",
-        )?;
-        self.builder.build_conditional_branch(cond0, header, exit)?;
-        ind0.add_incoming(&[
-            (&ind0_next, exiting),
-            (&self.context.i64_type().const_zero(), preheader),
-        ]);
-        offset0.add_incoming(&[
-            (&offset0_next, exiting),
-            (&self.context.i64_type().const_zero(), preheader),
-        ]);
-
         self.builder.position_at_end(exit);
         Ok(exit)
     }

@@ -158,7 +158,7 @@ impl Session {
         // Self::_write_model(&model.graph, "model.dot");
         // panic!("a");
 
-        {
+        if false {
             model
                 .save_to_path("model.onnx")
                 .map_err(|e| SessionError::OtherError(format!("Failed to save model: {:?}", e)))?;

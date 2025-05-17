@@ -692,6 +692,21 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::Tanh) => {
                 gen_unaryop!(convert_op(operator))
             }
+
+            Operator::BatchNormalization(bn) => {
+                let mut operands = smallvec![ptrs[0].clone(), ptrs[1].clone()];
+                for param in ptrs.iter().skip(2) {
+                    let mut param = param.clone();
+                    param.ty = param.ty.extend_per_channel_params(&ptrs[0].ty.dims);
+                    operands.push(param);
+                }
+                let op = Operation {
+                    opcode: SingleOpcode::BatchNorm(*bn).into(),
+                    operands,
+                };
+                nested_loop!(op)
+            }
+
             Operator::Concat(ref concat) => {
                 let dst = ptrs[0].clone();
                 let axis = concat.axis.index(dst.ty.dims.ndim());
@@ -727,21 +742,6 @@ impl<'ll> CodeGen<'ll, '_> {
                 let n = ptrs[1].ty.dims[1] as u64;
                 let elem_type = ptrs[0].ty.elem_type;
                 translator.build_matrix_reduce(&ptrs, elem_type, (m, n), *op, entry)
-            }
-            Operator::BatchNormalizationPerChannel(ref batchnorm) => {
-                let dst = ptrs[0].ptr;
-                let inputs = ptrs.iter().skip(1).map(|ptr| ptr.ptr).collect::<Vec<_>>();
-                let m = ptrs[1].ty.dims[0] as u64;
-                let n = (ptrs[1].ty.dims.size() as u64) / m;
-                let elem_type = ptrs[0].ty.elem_type;
-                translator.build_batchnorm_by_channel(
-                    dst,
-                    inputs.as_slice(),
-                    elem_type,
-                    (m, n),
-                    entry,
-                    batchnorm,
-                )
             }
             Operator::Resize(ref resize) => translator.build_resize(
                 ptrs[0].clone(),

@@ -411,7 +411,6 @@ pub fn infer_node_output(
         }
         Operator::Input(_) |
         Operator::Output(_) |
-        Operator::BatchNormalizationPerChannel(_) |
         Operator::Im2Col(_) |
         Operator::ReduceMatrix(_) |
         Operator::ElementwiseOps(_) |
