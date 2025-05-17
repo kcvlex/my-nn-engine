@@ -89,6 +89,10 @@ impl<T: Clone + Copy + PartialEq> OptionalVec<T> {
     pub fn new(vec: Option<Vec<T>>, default: T) -> Self {
         Self { vec, default }
     }
+
+    pub fn inner(&self) -> Option<&Vec<T>> {
+        self.vec.as_ref()
+    }
 }
 
 impl<T: Clone + Copy + PartialEq> Index<usize> for OptionalVec<T> {

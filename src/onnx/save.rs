@@ -124,9 +124,17 @@ impl AttributeProto {
         self
     }
 
-    fn with_ints(mut self, ints: &[i64]) -> Self {
+    fn with_ints<T>(mut self, ints: &[T]) -> Self 
+        where
+            T: TryInto<i64> + Copy,
+            <T as TryInto<i64>>::Error: std::fmt::Debug,
+    {
         self.r#type = attribute_proto::AttributeType::Ints.into();
-        self.ints = ints.to_vec();
+        self.ints = ints
+            .iter()
+            .copied()
+            .map(|x| x.try_into().unwrap())
+            .collect();
         self
     }
 
@@ -173,6 +181,99 @@ impl Concat {
         vec![AttributeProto::default()
             .with_name("axis")
             .with_index(self.axis)]
+    }
+}
+
+impl Conv {
+    fn to_proto(&self) -> Vec<AttributeProto> {
+        let mut vec = Vec::new();
+
+        let (auto_pad, pads) = match &self.pad {
+            ConvPad::NotSet(v) => {
+                let pads = match v.inner() {
+                    Some(v) => {
+                        let mut pads = vec![0; v.len() * 2];
+                        for (i, (v0, v1)) in v.iter().enumerate() {
+                            pads[i] = *v0;
+                            pads[v.len() + i] = *v1;
+                        }
+                        Some(pads)
+                    },
+                    None => None,
+                };
+                ("NOTSET", pads)
+            },
+            ConvPad::SameUpper => ("SAME_UPPER", None),
+            ConvPad::SameLower => ("SAME_LOWER", None),
+            ConvPad::Valid => ("VALID", None),
+        };
+
+        vec.push(AttributeProto::default().with_name("auto_pad").with_s(auto_pad));
+        if let Some(pads) = pads {
+            vec.push(AttributeProto::default().with_name("pads").with_ints(&pads));
+        }
+        if let Some(dilations) = self.dilations.inner() {
+            vec.push(AttributeProto::default().with_name("dilations").with_ints(dilations));
+        }
+        vec.push(AttributeProto::default().with_name("groups").with_i(self.groups as i64));
+        vec.push(AttributeProto::default().with_name("kernel_shape").with_ints(self.kernel_shape.inner()));
+        if let Some(strides) = self.strides.inner() {
+            vec.push(AttributeProto::default().with_name("strides").with_ints(strides));
+        }
+
+        vec
+    }
+}
+
+impl Gather {
+    fn to_proto(&self) -> Vec<AttributeProto> {
+        vec![AttributeProto::default()
+            .with_name("axis")
+            .with_index(self.axis)]
+    }
+}
+
+impl Gemm {
+    fn to_proto(&self) -> Vec<AttributeProto> {
+        vec![
+            AttributeProto::default()
+                .with_name("alpha")
+                .with_f(self.alpha as f32),
+            AttributeProto::default()
+                .with_name("beta")
+                .with_f(self.beta as f32),
+            AttributeProto::default()
+                .with_name("transA")
+                .with_i(self.trans_a.into()),
+            AttributeProto::default()
+                .with_name("transB")
+                .with_i(self.trans_b.into()),
+        ]
+    }
+}
+
+impl LeakyReLU {
+    fn to_proto(&self) -> Vec<AttributeProto> {
+        vec![AttributeProto::default()
+            .with_name("alpha")
+            .with_f(self.alpha as f32)]
+    }
+}
+
+impl Resize {
+    fn to_proto(&self) -> Vec<AttributeProto> {
+        let mut vec = Vec::new();
+        vec.push(AttributeProto::default().with_name("mode").with_s(&self.mode));
+        if let Some(roi) = &self.roi {
+            vec.push(AttributeProto::default().with_name("roi").with_ints(roi));
+        }
+        if let Some(scales) = &self.scales {
+            vec.push(AttributeProto::default().with_name("scales").with_ints(scales));
+        }
+        if let Some(sizes) = &self.sizes {
+            vec.push(AttributeProto::default().with_name("sizes").with_ints(sizes));
+        }
+        vec
     }
 }
 
