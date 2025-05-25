@@ -368,11 +368,19 @@ impl Node {
         let (opname, attrs) = match &self.op {
             Operator::Add => ("Add", vec![]),
             Operator::BatchNormalization(attrs) => ("BatchNormalization", attrs.to_proto()),
+            Operator::Cast(attrs) => ("Cast", attrs.to_proto()),
+            Operator::Concat(attrs) => ("Concat", attrs.to_proto()),
+            Operator::Exp => ("Exp", vec![]),
             Operator::Gemm(attrs) => ("Gemm", attrs.to_proto()),
             Operator::Identity => ("Identity", vec![]),
+            Operator::LeakyReLU(attrs) => ("LeakyRelu", attrs.to_proto()),
             Operator::MatMul => ("MatMul", vec![]),
             Operator::ReLU => ("Relu", vec![]),
+            Operator::Resize(_) => ("Resize", vec![]),
             Operator::Reshape => ("Reshape", vec![]),
+            Operator::Sigmoid => ("Sigmoid", vec![]),
+            Operator::Slice => ("Slice", vec![]),
+            Operator::Split(_) => ("Split", vec![]),
 
             // Custom
             // TODO: Im2Col
