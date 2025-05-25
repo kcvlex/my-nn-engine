@@ -849,6 +849,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "MatMul" => Ok(Operator::MatMul),
         "MaxPool" => Ok(Operator::MaxPool(Pooling::load(attributes)?)),
         "Mul" => Ok(Operator::Mul),
+        "Reciprocal" => Ok(Operator::Reciprocal),
         "ReduceMax" => Ok(Operator::ReduceMax(Reduce::load(attributes)?)),
         "ReduceMean" => Ok(Operator::ReduceMean(Reduce::load(attributes)?)),
         "ReduceSum" => Ok(Operator::ReduceSum(Reduce::load(attributes)?)),

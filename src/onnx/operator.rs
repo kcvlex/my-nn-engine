@@ -41,6 +41,7 @@ pub enum Operator {
     Identity,
     LeakyReLU(LeakyReLU),
     Log,
+    Reciprocal,
     ReLU,
     Reshape,
     Resize(Resize),
@@ -476,6 +477,7 @@ impl Operator {
             Operator::Identity => "Identity",
             Operator::LeakyReLU(_) => "LeakyReLU",
             Operator::Log => "Log",
+            Operator::Reciprocal => "Reciprocal",
             Operator::ReLU => "ReLU",
             Operator::Reshape => "Reshape",
             Operator::MatMul => "MatMul",
@@ -518,6 +520,7 @@ impl Operator {
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
+                Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
                 Operator::Sub |

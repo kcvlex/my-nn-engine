@@ -76,6 +76,7 @@ pub enum SingleOpcode {
     LeakyReLU(LeakyReLU),
     Log,
     Mul,
+    Reciprocal,
     ReLU,
     Sigmoid,
     Tanh,

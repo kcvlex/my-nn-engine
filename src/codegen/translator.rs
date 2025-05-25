@@ -657,6 +657,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder.build_select(lt, lhs, rhs, "res")?
             }
 
+            SingleOpcode::Reciprocal => {
+                let ty = ty.float_type().unwrap();
+                let src = unary_op!(operands).into_float_value();
+                let one = ty.llvm_type(self.context).const_float(1.0);
+                // TODO: Add `arcp` flag
+                self.builder.build_float_div(one, src, "res")?.into()
+            }
+
             SingleOpcode::ReLU => {
                 let ty = ty.float_type().unwrap();
                 let fmax = self.intrinsics.fmax.get(ty);

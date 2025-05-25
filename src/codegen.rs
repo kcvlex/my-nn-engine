@@ -655,6 +655,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,
+                Operator::Reciprocal => SingleOpcode::Reciprocal,
                 Operator::ReLU => SingleOpcode::ReLU,
                 Operator::Sigmoid => SingleOpcode::Sigmoid,
                 Operator::Tanh => SingleOpcode::Tanh,
@@ -689,6 +690,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
+                Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
                 Operator::Tanh => (),
@@ -705,6 +707,7 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::LeakyReLU(_) |
             Operator::Log |
             Operator::Mul |
+            Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |
             Operator::Tanh) => {
@@ -716,6 +719,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     Operator::Exp |
                     Operator::LeakyReLU(_) |
                     Operator::Log |
+                    Operator::Reciprocal |
                     Operator::ReLU |
                     Operator::Sigmoid |
                     Operator::Tanh |

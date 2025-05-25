@@ -69,6 +69,7 @@ pub fn infer_node_output(
         Operator::Identity |
         Operator::LeakyReLU(_) |
         Operator::Log |
+        Operator::Reciprocal |
         Operator::ReLU |
         Operator::Sigmoid |
         Operator::Tanh => {
