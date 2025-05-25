@@ -734,10 +734,28 @@ impl Split {
     }
 }
 
+impl Squeeze {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axes = attributes.get("axes").map(|x| x.indexes()).transpose()?;
+        Ok(Self { axes })
+    }
+}
+
 impl Transpose {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let perm = attributes.get("perm").map(|x| x.ints()).transpose()?;
         Ok(Transpose { perm })
+    }
+}
+
+impl Unsqueeze {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axes = attributes
+            .get("axes")
+            .map(|x| x.indexes())
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Unsqueeze { axes })
     }
 }
 
@@ -837,13 +855,15 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Relu" => Ok(Operator::ReLU),
         "Reshape" => Ok(Operator::Reshape),
         "Resize" => Ok(Operator::Resize(Resize::load(attributes)?)),
-        "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
         "Sigmoid" => Ok(Operator::Sigmoid),
+        "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
+        "Squeeze" => Ok(Operator::Squeeze(Squeeze::load(attributes)?)),
         "Sub" => Ok(Operator::Sub),
         "Tanh" => Ok(Operator::Tanh),
         "Slice" => Ok(Operator::Slice),
         "Split" => Ok(Operator::Split(Split::load(attributes)?)),
         "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
+        "Unsqueeze" => Ok(Operator::Unsqueeze(Unsqueeze::load(attributes)?)),
 
         // Custom
         "ElementwiseOps" => Ok(Operator::ElementwiseOps(ElementwiseOps::load(attributes)?)),

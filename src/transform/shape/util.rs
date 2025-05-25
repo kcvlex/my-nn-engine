@@ -385,6 +385,36 @@ pub fn infer_node_output(
                 });
         }
 
+        Operator::Squeeze(Squeeze { axes }) => {
+            let input = &inputs[0];
+            let input_dims = &input.dims;
+            let rank = input_dims.ndim();
+            let drop = if let Some(axes) = axes {
+                let mut drop = vec![false; rank];
+                for &axis in axes.iter() {
+                    let axis = axis.index(rank);
+                    cond_error!(axis >= rank);
+                    cond_error!(input_dims[axis] != 1);
+                    drop[axis] = true;
+                }
+                drop
+            } else {
+                (0..rank).map(|i| input_dims[i] == 1).collect()
+            };
+
+            let mut dims = Vec::new();
+            for (i, d) in input_dims.iter().copied().enumerate() {
+                if !drop[i] {
+                    dims.push(d);
+                }
+            }
+
+            res.push(ResolvedTensorType::new(
+                input.elem_type,
+                ResolvedTensorDims::new(dims),
+            ));
+        }
+
         Operator::Gather(Gather { axis }) => {
             let input = &inputs[0].dims;
             let indices = &inputs[1].dims;
@@ -404,6 +434,36 @@ pub fn infer_node_output(
                 ResolvedTensorDims::new(dims),
             ));
         }
+
+        Operator::Unsqueeze(Unsqueeze { axes }) => {
+            let input = &inputs[0];
+            let input_dims = &input.dims;
+            let expanded_rank = input_dims.ndim() + axes.len();
+            let mut insert = vec![false; expanded_rank];
+            for &axis in axes.iter() {
+                let axis = axis.index(expanded_rank);
+                cond_error!(axis >= expanded_rank);
+                insert[axis] = true;
+            }
+            let mut dims = Vec::with_capacity(expanded_rank);
+            let mut input_iter = input_dims.iter().copied();
+            for i in 0..expanded_rank {
+                if insert[i] {
+                    dims.push(1);
+                } else {
+                    dims.push(input_iter.next().ok_or(TypeError::InferError(
+                        "Unsqueeze: Not enough dimensions".to_string(),
+                    ))?);
+                }
+            }
+
+            cond_error!(input_iter.next().is_some());
+            res.push(ResolvedTensorType::new(
+                input.elem_type,
+                ResolvedTensorDims::new(dims),
+            ));
+        }
+
         // Custom
         Operator::Contiguous => {
             let input = &inputs[0];

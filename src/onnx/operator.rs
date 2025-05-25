@@ -51,12 +51,14 @@ pub enum Operator {
     ReduceMean(Reduce),
     ReduceSum(Reduce),
     Shape(Shape),
+    Sigmoid,
     Slice,
     Split(Split),
-    Sigmoid,
+    Squeeze(Squeeze),
     Sub,
     Tanh,
     Transpose(Transpose),
+    Unsqueeze(Unsqueeze),
 
     // Custom
     Contiguous,
@@ -207,6 +209,11 @@ pub struct Transpose {
     pub perm: Option<Vec<usize>>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unsqueeze {
+    pub axes: Vec<TensorIndex>,
+}
+
 impl Slice {
     pub fn collect_slices(graph: &Graph, node_id: NodeId) -> Option<Vec<Self>> {
         let node = &graph.nodes[node_id];
@@ -263,6 +270,11 @@ pub enum SplitOutputs {
 pub struct Split {
     pub axis: TensorIndex,
     pub outputs: SplitOutputs,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Squeeze {
+    pub axes: Option<Vec<TensorIndex>>,
 }
 
 impl Reduce {
@@ -474,12 +486,14 @@ impl Operator {
             Operator::ReduceSum(_) => "ReduceSum",
             Operator::Resize(_) => "Resize",
             Operator::Shape(_) => "Shape",
+            Operator::Sigmoid => "Sigmoid",
             Operator::Slice => "Slice",
             Operator::Split(_) => "Split",
-            Operator::Sigmoid => "Sigmoid",
+            Operator::Squeeze(_) => "Squeeze",
             Operator::Sub => "Sub",
             Operator::Tanh => "Tanh",
             Operator::Transpose(_) => "Transpose",
+            Operator::Unsqueeze(_) => "Unsqueeze",
 
             // Custom
             Operator::Contiguous => "Contiguous (Custom)",

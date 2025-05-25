@@ -327,6 +327,8 @@ impl Session {
 
 #[cfg(test)]
 mod test {
+    use image::codecs::qoi;
+
     use super::*;
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
@@ -1207,6 +1209,48 @@ mod test {
             expected.scaled_add(0.5, &bias);
             let output = session.run(&[input0, input1])?;
             tensor_assert_eq!(output[0], expected.into_dyn());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn squeeze() -> TestResult {
+        with_session("squeeze.onnx", |session| {
+            let (input, orig) = make_range_tensor!(f32, 1, 2, 1, 3, 4)?;
+            let expected = orig
+                .into_shape_with_order((1, 2, 3, 4))
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+                .into_dyn();
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn squeeze_opt() -> TestResult {
+        with_session("squeeze_opt.onnx", |session| {
+            let (input, orig) = make_range_tensor!(f32, 1, 2, 1, 3, 4)?;
+            let expected = orig
+                .into_shape_with_order((2, 3, 4))
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+                .into_dyn();
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn unsqueeze() -> TestResult {
+        with_session("unsqueeze.onnx", |session| {
+            let (input, orig) = make_range_tensor!(f32, 2, 3, 4)?;
+            let expected = orig
+                .into_shape_with_order((1, 2, 3, 4, 1))
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?
+                .into_dyn();
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected);
             Ok(())
         })
     }
