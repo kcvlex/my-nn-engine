@@ -130,13 +130,10 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
             for &axis in info.axes.iter() {
                 drop[axis] = true;
             }
-            let mut perms = Vec::with_capacity(rank);
-            for i in 0..rank {
-                if !drop[i] {
-                    perms.push(i);
-                }
-            }
-            perms.extend(info.axes.iter());
+            let perms = (0..rank)
+                .filter(|&i| !drop[i])
+                .chain(info.axes.iter().copied())
+                .collect();
 
             let input_v = TransposeGenerator::default()
                 .set_input(*input_value)
