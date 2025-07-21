@@ -858,6 +858,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Resize" => Ok(Operator::Resize(Resize::load(attributes)?)),
         "Sigmoid" => Ok(Operator::Sigmoid),
         "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
+        "Sqrt" => Ok(Operator::Sqrt),
         "Squeeze" => Ok(Operator::Squeeze(Squeeze::load(attributes)?)),
         "Sub" => Ok(Operator::Sub),
         "Tanh" => Ok(Operator::Tanh),

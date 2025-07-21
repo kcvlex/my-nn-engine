@@ -55,6 +55,7 @@ pub enum Operator {
     Sigmoid,
     Slice,
     Split(Split),
+    Sqrt,
     Squeeze(Squeeze),
     Sub,
     Tanh,
@@ -491,6 +492,7 @@ impl Operator {
             Operator::Sigmoid => "Sigmoid",
             Operator::Slice => "Slice",
             Operator::Split(_) => "Split",
+            Operator::Sqrt => "Sqrt",
             Operator::Squeeze(_) => "Squeeze",
             Operator::Sub => "Sub",
             Operator::Tanh => "Tanh",
@@ -523,6 +525,7 @@ impl Operator {
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
+                Operator::Sqrt |
                 Operator::Sub |
                 Operator::Tanh |
                 Operator::ElementwiseOps(_)

@@ -658,6 +658,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Reciprocal => SingleOpcode::Reciprocal,
                 Operator::ReLU => SingleOpcode::ReLU,
                 Operator::Sigmoid => SingleOpcode::Sigmoid,
+                Operator::Sqrt => SingleOpcode::Sqrt,
                 Operator::Tanh => SingleOpcode::Tanh,
                 _ => unreachable!(),
             }
@@ -693,6 +694,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
+                Operator::Sqrt |
                 Operator::Tanh => (),
 
                 _ => unreachable!(),
@@ -710,6 +712,7 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |
+            Operator::Sqrt |
             Operator::Tanh) => {
                 let operands: &'static [Option<usize>] = match operator {
                     Operator::Add | Operator::Mul => &[Some(0), Some(1)],
@@ -722,6 +725,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     Operator::Reciprocal |
                     Operator::ReLU |
                     Operator::Sigmoid |
+                    Operator::Sqrt |
                     Operator::Tanh |
                     Operator::Contiguous => &[],
                     _ => unreachable!(),

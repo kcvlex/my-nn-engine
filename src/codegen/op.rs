@@ -79,6 +79,7 @@ pub enum SingleOpcode {
     Reciprocal,
     ReLU,
     Sigmoid,
+    Sqrt,
     Tanh,
     Transfer,
 }

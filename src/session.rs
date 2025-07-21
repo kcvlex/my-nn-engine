@@ -1235,4 +1235,15 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn sqrt() -> TestResult {
+        with_session("sqrt.onnx", |session| {
+            let (input, orig) = make_tensor!(f32, [1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],)?;
+            let expected = orig.map(|x| x.sqrt()).into_dyn();
+            let output = session.run(&[input])?;
+            tensor_assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
 }

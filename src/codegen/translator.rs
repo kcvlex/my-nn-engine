@@ -625,12 +625,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap()
             }
 
-            opcode @ (SingleOpcode::Exp | SingleOpcode::Log) => {
+            opcode @ (SingleOpcode::Exp | SingleOpcode::Log | SingleOpcode::Sqrt) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();
                 let f = match opcode {
                     SingleOpcode::Exp => self.intrinsics.exp.get(ty),
                     SingleOpcode::Log => self.intrinsics.log.get(ty),
+                    SingleOpcode::Sqrt => self.intrinsics.sqrt.get(ty),
                     _ => unreachable!(),
                 };
                 let src = src.into_float_value();
