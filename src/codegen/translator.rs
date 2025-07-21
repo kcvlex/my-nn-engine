@@ -569,7 +569,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         }
 
         let res = match opcode {
-            opcode @ (SingleOpcode::Add | SingleOpcode::Mul) => {
+            opcode @ (SingleOpcode::Add | SingleOpcode::Mul | SingleOpcode::Sub) => {
                 macro_rules! body {
                     ($into: ident, $arith: ident) => {{
                         let (lhs, rhs) = binary_op!(operands);
@@ -588,11 +588,17 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     (SingleOpcode::Mul, true) => {
                         body!(into_float_value, build_float_mul)
                     }
+                    (SingleOpcode::Sub, true) => {
+                        body!(into_float_value, build_float_sub)
+                    }
                     (SingleOpcode::Add, false) => {
                         body!(into_int_value, build_int_add)
                     }
                     (SingleOpcode::Mul, false) => {
                         body!(into_int_value, build_int_mul)
+                    }
+                    (SingleOpcode::Sub, false) => {
+                        body!(into_int_value, build_int_sub)
                     }
                     _ => unreachable!(),
                 }

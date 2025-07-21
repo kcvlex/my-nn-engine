@@ -658,7 +658,7 @@ impl<'ll> CodeGen<'ll, '_> {
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
-                Operator::Add | Operator::Mul | Operator::Pow => {
+                Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub => {
                     assert!(operands.len() == 2);
                     for i in operands.iter().filter_map(|x| *x) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
@@ -706,6 +706,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::ReLU => SingleOpcode::ReLU,
                 Operator::Sigmoid => SingleOpcode::Sigmoid,
                 Operator::Sqrt => SingleOpcode::Sqrt,
+                Operator::Sub => SingleOpcode::Sub,
                 Operator::Tanh => SingleOpcode::Tanh,
                 _ => unreachable!(),
             }
@@ -724,6 +725,7 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::ReLU |
             Operator::Sigmoid |
             Operator::Sqrt |
+            Operator::Sub |
             Operator::Tanh) => {
                 let operands: &'static [Option<usize>] = match operator {
                     Operator::Add | Operator::Mul | Operator::Pow => &[Some(0), Some(1)],
