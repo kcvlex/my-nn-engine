@@ -472,6 +472,30 @@ pub fn infer_node_output(
             ));
         }
 
+        Operator::ConstantOfShape(ConstantOfShape { value }) => {
+            let shape = graph
+                .initializer
+                .get(&node.inputs[0])
+                .ok_or(TypeError::UnresolvedInput)?;
+            let ty = match shape.data {
+                TensorData::SInt(SIntType::I64, ref v) => {
+                    cond_error!(shape.dims.ndim() <= 1);
+                    let dims = v
+                        .iter()
+                        .map(|&x| {
+                            cond_error!(0 <= x);
+                            Ok(x as usize)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    ResolvedTensorType::new(value.elem_type(), ResolvedTensorDims::new(dims))
+                }
+                _ => {
+                    return Err(TypeError::InferError("Invalid shape".to_string()));
+                }
+            };
+            res.push(ty);
+        }
+
         // Custom
         Operator::Contiguous => {
             let input = &inputs[0];

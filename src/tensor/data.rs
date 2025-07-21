@@ -10,6 +10,13 @@ pub enum TensorData {
     Float(FloatType, Vec<f64>),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ScalarData {
+    SInt(SIntType, i64),
+    UInt(UIntType, u64),
+    Float(FloatType, f64),
+}
+
 impl Eq for TensorData {}
 
 impl PartialEq for TensorData {
@@ -18,6 +25,19 @@ impl PartialEq for TensorData {
             (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => a0 == b0 && a1 == b1,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ScalarData {}
+
+impl PartialEq for ScalarData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ScalarData::SInt(a0, a1), ScalarData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (ScalarData::UInt(a0, a1), ScalarData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
+            (ScalarData::Float(a0, a1), ScalarData::Float(b0, b1)) => a0 == b0 && a1 == b1,
             _ => false,
         }
     }
@@ -158,5 +178,31 @@ impl From<Vec<f32>> for TensorData {
 impl From<Vec<f64>> for TensorData {
     fn from(v: Vec<f64>) -> Self {
         TensorData::Float(FloatType::F64, v)
+    }
+}
+
+impl ScalarData {
+    pub fn elem_type(&self) -> DataType {
+        match self {
+            ScalarData::SInt(t, _) => DataType::SInt(*t),
+            ScalarData::UInt(t, _) => DataType::UInt(*t),
+            ScalarData::Float(t, _) => DataType::Float(*t),
+        }
+    }
+}
+
+impl TryInto<ScalarData> for TensorData {
+    type Error = TypeError;
+
+    fn try_into(self) -> Result<ScalarData, Self::Error> {
+        match self {
+            TensorData::SInt(ty, v) if v.len() == 1 => Ok(ScalarData::SInt(ty, v[0])),
+            TensorData::UInt(ty, v) if v.len() == 1 => Ok(ScalarData::UInt(ty, v[0])),
+            TensorData::Float(ty, v) if v.len() == 1 => Ok(ScalarData::Float(ty, v[0])),
+            _ => Err(TypeError::InvalidShape(
+                self.size(),
+                ResolvedTensorDims::new(vec![1]),
+            )),
+        }
     }
 }

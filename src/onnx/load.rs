@@ -1,7 +1,7 @@
 use crate::onnx::model::{Graph, Model, Node, NodeMeta, Nodes, ValueId, ValueInfo, Values};
 use crate::onnx::operator::*;
 use crate::tensor::{
-    data::TensorData,
+    data::{ScalarData, TensorData},
     dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
     types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
     Tensor,
@@ -68,6 +68,7 @@ enum Attribute {
     Ints(Vec<i64>),
     Str(String),
     Strings(Vec<String>),
+    Tensor(Tensor),
 }
 
 impl Attribute {
@@ -130,6 +131,13 @@ impl Attribute {
     fn strings(&self) -> LoadResult<Vec<String>> {
         match self {
             Attribute::Strings(x) => Ok(x.clone()),
+            x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
+        }
+    }
+
+    fn tensor(&self) -> LoadResult<Tensor> {
+        match self {
+            Attribute::Tensor(x) => Ok(x.clone()),
             x => Err(ModelLoadError::Unexpected(format!("{:?}", x))),
         }
     }
@@ -393,6 +401,9 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
                 .map(load_utf8)
                 .collect::<Result<Vec<_>, _>>()
                 .map(|x| Attribute::Strings(x)),
+            attribute_proto::AttributeType::Tensor => {
+                load_tensor(attr.t.unwrap()).map(Attribute::Tensor)
+            }
             x => Err(ModelLoadError::UnsupportedAttributeType(x)),
         }?;
         res.insert(name, value);
@@ -449,6 +460,18 @@ impl Concat {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let axis = attributes.required("axis")?.index()?;
         Ok(Concat { axis })
+    }
+}
+
+impl ConstantOfShape {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let value = attributes
+            .get("value")
+            .map(|x| x.tensor())
+            .transpose()?
+            .and_then(|tensor| tensor.data.try_into().ok())
+            .unwrap_or(ScalarData::Float(FloatType::F32, 1.0));
+        Ok(ConstantOfShape { value })
     }
 }
 
@@ -838,6 +861,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         )?)),
         "Cast" => Ok(Operator::Cast(Cast::load(attributes)?)),
         "Concat" => Ok(Operator::Concat(Concat::load(attributes)?)),
+        "ConstantOfShape" => Ok(Operator::ConstantOfShape(ConstantOfShape::load(
+            attributes,
+        )?)),
         "Conv" => Ok(Operator::Conv(Conv::load(attributes)?)),
         "Exp" => Ok(Operator::Exp),
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),

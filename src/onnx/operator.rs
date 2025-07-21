@@ -1,4 +1,5 @@
 use crate::onnx::model::{Graph, NodeId, ValueId};
+use crate::tensor::data::ScalarData;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use crate::tensor::Tensor;
@@ -33,6 +34,7 @@ pub enum Operator {
     BatchNormalization(BatchNormalization),
     Cast(Cast),
     Concat(Concat),
+    ConstantOfShape(ConstantOfShape),
     Conv(Conv),
     Exp,
     Gather(Gather),
@@ -115,6 +117,11 @@ pub struct Cast {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Concat {
     pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstantOfShape {
+    pub value: ScalarData,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -471,6 +478,7 @@ impl Operator {
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
             Operator::Concat(_) => "Concat",
+            Operator::ConstantOfShape(_) => "ConstantOfShape",
             Operator::Conv(_) => "Conv",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
