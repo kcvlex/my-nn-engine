@@ -64,6 +64,12 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
+        Operator::Pow => {
+            let a = &inputs[0];
+            let b = &inputs[1];
+            let dims = broadcast_shape(&a.dims, &b.dims)?;
+            res.push(ResolvedTensorType::new(a.elem_type, dims));
+        }
         Operator::BatchNormalization(_) |
         Operator::Exp |
         Operator::Identity |

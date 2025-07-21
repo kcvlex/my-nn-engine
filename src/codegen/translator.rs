@@ -658,6 +658,82 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder.build_select(lt, lhs, rhs, "res")?
             }
 
+            // TODO: Improve implmentation.
+            SingleOpcode::Pow(base_ty, exp_ty) => {
+                let (lhs, rhs) = binary_op!(operands);
+                let cast_ty = {
+                    let width = base_ty.bit_width().max(exp_ty.bit_width());
+                    if width <= 32 {
+                        FloatType::F32
+                    } else {
+                        assert!(width <= 64);
+                        FloatType::F64
+                    }
+                };
+                let llvm_cast_ty = cast_ty.llvm_type(self.context);
+                let convert_op = |v: BasicValueEnum<'ctx>, ty: DataType| match ty {
+                    DataType::SInt(_) => {
+                        self.builder
+                            .build_signed_int_to_float(v.into_int_value(), llvm_cast_ty, "")
+                    }
+                    DataType::UInt(_) => self.builder.build_unsigned_int_to_float(
+                        v.into_int_value(),
+                        llvm_cast_ty,
+                        "",
+                    ),
+                    DataType::Float(fty) => {
+                        if fty.bit_width() == cast_ty.bit_width() {
+                            Ok(v.into_float_value())
+                        } else {
+                            assert!(fty.bit_width() < cast_ty.bit_width());
+                            self.builder
+                                .build_float_cast(v.into_float_value(), llvm_cast_ty, "")
+                        }
+                    }
+                };
+
+                let lhs = convert_op(lhs, base_ty)?;
+                let rhs = convert_op(rhs, exp_ty)?;
+                let pow = self.intrinsics.pow.get(cast_ty);
+                let res = self
+                    .build_tail_call(pow, &[lhs.into(), rhs.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
+
+                match base_ty {
+                    DataType::SInt(sty) => self
+                        .builder
+                        .build_float_to_signed_int(
+                            res.into_float_value(),
+                            sty.llvm_type(self.context),
+                            "res",
+                        )?
+                        .as_basic_value_enum(),
+                    DataType::UInt(uty) => self
+                        .builder
+                        .build_float_to_unsigned_int(
+                            res.into_float_value(),
+                            uty.llvm_type(self.context),
+                            "res",
+                        )?
+                        .as_basic_value_enum(),
+                    DataType::Float(fty) => {
+                        if fty == cast_ty {
+                            res.as_basic_value_enum()
+                        } else {
+                            self.builder
+                                .build_float_trunc(
+                                    res.into_float_value(),
+                                    fty.llvm_type(self.context),
+                                    "res",
+                                )?
+                                .as_basic_value_enum()
+                        }
+                    }
+                }
+            }
+
             SingleOpcode::Reciprocal => {
                 let ty = ty.float_type().unwrap();
                 let src = unary_op!(operands).into_float_value();

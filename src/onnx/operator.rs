@@ -41,6 +41,7 @@ pub enum Operator {
     Identity,
     LeakyReLU(LeakyReLU),
     Log,
+    Pow,
     Reciprocal,
     ReLU,
     Reshape,
@@ -484,6 +485,7 @@ impl Operator {
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
             Operator::Mul => "Mul",
+            Operator::Pow => "Pow",
             Operator::ReduceMax(_) => "ReduceMax",
             Operator::ReduceMean(_) => "ReduceMean",
             Operator::ReduceSum(_) => "ReduceSum",
@@ -522,6 +524,7 @@ impl Operator {
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
+                Operator::Pow |
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |

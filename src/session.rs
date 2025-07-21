@@ -211,6 +211,8 @@ impl Session {
             })
             .collect::<Vec<_>>();
 
+        dbg!(&tmp_dir);
+
         println!("Compiling");
         let objs = codegens
             .into_par_iter()
@@ -327,11 +329,10 @@ impl Session {
 
 #[cfg(test)]
 mod test {
-    use image::codecs::qoi;
-
     use super::*;
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
+    use itertools::izip;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{
@@ -1245,5 +1246,43 @@ mod test {
             tensor_assert_eq!(output[0], expected);
             Ok(())
         })
+    }
+
+    #[test]
+    fn pow_types() -> TestResult {
+        let (x_i32, _) = make_tensor!(i32, 1, 2, 3,)?;
+        let (x_i64, _) = make_tensor!(i64, 1, 2, 3,)?;
+        let (x_u64, _) = make_tensor!(u64, 1, 2, 3,)?;
+        let (x_f32, _) = make_tensor!(f32, 1.0, 2.0, 3.0,)?;
+        let (x_f64, _) = make_tensor!(f64, 1.0, 2.0, 3.0,)?;
+
+        let (y_i32, _) = make_tensor!(i32, 4, 5, 6,)?;
+        let (y_i64, _) = make_tensor!(i64, 4, 5, 6,)?;
+        let (y_u64, _) = make_tensor!(u64, 4, 5, 6,)?;
+        let (y_f32, _) = make_tensor!(f32, 4.0, 5.0, 6.0,)?;
+        let (y_f64, _) = make_tensor!(f64, 4.0, 5.0, 6.0,)?;
+
+        let (z_i32, _) = make_tensor!(i32, 1, 32, 729,)?;
+        let (z_i64, _) = make_tensor!(i64, 1, 32, 729,)?;
+        let (z_u64, _) = make_tensor!(u64, 1, 32, 729,)?;
+        let (z_f32, _) = make_tensor!(f32, 1.0, 32.0, 729.0,)?;
+        let (z_f64, _) = make_tensor!(f64, 1.0, 32.0, 729.0,)?;
+
+        let xv = [x_i32, x_i64, x_u64, x_f32, x_f64];
+        let yv = [y_i32, y_i64, y_u64, y_f32, y_f64];
+        let zv = [z_i32, z_i64, z_u64, z_f32, z_f64];
+        let ty_lit = ["i32", "i64", "u64", "f32", "f64"];
+
+        for (x, z, lty) in izip!(xv, zv, ty_lit) {
+            for (y, rty) in izip!(yv.iter(), ty_lit) {
+                with_session(format!("pow_{}_{}.onnx", lty, rty), |session| {
+                    let output = session.run(&[x.clone(), y.clone()])?;
+                    assert_eq!(output[0], z.clone());
+                    Ok(())
+                })?;
+            }
+        }
+
+        Ok(())
     }
 }

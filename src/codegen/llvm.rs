@@ -29,6 +29,7 @@ pub struct Intrinsics<'ll> {
     pub fmax: FloatIntrinsics<'ll>,
     pub floor: FloatIntrinsics<'ll>,
     pub log: FloatIntrinsics<'ll>,
+    pub pow: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
 
     // TODO: Replace with llvm..tanh.* after bumping to llvm-19

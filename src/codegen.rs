@@ -278,6 +278,10 @@ impl CodeGenContext {
             f_f32: get_intrinsic!("llvm.log", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.log", &[f64_ty])?,
         };
+        let pow = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.pow", &[f32_ty, f32_ty])?,
+            f_f64: get_intrinsic!("llvm.pow", &[f64_ty, f64_ty])?,
+        };
         let sqrt = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.sqrt", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.sqrt", &[f64_ty])?,
@@ -298,6 +302,7 @@ impl CodeGenContext {
             fma,
             fmax,
             log,
+            pow,
             sqrt,
             smin_i32,
             smin_i64,
@@ -653,7 +658,7 @@ impl<'ll> CodeGen<'ll, '_> {
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
-                Operator::Add | Operator::Mul => {
+                Operator::Add | Operator::Mul | Operator::Pow => {
                     assert!(operands.len() == 2);
                     for i in operands.iter().filter_map(|x| *x) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
@@ -691,6 +696,12 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,
+                Operator::Pow => {
+                    assert!(operands.len() == 2);
+                    let lhs = ptrs[operands[0].unwrap()].ty.elem_type;
+                    let rhs = ptrs[operands[1].unwrap()].ty.elem_type;
+                    SingleOpcode::Pow(lhs, rhs)
+                }
                 Operator::Reciprocal => SingleOpcode::Reciprocal,
                 Operator::ReLU => SingleOpcode::ReLU,
                 Operator::Sigmoid => SingleOpcode::Sigmoid,
@@ -708,13 +719,14 @@ impl<'ll> CodeGen<'ll, '_> {
             Operator::LeakyReLU(_) |
             Operator::Log |
             Operator::Mul |
+            Operator::Pow |
             Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |
             Operator::Sqrt |
             Operator::Tanh) => {
                 let operands: &'static [Option<usize>] = match operator {
-                    Operator::Add | Operator::Mul => &[Some(0), Some(1)],
+                    Operator::Add | Operator::Mul | Operator::Pow => &[Some(0), Some(1)],
                     Operator::BatchNormalization(_) => {
                         &[Some(0), Some(1), Some(2), Some(3), Some(4)]
                     }

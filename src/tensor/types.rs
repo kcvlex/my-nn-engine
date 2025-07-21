@@ -17,9 +17,26 @@ pub enum SIntType {
     I64,
 }
 
+impl SIntType {
+    pub fn bit_width(&self) -> usize {
+        match self {
+            SIntType::I32 => 32,
+            SIntType::I64 => 64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum UIntType {
     U64,
+}
+
+impl UIntType {
+    pub fn bit_width(&self) -> usize {
+        match self {
+            UIntType::U64 => 64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -28,11 +45,36 @@ pub enum FloatType {
     F64,
 }
 
+impl FloatType {
+    pub fn bit_width(&self) -> usize {
+        match self {
+            FloatType::F32 => 32,
+            FloatType::F64 => 64,
+        }
+    }
+}
+
 impl DataType {
     pub fn float_type(&self) -> Option<FloatType> {
         match self {
             DataType::Float(t) => Some(*t),
             _ => None,
+        }
+    }
+
+    pub fn is_int(&self) -> bool {
+        matches!(self, DataType::SInt(_) | DataType::UInt(_))
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, DataType::Float(_))
+    }
+
+    pub fn bit_width(&self) -> usize {
+        match self {
+            DataType::SInt(sty) => sty.bit_width(),
+            DataType::UInt(uty) => uty.bit_width(),
+            DataType::Float(fty) => fty.bit_width(),
         }
     }
 }
