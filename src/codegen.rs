@@ -646,29 +646,12 @@ impl<'ll> CodeGen<'ll, '_> {
             }};
         }
 
-        let convert_op = |op: &Operator| -> SingleOpcode {
-            match op {
-                Operator::Add => SingleOpcode::Add,
-                Operator::BatchNormalization(bn) => SingleOpcode::BatchNorm(*bn),
-                Operator::Contiguous => SingleOpcode::Transfer,
-                Operator::Exp => SingleOpcode::Exp,
-                Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
-                Operator::Log => SingleOpcode::Log,
-                Operator::Mul => SingleOpcode::Mul,
-                Operator::Reciprocal => SingleOpcode::Reciprocal,
-                Operator::ReLU => SingleOpcode::ReLU,
-                Operator::Sigmoid => SingleOpcode::Sigmoid,
-                Operator::Sqrt => SingleOpcode::Sqrt,
-                Operator::Tanh => SingleOpcode::Tanh,
-                _ => unreachable!(),
-            }
-        };
-
         // TODO: When same Input is used in multiple nodes
-        let adjust_ptrs = |op: &Operator,
-                           ptrs: &mut [TensorPtr<'_>],
-                           operands: &[Option<usize>],
-                           target_dim: &ResolvedTensorDims| {
+        let adjust_ptrs_and_convert_op = |op: &Operator,
+                                          ptrs: &mut [TensorPtr<'_>],
+                                          operands: &[Option<usize>],
+                                          target_dim: &ResolvedTensorDims|
+         -> SingleOpcode {
             match op {
                 Operator::Add | Operator::Mul => {
                     assert!(operands.len() == 2);
@@ -697,6 +680,22 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sqrt |
                 Operator::Tanh => (),
 
+                _ => unreachable!(),
+            };
+
+            match op {
+                Operator::Add => SingleOpcode::Add,
+                Operator::BatchNormalization(bn) => SingleOpcode::BatchNorm(*bn),
+                Operator::Contiguous => SingleOpcode::Transfer,
+                Operator::Exp => SingleOpcode::Exp,
+                Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
+                Operator::Log => SingleOpcode::Log,
+                Operator::Mul => SingleOpcode::Mul,
+                Operator::Reciprocal => SingleOpcode::Reciprocal,
+                Operator::ReLU => SingleOpcode::ReLU,
+                Operator::Sigmoid => SingleOpcode::Sigmoid,
+                Operator::Sqrt => SingleOpcode::Sqrt,
+                Operator::Tanh => SingleOpcode::Tanh,
                 _ => unreachable!(),
             }
         };
@@ -732,8 +731,8 @@ impl<'ll> CodeGen<'ll, '_> {
                 };
                 let target_dim = ptrs[0].ty.dims.clone();
                 let nest = target_dim.ndim();
-                adjust_ptrs(operator, &mut ptrs[1..], operands, &target_dim);
-                let operator = convert_op(operator);
+                let operator =
+                    adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], operands, &target_dim);
                 let op = Operation {
                     opcode: operator.into(),
                     operands: ptrs.into(),
@@ -789,7 +788,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 let nest = target_dim.ndim();
                 let ops: Vec<_> = ops
                     .iter()
-                    .inspect(|(op, args)| {
+                    .map(|(op, args)| {
                         let operands = args
                             .iter()
                             .map(|arg| match arg {
@@ -797,9 +796,10 @@ impl<'ll> CodeGen<'ll, '_> {
                                 operator::ElementwiseOpArg::NthResult(_) => None,
                             })
                             .collect::<Vec<_>>();
-                        adjust_ptrs(op, &mut ptrs[1..], &operands, &target_dim);
+                        let operator =
+                            adjust_ptrs_and_convert_op(op, &mut ptrs[1..], &operands, &target_dim);
+                        (operator, args.clone())
                     })
-                    .map(|(op, args)| (convert_op(op), args.clone()))
                     .collect();
                 let op = Operation {
                     opcode: Opcode::Fused(ops),
