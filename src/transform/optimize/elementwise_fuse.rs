@@ -1,7 +1,7 @@
 use crate::onnx::model::{Graph, Node, NodeId, NodeMeta, ValueId};
 use crate::onnx::operator::*;
 use crate::onnx::utils;
-use crate::transform::modify::GraphModifier;
+use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 use crate::utils::UnionFind;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub struct FuseElementwiseOps {}
 
-impl<T: GraphModifier> Pass<T> for FuseElementwiseOps {
+impl<T: GraphOp> Pass<T> for FuseElementwiseOps {
     fn summary(&self) -> &'static str {
         "Fuse elementwise operators"
     }
@@ -76,7 +76,7 @@ impl FuseElementwiseOpsImpl {
         &self,
         id: NodeId,
         graph: &Graph,
-        modifier: &impl GraphModifier,
+        modifier: &impl GraphOp,
         uf: &mut UnionFind,
     ) -> Option<()> {
         let ord_id = self.id2order.get(&id).copied()?;
@@ -146,7 +146,7 @@ impl FuseElementwiseOpsImpl {
         (ElementwiseOps { ops }, inputs)
     }
 
-    fn run(&self, graph: &mut Graph, modifier: &mut impl GraphModifier) {
+    fn run(&self, graph: &mut Graph, modifier: &mut impl GraphOp) {
         let mut uf = UnionFind::new(self.node_ids.len());
         for node_id in self.node_ids.iter().rev() {
             self.try_fuse(*node_id, graph, modifier, &mut uf);
@@ -193,7 +193,7 @@ mod test {
     use crate::transform::*;
     use std::path::PathBuf;
 
-    fn create_fusion_pass() -> SimplePassManager<SimpleGraphModifier> {
+    fn create_fusion_pass() -> SimplePassManager<SimpleGraphOp> {
         let mut manager = SimplePassManager::new("Fusion".to_string());
         manager.add_pass(Box::new(FuseElementwiseOps::default()));
         manager
@@ -206,7 +206,7 @@ mod test {
         let input = dir.join(input);
         let mut model = Model::load_from_path(&input).map_err(|e| format!("{:?}", e))?;
         let obtained = &mut model.graph;
-        let mut modifier = SimpleGraphModifier::new(obtained);
+        let mut modifier = SimpleGraphOp::new(obtained);
         for manager in [create_infer_passes(true), create_fusion_pass()] {
             manager.run(obtained, &mut modifier);
         }

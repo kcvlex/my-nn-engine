@@ -1,6 +1,6 @@
 use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
 use crate::onnx::operator::*;
-use crate::transform::modify::GraphModifier;
+use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 // #[derive(Default)]
@@ -77,7 +77,7 @@ use crate::transform::Pass;
 #[derive(Default)]
 pub struct GemmTransComposition {}
 
-impl<T: GraphModifier> Pass<T> for GemmTransComposition {
+impl<T: GraphOp> Pass<T> for GemmTransComposition {
     fn summary(&self) -> &'static str {
         "Compose Gemm and Tranpose into Gemm"
     }

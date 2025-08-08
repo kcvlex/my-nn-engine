@@ -6,7 +6,7 @@ pub mod shape;
 mod utils;
 
 use crate::onnx::model::Graph;
-use modify::{GraphModifier, NodeDelete, SimpleGraphModifier};
+use modify::{GraphOp, NodeDelete, SimpleGraphOp};
 use typed_builder::TypedBuilder;
 
 pub use epilog::create_epilog_passes;
@@ -15,23 +15,23 @@ pub use optimize::{create_optimize_passes0, create_optimize_passes1, create_opti
 pub use shape::infer::create_infer_passes;
 pub use shape::strides::create_strides_passes;
 
-pub trait Pass<T: GraphModifier> {
+pub trait Pass<T: GraphOp> {
     fn summary(&self) -> &str;
     fn run(&self, graph: &mut Graph, modifier: &mut T);
 }
 
-pub trait PassManager<T: GraphModifier + NodeDelete> {
+pub trait PassManager<T: GraphOp + NodeDelete> {
     fn add_pass(&mut self, pass: Box<dyn Pass<T>>);
     fn run(&self, graph: &mut Graph, modifier: &mut T);
     fn name(&self) -> &str;
 }
 
-pub struct SimplePassManager<T: GraphModifier + NodeDelete> {
+pub struct SimplePassManager<T: GraphOp + NodeDelete> {
     name: String,
     passes: Vec<Box<dyn Pass<T>>>,
 }
 
-impl<T: GraphModifier + NodeDelete> SimplePassManager<T> {
+impl<T: GraphOp + NodeDelete> SimplePassManager<T> {
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -40,7 +40,7 @@ impl<T: GraphModifier + NodeDelete> SimplePassManager<T> {
     }
 }
 
-impl<T: GraphModifier + NodeDelete> PassManager<T> for SimplePassManager<T> {
+impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
     fn add_pass(&mut self, pass: Box<dyn Pass<T>>) {
         self.passes.push(pass);
     }
@@ -85,7 +85,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
         create_epilog_passes(),
     ];
 
-    let mut modifier = SimpleGraphModifier::new(graph);
+    let mut modifier = SimpleGraphOp::new(graph);
     for manager in managers.iter() {
         manager.run(graph, &mut modifier);
     }
@@ -109,7 +109,7 @@ mod test {
         let input = dir.join(format!("{}.onnx", input_name));
         let mut model = Model::load_from_path(&input).unwrap();
         let graph = &mut model.graph;
-        let mut modifier = SimpleGraphModifier::new(graph);
+        let mut modifier = SimpleGraphOp::new(graph);
         let infer = create_infer_passes(true);
         let fusion = FuseElementwiseOps::default();
         infer.run(graph, &mut modifier);

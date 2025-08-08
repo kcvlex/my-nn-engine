@@ -2,8 +2,8 @@ use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
-use crate::transform::modify::GraphModifier;
-use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::modify::GraphOp;
+use crate::transform::modify::SimpleGraphOp;
 use crate::transform::utils::tensor::*;
 use crate::transform::SimplePassManager;
 use crate::transform::{Pass, PassManager};
@@ -11,7 +11,7 @@ use crate::transform::{Pass, PassManager};
 #[derive(Default)]
 pub struct EliminateGlobalAvgPool {}
 
-impl<T: GraphModifier> Pass<T> for EliminateGlobalAvgPool {
+impl<T: GraphOp> Pass<T> for EliminateGlobalAvgPool {
     fn summary(&self) -> &'static str {
         "Convert GlobalAveragePool to another operator"
     }
@@ -90,7 +90,7 @@ struct ReduceInfo {
     op: ReduceOp,
 }
 
-impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
+impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
     fn summary(&self) -> &'static str {
         "Convert ReduceXXX nodes to Transpose + ReduceMatrix"
     }
@@ -187,7 +187,7 @@ impl<T: GraphModifier> Pass<T> for Reduce2ReduceMatrix {
 #[derive(Default)]
 pub struct MatMul2Gemm {}
 
-impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
+impl<T: GraphOp> Pass<T> for MatMul2Gemm {
     fn summary(&self) -> &'static str {
         "Convert 2-D MatMul to Gemm"
     }
@@ -230,7 +230,7 @@ impl<T: GraphModifier> Pass<T> for MatMul2Gemm {
 #[derive(Default)]
 pub struct Squeeze2Reshape {}
 
-impl<T: GraphModifier> Pass<T> for Squeeze2Reshape {
+impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
     fn summary(&self) -> &'static str {
         "Convert Squeeze/Unsqueeze to Reshape"
     }
@@ -268,7 +268,7 @@ impl<T: GraphModifier> Pass<T> for Squeeze2Reshape {
     }
 }
 
-pub fn create_lower_passes() -> SimplePassManager<SimpleGraphModifier> {
+pub fn create_lower_passes() -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));

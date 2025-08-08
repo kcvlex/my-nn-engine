@@ -1,11 +1,11 @@
 use crate::onnx::model::{Graph, UnifyMode};
 use crate::tensor::types::TypeError;
-use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::utils::const_fold::fold_constant;
 use crate::transform::SimplePassManager;
-use crate::transform::{GraphModifier, Pass, PassManager};
+use crate::transform::{GraphOp, Pass, PassManager};
 use itertools::zip_eq;
 
 pub struct Config {
@@ -23,7 +23,7 @@ impl Default for Config {
 #[derive(Default)]
 pub struct ShapeInference {}
 
-impl<T: GraphModifier> Pass<T> for ShapeInference {
+impl<T: GraphOp> Pass<T> for ShapeInference {
     fn summary(&self) -> &'static str {
         "Infer shape of each node"
     }
@@ -34,11 +34,7 @@ impl<T: GraphModifier> Pass<T> for ShapeInference {
 }
 
 impl ShapeInference {
-    fn infer<T: GraphModifier>(
-        &self,
-        graph: &mut Graph,
-        modifier: &mut T,
-    ) -> Result<(), TypeError> {
+    fn infer<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T) -> Result<(), TypeError> {
         let ids = graph
             .nodes
             .iter()
@@ -71,7 +67,7 @@ impl ShapeInference {
     }
 }
 
-pub fn create_infer_passes(verify: bool) -> SimplePassManager<SimpleGraphModifier> {
+pub fn create_infer_passes(verify: bool) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Shape inference".to_string());
     manager.add_pass(Box::new(ShapeInference::default()));
     if verify {

@@ -1,7 +1,7 @@
 use crate::onnx::model::{Graph, Node, NodeMeta, ValueId, ValueInfo};
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::transform::modify::GraphModifier;
+use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 use std::io::{Error, Result};
 
@@ -40,11 +40,7 @@ impl TransposeGenerator {
         self
     }
 
-    pub fn generate<T: GraphModifier>(
-        self,
-        graph: &mut Graph,
-        modifier: &mut T,
-    ) -> Result<ValueId> {
+    pub fn generate<T: GraphOp>(self, graph: &mut Graph, graph_op: &mut T) -> Result<ValueId> {
         let input = self.input.ok_or(Error::new(
             std::io::ErrorKind::InvalidInput,
             "input is required",
@@ -71,8 +67,8 @@ impl TransposeGenerator {
 
         let new_ty = input_ty.transpose(&perm);
         let perm = Some(perm);
-        let transposed = modifier.register_new_value(graph, value_name.clone(), new_ty.clone());
-        modifier.register_new_node(
+        let transposed = graph_op.register_new_value(graph, value_name.clone(), new_ty.clone());
+        graph_op.register_new_node(
             graph,
             Node {
                 inputs: vec![input],
@@ -86,8 +82,8 @@ impl TransposeGenerator {
         let new_value = if contiguous {
             let new_ty = new_ty.contiguous();
             let new_value =
-                modifier.register_new_value(graph, format!("{value_name}_Contiguous"), new_ty);
-            modifier.register_new_node(
+                graph_op.register_new_value(graph, format!("{value_name}_Contiguous"), new_ty);
+            graph_op.register_new_node(
                 graph,
                 Node {
                     inputs: vec![transposed],
@@ -140,11 +136,7 @@ impl ReshapeGenerator {
         self
     }
 
-    pub fn generate<T: GraphModifier>(
-        self,
-        graph: &mut Graph,
-        modifier: &mut T,
-    ) -> Result<ValueId> {
+    pub fn generate<T: GraphOp>(self, graph: &mut Graph, graph_op: &mut T) -> Result<ValueId> {
         let allow_contiguous = self.allow_contiguous.unwrap_or(true);
         let input = self.input.ok_or(Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -182,8 +174,8 @@ impl ReshapeGenerator {
                     let reshaped_ty = new_ty.try_reshape(&dims).unwrap();
                     let value_name = format!("{value_name}_Continguous");
                     let node_name = format!("{node_name}_Continguous");
-                    let new_value = modifier.register_new_value(graph, value_name, new_ty.clone());
-                    modifier.register_new_node(
+                    let new_value = graph_op.register_new_value(graph, value_name, new_ty.clone());
+                    graph_op.register_new_node(
                         graph,
                         Node {
                             inputs: vec![input],
@@ -199,9 +191,9 @@ impl ReshapeGenerator {
         };
 
         let shape_name = format!("{value_name}_Shape");
-        let shape_input = modifier.register_new_tensor(graph, dims.to_tensor(), shape_name.clone());
-        let new_value = modifier.register_new_value(graph, value_name, reshaped_ty);
-        modifier.register_new_node(
+        let shape_input = graph_op.register_new_tensor(graph, dims.to_tensor(), shape_name.clone());
+        let new_value = graph_op.register_new_value(graph, value_name, reshaped_ty);
+        graph_op.register_new_node(
             graph,
             Node {
                 inputs: vec![input_value, shape_input],
@@ -219,12 +211,12 @@ impl ReshapeGenerator {
 pub struct ContigousOutput {}
 
 // This pass is assumed to be run before shape inference
-impl<T: GraphModifier> Pass<T> for ContigousOutput {
+impl<T: GraphOp> Pass<T> for ContigousOutput {
     fn summary(&self) -> &'static str {
         "Insert contiguous before all Outputs"
     }
 
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+    fn run(&self, graph: &mut Graph, graph_op: &mut T) {
         let ids = graph.outputs.clone();
         for id in ids.iter() {
             let input = graph.nodes[*id].inputs[0];
@@ -233,7 +225,7 @@ impl<T: GraphModifier> Pass<T> for ContigousOutput {
                 name: format!("Contiguous_Output_{}", id.index()),
                 ty: input_ty,
             });
-            modifier.register_new_node(
+            graph_op.register_new_node(
                 graph,
                 Node {
                     inputs: vec![input],
@@ -243,7 +235,7 @@ impl<T: GraphModifier> Pass<T> for ContigousOutput {
                     meta: NodeMeta::default(),
                 },
             );
-            modifier.replace_input_value_if_without_typecheck(
+            graph_op.replace_input_value_if_without_typecheck(
                 graph,
                 input,
                 new_value,

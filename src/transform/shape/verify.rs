@@ -5,7 +5,7 @@ use crate::tensor::{
     types::{ResolvedTensorType, TypeError},
 };
 use crate::transform::shape::util;
-use crate::transform::{GraphModifier, Pass};
+use crate::transform::{GraphOp, Pass};
 use itertools::zip_eq;
 
 #[derive(Default)]
@@ -23,7 +23,7 @@ pub enum VerifyShapeError {
     Other(String),
 }
 
-impl<T: GraphModifier> Pass<T> for VerifyShape {
+impl<T: GraphOp> Pass<T> for VerifyShape {
     fn summary(&self) -> &'static str {
         "Verify shapes"
     }
@@ -81,7 +81,7 @@ mod test {
     use crate::onnx::load::*;
     use crate::onnx::model::*;
     use crate::tensor::types::FloatType;
-    use crate::transform::modify::SimpleGraphModifier;
+    use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::infer::ShapeInference;
     use crate::transform::shape::strides::AssignStrides;
     use crate::transform::*;
@@ -102,7 +102,7 @@ mod test {
                 ResolvedTensorDims::new(vec![1, 416, 416, 3]),
             )])
             .unwrap();
-        let mut modifier = SimpleGraphModifier::new(&graph);
+        let mut modifier = SimpleGraphOp::new(&graph);
         let mut pass_manager = SimplePassManager::new("Shape".to_string());
         pass_manager.add_pass(Box::new(ShapeInference::default()));
         pass_manager.add_pass(Box::new(AssignStrides::default()));

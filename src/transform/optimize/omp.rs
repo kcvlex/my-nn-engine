@@ -1,12 +1,12 @@
 use crate::onnx::model::Graph;
-use crate::transform::modify::GraphModifier;
+use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 pub struct InnermostOMP {
     pub threshold: usize,
 }
 
-impl<T: GraphModifier> Pass<T> for InnermostOMP {
+impl<T: GraphOp> Pass<T> for InnermostOMP {
     fn summary(&self) -> &'static str {
         "Annotate omp parallel and for to the innermost loop"
     }

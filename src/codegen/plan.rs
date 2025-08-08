@@ -3,8 +3,8 @@ use crate::onnx::operator::Operator;
 use crate::onnx::utils;
 use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
 use serde_derive::Serialize;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize)]
 pub struct AllocateInfo {
@@ -14,10 +14,7 @@ pub struct AllocateInfo {
     pub is_first_use: bool,
 }
 
-fn serialize_value_id<S>(
-    value_id: &ValueId,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_value_id<S>(value_id: &ValueId, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -39,9 +36,15 @@ impl Serialize for AllocateType {
         S: serde::Serializer,
     {
         match self {
-            AllocateType::Chunk(id) => serializer.serialize_newtype_variant("AllocateType", 0, "Chunk", id),
-            AllocateType::Input(id) => serializer.serialize_newtype_variant("AllocateType", 1, "Input", &id.index()),
-            AllocateType::Output(id) => serializer.serialize_newtype_variant("AllocateType", 2, "Output", &id.index()),
+            AllocateType::Chunk(id) => {
+                serializer.serialize_newtype_variant("AllocateType", 0, "Chunk", id)
+            }
+            AllocateType::Input(id) => {
+                serializer.serialize_newtype_variant("AllocateType", 1, "Input", &id.index())
+            }
+            AllocateType::Output(id) => {
+                serializer.serialize_newtype_variant("AllocateType", 2, "Output", &id.index())
+            }
         }
     }
 }
@@ -342,7 +345,7 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
-    use crate::transform::modify::SimpleGraphModifier;
+    use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::*;
     use crate::transform::*;
     use std::io::{Error, Result};
@@ -357,7 +360,7 @@ mod test {
         let mut pass_manager = SimplePassManager::new("Shape".to_string());
         pass_manager.add_pass(Box::new(infer::ShapeInference::default()));
         pass_manager.add_pass(Box::new(strides::AssignStrides::default()));
-        let mut modifier = SimpleGraphModifier::new(&model.graph);
+        let mut modifier = SimpleGraphOp::new(&model.graph);
         pass_manager.run(&mut model.graph, &mut modifier);
         Ok(model)
     }

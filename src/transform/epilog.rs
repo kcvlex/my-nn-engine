@@ -1,14 +1,14 @@
 use crate::onnx::model::Graph;
 use crate::onnx::operator::*;
-use crate::transform::modify::GraphModifier;
-use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::modify::GraphOp;
+use crate::transform::modify::SimpleGraphOp;
 use crate::transform::SimplePassManager;
 use crate::transform::{Pass, PassManager};
 
 #[derive(Default)]
 pub struct Ops2Identity {}
 
-impl<T: GraphModifier> Pass<T> for Ops2Identity {
+impl<T: GraphOp> Pass<T> for Ops2Identity {
     fn summary(&self) -> &'static str {
         "Convert Reshape/Transpose to Identity"
     }
@@ -28,7 +28,7 @@ impl<T: GraphModifier> Pass<T> for Ops2Identity {
     }
 }
 
-pub fn create_epilog_passes() -> SimplePassManager<SimpleGraphModifier> {
+pub fn create_epilog_passes() -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Epilog".to_string());
     manager.add_pass(Box::new(Ops2Identity::default()));
     manager

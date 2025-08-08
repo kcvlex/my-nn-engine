@@ -6,7 +6,7 @@ use indexmap::IndexSet;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-pub trait GraphModifier {
+pub trait GraphOp {
     // fn new(graph: &Graph) -> Self;
 
     fn register_new_value(
@@ -92,22 +92,22 @@ fn calc_value2xx(graph: &Graph) -> (Value2Defined, Value2Used) {
     (value2defined, value2used)
 }
 
-pub struct SimpleGraphModifier {
+pub struct SimpleGraphOp {
     value2defined: HashMap<ValueId, (NodeId, usize)>,
     value2used: HashMap<ValueId, IndexSet<(NodeId, usize)>>,
 }
 
-impl SimpleGraphModifier {
+impl SimpleGraphOp {
     pub fn new(graph: &Graph) -> Self {
         let (value2defined, value2used) = calc_value2xx(graph);
-        SimpleGraphModifier {
+        SimpleGraphOp {
             value2defined,
             value2used,
         }
     }
 }
 
-impl GraphModifier for SimpleGraphModifier {
+impl GraphOp for SimpleGraphOp {
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId {
         let inputs = v.inputs.clone();
         let outputs = v.outputs.clone();
@@ -179,7 +179,7 @@ impl GraphModifier for SimpleGraphModifier {
     }
 }
 
-impl NodeDelete for SimpleGraphModifier {
+impl NodeDelete for SimpleGraphOp {
     fn update_deleted_nodes(&mut self, graph: &mut Graph) {
         let mut visited = HashSet::new();
         for node in graph.outputs.iter() {
@@ -221,7 +221,7 @@ impl NodeDelete for SimpleGraphModifier {
     }
 }
 
-impl SimpleGraphModifier {
+impl SimpleGraphOp {
     fn used_nodes_dfs(&mut self, graph: &Graph, node_id: NodeId, visited: &mut HashSet<NodeId>) {
         if visited.contains(&node_id) {
             return;
@@ -246,7 +246,7 @@ impl SimpleGraphModifier {
 }
 
 #[derive(Default)]
-pub struct ExperimentalGraphModifier {
+pub struct ExperimentalGraphOp {
     value2defined: HashMap<ValueId, (NodeId, usize)>,
     value2used: HashMap<ValueId, IndexSet<(NodeId, usize)>>,
 
@@ -254,21 +254,21 @@ pub struct ExperimentalGraphModifier {
     outdegrees: HashMap<NodeId, usize>,
 }
 
-impl ExperimentalGraphModifier {
+impl ExperimentalGraphOp {
     pub fn new(graph: &Graph) -> Self {
-        let mut modifier = ExperimentalGraphModifier::default();
+        let mut graph_op = ExperimentalGraphOp::default();
         let (value2defined, value2used) = calc_value2xx(graph);
-        modifier.value2defined = value2defined;
-        modifier.value2used = value2used;
-        for (value, (node, _)) in modifier.value2defined.iter() {
-            *modifier.outdegrees.entry(*node).or_insert(0) +=
-                modifier.value2used.get(value).map_or(0, |x| x.len());
+        graph_op.value2defined = value2defined;
+        graph_op.value2used = value2used;
+        for (value, (node, _)) in graph_op.value2defined.iter() {
+            *graph_op.outdegrees.entry(*node).or_insert(0) +=
+                graph_op.value2used.get(value).map_or(0, |x| x.len());
         }
-        modifier
+        graph_op
     }
 }
 
-impl GraphModifier for ExperimentalGraphModifier {
+impl GraphOp for ExperimentalGraphOp {
     fn register_new_node(&mut self, graph: &mut Graph, v: Node) -> NodeId {
         let inputs = v.inputs.clone();
         let outputs = v.outputs.clone();
@@ -337,7 +337,7 @@ impl GraphModifier for ExperimentalGraphModifier {
     }
 }
 
-impl NodeDelete for ExperimentalGraphModifier {
+impl NodeDelete for ExperimentalGraphOp {
     fn update_deleted_nodes(&mut self, graph: &mut Graph) {
         let mut vec = Vec::new();
         std::mem::swap(&mut vec, &mut self.to_delete_nodes);
@@ -347,7 +347,7 @@ impl NodeDelete for ExperimentalGraphModifier {
     }
 }
 
-impl ExperimentalGraphModifier {
+impl ExperimentalGraphOp {
     fn incr_outdegree(&mut self, node: NodeId, v: usize) {
         *self.outdegrees.entry(node).or_insert(0) += v;
     }

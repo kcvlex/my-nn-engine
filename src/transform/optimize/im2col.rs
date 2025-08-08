@@ -2,7 +2,7 @@ use crate::onnx::model::{Graph, Node, NodeId, NodeMeta};
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
-use crate::transform::modify::GraphModifier;
+use crate::transform::modify::GraphOp;
 use crate::transform::utils::tensor::*;
 use crate::transform::Pass;
 
@@ -70,7 +70,7 @@ fn gen_im2col_from_pooling(
     (im2col, im2col_output_shape)
 }
 
-fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
+fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     let index = id.index();
     let node = &graph.nodes[id];
     match &node.op {
@@ -313,7 +313,7 @@ fn im2col_core<T: GraphModifier>(graph: &mut Graph, modifier: &mut T, id: NodeId
     }
 }
 
-impl<T: GraphModifier> Pass<T> for InsertIm2Col {
+impl<T: GraphOp> Pass<T> for InsertIm2Col {
     fn summary(&self) -> &'static str {
         "Insert explicit Im2Col nodes and expand Conv/MaxPool"
     }
@@ -337,7 +337,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2Col {
     }
 }
 
-impl<T: GraphModifier> Pass<T> for InsertIm2ColConv {
+impl<T: GraphOp> Pass<T> for InsertIm2ColConv {
     fn summary(&self) -> &'static str {
         "Insert explicit Im2Col nodes and expand Conv/MaxPool"
     }
@@ -361,7 +361,7 @@ impl<T: GraphModifier> Pass<T> for InsertIm2ColConv {
     }
 }
 
-impl<T: GraphModifier> Pass<T> for InsertIm2ColMaxPool {
+impl<T: GraphOp> Pass<T> for InsertIm2ColMaxPool {
     fn summary(&self) -> &'static str {
         "Insert explicit Im2Col nodes and expand Conv/MaxPool"
     }

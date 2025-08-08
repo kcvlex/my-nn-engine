@@ -1,11 +1,11 @@
 use crate::onnx::model::{Graph, Node, NodeId, NodeMeta, UnifyMode, ValueId};
 use crate::onnx::operator::*;
 use crate::tensor::types::ResolvedTensorType;
-use crate::transform::modify::SimpleGraphModifier;
+use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::SimplePassManager;
-use crate::transform::{GraphModifier, Pass, PassManager};
+use crate::transform::{GraphOp, Pass, PassManager};
 use itertools::zip_eq;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub struct AssignStrides {}
 
-impl<T: GraphModifier> Pass<T> for AssignStrides {
+impl<T: GraphOp> Pass<T> for AssignStrides {
     fn summary(&self) -> &'static str {
         "Assign strides to all tensors"
     }
@@ -32,7 +32,7 @@ struct AssignStridesImpl {
 }
 
 impl AssignStridesImpl {
-    fn run(&mut self, graph: &mut Graph, modifier: &mut impl GraphModifier) -> Option<()> {
+    fn run(&mut self, graph: &mut Graph, modifier: &mut impl GraphOp) -> Option<()> {
         for id in graph
             .nodes
             .iter()
@@ -98,7 +98,7 @@ impl AssignStridesImpl {
     fn complete_value(
         &mut self,
         graph: &mut Graph,
-        modifier: &mut impl GraphModifier,
+        modifier: &mut impl GraphOp,
         value_id: ValueId,
     ) {
         self.computed_values.insert(value_id);
@@ -129,7 +129,7 @@ impl AssignStridesImpl {
     fn insert_contiguous(
         &self,
         graph: &mut Graph,
-        modifier: &mut impl GraphModifier,
+        modifier: &mut impl GraphOp,
         input: ValueId,
         name: &str,
     ) -> NodeId {
@@ -151,7 +151,7 @@ impl AssignStridesImpl {
     fn compute_strides(
         &mut self,
         graph: &mut Graph,
-        modifier: &mut impl GraphModifier,
+        modifier: &mut impl GraphOp,
         node_id: NodeId,
     ) -> Option<(NodeId, Vec<ResolvedTensorType>)> {
         let new_node_id = match &graph.nodes[node_id].op {
@@ -201,7 +201,7 @@ impl AssignStridesImpl {
     }
 }
 
-pub fn create_strides_passes(verify: bool) -> SimplePassManager<SimpleGraphModifier> {
+pub fn create_strides_passes(verify: bool) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Assign strides".to_string());
     manager.add_pass(Box::new(AssignStrides::default()));
     if verify {
