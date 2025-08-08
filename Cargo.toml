@@ -16,6 +16,8 @@ num-integer = "0.1.46"
 prost = "0.13.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rayon = "1.10.0"
+serde = "1.0.219"
+serde_derive = "1.0.219"
 smallvec = "1.15.0"
 strum = "0.26.3"
 strum_macros = "0.26.4"
@@ -24,3 +26,6 @@ typed-builder = "0.21.0"
 
 [build-dependencies]
 prost-build = "0.13.1"
+
+[dev-dependencies]
+insta = { version = "1.43.1", features = ["yaml"] }

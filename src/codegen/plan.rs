@@ -2,13 +2,26 @@ use crate::onnx::model::{Graph, NodeId, ValueId};
 use crate::onnx::operator::Operator;
 use crate::onnx::utils;
 use indexmap::{IndexMap, IndexSet};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use serde_derive::Serialize;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize)]
 pub struct AllocateInfo {
+    #[serde(serialize_with = "serialize_value_id")]
     pub value_id: ValueId,
     pub ty: AllocateType,
     pub is_first_use: bool,
+}
+
+fn serialize_value_id<S>(
+    value_id: &ValueId,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u64(value_id.index() as u64)
 }
 
 pub type ChunkId = usize;
@@ -18,6 +31,19 @@ pub enum AllocateType {
     Chunk(ChunkId),
     Input(ValueId),
     Output(ValueId),
+}
+
+impl Serialize for AllocateType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            AllocateType::Chunk(id) => serializer.serialize_newtype_variant("AllocateType", 0, "Chunk", id),
+            AllocateType::Input(id) => serializer.serialize_newtype_variant("AllocateType", 1, "Input", &id.index()),
+            AllocateType::Output(id) => serializer.serialize_newtype_variant("AllocateType", 2, "Output", &id.index()),
+        }
+    }
 }
 
 impl AllocateType {
@@ -365,7 +391,7 @@ mod test {
     //
     #[test]
     fn diamond() -> Result<()> {
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, PartialEq, Serialize)]
         struct Test {
             ty: AllocateType,
             is_first_use: bool,
@@ -395,43 +421,7 @@ mod test {
                 },
             )
             .collect::<Vec<_>>();
-        let output_id = match model.graph.nodes[model.graph.outputs[0]].op {
-            Operator::Output(id) => id,
-            _ => unreachable!(),
-        };
-        assert_eq!(
-            mem,
-            &[
-                Test {
-                    ty: AllocateType::Chunk(0),
-                    is_first_use: true
-                },
-                Test {
-                    ty: AllocateType::Chunk(1),
-                    is_first_use: true
-                },
-                Test {
-                    ty: AllocateType::Chunk(2),
-                    is_first_use: true
-                },
-                Test {
-                    ty: AllocateType::Chunk(0),
-                    is_first_use: false
-                },
-                Test {
-                    ty: AllocateType::Chunk(0),
-                    is_first_use: false
-                },
-                Test {
-                    ty: AllocateType::Chunk(2),
-                    is_first_use: false
-                },
-                Test {
-                    ty: AllocateType::Output(output_id),
-                    is_first_use: false
-                },
-            ]
-        );
+        insta::assert_yaml_snapshot!(&mem);
         Ok(())
     }
 }
