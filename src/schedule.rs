@@ -1,16 +1,12 @@
 pub mod kernel;
 pub mod mem_alloc;
 
-use crate::onnx::model::{Graph, NodeId, ValueId};
+use crate::onnx::model::{Graph, ValueId};
 use crate::onnx::operator::Operator;
-use crate::onnx::utils;
-use crate::schedule::kernel::*;
 use crate::transform::modify::GraphOp;
 use id_arena::{Arena, Id};
-use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;
 use serde_derive::Serialize;
-use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub struct Kernels(Arena<Kernel>);

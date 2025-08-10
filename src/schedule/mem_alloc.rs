@@ -1,11 +1,8 @@
-use crate::onnx::model::{Graph, NodeId, ValueId};
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::Operator;
-use crate::onnx::utils;
 use crate::schedule::*;
 use indexmap::{IndexMap, IndexSet};
 use itertools::zip_eq;
-use serde::Serialize;
-use serde_derive::Serialize;
 use std::collections::{HashMap, HashSet};
 
 // TODO: Make the order deterministic
