@@ -2,7 +2,6 @@ use crate::onnx::model::ValueId;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use indexmap::{IndexMap, IndexSet};
-use itertools::zip_eq;
 use std::collections::{HashMap, HashSet};
 
 // TODO: Make the order deterministic

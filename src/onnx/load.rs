@@ -6,7 +6,7 @@ use crate::tensor::{
     types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
     Tensor,
 };
-use itertools::{zip_eq, Itertools};
+use itertools::Itertools;
 use prost::{DecodeError, Message};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
