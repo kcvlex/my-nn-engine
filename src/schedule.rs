@@ -1,25 +1,35 @@
 pub mod kernel;
 pub mod mem_alloc;
+pub mod omp;
 
-use crate::onnx::model::{Graph, ValueId};
+use crate::onnx::model::{Graph, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
-use crate::transform::modify::GraphOp;
+use crate::tensor::types::ResolvedTensorType;
+use crate::transform::modify::SimpleGraphOp;
 use id_arena::{Arena, Id};
+use itertools::zip_eq;
 use serde::Serialize;
 use serde_derive::Serialize;
+use std::ops::{Index, IndexMut};
 
 #[derive(Default)]
 pub struct Kernels(Arena<Kernel>);
 pub type KernelId = Id<Kernel>;
 
-pub struct Schedule<'graph> {
+pub struct Schedule {
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,
     pub initializers: Vec<ValueId>,
 
     pub kernels: Kernels,
 
-    graph: &'graph Graph,
+    graph: Graph,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OmpInfo {
+    pub omp_parallel: Option<usize>,
+    pub omp_for: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -30,16 +40,17 @@ pub struct Kernel {
     pub name: String,
 
     pub mem_alloc: Option<Vec<AllocateInfo>>,
+    pub omp_info: OmpInfo,
 }
 
 #[derive(Debug, Clone)]
 pub enum KernelBody {
-    Single(Single),
-    ElementWises(ElementWises),
+    SingleKernel(SingleKernel),
+    FusedElementWises(FusedElementWises),
 }
 
 #[derive(Debug, Clone)]
-pub struct Single {
+pub struct SingleKernel {
     pub op: Operator,
 }
 
@@ -50,7 +61,7 @@ pub enum ElementwiseOpArg {
 }
 
 #[derive(Debug, Clone)]
-pub struct ElementWises {
+pub struct FusedElementWises {
     pub ops: Vec<(Operator, Vec<ElementwiseOpArg>)>,
 }
 
@@ -106,36 +117,94 @@ impl AllocateType {
     }
 }
 
-pub fn build_init_schedule<'graph>(
-    graph: &'graph Graph,
-    graph_op: &mut impl GraphOp,
-) -> Schedule<'graph> {
-    let inputs = graph
-        .inputs
-        .iter()
-        .map(|x| match graph.nodes[*x].op {
-            Operator::Input(v) => v,
-            _ => unreachable!(),
-        })
-        .chain(graph.initializer.keys().copied())
-        .collect::<Vec<_>>();
-    let outputs = graph
-        .outputs
-        .iter()
-        .map(|x| match graph.nodes[*x].op {
-            Operator::Output(v) => v,
-            _ => unreachable!(),
-        })
-        .collect::<Vec<_>>();
-    let initializers = graph.initializer.keys().copied().collect::<Vec<_>>();
-    let kernels = kernel::build_kernels(graph, graph_op);
-    Schedule {
-        inputs,
-        outputs,
-        initializers,
+impl Kernels {
+    pub fn iter(&self) -> impl Iterator<Item = (KernelId, &Kernel)> {
+        self.0.iter()
+    }
 
-        kernels,
-
-        graph,
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (KernelId, &mut Kernel)> {
+        self.0.iter_mut()
     }
 }
+
+impl Index<KernelId> for Kernels {
+    type Output = Kernel;
+    fn index(&self, index: KernelId) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl IndexMut<KernelId> for Kernels {
+    fn index_mut(&mut self, index: KernelId) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl Schedule {
+    pub fn new(graph: Graph) -> Self {
+        let graph_op = SimpleGraphOp::new(&graph);
+        let inputs = graph
+            .inputs
+            .iter()
+            .map(|x| match graph.nodes[*x].op {
+                Operator::Input(v) => v,
+                _ => unreachable!(),
+            })
+            .chain(graph.initializer.keys().copied())
+            .collect::<Vec<_>>();
+        let outputs = graph
+            .outputs
+            .iter()
+            .map(|x| match graph.nodes[*x].op {
+                Operator::Output(v) => v,
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        let initializers = graph.initializer.keys().copied().collect::<Vec<_>>();
+        let kernels = kernel::build_kernels(&graph, &graph_op);
+        Self {
+            inputs,
+            outputs,
+            initializers,
+
+            kernels,
+
+            graph,
+        }
+    }
+
+    pub fn assign_mem(&mut self) {
+        let info_v = mem_alloc::MemoryPlanner::new(self).run();
+        for ((_, kernel), info) in zip_eq(self.kernels.0.iter_mut(), info_v) {
+            kernel.mem_alloc = Some(info);
+        }
+    }
+
+    pub fn annotate_omp(&mut self, threshold: usize) {
+        let annotater = omp::InnermostOMP { threshold };
+        annotater.annotate(self);
+    }
+
+    pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {
+        self.graph.values[id].ty.as_ref()?.as_resolved()
+    }
+
+    pub fn get_value(&self, id: ValueId) -> &ValueInfo {
+        &self.graph.values[id]
+    }
+
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+}
+
+macro_rules! matches_single_kernel {
+    ($kernel:expr, $pat:pat) => {{
+        match &$kernel.body {
+            KernelBody::SingleKernel(SingleKernel { op }) => matches!(op, $pat),
+            KernelBody::FusedElementWises(_) => false,
+        }
+    }};
+}
+
+pub(crate) use matches_single_kernel;

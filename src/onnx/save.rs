@@ -292,65 +292,6 @@ impl Transpose {
     }
 }
 
-impl ElementwiseOps {
-    fn to_proto(&self) -> Vec<AttributeProto> {
-        let mut operators = Vec::with_capacity(self.ops.len());
-        let mut num_arguments = Vec::with_capacity(self.ops.len());
-        let mut argument_types = Vec::new();
-        let mut input_indices = Vec::new();
-        let mut intermediate_indices = Vec::new();
-
-        // TODO: Attributes of each operator
-        for (op, args) in self.ops.iter() {
-            let op = match **op {
-                Operator::Add => "Add",
-                Operator::BatchNormalization(_) => "BatchNormalization",
-                Operator::Exp => "Exp",
-                Operator::Log => "Log",
-                Operator::Mul => "Mul",
-                Operator::ReLU => "Relu",
-                Operator::Sigmoid => "Sigmoid",
-                Operator::Sub => "Sub",
-                Operator::Tanh => "Tanh",
-                _ => unimplemented!(),
-            };
-            operators.push(op.to_string());
-            num_arguments.push(args.len() as i64);
-            for arg in args {
-                let ty = match arg {
-                    ElementwiseOpArg::Input(index) => {
-                        input_indices.push(*index as i64);
-                        "input".to_string()
-                    }
-                    ElementwiseOpArg::NthResult(index) => {
-                        intermediate_indices.push(*index as i64);
-                        "intermediate".to_string()
-                    }
-                };
-                argument_types.push(ty);
-            }
-        }
-
-        vec![
-            AttributeProto::default()
-                .with_name("operators")
-                .with_strings(&operators),
-            AttributeProto::default()
-                .with_name("num_arguments")
-                .with_ints(&num_arguments),
-            AttributeProto::default()
-                .with_name("argument_types")
-                .with_strings(&argument_types),
-            AttributeProto::default()
-                .with_name("input_indices")
-                .with_ints(&input_indices),
-            AttributeProto::default()
-                .with_name("intermediate_indices")
-                .with_ints(&intermediate_indices),
-        ]
-    }
-}
-
 impl ReduceOp {
     fn to_proto(self) -> Vec<AttributeProto> {
         let name = match self {
@@ -385,7 +326,6 @@ impl Node {
             // Custom
             // TODO: Im2Col
             Operator::Contiguous => ("Contiguous", vec![]),
-            Operator::ElementwiseOps(attrs) => ("ElementwiseOps", attrs.to_proto()),
             Operator::Im2Col(_) => ("Im2Col", vec![]),
             Operator::ReduceMatrix(op) => ("ReduceMatrix", op.to_proto()),
 

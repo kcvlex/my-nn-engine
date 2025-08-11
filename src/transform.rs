@@ -11,7 +11,7 @@ use typed_builder::TypedBuilder;
 
 pub use epilog::create_epilog_passes;
 pub use lower::create_lower_passes;
-pub use optimize::{create_optimize_passes0, create_optimize_passes1, create_optimize_passes2};
+pub use optimize::{create_optimize_passes0, create_optimize_passes1};
 pub use shape::infer::create_infer_passes;
 pub use shape::strides::create_strides_passes;
 
@@ -77,11 +77,10 @@ pub struct Options {
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options.verify_after_inferrence),
-        create_optimize_passes0(options.enable_fuse_ops),
+        create_optimize_passes0(),
         create_lower_passes(),
         create_optimize_passes1(),
         create_strides_passes(options.verify_after_strides),
-        create_optimize_passes2(options.omp_threshold),
         create_epilog_passes(),
     ];
 
@@ -93,30 +92,29 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
     graph.delete_nodes();
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::onnx::load::*;
-    use crate::onnx::model::Model;
-    use crate::transform::optimize::elementwise_fuse::FuseElementwiseOps;
-    use std::path::PathBuf;
-
-    #[ignore]
-    #[test]
-    fn test_save() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/test/optimize");
-        let input_name = "elementwise_complex0";
-        let input = dir.join(format!("{}.onnx", input_name));
-        let mut model = Model::load_from_path(&input).unwrap();
-        let graph = &mut model.graph;
-        let mut modifier = SimpleGraphOp::new(graph);
-        let infer = create_infer_passes(true);
-        let fusion = FuseElementwiseOps::default();
-        infer.run(graph, &mut modifier);
-        fusion.run(graph, &mut modifier);
-        modifier.update_deleted_nodes(graph);
-        graph.delete_nodes();
-        let output = dir.join(format!("{}.out.onnx", input_name));
-        model.save_to_path(&output).unwrap();
-    }
-}
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+//     use crate::onnx::load::*;
+//     use crate::onnx::model::Model;
+//     use std::path::PathBuf;
+// 
+//     #[ignore]
+//     #[test]
+//     fn test_save() {
+//         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/test/optimize");
+//         let input_name = "elementwise_complex0";
+//         let input = dir.join(format!("{}.onnx", input_name));
+//         let mut model = Model::load_from_path(&input).unwrap();
+//         let graph = &mut model.graph;
+//         let mut modifier = SimpleGraphOp::new(graph);
+//         let infer = create_infer_passes(true);
+//         let fusion = FuseElementwiseOps::default();
+//         infer.run(graph, &mut modifier);
+//         fusion.run(graph, &mut modifier);
+//         modifier.update_deleted_nodes(graph);
+//         graph.delete_nodes();
+//         let output = dir.join(format!("{}.out.onnx", input_name));
+//         model.save_to_path(&output).unwrap();
+//     }
+// }

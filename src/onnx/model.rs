@@ -200,8 +200,6 @@ impl Graph {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct NodeMeta {
     pub(crate) mark_as_deleted: bool,
-    pub(crate) omp_parallel: Option<usize>,
-    pub(crate) omp_for: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

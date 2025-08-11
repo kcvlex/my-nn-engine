@@ -2,18 +2,17 @@ mod blas;
 mod llvm;
 mod omp;
 mod op;
-mod plan;
 mod translator;
 
 use crate::codegen::blas::*;
 use crate::codegen::llvm::*;
 use crate::codegen::omp::*;
 use crate::codegen::op::*;
-use crate::codegen::plan::*;
 use crate::codegen::translator::*;
-use crate::onnx::model::{Graph, Node, NodeId, ValueId};
+use crate::onnx::model::ValueId;
 use crate::onnx::operator;
 use crate::onnx::operator::Operator;
+use crate::schedule::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::{DataType, FloatType, SIntType, UIntType};
 use inkwell::basic_block::BasicBlock;
@@ -47,14 +46,13 @@ struct UnitInfo<'ll> {
 
 enum UnitType {
     Main,
-    Node(NodeId),
+    Kernel(KernelId),
 }
 
 pub struct CodeGenContext {
-    pub graph: Graph,
-    order: Vec<(NodeId, Vec<AllocateInfo>)>,
-    value2alloc: HashMap<ValueId, AllocateInfo>,
+    pub schedule: Schedule,
     mem_size: Vec<u64>,
+    value2alloc: HashMap<ValueId, AllocateInfo>,
 }
 
 pub struct CodeGen<'ll, 'gen> {
@@ -95,35 +93,35 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
 }
 
 impl CodeGenContext {
-    pub fn new(graph: Graph) -> Result<Self, CodeGenError> {
-        let order = plan::plan(&graph);
-        let value2alloc = order
+    pub fn new(schedule: Schedule) -> Result<Self, CodeGenError> {
+        let mem_size = calc_memsize(&schedule);
+        let value2alloc = schedule
+            .kernels
             .iter()
-            .flat_map(|(_, v)| v)
+            .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+            .flat_map(|v| v)
             .map(|info| (info.value_id, *info))
             .collect::<HashMap<_, _>>();
 
-        let mem_size = calc_memsize(&graph, &order);
 
         Ok(CodeGenContext {
-            graph,
-            order,
-            value2alloc,
+            schedule,
             mem_size,
+            value2alloc,
         })
     }
 
-    fn need_to_generate(&self, node_id: NodeId) -> bool {
-        let node = &self.graph.nodes[node_id];
-        if node.is_dummy() {
+    fn need_to_generate(&self, kernel_id: KernelId) -> bool {
+        let kernel = &self.schedule.kernels[kernel_id];
+        // if node.is_dummy() {
+        //     return false;
+        // }
+        if matches_single_kernel!(kernel, Operator::Split(_)) {
             return false;
         }
-        if matches!(node.op, Operator::Split(_)) {
-            return false;
-        }
-        if let Operator::Identity = node.op {
-            let chunk_in = self.value2alloc.get(&node.inputs[0]).map(|info| &info.ty);
-            let chunk_out = self.value2alloc.get(&node.outputs[0]).map(|info| &info.ty);
+        if matches_single_kernel!(kernel, Operator::Identity) {
+            let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
+            let chunk_out = self.value2alloc.get(&kernel.outputs[0]).map(|info| &info.ty);
             // TODO: correct?
             let res = match (chunk_in, chunk_out) {
                 (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
@@ -136,18 +134,20 @@ impl CodeGenContext {
         true
     }
 
-    pub fn all_necessary_nodes(&self) -> Vec<NodeId> {
-        self.order
+    pub fn all_necessary_kernels(&self) -> Vec<KernelId> {
+        self
+            .schedule
+            .kernels
             .iter()
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .filter(|&id| self.need_to_generate(id))
             .collect()
     }
 }
 
 // TODO: Target dependent value
-fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
-    let result_ty = graph.get_resolved_tensor_type(value).unwrap();
+fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
+    let result_ty = sched.get_resolved_tensor_type(value).unwrap();
     let data_size = match result_ty.elem_type {
         DataType::SInt(SIntType::I32) => 4,
         DataType::SInt(SIntType::I64) => 8,
@@ -158,21 +158,25 @@ fn memory_usage(graph: &Graph, value: ValueId) -> u64 {
     (result_ty.dims.size() * data_size).try_into().unwrap()
 }
 
-fn calc_memsize(graph: &Graph, order: &[(NodeId, Vec<AllocateInfo>)]) -> Vec<u64> {
-    let mut mem_size = vec![
-        0;
-        order
-            .iter()
-            .flat_map(|(_, info)| info)
-            .filter_map(|info| info.ty.chunk_id())
-            .max()
-            .map(|x| x + 1)
-            .unwrap_or(0)
-    ];
-    for (_, vec) in order.iter() {
+fn calc_memsize(sched: &Schedule) -> Vec<u64> {
+    let max_chunk_id = sched
+        .kernels
+        .iter()
+        .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+        .flat_map(|info| info)
+        .filter_map(|info| info.ty.chunk_id())
+        .max()
+        .map(|x| x + 1)
+        .unwrap_or(0);
+    let mut mem_size = vec![0; max_chunk_id as usize];
+    for vec in sched
+        .kernels
+        .iter()
+        .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+    {
         for info in vec.iter() {
             if let Some(chunk_id) = info.ty.chunk_id() {
-                mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(graph, info.value_id));
+                mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(sched, info.value_id));
             }
         }
     }
@@ -180,18 +184,18 @@ fn calc_memsize(graph: &Graph, order: &[(NodeId, Vec<AllocateInfo>)]) -> Vec<u64
 }
 
 impl CodeGenContext {
-    pub fn new_codegen_for_node<'ll>(
+    pub fn new_codegen_for_kernel<'ll>(
         &self,
-        node_id: NodeId,
+        kernel_id: KernelId,
         ll_ctx: &'ll Context,
     ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
-        let node = &self.graph.nodes[node_id];
+        let kernel = &self.schedule.kernels[kernel_id];
         let target_machine = target_machine()?;
         let attrs = Attributes::new(ll_ctx, &target_machine);
-        let module = ll_ctx.create_module(get_node_name_or(node, node_id).as_str());
-        let func = self.declare_node_func(node_id, ll_ctx, &module, &attrs);
+        let module = ll_ctx.create_module(get_kernel_name_or(kernel, kernel_id).as_str());
+        let func = self.declare_node_func(kernel_id, ll_ctx, &module, &attrs);
         let entry = ll_ctx.append_basic_block(func, "entry");
-        let ty = UnitType::Node(node_id);
+        let ty = UnitType::Kernel(kernel_id);
         let unit = UnitInfo {
             ty,
             module,
@@ -333,16 +337,16 @@ impl CodeGenContext {
 
     fn declare_node_func<'ctx>(
         &self,
-        node_id: NodeId,
+        kernel_id: KernelId,
         ctx: &'ctx Context,
         module: &Module<'ctx>,
         attrs: &Attributes,
     ) -> FunctionValue<'ctx> {
-        let node = &self.graph.nodes[node_id];
-        let allocs = node
+        let kernel = &self.schedule.kernels[kernel_id];
+        let allocs = kernel
             .outputs
             .iter()
-            .chain(node.inputs.iter())
+            .chain(kernel.inputs.iter())
             .map(|&id| self.value2alloc.get(&id))
             .collect::<Vec<_>>();
         let mut is_noalias = vec![true; allocs.len()];
@@ -361,18 +365,18 @@ impl CodeGenContext {
 
         let args = vec![ctx.ptr_type(AddressSpace::default()).into(); allocs.len()];
         let fn_type = ctx.void_type().fn_type(&args, false);
-        let func = module.add_function(get_node_name_or(node, node_id).as_str(), fn_type, None);
+        let func = module.add_function(get_kernel_name_or(kernel, kernel_id).as_str(), fn_type, None);
         attrs.add_default_attributes(&func, |i| is_noalias[i]);
         func
     }
 }
 
 // TODO
-fn get_node_name_or(node: &Node, node_id: NodeId) -> String {
-    if node.name.is_empty() {
-        format!("node.{}", node_id.index())
+fn get_kernel_name_or(kernel: &Kernel, kernel_id: KernelId) -> String {
+    if kernel.name.is_empty() {
+        format!("kernel.{}", kernel_id.index())
     } else {
-        node.name.clone()
+        kernel.name.clone()
     }
 }
 
@@ -380,7 +384,7 @@ impl<'ll> CodeGen<'ll, '_> {
     pub fn compile(&self) -> Result<(), CodeGenError> {
         (match self.unit.ty {
             UnitType::Main => self.compile_main(),
-            UnitType::Node(node_id) => self.compile_node(node_id),
+            UnitType::Kernel(kernel_id) => self.compile_kernel(kernel_id),
         })
         .map_err(CodeGenError::BuilderError)
     }
@@ -410,7 +414,7 @@ impl<'ll> CodeGen<'ll, '_> {
         builder.position_at_end(self.unit.entry);
         macro_rules! init_ptr {
             ($value_id: expr, $ptr: expr, $i: expr) => {{
-                let value = &self.gen_ctx.graph.values[$value_id];
+                let value = &self.gen_ctx.schedule.get_value($value_id);
                 let ptr = unsafe {
                     builder.build_in_bounds_gep(
                         self.ll_ctx.ptr_type(AddressSpace::default()),
@@ -430,8 +434,9 @@ impl<'ll> CodeGen<'ll, '_> {
             }};
         }
 
-        for (i, arr) in [&self.gen_ctx.graph.outputs, &self.gen_ctx.graph.inputs]
+        for (i, arr) in [&self.gen_ctx.schedule.outputs, &self.gen_ctx.schedule.inputs]
             .iter()
+            .copied()
             .enumerate()
         {
             let ptr = self
@@ -440,18 +445,18 @@ impl<'ll> CodeGen<'ll, '_> {
                 .get_nth_param(i as u32)
                 .unwrap()
                 .into_pointer_value();
-            for (i, node_id) in arr.iter().enumerate() {
-                let value_id = match self.gen_ctx.graph.nodes[*node_id].op {
-                    Operator::Input(v) | Operator::Output(v) => v,
-                    _ => unreachable!(),
-                };
+            for (i, value_id) in arr.iter().enumerate() {
+                // let value_id = match self.gen_ctx.graph.nodes[*node_id].op {
+                //     Operator::Input(v) | Operator::Output(v) => v,
+                //     _ => unreachable!(),
+                // };
 
-                // TODO: necessary?
-                if self.gen_ctx.graph.initializer.contains_key(&value_id) {
-                    continue;
-                }
+                // // TODO: necessary?
+                // if self.gen_ctx.graph.initializer.contains_key(&value_id) {
+                //     continue;
+                // }
 
-                init_ptr!(value_id, ptr, i);
+                init_ptr!(*value_id, ptr, i);
             }
         }
 
@@ -462,7 +467,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 .get_nth_param(2)
                 .unwrap()
                 .into_pointer_value();
-            for (i, value_id) in self.gen_ctx.graph.initializer.keys().enumerate() {
+            for (i, value_id) in self.gen_ctx.schedule.initializers.iter().enumerate() {
                 init_ptr!(*value_id, ptr, i);
             }
         }
@@ -474,12 +479,13 @@ impl<'ll> CodeGen<'ll, '_> {
         let mut ptr_values = self.init_main_args()?;
         let mut chunk2ptr = HashMap::new();
         let builder = self.ll_ctx.create_builder();
-        for (node_id, alloc) in self.gen_ctx.order.iter() {
-            let function = if !self.gen_ctx.need_to_generate(*node_id) {
+        for (kernel_id, kernel) in self.gen_ctx.schedule.kernels.iter() {
+            dbg!(&kernel);
+            let function = if !self.gen_ctx.need_to_generate(kernel_id) {
                 None
             } else {
                 Some(self.gen_ctx.declare_node_func(
-                    *node_id,
+                    kernel_id,
                     self.ll_ctx,
                     &self.unit.module,
                     &self.attrs,
@@ -487,20 +493,19 @@ impl<'ll> CodeGen<'ll, '_> {
             };
 
             builder.position_at_end(self.unit.entry);
-            let node = &self.gen_ctx.graph.nodes[*node_id];
 
-            if let Operator::Split(ref split) = node.op {
+            if let KernelBody::SingleKernel(SingleKernel { op: Operator::Split(ref split) }) = kernel.body {
                 let src_ty = self
                     .gen_ctx
-                    .graph
-                    .get_resolved_tensor_type(node.inputs[0])
+                    .schedule
+                    .get_resolved_tensor_type(kernel.inputs[0])
                     .unwrap();
                 dbg!(&src_ty);
-                let src = *ptr_values.get(&node.inputs[0]).unwrap();
+                let src = *ptr_values.get(&kernel.inputs[0]).unwrap();
                 let axis = split.axis.index(src_ty.dims.ndim());
                 let mut acc = 0;
                 let elem_ty = src_ty.elem_type.llvm_type(self.ll_ctx);
-                for output in node.outputs.iter() {
+                for output in kernel.outputs.iter() {
                     let ptr = unsafe {
                         builder.build_in_bounds_gep(
                             elem_ty,
@@ -512,14 +517,14 @@ impl<'ll> CodeGen<'ll, '_> {
                     ptr_values.insert(*output, ptr);
                     let len = self
                         .gen_ctx
-                        .graph
+                        .schedule
                         .get_resolved_tensor_type(*output)
                         .unwrap()
                         .dims[axis];
                     acc += (src_ty.stride(axis) * len) as u64;
                 }
             } else {
-                for alloc in alloc.iter() {
+                for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
                     let dst_ptr = match alloc.ty {
                         AllocateType::Chunk(chunk) => {
                             if alloc.is_first_use {
@@ -546,10 +551,11 @@ impl<'ll> CodeGen<'ll, '_> {
             }
 
             if let Some(function) = function {
-                let args = node
+                let args = kernel
                     .outputs
                     .iter()
-                    .chain(node.inputs.iter())
+                    .chain(kernel.inputs.iter())
+                    .inspect(|&id| { dbg!(id); })
                     .map(|&id| ptr_values.get(&id).unwrap())
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
@@ -562,13 +568,13 @@ impl<'ll> CodeGen<'ll, '_> {
         Ok(())
     }
 
-    fn compile_node(&self, node_id: NodeId) -> Result<(), BuilderError> {
-        let node = &self.gen_ctx.graph.nodes[node_id];
+    fn compile_kernel(&self, kernel_id: KernelId) -> Result<(), BuilderError> {
+        let kernel = &self.gen_ctx.schedule.kernels[kernel_id];
         // dbg!(&node);
-        let args = node
+        let args = kernel
             .outputs
             .iter()
-            .chain(node.inputs.iter())
+            .chain(kernel.inputs.iter())
             .collect::<Vec<_>>();
         let builder = self.ll_ctx.create_builder();
         let entry = self.unit.entry;
@@ -596,7 +602,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     .into_pointer_value();
                 let ty = self
                     .gen_ctx
-                    .graph
+                    .schedule
                     .get_resolved_tensor_type(*id)
                     .unwrap()
                     .clone();
@@ -612,7 +618,7 @@ impl<'ll> CodeGen<'ll, '_> {
             .collect::<Vec<_>>();
 
         // TODO
-        if let Operator::Identity = node.op {
+        if matches_single_kernel!(kernel, Operator::Identity) {
             builder.position_at_end(entry);
             let len = ptrs[0]
                 .ty
@@ -634,8 +640,8 @@ impl<'ll> CodeGen<'ll, '_> {
 
         // TODO
         let omp_ctx = None;
-        let omp_parallel = node.meta.omp_parallel;
-        let omp_for = node.meta.omp_for;
+        let omp_parallel = kernel.omp_info.omp_parallel;
+        let omp_for = kernel.omp_info.omp_for;
 
         let mut ptrs = ptrs;
 
@@ -712,7 +718,8 @@ impl<'ll> CodeGen<'ll, '_> {
             }
         };
 
-        let exit = match &node.op {
+        let exit = match &kernel.body {
+            KernelBody::SingleKernel(SingleKernel { op }) => match op {
             operator @ (Operator::Add |
             Operator::BatchNormalization(_) |
             Operator::Contiguous |
@@ -797,7 +804,9 @@ impl<'ll> CodeGen<'ll, '_> {
                 entry,
                 resize,
             ),
-            Operator::ElementwiseOps(operator::ElementwiseOps { ops }) => {
+            _ => todo!("{:?}", op),
+            },
+            KernelBody::FusedElementWises(FusedElementWises{ ops }) => {
                 let target_dim = ptrs[0].ty.dims.clone();
                 let nest = target_dim.ndim();
                 let ops: Vec<_> = ops
@@ -806,8 +815,8 @@ impl<'ll> CodeGen<'ll, '_> {
                         let operands = args
                             .iter()
                             .map(|arg| match arg {
-                                operator::ElementwiseOpArg::Input(i) => Some(*i),
-                                operator::ElementwiseOpArg::NthResult(_) => None,
+                                ElementwiseOpArg::Input(i) => Some(*i),
+                                ElementwiseOpArg::NthResult(_) => None,
                             })
                             .collect::<Vec<_>>();
                         let operator =
@@ -821,7 +830,6 @@ impl<'ll> CodeGen<'ll, '_> {
                 };
                 nested_loop!(op, nest)
             }
-            _ => todo!("{:?}", node.op),
         }?;
 
         builder.position_at_end(exit);

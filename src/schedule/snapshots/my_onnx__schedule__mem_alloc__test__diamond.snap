@@ -1,0 +1,32 @@
+---
+source: src/schedule/mem_alloc.rs
+expression: "&mem"
+---
+- ty:
+    Chunk: 0
+  is_first_use: true
+  name: /layer1/Sigmoid
+- ty:
+    Chunk: 1
+  is_first_use: true
+  name: /layer3/MaxPool
+- ty:
+    Chunk: 0
+  is_first_use: false
+  name: /layer2/layer2.0/Sigmoid
+- ty:
+    Chunk: 2
+  is_first_use: true
+  name: /layer2/layer2.1/MaxPool
+- ty:
+    Chunk: 2
+  is_first_use: false
+  name: /Add
+- ty:
+    Chunk: 1
+  is_first_use: false
+  name: /Transpose
+- ty:
+    Output: 7
+  is_first_use: false
+  name: Contiguous_6

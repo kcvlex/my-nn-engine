@@ -3,7 +3,7 @@ use crate::codegen::llvm::*;
 use crate::codegen::omp::*;
 use crate::codegen::op::*;
 use crate::onnx::operator;
-use crate::onnx::operator::ElementwiseOpArg;
+use crate::schedule::ElementwiseOpArg;
 use crate::tensor::types::{DataType, FloatType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};

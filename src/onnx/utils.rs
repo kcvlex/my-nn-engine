@@ -2,13 +2,14 @@ use crate::onnx::model::{Graph, NodeId, Nodes, ValueId, ValueInfo};
 use crate::onnx::operator::*;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
+use indexmap::{IndexMap, IndexSet};
 
 pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     fn dfs(
         node: NodeId,
         res: &mut Vec<NodeId>,
         visited: &mut HashSet<NodeId>,
-        adj: &HashMap<NodeId, HashSet<NodeId>>,
+        adj: &IndexMap<NodeId, IndexSet<NodeId>>,
         nodes: &Nodes,
     ) {
         if visited.contains(&node) {
@@ -33,11 +34,11 @@ pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
             defined.insert(value, id);
         }
     }
-    let mut adj = HashMap::new();
+    let mut adj = IndexMap::new();
     for (id, node) in graph.nodes.iter() {
         for value in node.inputs.iter() {
             if let Some(defines) = defined.get(value) {
-                adj.entry(*defines).or_insert(HashSet::new()).insert(id);
+                adj.entry(*defines).or_insert(IndexSet::new()).insert(id);
             } else {
                 assert!(graph.initializer.contains_key(value));
             }

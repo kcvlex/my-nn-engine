@@ -6,19 +6,31 @@ use crate::utils::UnionFind;
 use itertools::zip_eq;
 use std::collections::HashMap;
 
+struct OrderedNodeId {
+    ordered: Vec<NodeId>,
+    id2order: HashMap<NodeId, usize>,
+}
+
+impl OrderedNodeId {
+    fn new(ids: Vec<NodeId>) -> Self {
+        let id2order = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+        Self { ordered: ids, id2order }
+    }
+}
+
 struct KernelsBuilder {
-    ordered_node_ids: Vec<NodeId>,
-    elementwise_node_ids: Vec<NodeId>,
-    elementwise_id2order: HashMap<NodeId, usize>,
+    nodes: OrderedNodeId,
+    elementwise_nodes: OrderedNodeId,
 }
 
 impl KernelsBuilder {
     fn new(graph: &Graph) -> Self {
-        let ordered_node_ids = utils::simple_topological_order(graph)
+        let nodes = utils::simple_topological_order(graph)
             .into_iter()
             .filter(|id| !graph.nodes[*id].is_dummy())
             .collect::<Vec<_>>();
-        let elementwise_node_ids: Vec<_> = ordered_node_ids
+        let nodes = OrderedNodeId::new(nodes);
+        let elementwise_nodes: Vec<_> = nodes.ordered
             .iter()
             .copied()
             .filter(|id| {
@@ -55,16 +67,11 @@ impl KernelsBuilder {
                 true
             })
             .collect();
-        let elementwise_id2order = elementwise_node_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (*id, i))
-            .collect();
+        let elementwise_nodes = OrderedNodeId::new(elementwise_nodes);
 
         Self {
-            ordered_node_ids,
-            elementwise_node_ids,
-            elementwise_id2order,
+            nodes,
+            elementwise_nodes,
         }
     }
 
@@ -75,12 +82,12 @@ impl KernelsBuilder {
         graph_op: &impl GraphOp,
         uf: &mut UnionFind,
     ) -> Option<()> {
-        let ord_id = self.elementwise_id2order.get(&id).copied()?;
+        let ord_id = self.elementwise_nodes.id2order.get(&id).copied()?;
         let mut cand = None;
         assert!(graph.nodes[id].outputs.len() == 1);
         let output = graph.nodes[id].outputs[0];
         for (user, _) in graph_op.used_node(output)? {
-            let user_id = self.elementwise_id2order.get(user).copied()?;
+            let user_id = self.elementwise_nodes.id2order.get(user).copied()?;
             let repr = uf.representative(user_id);
             match cand {
                 Some(v) if v == repr => (),
@@ -97,15 +104,17 @@ impl KernelsBuilder {
     }
 
     // ids must be sorted.
-    fn build_bundled_ops(&self, ord_ids: &[usize], graph: &Graph) -> (ElementWises, Vec<ValueId>) {
+    fn build_bundled_ops(&self, ord_ids: &[usize], graph: &Graph) -> (FusedElementWises, Vec<ValueId>) {
         use std::collections::hash_map::Entry;
+
+        assert!(ord_ids.is_sorted());
 
         let mut inputs = Vec::new();
         let mut input2idx = HashMap::new();
         let mut intermediates = HashMap::new();
         let mut ops = Vec::with_capacity(ord_ids.len());
         for ord in ord_ids {
-            let node_id = self.elementwise_node_ids[*ord];
+            let node_id = self.elementwise_nodes.ordered[*ord];
             let node = &graph.nodes[node_id];
 
             let args: Vec<_> = node
@@ -135,59 +144,70 @@ impl KernelsBuilder {
             ops.push((node.op.clone(), args));
         }
 
-        (ElementWises { ops }, inputs)
+        (FusedElementWises { ops }, inputs)
+    }
+
+    fn elementwise_order2order(&self, ord: usize) -> usize {
+        let id = self.elementwise_nodes.ordered[ord];
+        self.nodes.id2order[&id]
     }
 
     fn run(&self, graph: &Graph, graph_op: &impl GraphOp) -> Kernels {
-        let mut uf = UnionFind::new(self.elementwise_node_ids.len());
-        for node_id in self.elementwise_node_ids.iter().rev() {
+        let mut uf = UnionFind::new(self.elementwise_nodes.ordered.len());
+        for node_id in self.elementwise_nodes.ordered.iter().rev() {
             self.try_fuse(*node_id, graph, graph_op, &mut uf);
         }
 
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, Debug)]
         enum KernelTag {
             Ignore,
             Single,
             ElementwiseLast(usize),
         }
 
-        let mut kernel_tags = vec![KernelTag::Single; self.ordered_node_ids.len()];
-        let mut groups = uf.groups();
-        for (group_id, group) in groups.iter_mut().enumerate().filter(|(_, g)| 1 < g.len()) {
-            group.sort();
-            for g in group.iter() {
-                kernel_tags[*g] = KernelTag::Ignore;
+        let mut kernel_tags = vec![KernelTag::Single; self.nodes.ordered.len()];
+        let groups = uf.groups().into_iter().filter_map(|mut g| {
+            if 1 < g.len() {
+                g.sort();
+                Some(g)
+            } else {
+                None
             }
-            let last_node_id = group.last().unwrap();
-            kernel_tags[*last_node_id] = KernelTag::ElementwiseLast(group_id);
+        }).collect::<Vec<_>>();
+        for (group_id, group) in groups.iter().enumerate() {
+            for g in group.iter() {
+                let node_id = self.elementwise_order2order(*g);
+                kernel_tags[node_id] = KernelTag::Ignore;
+            }
+            let last_node_id = self.elementwise_order2order(*group.last().unwrap());
+            kernel_tags[last_node_id] = KernelTag::ElementwiseLast(group_id);
         }
 
         let mut kernels = Kernels::default();
-        for (tag, node_id) in zip_eq(kernel_tags.iter(), self.ordered_node_ids.iter().copied()) {
+        for (tag, node_id) in zip_eq(kernel_tags.iter(), self.nodes.ordered.iter().copied()) {
             let kernel = match tag {
                 KernelTag::Ignore => continue,
                 KernelTag::Single => {
                     let node = &graph.nodes[node_id];
-                    let body = Single {
+                    let body = SingleKernel {
                         op: node.op.clone(),
                     };
-                    let body = KernelBody::Single(body);
+                    let body = KernelBody::SingleKernel(body);
                     Kernel {
                         inputs: graph.nodes[node_id].inputs.clone(),
                         outputs: graph.nodes[node_id].outputs.clone(),
                         body,
                         name: node.name.clone(),
                         mem_alloc: None,
+                        omp_info: OmpInfo::default(),
                     }
                 }
                 KernelTag::ElementwiseLast(group_id) => {
                     let group = &groups[*group_id];
-                    let last_node = group.last().unwrap();
-                    let last_node = self.elementwise_node_ids[*last_node];
-                    let last_node = &graph.nodes[last_node];
+                    let last_node = &graph.nodes[node_id];
                     let outputs = last_node.outputs.clone();
                     let (body, inputs) = self.build_bundled_ops(group, graph);
-                    let body = KernelBody::ElementWises(body);
+                    let body = KernelBody::FusedElementWises(body);
                     let name = format!("Fused_Elementwise_{}", last_node.name);
                     Kernel {
                         inputs,
@@ -195,6 +215,7 @@ impl KernelsBuilder {
                         body,
                         name,
                         mem_alloc: None,
+                        omp_info: OmpInfo::default(),
                     }
                 }
             };

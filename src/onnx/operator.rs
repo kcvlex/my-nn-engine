@@ -67,7 +67,6 @@ pub enum Operator {
 
     // Custom
     Contiguous,
-    ElementwiseOps(ElementwiseOps),
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
 
@@ -511,7 +510,6 @@ impl Operator {
 
             // Custom
             Operator::Contiguous => "Contiguous (Custom)",
-            Operator::ElementwiseOps(_) => "ElementwiseOps (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
 
@@ -538,51 +536,9 @@ impl Operator {
                 Operator::Sigmoid |
                 Operator::Sqrt |
                 Operator::Sub |
-                Operator::Tanh |
-                Operator::ElementwiseOps(_)
+                Operator::Tanh
         )
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ElementwiseOpArg {
-    Input(usize),
-    NthResult(usize),
-}
-
-/// # Attributes
-///
-/// - **operators - STRINGS:** \
-///   A list of elementwise operators.
-///
-/// - **num_arguments - INTS:** \
-///   A list of the number of arguments for each operator. The length of this list must be equal to
-///   the length of `operators`.
-///
-/// - **argument_types - STRINGS:** \
-///   A list of a type of each argument. Each element must be either "input" or "intermediate". The
-///   arguments for the i-th operator corresponds to `argument_types[l..r]`, where `l` and `r` is
-///   as follows.
-///
-///   ```text
-///   l = sum(num_arguments[0..i])
-///   r = l + num_arguments[i]
-///   ```
-///
-///   The following values must be equal.
-///
-///   - The sum of the values of `num_arguments`.
-///   - The length of `argument_types`.
-///   - The sum of the length of `input_indices` and `intermediate_indices`.
-///
-/// - **input_indices - INTS:** \
-///   TODO: Write
-///
-/// - **intermediate_indices - INTS:** \
-///   TODO: Write
-#[derive(Debug, Clone, PartialEq)]
-pub struct ElementwiseOps {
-    pub ops: Vec<(Box<Operator>, Vec<ElementwiseOpArg>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

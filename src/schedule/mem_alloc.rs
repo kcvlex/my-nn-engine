@@ -72,16 +72,16 @@ impl Chunks {
     }
 }
 
-struct MemoryPlanner<'graph, 'sched> {
-    schedule: &'sched Schedule<'graph>,
+pub(super) struct MemoryPlanner<'sched> {
+    schedule: &'sched Schedule,
     deps: DependencyGraph,
     liveness_counter: IndexMap<ChunkId, usize>,
     chunks: Chunks,
     allocations: HashMap<ValueId, AllocateType>,
 }
 
-impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
-    fn new(schedule: &'sched Schedule<'graph>) -> Self {
+impl<'sched> MemoryPlanner<'sched> {
+    pub(super) fn new(schedule: &'sched Schedule) -> Self {
         let deps = DependencyGraph::new(schedule);
 
         MemoryPlanner {
@@ -94,7 +94,7 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
     }
 
     // ref: https://arxiv.org/pdf/1604.06174
-    fn run(&mut self) -> Vec<Vec<AllocateInfo>> {
+    pub(super) fn run(&mut self) -> Vec<Vec<AllocateInfo>> {
         for input in self.deps.inputs_set.iter() {
             self.allocations.insert(*input, AllocateType::Input(*input));
         }
@@ -104,7 +104,7 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
         }
 
         for (kernel_id, _) in self.schedule.kernels.0.iter() {
-            let allocated = self.run_node(kernel_id);
+            let allocated = self.run_kernel(kernel_id);
             for (value_id, allocated) in allocated {
                 self.allocations.insert(value_id, allocated);
             }
@@ -157,14 +157,7 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
                     *self.allocations.get_mut(output).unwrap() = AllocateType::Output(*v);
 
                     // TODO: Support other patterns
-                    if i == 0 &&
-                        matches!(
-                            kernel.body,
-                            KernelBody::Single(Single {
-                                op: Operator::Identity
-                            })
-                        )
-                    {
+                    if i == 0 && matches_single_kernel!(kernel, Operator::Identity) {
                         output_set.insert(kernel.inputs[0], *v);
                     }
                 }
@@ -172,14 +165,14 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
         }
     }
 
-    fn run_node(&mut self, kernel_id: KernelId) -> Vec<(ValueId, AllocateType)> {
+    fn run_kernel(&mut self, kernel_id: KernelId) -> Vec<(ValueId, AllocateType)> {
         let mut res = Vec::new();
         let kernel = &self.schedule.kernels.0[kernel_id];
         for output in kernel.outputs.iter() {
             let chunk = match kernel.body {
                 // Split is a special case.
                 // TODO: When the input is `Input` or initializer.
-                KernelBody::Single(Single {
+                KernelBody::SingleKernel(SingleKernel {
                     op: Operator::Split(_),
                 }) => {
                     let res = *self.allocations.get(&kernel.inputs[0]).unwrap();
@@ -199,7 +192,7 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
             };
             res.push((*output, chunk));
             if let AllocateType::Chunk(chunk) = chunk {
-                // It is possible that the value is not used by any other nodes, e.g., the output
+                // It is possible that the value is not used by any other kernels, e.g., the output
                 // of splitted one.
                 if let Some(used) = self.deps.value2used.get(output) {
                     *self.liveness_counter.entry(chunk).or_insert(0) += used.len();
@@ -247,12 +240,7 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
             };
 
             // TODO: correct?
-            if matches!(
-                kernel.body,
-                KernelBody::Single(Single {
-                    op: Operator::Identity
-                })
-            ) {
+            if matches_single_kernel!(kernel, Operator::Identity) {
                 return Some(*input);
             }
 
@@ -262,12 +250,10 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
 
             if self
                 .schedule
-                .graph
                 .get_resolved_tensor_type(*input)
                 .as_ref()
                 .unwrap() ==
                 self.schedule
-                    .graph
                     .get_resolved_tensor_type(value_id)
                     .as_ref()
                     .unwrap()
@@ -282,23 +268,18 @@ impl<'graph, 'sched> MemoryPlanner<'graph, 'sched> {
     fn can_in_place(&self, value_id: ValueId) -> bool {
         let kernel_id = self.deps.value2defined[&value_id];
         match &self.schedule.kernels.0[kernel_id].body {
-            KernelBody::Single(Single { op }) => {
+            KernelBody::SingleKernel(SingleKernel { op }) => {
                 matches!(op, Operator::Identity) || op.is_elementwise()
             }
-            KernelBody::ElementWises(_) => true,
+            KernelBody::FusedElementWises(_) => true,
         }
-    }
-}
-
-pub fn assign_mem(schedule: &mut Schedule<'_>) {
-    let info_v = MemoryPlanner::new(schedule).run();
-    for ((_, kernel), info) in zip_eq(schedule.kernels.0.iter_mut(), info_v) {
-        kernel.mem_alloc = Some(info);
     }
 }
 
 #[cfg(test)]
 mod test {
+    use itertools::Itertools;
+
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
@@ -337,20 +318,23 @@ mod test {
         struct Test {
             ty: AllocateType,
             is_first_use: bool,
+            name: String,
         }
 
         let model = load_model("diamond.onnx")?;
-        let schedule = build_init_schedule(&model.graph, &mut SimpleGraphOp::new(&model.graph));
+        let schedule = Schedule::new(model.graph);
         let mem = MemoryPlanner::new(&schedule)
             .run()
             .iter()
             .flatten()
+            .zip_eq(schedule.kernels.iter().map(|(_, k)| k.name.clone()))
             .map(
-                |AllocateInfo {
+                |(AllocateInfo {
                      ty, is_first_use, ..
-                 }| Test {
+                 }, name)| Test {
                     ty: *ty,
                     is_first_use: *is_first_use,
+                    name,
                 },
             )
             .collect::<Vec<_>>();

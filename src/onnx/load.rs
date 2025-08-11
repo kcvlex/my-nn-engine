@@ -782,77 +782,6 @@ impl Unsqueeze {
     }
 }
 
-impl ElementwiseOps {
-    fn load_elementwise_op(op: &str) -> LoadResult<Operator> {
-        match op {
-            "Add" => Ok(Operator::Add),
-            "Exp" => Ok(Operator::Exp),
-            "Log" => Ok(Operator::Log),
-            "Mul" => Ok(Operator::Mul),
-            "ReLU" => Ok(Operator::ReLU),
-            "Sigmoid" => Ok(Operator::Sigmoid),
-            "Sub" => Ok(Operator::Sub),
-            "Tanh" => Ok(Operator::Tanh),
-            x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
-        }
-    }
-
-    fn load(attributes: &Attributes) -> LoadResult<Self> {
-        let operators = attributes
-            .get("operators")
-            .ok_or(ModelLoadError::Required("operators".to_string()))?
-            .strings()?;
-        let num_arguments = attributes
-            .get("num_arguments")
-            .ok_or(ModelLoadError::Required("num_arguments".to_string()))?
-            .ints::<usize>()?;
-        let argument_types = attributes
-            .get("argument_types")
-            .ok_or(ModelLoadError::Required("argument_types".to_string()))?
-            .strings()?;
-        let input_indices = attributes
-            .get("input_indices")
-            .ok_or(ModelLoadError::Required("input_indices".to_string()))?
-            .ints::<usize>()?;
-        let intermediate_indices = attributes
-            .get("intermediate_indices")
-            .ok_or(ModelLoadError::Required("intermediate_indices".to_string()))?
-            .ints::<usize>()?;
-
-        let mut ops = Vec::with_capacity(operators.len());
-        let mut arg_types_index = 0;
-        let mut input_index = 0;
-        let mut intermediate_index = 0;
-        for (op, num_arg) in zip_eq(operators, num_arguments) {
-            let op = Self::load_elementwise_op(&op)?;
-            let mut args = Vec::with_capacity(num_arg);
-            for ty in &argument_types[arg_types_index..arg_types_index + num_arg] {
-                match ty.as_str() {
-                    "input" => {
-                        args.push(ElementwiseOpArg::Input(input_indices[input_index]));
-                        input_index += 1;
-                    }
-                    "intermediate" => {
-                        args.push(ElementwiseOpArg::NthResult(
-                            intermediate_indices[intermediate_index],
-                        ));
-                        intermediate_index += 1;
-                    }
-                    _ => {
-                        return Err(ModelLoadError::Unexpected(
-                            "Invalid argument type".to_string(),
-                        ))
-                    }
-                }
-            }
-            arg_types_index += num_arg;
-            ops.push((Box::new(op), args));
-        }
-
-        Ok(Self { ops })
-    }
-}
-
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
@@ -895,7 +824,6 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Unsqueeze" => Ok(Operator::Unsqueeze(Unsqueeze::load(attributes)?)),
 
         // Custom
-        "ElementwiseOps" => Ok(Operator::ElementwiseOps(ElementwiseOps::load(attributes)?)),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

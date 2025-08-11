@@ -1,5 +1,6 @@
 use crate::codegen::{CodeGenContext, CodeGenError};
 use crate::onnx::load::*;
+use crate::schedule::Schedule;
 use crate::onnx::model::{Graph, Model, ValueId};
 use crate::tensor::{
     data::TensorData,
@@ -173,9 +174,13 @@ impl Session {
             .map(StrictTensor::from)
             .collect::<Vec<_>>();
 
-        let codegen_ctx = CodeGenContext::new(model.graph).map_err(SessionError::CodeGenError)?;
+        let mut schedule = Schedule::new(model.graph);
+        schedule.assign_mem();
+        schedule.annotate_omp(options.omp_threshold);
+
+        let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let (codegens, mut contexts): (Vec<_>, Vec<_>) = codegen_ctx
-            .all_necessary_nodes()
+            .all_necessary_kernels()
             .iter()
             .copied()
             .map(|id| {
@@ -189,7 +194,7 @@ impl Session {
             .enumerate()
             .map(|(i, id)| {
                 let ll_ctx = &contexts[i];
-                codegen_ctx.new_codegen_for_node(id, ll_ctx)
+                codegen_ctx.new_codegen_for_kernel(id, ll_ctx)
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(SessionError::CodeGenError)?;
@@ -316,7 +321,7 @@ impl Session {
     }
 
     pub fn write_model<P: AsRef<Path>>(&self, p: P) {
-        Self::_write_model(&self.codegen_ctx.graph, p);
+        Self::_write_model(self.codegen_ctx.schedule.graph(), p);
     }
 
     pub fn persistent(&mut self) -> Result<(), SessionError> {
