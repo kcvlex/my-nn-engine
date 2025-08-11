@@ -566,9 +566,6 @@ impl<'ll> CodeGen<'ll, '_> {
                     .outputs
                     .iter()
                     .chain(kernel.inputs.iter())
-                    .inspect(|&id| {
-                        dbg!(id);
-                    })
                     .map(|&id| ptr_values.get(&id).unwrap())
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
