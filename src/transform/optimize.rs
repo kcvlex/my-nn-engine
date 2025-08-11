@@ -1,4 +1,5 @@
-pub mod gemm;
+pub mod gemm_add_fusion;
+pub mod gemm_transpose_fusion;
 pub mod im2col;
 
 use crate::transform::modify::SimpleGraphOp;
@@ -17,6 +18,9 @@ pub fn create_optimize_passes1() -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager =
         SimplePassManager::new("Optimization between Lowering and Strides".to_string());
     pass_manager.add_pass(Box::new(im2col::InsertIm2Col::default()));
-    pass_manager.add_pass(Box::new(gemm::GemmTransComposition::default()));
+    pass_manager.add_pass(Box::new(
+        gemm_transpose_fusion::GemmTransposeFusion::default(),
+    ));
+    pass_manager.add_pass(Box::new(gemm_add_fusion::GemmAddFusion::default()));
     pass_manager
 }

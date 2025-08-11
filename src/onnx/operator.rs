@@ -314,7 +314,7 @@ impl Default for Gemm {
     fn default() -> Self {
         Self {
             alpha: 1.0,
-            beta: 1.0,
+            beta: 0.0,
             trans_a: false,
             trans_b: false,
         }

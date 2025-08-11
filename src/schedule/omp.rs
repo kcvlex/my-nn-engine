@@ -16,8 +16,18 @@ impl InnermostOMP {
                             return None;
                         }
                     }
-                    KernelBody::FusedElementWises(_) => (),
-                };
+                    KernelBody::FusedElementWises(FusedElementWises { ops }) => {
+                        for (_, args) in ops.iter() {
+                            for arg in args {
+                                match arg {
+                                    // TODO: ????
+                                    ElementwiseOpArg::Input(n) if 3 <= *n => return None,
+                                    _ => (),
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let output = kernel.outputs[0];
                 let ty = &schedule.get_resolved_tensor_type(output).unwrap();

@@ -75,11 +75,11 @@ use crate::transform::Pass;
 // }
 
 #[derive(Default)]
-pub struct GemmTransComposition {}
+pub struct GemmTransposeFusion {}
 
-impl<T: GraphOp> Pass<T> for GemmTransComposition {
+impl<T: GraphOp> Pass<T> for GemmTransposeFusion {
     fn summary(&self) -> &'static str {
-        "Compose Gemm and Tranpose into Gemm"
+        "Fuse Gemm and Transpose into Gemm"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
@@ -107,6 +107,7 @@ impl<T: GraphOp> Pass<T> for GemmTransComposition {
 
             let a = graph.nodes[id].inputs[args::GEMM_A];
             let b = graph.nodes[id].inputs[args::GEMM_B];
+            let c_opt = graph.nodes[id].inputs.get(args::GEMM_C).cloned();
             let old_output = graph.nodes[id].outputs[0];
             let trans_a = is_transposed(a);
             let trans_b = is_transposed(b);
@@ -128,8 +129,14 @@ impl<T: GraphOp> Pass<T> for GemmTransComposition {
                     format!("GemmTransComposition_Output_{index}"),
                     ty,
                 );
+                let mut inputs = Vec::with_capacity(3);
+                inputs.push(trans_a.unwrap_or(a));
+                inputs.push(trans_b.unwrap_or(b));
+                if let Some(c) = c_opt {
+                    inputs.push(c);
+                }
                 let new_node = Node {
-                    inputs: vec![trans_a.unwrap_or(a), trans_b.unwrap_or(b)],
+                    inputs,
                     outputs: vec![new_output],
                     name: format!("GemmTransComposition_{index}"),
                     op: Operator::Gemm(gemm),

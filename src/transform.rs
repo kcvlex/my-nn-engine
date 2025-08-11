@@ -61,7 +61,7 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 
 #[derive(TypedBuilder)]
 pub struct Options {
-    #[builder(default = 1000)]
+    #[builder(default = 100)]
     pub omp_threshold: usize,
 
     #[builder(default = true)]

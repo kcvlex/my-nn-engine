@@ -488,7 +488,6 @@ impl<'ll> CodeGen<'ll, '_> {
         let mut chunk2ptr = HashMap::new();
         let builder = self.ll_ctx.create_builder();
         for (kernel_id, kernel) in self.gen_ctx.schedule.kernels.iter() {
-            dbg!(&kernel);
             let function = if !self.gen_ctx.need_to_generate(kernel_id) {
                 None
             } else {
@@ -511,7 +510,6 @@ impl<'ll> CodeGen<'ll, '_> {
                     .schedule
                     .get_resolved_tensor_type(kernel.inputs[0])
                     .unwrap();
-                dbg!(&src_ty);
                 let src = *ptr_values.get(&kernel.inputs[0]).unwrap();
                 let axis = split.axis.index(src_ty.dims.ndim());
                 let mut acc = 0;
