@@ -61,7 +61,7 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 
 #[derive(TypedBuilder)]
 pub struct Options {
-    #[builder(default = 100)]
+    #[builder(default = 1000)]
     pub omp_threshold: usize,
 
     #[builder(default = true)]
@@ -98,7 +98,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
 //     use crate::onnx::load::*;
 //     use crate::onnx::model::Model;
 //     use std::path::PathBuf;
-// 
+//
 //     #[ignore]
 //     #[test]
 //     fn test_save() {

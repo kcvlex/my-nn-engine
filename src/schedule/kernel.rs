@@ -14,7 +14,10 @@ struct OrderedNodeId {
 impl OrderedNodeId {
     fn new(ids: Vec<NodeId>) -> Self {
         let id2order = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
-        Self { ordered: ids, id2order }
+        Self {
+            ordered: ids,
+            id2order,
+        }
     }
 }
 
@@ -30,7 +33,8 @@ impl KernelsBuilder {
             .filter(|id| !graph.nodes[*id].is_dummy())
             .collect::<Vec<_>>();
         let nodes = OrderedNodeId::new(nodes);
-        let elementwise_nodes: Vec<_> = nodes.ordered
+        let elementwise_nodes: Vec<_> = nodes
+            .ordered
             .iter()
             .copied()
             .filter(|id| {
@@ -104,7 +108,11 @@ impl KernelsBuilder {
     }
 
     // ids must be sorted.
-    fn build_bundled_ops(&self, ord_ids: &[usize], graph: &Graph) -> (FusedElementWises, Vec<ValueId>) {
+    fn build_bundled_ops(
+        &self,
+        ord_ids: &[usize],
+        graph: &Graph,
+    ) -> (FusedElementWises, Vec<ValueId>) {
         use std::collections::hash_map::Entry;
 
         assert!(ord_ids.is_sorted());
@@ -166,14 +174,18 @@ impl KernelsBuilder {
         }
 
         let mut kernel_tags = vec![KernelTag::Single; self.nodes.ordered.len()];
-        let groups = uf.groups().into_iter().filter_map(|mut g| {
-            if 1 < g.len() {
-                g.sort();
-                Some(g)
-            } else {
-                None
-            }
-        }).collect::<Vec<_>>();
+        let groups = uf
+            .groups()
+            .into_iter()
+            .filter_map(|mut g| {
+                if 1 < g.len() {
+                    g.sort();
+                    Some(g)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         for (group_id, group) in groups.iter().enumerate() {
             for g in group.iter() {
                 let node_id = self.elementwise_order2order(*g);

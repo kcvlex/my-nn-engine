@@ -103,7 +103,6 @@ impl CodeGenContext {
             .map(|info| (info.value_id, *info))
             .collect::<HashMap<_, _>>();
 
-
         Ok(CodeGenContext {
             schedule,
             mem_size,
@@ -121,7 +120,10 @@ impl CodeGenContext {
         }
         if matches_single_kernel!(kernel, Operator::Identity) {
             let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
-            let chunk_out = self.value2alloc.get(&kernel.outputs[0]).map(|info| &info.ty);
+            let chunk_out = self
+                .value2alloc
+                .get(&kernel.outputs[0])
+                .map(|info| &info.ty);
             // TODO: correct?
             let res = match (chunk_in, chunk_out) {
                 (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
@@ -135,8 +137,7 @@ impl CodeGenContext {
     }
 
     pub fn all_necessary_kernels(&self) -> Vec<KernelId> {
-        self
-            .schedule
+        self.schedule
             .kernels
             .iter()
             .map(|(id, _)| id)
@@ -365,7 +366,11 @@ impl CodeGenContext {
 
         let args = vec![ctx.ptr_type(AddressSpace::default()).into(); allocs.len()];
         let fn_type = ctx.void_type().fn_type(&args, false);
-        let func = module.add_function(get_kernel_name_or(kernel, kernel_id).as_str(), fn_type, None);
+        let func = module.add_function(
+            get_kernel_name_or(kernel, kernel_id).as_str(),
+            fn_type,
+            None,
+        );
         attrs.add_default_attributes(&func, |i| is_noalias[i]);
         func
     }
@@ -434,10 +439,13 @@ impl<'ll> CodeGen<'ll, '_> {
             }};
         }
 
-        for (i, arr) in [&self.gen_ctx.schedule.outputs, &self.gen_ctx.schedule.inputs]
-            .iter()
-            .copied()
-            .enumerate()
+        for (i, arr) in [
+            &self.gen_ctx.schedule.outputs,
+            &self.gen_ctx.schedule.inputs,
+        ]
+        .iter()
+        .copied()
+        .enumerate()
         {
             let ptr = self
                 .unit
@@ -494,7 +502,10 @@ impl<'ll> CodeGen<'ll, '_> {
 
             builder.position_at_end(self.unit.entry);
 
-            if let KernelBody::SingleKernel(SingleKernel { op: Operator::Split(ref split) }) = kernel.body {
+            if let KernelBody::SingleKernel(SingleKernel {
+                op: Operator::Split(ref split),
+            }) = kernel.body
+            {
                 let src_ty = self
                     .gen_ctx
                     .schedule
@@ -555,7 +566,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     .outputs
                     .iter()
                     .chain(kernel.inputs.iter())
-                    .inspect(|&id| { dbg!(id); })
+                    .inspect(|&id| {
+                        dbg!(id);
+                    })
                     .map(|&id| ptr_values.get(&id).unwrap())
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
@@ -720,93 +733,93 @@ impl<'ll> CodeGen<'ll, '_> {
 
         let exit = match &kernel.body {
             KernelBody::SingleKernel(SingleKernel { op }) => match op {
-            operator @ (Operator::Add |
-            Operator::BatchNormalization(_) |
-            Operator::Contiguous |
-            Operator::Exp |
-            Operator::LeakyReLU(_) |
-            Operator::Log |
-            Operator::Mul |
-            Operator::Pow |
-            Operator::Reciprocal |
-            Operator::ReLU |
-            Operator::Sigmoid |
-            Operator::Sqrt |
-            Operator::Sub |
-            Operator::Tanh) => {
-                let operands: &'static [Option<usize>] = match operator {
-                    Operator::Add | Operator::Mul | Operator::Pow => &[Some(0), Some(1)],
-                    Operator::BatchNormalization(_) => {
-                        &[Some(0), Some(1), Some(2), Some(3), Some(4)]
-                    }
-                    Operator::Exp |
-                    Operator::LeakyReLU(_) |
-                    Operator::Log |
-                    Operator::Reciprocal |
-                    Operator::ReLU |
-                    Operator::Sigmoid |
-                    Operator::Sqrt |
-                    Operator::Tanh |
-                    Operator::Contiguous => &[],
-                    _ => unreachable!(),
-                };
-                let target_dim = ptrs[0].ty.dims.clone();
-                let nest = target_dim.ndim();
-                let operator =
-                    adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], operands, &target_dim);
-                let op = Operation {
-                    opcode: operator.into(),
-                    operands: ptrs.into(),
-                };
-                nested_loop!(op, nest)
-            }
+                operator @ (Operator::Add |
+                Operator::BatchNormalization(_) |
+                Operator::Contiguous |
+                Operator::Exp |
+                Operator::LeakyReLU(_) |
+                Operator::Log |
+                Operator::Mul |
+                Operator::Pow |
+                Operator::Reciprocal |
+                Operator::ReLU |
+                Operator::Sigmoid |
+                Operator::Sqrt |
+                Operator::Sub |
+                Operator::Tanh) => {
+                    let operands: &'static [Option<usize>] = match operator {
+                        Operator::Add | Operator::Mul | Operator::Pow => &[Some(0), Some(1)],
+                        Operator::BatchNormalization(_) => {
+                            &[Some(0), Some(1), Some(2), Some(3), Some(4)]
+                        }
+                        Operator::Exp |
+                        Operator::LeakyReLU(_) |
+                        Operator::Log |
+                        Operator::Reciprocal |
+                        Operator::ReLU |
+                        Operator::Sigmoid |
+                        Operator::Sqrt |
+                        Operator::Tanh |
+                        Operator::Contiguous => &[],
+                        _ => unreachable!(),
+                    };
+                    let target_dim = ptrs[0].ty.dims.clone();
+                    let nest = target_dim.ndim();
+                    let operator =
+                        adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], operands, &target_dim);
+                    let op = Operation {
+                        opcode: operator.into(),
+                        operands: ptrs.into(),
+                    };
+                    nested_loop!(op, nest)
+                }
 
-            Operator::Concat(ref concat) => {
-                let dst = ptrs[0].clone();
-                let axis = concat.axis.index(dst.ty.dims.ndim());
-                translator.build_concat(dst, &ptrs[1..], entry, axis)
-            }
-            // Operator::Transpose(ref perm) => {
-            //     ptrs[1].perms = Some(perm.clone());
-            //     gen_unaryop!(UnaryOpcode::Transpose)
-            // }
-            // Operator::MatMul => {
-            //     let nest = ptrs[0].ty.dims.ndim() - 2;
-            //     let gemm = gen_gemm!(
-            //         &operator::Gemm {
-            //             trans_a: false,
-            //             trans_b: false,
-            //             alpha: 1.0,
-            //             beta: 0.0,
-            //         },
-            //         nest
-            //     );
-            //     translator.build_nested_loop(gemm, entry, nest)
-            // }
-            Operator::MatMul => todo!(),
-            Operator::Gemm(ref gemm) => {
-                translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
-            }
-            Operator::Im2Col(ref im2col) => {
-                translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
-            }
-            Operator::ReduceMatrix(op) => {
-                let m = ptrs[1].ty.dims[0] as u64;
-                let n = ptrs[1].ty.dims[1] as u64;
-                let elem_type = ptrs[0].ty.elem_type;
-                translator.build_matrix_reduce(&ptrs, elem_type, (m, n), *op, entry)
-            }
-            Operator::Resize(ref resize) => translator.build_resize(
-                ptrs[0].clone(),
-                ptrs[1].clone(),
-                ptrs.get(1 + operator::args::RESIZE_SCALES),
-                ptrs.get(1 + operator::args::RESIZE_SIZES),
-                entry,
-                resize,
-            ),
-            _ => todo!("{:?}", op),
+                Operator::Concat(ref concat) => {
+                    let dst = ptrs[0].clone();
+                    let axis = concat.axis.index(dst.ty.dims.ndim());
+                    translator.build_concat(dst, &ptrs[1..], entry, axis)
+                }
+                // Operator::Transpose(ref perm) => {
+                //     ptrs[1].perms = Some(perm.clone());
+                //     gen_unaryop!(UnaryOpcode::Transpose)
+                // }
+                // Operator::MatMul => {
+                //     let nest = ptrs[0].ty.dims.ndim() - 2;
+                //     let gemm = gen_gemm!(
+                //         &operator::Gemm {
+                //             trans_a: false,
+                //             trans_b: false,
+                //             alpha: 1.0,
+                //             beta: 0.0,
+                //         },
+                //         nest
+                //     );
+                //     translator.build_nested_loop(gemm, entry, nest)
+                // }
+                Operator::MatMul => todo!(),
+                Operator::Gemm(ref gemm) => {
+                    translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
+                }
+                Operator::Im2Col(ref im2col) => {
+                    translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
+                }
+                Operator::ReduceMatrix(op) => {
+                    let m = ptrs[1].ty.dims[0] as u64;
+                    let n = ptrs[1].ty.dims[1] as u64;
+                    let elem_type = ptrs[0].ty.elem_type;
+                    translator.build_matrix_reduce(&ptrs, elem_type, (m, n), *op, entry)
+                }
+                Operator::Resize(ref resize) => translator.build_resize(
+                    ptrs[0].clone(),
+                    ptrs[1].clone(),
+                    ptrs.get(1 + operator::args::RESIZE_SCALES),
+                    ptrs.get(1 + operator::args::RESIZE_SIZES),
+                    entry,
+                    resize,
+                ),
+                _ => todo!("{:?}", op),
             },
-            KernelBody::FusedElementWises(FusedElementWises{ ops }) => {
+            KernelBody::FusedElementWises(FusedElementWises { ops }) => {
                 let target_dim = ptrs[0].ty.dims.clone();
                 let nest = target_dim.ndim();
                 let ops: Vec<_> = ops

@@ -1,7 +1,7 @@
 use crate::codegen::{CodeGenContext, CodeGenError};
 use crate::onnx::load::*;
-use crate::schedule::Schedule;
 use crate::onnx::model::{Graph, Model, ValueId};
+use crate::schedule::Schedule;
 use crate::tensor::{
     data::TensorData,
     dimensions::ResolvedTensorDims,

@@ -329,9 +329,12 @@ mod test {
             .flatten()
             .zip_eq(schedule.kernels.iter().map(|(_, k)| k.name.clone()))
             .map(
-                |(AllocateInfo {
-                     ty, is_first_use, ..
-                 }, name)| Test {
+                |(
+                    AllocateInfo {
+                        ty, is_first_use, ..
+                    },
+                    name,
+                )| Test {
                     ty: *ty,
                     is_first_use: *is_first_use,
                     name,

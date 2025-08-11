@@ -1,8 +1,8 @@
 use crate::onnx::model::{Graph, NodeId, Nodes, ValueId, ValueInfo};
 use crate::onnx::operator::*;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use indexmap::{IndexMap, IndexSet};
 
 pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     fn dfs(
