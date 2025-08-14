@@ -1,13 +1,9 @@
 use crate::codegen::cpu::CodeGenContext;
-use crate::codegen::CodeGenError;
-use crate::onnx::load::*;
-use crate::onnx::model::{Graph, Model, ValueId};
+use crate::onnx::model::{Graph, ValueId};
 use crate::schedule::Schedule;
 use crate::session::{SessionError, StrictTensor};
 use crate::tensor::{
-    data::TensorData,
-    dimensions::ResolvedTensorDims,
-    types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType},
+    types::{ResolvedTensorType, TypeError},
     Tensor,
 };
 
@@ -205,7 +201,7 @@ mod test {
     use crate::session::{Session, Target};
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
-    use crate::transform::{transform_graph, Options};
+    use crate::transform::Options;
     use itertools::izip;
 
     macro_rules! make_tensor {

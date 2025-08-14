@@ -13,16 +13,10 @@ use crate::tensor::{
 };
 use crate::transform::{transform_graph, Options};
 
-use tempfile::TempDir;
 
 use rayon::prelude::*;
 
-use itertools::zip_eq;
 
-use inkwell::context::Context;
-use inkwell::targets::FileType;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 enum StrictTensor {

@@ -1,4 +1,4 @@
-use crate::onnx::model::{Graph, Node, NodeMeta, ValueId};
+use crate::onnx::model::{Graph, Node, NodeMeta};
 use crate::onnx::operator::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
