@@ -1,5 +1,5 @@
 use my_onnx::onnx::load::*;
-use my_onnx::session::{Session, SessionError};
+use my_onnx::session::{Session, SessionError, Target};
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::Options;
@@ -24,7 +24,7 @@ fn run_test(dir: &str, epsilon: f64, options: &Options, nums: (usize, usize)) ->
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let session = Session::new(&model_path, Some(&input_types), options)?;
+    let session = Session::new(&model_path, Some(&input_types), options, Target::CPU)?;
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)
         .map(|i| {

@@ -1,7 +1,7 @@
-use crate::codegen::blas::*;
-use crate::codegen::llvm::*;
-use crate::codegen::omp::*;
-use crate::codegen::op::*;
+use crate::codegen::cpu::blas::*;
+use crate::codegen::cpu::llvm::*;
+use crate::codegen::cpu::omp::*;
+use crate::codegen::cpu::op::*;
 use crate::onnx::operator;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::types::{DataType, FloatType};

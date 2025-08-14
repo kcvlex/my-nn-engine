@@ -1,4 +1,4 @@
-use crate::codegen::translator::FunctionTranslator;
+use crate::codegen::cpu::translator::FunctionTranslator;
 use crate::onnx::operator::{BatchNormalization, LeakyReLU};
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::dimensions::ResolvedTensorDims;
