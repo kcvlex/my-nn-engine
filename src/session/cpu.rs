@@ -1,11 +1,7 @@
 use crate::codegen::cpu::CodeGenContext;
-use crate::onnx::model::{Graph, ValueId};
 use crate::schedule::Schedule;
 use crate::session::{SessionError, StrictTensor};
-use crate::tensor::{
-    types::{ResolvedTensorType, TypeError},
-    Tensor,
-};
+use crate::tensor::{types::ResolvedTensorType, Tensor};
 
 use tempfile::TempDir;
 
@@ -40,19 +36,8 @@ pub struct SessionCPU {
     func: CodeType,
 }
 
-fn get_argument_types(
-    graph: &Graph,
-    values: &[ValueId],
-) -> Result<Vec<ResolvedTensorType>, SessionError> {
-    values
-        .iter()
-        .map(|&id| graph.get_resolved_tensor_type(id).cloned())
-        .collect::<Option<Vec<_>>>()
-        .ok_or(SessionError::TypeError(TypeError::UnresolvedInput))
-}
-
 impl SessionCPU {
-    pub fn new(
+    pub(super) fn new(
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
         initializer: Vec<StrictTensor>,
@@ -199,7 +184,7 @@ impl SessionCPU {
 mod test {
     use super::*;
     use crate::options::*;
-    use crate::session::{Session, Target};
+    use crate::session::Session;
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
     use itertools::izip;
