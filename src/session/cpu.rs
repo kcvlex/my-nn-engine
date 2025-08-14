@@ -198,10 +198,10 @@ impl SessionCPU {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::options::*;
     use crate::session::{Session, Target};
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
-    use crate::transform::Options;
     use itertools::izip;
 
     macro_rules! make_tensor {
@@ -299,12 +299,8 @@ mod test {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")
             .join(p);
-        let Session::CPU(session) = Session::new(
-            path,
-            None,
-            &Options::builder().omp_threshold(10).build(),
-            Target::CPU,
-        )?;
+        let Session::CPU(session) =
+            Session::new(path, None, &Options::builder().omp_threshold(10).build())?;
         f(session)?;
         Ok(())
     }

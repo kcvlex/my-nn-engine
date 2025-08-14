@@ -1,8 +1,8 @@
 use my_onnx::onnx::load::*;
-use my_onnx::session::{Session, SessionError, Target};
+use my_onnx::options::*;
+use my_onnx::session::{Session, SessionError};
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
-use my_onnx::transform::Options;
 use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;
@@ -21,7 +21,6 @@ fn run_test(model: &str, epsilon: f64) -> Result {
         &model_path,
         Some(&[input.tensor_type()]),
         &Options::builder().build(),
-        Target::CPU,
     )?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;

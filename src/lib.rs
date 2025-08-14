@@ -1,5 +1,6 @@
 pub mod codegen;
 pub mod onnx;
+pub mod options;
 pub mod schedule;
 pub mod session;
 pub mod tensor;

@@ -6,8 +6,8 @@ pub mod shape;
 mod utils;
 
 use crate::onnx::model::Graph;
+use crate::options::*;
 use modify::{GraphOp, NodeDelete, SimpleGraphOp};
-use typed_builder::TypedBuilder;
 
 pub use epilog::create_epilog_passes;
 pub use lower::create_lower_passes;
@@ -59,27 +59,12 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
     }
 }
 
-#[derive(TypedBuilder)]
-pub struct Options {
-    #[builder(default = 100)]
-    pub omp_threshold: usize,
-
-    #[builder(default = true)]
-    pub enable_fuse_ops: bool,
-
-    #[builder(default = true)]
-    pub verify_after_inferrence: bool,
-
-    #[builder(default = true)]
-    pub verify_after_strides: bool,
-}
-
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options.verify_after_inferrence),
         create_optimize_passes0(),
         create_lower_passes(),
-        create_optimize_passes1(),
+        create_optimize_passes1(options),
         create_strides_passes(options.verify_after_strides),
         create_epilog_passes(),
     ];

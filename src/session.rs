@@ -3,6 +3,7 @@ mod cpu;
 use crate::codegen::CodeGenError;
 use crate::onnx::load::*;
 use crate::onnx::model::{Graph, Model, ValueId};
+use crate::options::*;
 use crate::schedule::Schedule;
 use crate::session::cpu::SessionCPU;
 use crate::tensor::{
@@ -11,11 +12,9 @@ use crate::tensor::{
     types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType},
     Tensor,
 };
-use crate::transform::{transform_graph, Options};
-
+use crate::transform::transform_graph;
 
 use rayon::prelude::*;
-
 
 use std::path::Path;
 
@@ -101,11 +100,6 @@ pub enum SessionError {
     OtherError(String),
 }
 
-#[derive(Clone, Copy)]
-pub enum Target {
-    CPU,
-}
-
 pub enum Session {
     CPU(SessionCPU),
 }
@@ -126,7 +120,6 @@ impl Session {
         p: P,
         input_ty: Option<&[ResolvedTensorType]>,
         options: &Options,
-        target: Target,
     ) -> Result<Self, SessionError> {
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         if let Some(input_ty) = input_ty {
@@ -161,10 +154,14 @@ impl Session {
         schedule.assign_mem();
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
 
-        match target {
+        match options.target {
             Target::CPU => {
                 SessionCPU::new(inputs_ty, outputs_ty, initializer, schedule).map(Session::CPU)
             }
+            _ => Err(SessionError::OtherError(format!(
+                "Unsupported target: {:?}",
+                options.target
+            ))),
         }
     }
 
