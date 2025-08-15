@@ -327,7 +327,7 @@ mod test {
         }
 
         let model = load_model("diamond.onnx")?;
-        let schedule = Schedule::new(model.graph);
+        let schedule = Schedule::new(model.graph, Options::builder().build());
         let mem = MemoryPlanner::new(&schedule)
             .run()
             .iter()
