@@ -6,6 +6,7 @@ use crate::onnx::model::{Graph, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
+use crate::options::*;
 use id_arena::{Arena, Id};
 use itertools::zip_eq;
 use serde::Serialize;
@@ -22,6 +23,7 @@ pub struct Schedule {
     pub initializers: Vec<ValueId>,
 
     pub kernels: Kernels,
+    pub options: Options,
 
     graph: Graph,
 }
@@ -141,7 +143,7 @@ impl IndexMut<KernelId> for Kernels {
 }
 
 impl Schedule {
-    pub fn new(graph: Graph) -> Self {
+    pub fn new(graph: Graph, options: Options) -> Self {
         let graph_op = SimpleGraphOp::new(&graph);
         let inputs = graph
             .inputs
@@ -168,6 +170,7 @@ impl Schedule {
             initializers,
 
             kernels,
+            options,
 
             graph,
         }
@@ -195,6 +198,15 @@ impl Schedule {
 
     pub fn graph(&self) -> &Graph {
         &self.graph
+    }
+
+    pub fn max_chunk_id(&self) -> Option<usize> {
+        self.kernels
+            .iter()
+            .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+            .flatten()
+            .filter_map(|info| info.ty.chunk_id())
+            .max()
     }
 }
 

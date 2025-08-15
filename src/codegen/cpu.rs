@@ -153,16 +153,8 @@ fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
 }
 
 fn calc_memsize(sched: &Schedule) -> Vec<u64> {
-    let max_chunk_id = sched
-        .kernels
-        .iter()
-        .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
-        .flat_map(|info| info)
-        .filter_map(|info| info.ty.chunk_id())
-        .max()
-        .map(|x| x + 1)
-        .unwrap_or(0);
-    let mut mem_size = vec![0; max_chunk_id as usize];
+    let max_chunk_id = sched.max_chunk_id().map(|x| x + 1).unwrap_or(0);
+    let mut mem_size = vec![0; max_chunk_id];
     for vec in sched
         .kernels
         .iter()

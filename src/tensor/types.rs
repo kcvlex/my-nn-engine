@@ -4,14 +4,14 @@ use crate::tensor::dimensions::UnresolvedTensorDims;
 
 use itertools::{izip, zip_eq};
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum DataType {
     SInt(SIntType),
     UInt(UIntType),
     Float(FloatType),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum SIntType {
     I32,
     I64,
@@ -26,7 +26,7 @@ impl SIntType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum UIntType {
     U64,
 }
@@ -39,7 +39,7 @@ impl UIntType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum FloatType {
     F32,
     F64,

@@ -61,7 +61,7 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
-        create_infer_passes(options.verify_after_inferrence),
+        create_infer_passes(options.verify_after_inference),
         create_optimize_passes0(),
         create_lower_passes(),
         create_optimize_passes1(options),

@@ -17,13 +17,19 @@ impl DependencyGraph {
     fn new(schedule: &Schedule) -> Self {
         let mut value2defined = IndexMap::new();
         let mut value2used = IndexMap::new();
-        let inputs_set = schedule
-            .inputs
-            .iter()
-            .chain(schedule.initializers.iter())
-            .copied()
-            .collect::<HashSet<_>>();
-        let outputs_set = schedule.outputs.iter().copied().collect::<HashSet<_>>();
+        let (inputs_set, outputs_set) = match schedule.options.target {
+            Target::CPU => {
+                let inputs_set = schedule
+                    .inputs
+                    .iter()
+                    .chain(schedule.initializers.iter())
+                    .copied()
+                    .collect::<HashSet<_>>();
+                let outputs_set = schedule.outputs.iter().copied().collect::<HashSet<_>>();
+                (inputs_set, outputs_set)
+            },
+            Target::CUDA => (HashSet::new(), HashSet::new()),
+        };
         let ignore = |x| inputs_set.contains(x) || outputs_set.contains(x);
         for (kernel_id, kernel) in schedule.kernels.0.iter() {
             // if node.is_dummy() {

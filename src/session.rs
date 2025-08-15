@@ -150,7 +150,7 @@ impl Session {
             .map(StrictTensor::from)
             .collect::<Vec<_>>();
 
-        let mut schedule = Schedule::new(model.graph);
+        let mut schedule = Schedule::new(model.graph, options.clone());
         schedule.assign_mem();
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
 
