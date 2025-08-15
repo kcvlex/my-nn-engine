@@ -61,7 +61,6 @@ pub struct CodeGen<'ll, 'gen> {
 }
 
 // TODO: correct?
-unsafe impl Send for CodeGen<'_, '_> {}
 unsafe impl Sync for CodeGen<'_, '_> {}
 
 fn target_machine() -> Result<TargetMachine, CodeGenError> {
