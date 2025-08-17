@@ -27,7 +27,7 @@ impl DependencyGraph {
                     .collect::<HashSet<_>>();
                 let outputs_set = schedule.outputs.iter().copied().collect::<HashSet<_>>();
                 (inputs_set, outputs_set)
-            },
+            }
             Target::CUDA => (HashSet::new(), HashSet::new()),
         };
         let ignore = |x| inputs_set.contains(x) || outputs_set.contains(x);
@@ -117,39 +117,32 @@ impl<'sched> MemoryPlanner<'sched> {
 
         self.coalesce_output();
 
-        let mut last_user = vec![None; self.chunks.slot];
-        let mut info_v = Vec::new();
-        for (_, kernel) in self.schedule.kernels.0.iter().rev() {
-            let tmp = kernel
-                .outputs
-                .iter()
-                .map(|output| {
-                    let chunk = self.allocations.get(output).unwrap();
-                    if let AllocateType::Chunk(chunk) = chunk {
-                        last_user[*chunk] = Some(*output);
-                    }
-                    AllocateInfo {
-                        value_id: *output,
-                        ty: *chunk,
-                        is_first_use: false,
-                    }
-                })
-                .collect::<Vec<_>>();
-            info_v.push(tmp);
-        }
-
-        info_v.reverse();
-
-        for vec in info_v.iter_mut() {
-            for info in vec.iter_mut() {
-                if let AllocateType::Chunk(chunk) = info.ty {
-                    if last_user[chunk] == Some(info.value_id) {
-                        info.is_first_use = true;
-                    }
-                }
-            }
-        }
-        info_v
+        let mut used = vec![false; self.chunks.slot];
+        self.schedule
+            .kernels
+            .iter()
+            .map(|(_, kernel)| {
+                kernel
+                    .outputs
+                    .iter()
+                    .map(|output| {
+                        let chunk = self.allocations.get(output).unwrap();
+                        let is_first_use = if let AllocateType::Chunk(chunk) = chunk {
+                            let res = !used[*chunk];
+                            used[*chunk] = true;
+                            res
+                        } else {
+                            false
+                        };
+                        AllocateInfo {
+                            value_id: *output,
+                            ty: *chunk,
+                            is_first_use,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     }
 
     fn coalesce_output(&mut self) {
