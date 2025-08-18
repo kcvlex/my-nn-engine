@@ -108,8 +108,18 @@ impl<'sched> MemoryPlanner<'sched> {
                 .insert(*output, AllocateType::Output(*output));
         }
 
-        for (kernel_id, _) in self.schedule.kernels.0.iter() {
+        for (kernel_id, kernel) in self.schedule.kernels.iter() {
             let allocated = self.run_kernel(kernel_id);
+
+            // Verify
+            if self.schedule.options.target == Target::CUDA {
+                zip_eq(
+                    allocated.iter(),
+                    kernel.inputs.iter().chain(kernel.outputs.iter()),
+                )
+                .for_each(|(allocated, value_id)| assert!(allocated.0 == *value_id))
+            }
+
             for (value_id, allocated) in allocated {
                 self.allocations.insert(value_id, allocated);
             }
@@ -118,29 +128,36 @@ impl<'sched> MemoryPlanner<'sched> {
         self.coalesce_output();
 
         let mut used = vec![false; self.chunks.slot];
+        let mut to_allocate_info = |s: &Self, id: &ValueId| {
+            let chunk = s.allocations.get(id).unwrap();
+            let is_first_use = if let AllocateType::Chunk(chunk) = chunk {
+                let res = !used[*chunk];
+                used[*chunk] = true;
+                res
+            } else {
+                false
+            };
+            AllocateInfo {
+                value_id: *id,
+                ty: *chunk,
+                is_first_use,
+            }
+        };
         self.schedule
             .kernels
             .iter()
-            .map(|(_, kernel)| {
-                kernel
+            .map(|(_, kernel)| match self.schedule.options.target {
+                Target::CPU => kernel
                     .outputs
                     .iter()
-                    .map(|output| {
-                        let chunk = self.allocations.get(output).unwrap();
-                        let is_first_use = if let AllocateType::Chunk(chunk) = chunk {
-                            let res = !used[*chunk];
-                            used[*chunk] = true;
-                            res
-                        } else {
-                            false
-                        };
-                        AllocateInfo {
-                            value_id: *output,
-                            ty: *chunk,
-                            is_first_use,
-                        }
-                    })
-                    .collect::<Vec<_>>()
+                    .map(|id| to_allocate_info(self, id))
+                    .collect(),
+                Target::CUDA => kernel
+                    .inputs
+                    .iter()
+                    .chain(kernel.outputs.iter())
+                    .map(|id| to_allocate_info(self, id))
+                    .collect(),
             })
             .collect::<Vec<_>>()
     }
@@ -166,13 +183,30 @@ impl<'sched> MemoryPlanner<'sched> {
     fn run_kernel(&mut self, kernel_id: KernelId) -> Vec<(ValueId, AllocateType)> {
         let mut res = Vec::new();
         let kernel = &self.schedule.kernels.0[kernel_id];
+
+        if self.schedule.options.target != Target::CPU {
+            for input in kernel.inputs.iter() {
+                let chunk_id = match self.allocations.get(input) {
+                    Some(info) => info.chunk_id().to_owned().unwrap(),
+                    None => {
+                        let chunk_id = self.chunks.reuse_or_new();
+                        self.allocations
+                            .insert(*input, AllocateType::Chunk(chunk_id));
+                        chunk_id
+                    }
+                };
+                *self.liveness_counter.entry(chunk_id).or_insert(0) += 1;
+                res.push((*input, AllocateType::Chunk(chunk_id)));
+            }
+        }
+
         for output in kernel.outputs.iter() {
             let chunk = match kernel.body {
                 // Split is a special case.
                 // TODO: When the input is `Input` or initializer.
                 KernelBody::SingleKernel(SingleKernel {
                     op: Operator::Split(_),
-                }) => {
+                }) if self.schedule.options.target == Target::CPU => {
                     let res = *self.allocations.get(&kernel.inputs[0]).unwrap();
                     // assert!(matches!(res, AllocateType::Chunk(_)));
                     res

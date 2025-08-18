@@ -7,4 +7,5 @@ pub enum CodeGenError {
     LLVMError(inkwell::support::LLVMString),
     TargetMachineError(String),
     IntrinsicNotFound(String),
+    CudaBuildError(cuda::BuildError),
 }

@@ -66,7 +66,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
         create_lower_passes(),
         create_optimize_passes1(options),
         create_strides_passes(options.verify_after_strides),
-        create_epilog_passes(),
+        create_epilog_passes(options),
     ];
 
     let mut modifier = SimpleGraphOp::new(graph);

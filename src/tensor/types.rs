@@ -11,6 +11,12 @@ pub enum DataType {
     Float(FloatType),
 }
 
+impl Default for DataType {
+    fn default() -> Self {
+        DataType::SInt(SIntType::I32)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum SIntType {
     I32,

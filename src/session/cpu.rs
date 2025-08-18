@@ -285,7 +285,10 @@ mod test {
             .join("models/test/operator")
             .join(p);
         let Session::CPU(session) =
-            Session::new(path, None, &Options::builder().omp_threshold(10).build())?;
+            Session::new(path, None, &Options::builder().omp_threshold(10).build())?
+        else {
+            unreachable!()
+        };
         f(session)?;
         Ok(())
     }

@@ -4,9 +4,9 @@ pub mod omp;
 
 use crate::onnx::model::{Graph, ValueId, ValueInfo};
 use crate::onnx::operator::Operator;
+use crate::options::*;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
-use crate::options::*;
 use id_arena::{Arena, Id};
 use itertools::zip_eq;
 use serde::Serialize;

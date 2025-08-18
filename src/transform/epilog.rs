@@ -1,5 +1,6 @@
 use crate::onnx::model::Graph;
 use crate::onnx::operator::*;
+use crate::options::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::SimplePassManager;
@@ -28,8 +29,41 @@ impl<T: GraphOp> Pass<T> for Ops2Identity {
     }
 }
 
-pub fn create_epilog_passes() -> SimplePassManager<SimpleGraphOp> {
+#[derive(Default)]
+pub struct ElimCont {}
+impl<T: GraphOp> Pass<T> for ElimCont {
+    fn summary(&self) -> &'static str {
+        "Eliminate unnecessary Contiguous nodes"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let ids = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| match node.op {
+                Operator::Contiguous => {
+                    let input_shape = graph.get_resolved_tensor_type(node.inputs[0]).unwrap();
+                    input_shape.is_contiguous()
+                }
+                _ => false,
+            })
+            .map(|(id, _node)| id)
+            .collect::<Vec<_>>();
+
+        for id in ids.iter() {
+            let node = &graph.nodes[*id];
+            let input = node.inputs[0];
+            let output = node.outputs[0];
+            modifier.replace_input_value(graph, output, input);
+        }
+    }
+}
+
+pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Epilog".to_string());
     manager.add_pass(Box::new(Ops2Identity::default()));
+    if matches!(opt.target, Target::CUDA) {
+        manager.add_pass(Box::new(ElimCont::default()));
+    }
     manager
 }
