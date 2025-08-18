@@ -63,20 +63,20 @@ impl SessionCUDA {
         let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
 
         Command::new("nvcc")
-        .args([
-            main_file.to_str().unwrap(),
-            format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
-            "--shared",
-            "-o",
-            shared_obj.to_str().unwrap(),
-            "-lcudnn",
-            "--compiler-options",
-            "'-fPIC'",
-        ])
-        // .args(objs.iter().map(|p| p.to_str().unwrap()))
-        .status()
+            .args([
+                main_file.to_str().unwrap(),
+                format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
+                "--shared",
+                "-o",
+                shared_obj.to_str().unwrap(),
+                "-lcudnn",
+                "--compiler-options",
+                "'-fPIC'",
+            ])
+            // .args(objs.iter().map(|p| p.to_str().unwrap()))
+            .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-        
+
         dbg!(&tmp_dir);
         let tmp_dir = if PERSIST {
             let _ = tmp_dir.into_path();
@@ -94,7 +94,6 @@ impl SessionCUDA {
         let func = *func;
 
         println!("Loaded");
-
 
         Ok(Self {
             input_ty,

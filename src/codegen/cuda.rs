@@ -350,10 +350,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             (ARG_INITIALIZER, &self.schedule.initializers[..]),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
-                let ty = self
-                    .get_resolved_tensor_type(*value)?
-                    .elem_type
-                    .fragment();
+                let ty = self.get_resolved_tensor_type(*value)?.elem_type.fragment();
                 let value_name = format!("h_{}_{}", arg_name, value.index());
                 let stmt = format!("{ty} *{value_name} = ({ty} *)({arg_name}[{idx}]);",);
                 self.stmts.push(Statement::Raw(stmt));
@@ -411,7 +408,10 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     // TODO: Borrow
-    fn get_resolved_tensor_type(&self, value_id: ValueId) -> Result<&ResolvedTensorType, BuildError> {
+    fn get_resolved_tensor_type(
+        &self,
+        value_id: ValueId,
+    ) -> Result<&ResolvedTensorType, BuildError> {
         self.schedule
             .get_resolved_tensor_type(value_id)
             .ok_or(BuildError::UnresolvedType(value_id))
@@ -440,28 +440,60 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
 
         for (_, (handler, kernels)) in self.cudnn_handlers.iter() {
-            self.stmts.push(Statement::Raw(format!("cudnnHandle_t {cudnn_handler};", cudnn_handler = handler.handler())));
-            self.stmts.push(Statement::Raw(format!("void *{workspace_ptr};", workspace_ptr = handler.workspace_ptr())));
-            self.stmts.push(Statement::Raw(format!("size_t {workspace_max_size} = 0;", workspace_max_size = handler.workspace_max_size())));
+            self.stmts.push(Statement::Raw(format!(
+                "cudnnHandle_t {cudnn_handler};",
+                cudnn_handler = handler.handler()
+            )));
+            self.stmts.push(Statement::Raw(format!(
+                "void *{workspace_ptr};",
+                workspace_ptr = handler.workspace_ptr()
+            )));
+            self.stmts.push(Statement::Raw(format!(
+                "size_t {workspace_max_size} = 0;",
+                workspace_max_size = handler.workspace_max_size()
+            )));
 
             self.stmts.push(CudnnOps::Create(*handler).into());
             self.stmts.push(CudnnOps::SetStream(*handler).into());
             for kernel_id in kernels.iter().copied() {
-                self.stmts.push(Statement::Raw(format!("cudnnTensorDescriptor_t {};", kernel_id.input_descriptor())));
-                self.stmts.push(Statement::Raw(format!("cudnnTensorDescriptor_t {};", kernel_id.output_descriptor())));
-                self.stmts.push(Statement::Raw(format!("cudnnFilterDescriptor_t {};", kernel_id.filter_descriptor())));
-                self.stmts.push(Statement::Raw(format!("cudnnConvolutionDescriptor_t {};", kernel_id.convolution_descriptor())));
-                self.stmts.push(Statement::Raw(format!("size_t {};", kernel_id.workspace_size())));
+                self.stmts.push(Statement::Raw(format!(
+                    "cudnnTensorDescriptor_t {};",
+                    kernel_id.input_descriptor()
+                )));
+                self.stmts.push(Statement::Raw(format!(
+                    "cudnnTensorDescriptor_t {};",
+                    kernel_id.output_descriptor()
+                )));
+                self.stmts.push(Statement::Raw(format!(
+                    "cudnnFilterDescriptor_t {};",
+                    kernel_id.filter_descriptor()
+                )));
+                self.stmts.push(Statement::Raw(format!(
+                    "cudnnConvolutionDescriptor_t {};",
+                    kernel_id.convolution_descriptor()
+                )));
+                self.stmts.push(Statement::Raw(format!(
+                    "size_t {};",
+                    kernel_id.workspace_size()
+                )));
 
                 let kernel = &self.schedule.kernels[kernel_id];
-                let input_ty = self.get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?.clone();
-                let weight_ty = self.get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT])?.clone();
+                let input_ty = self
+                    .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
+                    .clone();
+                let weight_ty = self
+                    .get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT])?
+                    .clone();
                 let output_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.clone();
 
                 assert!(input_ty.dims.ndim() == 4);
                 assert!(weight_ty.dims.ndim() == 4);
                 assert!(output_ty.dims.ndim() == 4);
-                assert!(input_ty.is_contiguous() && weight_ty.is_contiguous() && output_ty.is_contiguous());
+                assert!(
+                    input_ty.is_contiguous() &&
+                        weight_ty.is_contiguous() &&
+                        output_ty.is_contiguous()
+                );
                 let input_desc = TensorDescriptor {
                     id: kernel_id,
                     is_input: true,
@@ -470,41 +502,55 @@ impl<'sched> HostCodeGenerator<'sched> {
                     id: kernel_id,
                     is_input: false,
                 };
-                self.stmts.push(CudnnOps::CreateTensorDescriptor(input_desc).into());
-                self.stmts.push(CudnnOps::SetTensor4dDescriptor {
-                    desc: input_desc,
-                    data_type: input_ty.elem_type,
-                    format: CudnnTensorFormat::NCHW,
-                    nbatch: input_ty.dims[0],
-                    channels: input_ty.dims[1],
-                    height: input_ty.dims[2],
-                    width: input_ty.dims[3],
-                }.into());
+                self.stmts
+                    .push(CudnnOps::CreateTensorDescriptor(input_desc).into());
+                self.stmts.push(
+                    CudnnOps::SetTensor4dDescriptor {
+                        desc: input_desc,
+                        data_type: input_ty.elem_type,
+                        format: CudnnTensorFormat::NCHW,
+                        nbatch: input_ty.dims[0],
+                        channels: input_ty.dims[1],
+                        height: input_ty.dims[2],
+                        width: input_ty.dims[3],
+                    }
+                    .into(),
+                );
 
-                self.stmts.push(CudnnOps::CreateTensorDescriptor(TensorDescriptor {
-                    id: kernel_id,
-                    is_input: false,
-                }).into());
-                self.stmts.push(CudnnOps::SetTensor4dDescriptor {
-                    desc: output_desc,
-                    data_type: output_ty.elem_type,
-                    format: CudnnTensorFormat::NCHW,
-                    nbatch: output_ty.dims[0],
-                    channels: output_ty.dims[1],
-                    height: output_ty.dims[2],
-                    width: output_ty.dims[3],
-                }.into());
+                self.stmts.push(
+                    CudnnOps::CreateTensorDescriptor(TensorDescriptor {
+                        id: kernel_id,
+                        is_input: false,
+                    })
+                    .into(),
+                );
+                self.stmts.push(
+                    CudnnOps::SetTensor4dDescriptor {
+                        desc: output_desc,
+                        data_type: output_ty.elem_type,
+                        format: CudnnTensorFormat::NCHW,
+                        nbatch: output_ty.dims[0],
+                        channels: output_ty.dims[1],
+                        height: output_ty.dims[2],
+                        width: output_ty.dims[3],
+                    }
+                    .into(),
+                );
 
-                self.stmts.push(CudnnOps::CreateFilterDescriptor(kernel_id).into());
-                self.stmts.push(CudnnOps::SetFilter4dDescriptor {
-                    id: kernel_id,
-                    data_type: weight_ty.elem_type,
-                    format: CudnnTensorFormat::NCHW,
-                    out_feature_maps: weight_ty.dims[0],
-                    in_feature_maps: weight_ty.dims[1],
-                    height: weight_ty.dims[2],
-                    width: weight_ty.dims[3],
-                }.into());
+                self.stmts
+                    .push(CudnnOps::CreateFilterDescriptor(kernel_id).into());
+                self.stmts.push(
+                    CudnnOps::SetFilter4dDescriptor {
+                        id: kernel_id,
+                        data_type: weight_ty.elem_type,
+                        format: CudnnTensorFormat::NCHW,
+                        out_feature_maps: weight_ty.dims[0],
+                        in_feature_maps: weight_ty.dims[1],
+                        height: weight_ty.dims[2],
+                        width: weight_ty.dims[3],
+                    }
+                    .into(),
+                );
 
                 let conv = match kernel.body {
                     KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
@@ -517,24 +563,31 @@ impl<'sched> HostCodeGenerator<'sched> {
                     ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
                     _ => unimplemented!("Padding type not implemented"),
                 };
-                self.stmts.push(CudnnOps::CreateConvolutionDescriptor(kernel_id).into());
-                self.stmts.push(CudnnOps::SetConvolution2dDescriptor {
-                    id: kernel_id,
-                    ty: weight_ty.elem_type,
-                    pad_h,
-                    pad_w,
-                    stride_h: conv.strides[0],
-                    stride_w: conv.strides[1],
-                    dilation_h: conv.dilations[0],
-                    dilation_w: conv.dilations[1],
-                    mode: CudnnConvolutionMode::Convolution,
-                }.into());
+                self.stmts
+                    .push(CudnnOps::CreateConvolutionDescriptor(kernel_id).into());
+                self.stmts.push(
+                    CudnnOps::SetConvolution2dDescriptor {
+                        id: kernel_id,
+                        ty: weight_ty.elem_type,
+                        pad_h,
+                        pad_w,
+                        stride_h: conv.strides[0],
+                        stride_w: conv.strides[1],
+                        dilation_h: conv.dilations[0],
+                        dilation_w: conv.dilations[1],
+                        mode: CudnnConvolutionMode::Convolution,
+                    }
+                    .into(),
+                );
 
-                self.stmts.push(CudnnOps::GetConvolutionForwardWorkspaceSize {
-                    handler: *handler,
-                    id: kernel_id,
-                    algo: self.conv_algo[&kernel_id],
-                }.into());
+                self.stmts.push(
+                    CudnnOps::GetConvolutionForwardWorkspaceSize {
+                        handler: *handler,
+                        id: kernel_id,
+                        algo: self.conv_algo[&kernel_id],
+                    }
+                    .into(),
+                );
 
                 self.stmts.push(Statement::Raw(format!(
                     "{workspace_size_max} = std::max({workspace_size_max}, {workspace_size});",
