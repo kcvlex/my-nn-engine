@@ -433,7 +433,7 @@ mod test {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-32
     #[test]
     fn conv() -> TestResult {
-        with_cpu_session("conv.onnx", |session| {
+        with_session("conv.onnx", &[Target::CPU, Target::CUDA], |session| {
             // (1 x 1 x 5 x 5)
             let (input0, _) = make_tensor!(
                 f32,

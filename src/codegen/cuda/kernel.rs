@@ -1,3 +1,4 @@
+use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::*;
 use crate::tensor::types::DataType;
 use delegate::delegate;

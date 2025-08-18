@@ -61,23 +61,29 @@ impl SessionCUDA {
         let shared_obj = tmp_dir.path().join("libmodel.so");
 
         let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
-        let include_opt = format!("-I{}", kernel_dir.to_str().unwrap());
-        dbg!(&include_opt);
 
-        let mut cmd = Command::new("nvcc");
-        cmd.args([
+        Command::new("nvcc")
+        .args([
             main_file.to_str().unwrap(),
-            include_opt.as_str(),
+            format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
             "--shared",
             "-o",
             shared_obj.to_str().unwrap(),
+            "-lcudnn",
             "--compiler-options",
             "'-fPIC'",
-        ]);
-        println!("Compiling with command: {:?}", cmd);
+        ])
         // .args(objs.iter().map(|p| p.to_str().unwrap()))
-        cmd.status()
+        .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        
+        dbg!(&tmp_dir);
+        let tmp_dir = if PERSIST {
+            let _ = tmp_dir.into_path();
+            None
+        } else {
+            Some(tmp_dir)
+        };
 
         println!("Compiled");
 
@@ -89,13 +95,6 @@ impl SessionCUDA {
 
         println!("Loaded");
 
-        dbg!(&tmp_dir);
-        let tmp_dir = if PERSIST {
-            let _ = tmp_dir.into_path();
-            None
-        } else {
-            Some(tmp_dir)
-        };
 
         Ok(Self {
             input_ty,
