@@ -140,6 +140,80 @@ pub struct Conv {
     pub strides: OptionalVec<usize>,
 }
 
+#[derive(Debug)]
+struct ConvShape<'a> {
+    kernel_shape: &'a [usize],
+    input_shape: &'a [usize],
+    pad: &'a OptionalVec<(usize, usize)>,
+    dilations: &'a OptionalVec<usize>,
+}
+
+impl ConvShape<'_> {
+    fn padded_input_size(&self, i: usize) -> usize {
+        self.input_shape[i] + self.pad[i].0 + self.pad[i].1
+    }
+
+    // Number of elements between first and last element (inclusive)
+    fn distance_per_conv(&self, i: usize) -> usize {
+        self.dilations[i] * (self.kernel_shape[i] - 1) + 1
+    }
+}
+
+impl Conv {
+    pub fn output_shape(
+        &self,
+        input_shape: &ResolvedTensorDims,
+        weight_shape: &ResolvedTensorDims,
+    ) -> ResolvedTensorDims {
+        // TODO: Check bias
+        // TODO: Check kernel_shape
+
+        assert!(input_shape.ndim() == weight_shape.ndim());
+        let batch_size = input_shape[0];
+        let channels = input_shape[1];
+        let ndim = input_shape.ndim() - 2;
+        let input = &input_shape[2..];
+
+        let feature_map_size = weight_shape[0];
+
+        assert!(feature_map_size % self.groups == 0);
+        assert!(channels == weight_shape[1] * self.groups);
+
+        let kernel_shape = &weight_shape[2..];
+        let default_pad = OptionalVec::new(None, (0, 0));
+        let pad = match self.pad {
+            ConvPad::NotSet(ref pad) => Some(pad),
+            ConvPad::SameUpper | ConvPad::SameLower => None,
+            ConvPad::Valid => Some(&default_pad),
+        };
+
+        let mut dims = Vec::with_capacity(ndim + 2);
+        dims.push(batch_size);
+        dims.push(feature_map_size);
+        let conv_shape = pad.map(|pad| ConvShape {
+            kernel_shape,
+            input_shape: input,
+            pad,
+            dilations: &self.dilations,
+        });
+        for i in 0..ndim {
+            let stride = self.strides[i];
+            let dim = if let Some(ref conv_shape) = &conv_shape {
+                let (q, rem) = num_integer::div_rem(
+                    conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i),
+                    stride,
+                );
+                // assert!(rem == 0);
+                q + 1
+            } else {
+                input[i].div_ceil(stride)
+            };
+            dims.push(dim);
+        }
+        ResolvedTensorDims::new(dims)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gather {
     pub axis: TensorIndex,
@@ -158,6 +232,44 @@ pub struct Pooling {
     pub dilations: OptionalVec<usize>,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+}
+
+impl Pooling {
+    pub fn output_shape(&self, input_shape: &ResolvedTensorDims) -> ResolvedTensorDims {
+        let mut dims = Vec::with_capacity(input_shape.ndim());
+        dims.push(input_shape[0]);
+        dims.push(input_shape[1]);
+        let input = &input_shape[2..];
+        let default_pad = OptionalVec::new(None, (0, 0));
+        let pad = match self.pad {
+            ConvPad::NotSet(ref pad) => pad,
+            ConvPad::Valid => &default_pad,
+            // deprecated attributes
+            ConvPad::SameUpper | ConvPad::SameLower => unimplemented!(),
+        };
+        let conv_shape = ConvShape {
+            kernel_shape: &self.kernel_shape[..],
+            input_shape: input,
+            pad,
+            dilations: &self.dilations,
+        };
+        for i in 0..input.len() {
+            let stride = self.strides[i];
+            let num = conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i);
+            let dim = if !self.ceil_mode {
+                // Floor div
+                num / stride + 1
+            } else {
+                // TODO: Correct?
+                //
+                // https://onnx.ai/onnx/operators/onnx__MaxPool.html#summary
+                //  > Sliding windows that would start in the right padded region are ignored.
+                num.div_ceil(stride) + 1
+            };
+            dims.push(dim);
+        }
+        ResolvedTensorDims::new(dims)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -179,7 +179,7 @@ impl Session {
 #[cfg(test)]
 mod test {
     use super::*;
-    
+
     use crate::session::Session;
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;

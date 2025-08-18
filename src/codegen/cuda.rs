@@ -581,76 +581,77 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         // Launch the kernel
         match kernel.body {
-            KernelBody::SingleKernel(SingleKernel {
-                op: Operator::MaxPool(ref pool),
-            }) => {
-                if pool.kernel_shape.ndim() != 2 {
-                    unimplemented!("Only 2D max pooling is supported");
-                }
-
-                assert!(kernel.inputs.len() == 1);
-                assert!(kernel.outputs.len() == 1);
-                let out = self.device_identifier(kernel.outputs[0])?;
-                let in_ = self.device_identifier(kernel.inputs[0])?;
-                let input_ty = self
-                    .schedule
-                    .get_resolved_tensor_type(kernel.inputs[0])
-                    .ok_or(BuildError::UnresolvedType(kernel.inputs[0]))?;
-                let output_ty = self
-                    .schedule
-                    .get_resolved_tensor_type(kernel.outputs[0])
-                    .ok_or(BuildError::UnresolvedType(kernel.outputs[0]))?;
-                assert!(input_ty.dims.ndim() == 4 && output_ty.dims.ndim() == 4);
-                assert!(input_ty.is_contiguous() && output_ty.is_contiguous());
-                assert!(input_ty.dims[0] == output_ty.dims[0]);
-                assert!(input_ty.dims[1] == output_ty.dims[1]);
-                let nbatch = input_ty.dims[0].to_literal();
-                let channels = input_ty.dims[1].to_literal();
-                let height = input_ty.dims[2].to_literal();
-                let width = input_ty.dims[3].to_literal();
-                let o_height = output_ty.dims[2].to_literal();
-                let o_width = output_ty.dims[3].to_literal();
-                let kernel_h = pool.kernel_shape[0].to_literal();
-                let kernel_w = pool.kernel_shape[1].to_literal();
-                let stride_h = pool.strides[0].to_literal();
-                let stride_w = pool.strides[1].to_literal();
-                let (pad_h, pad_w) = match pool.pad {
-                    ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
-                    _ => unimplemented!("Padding type not implemented"),
-                };
-                let pad_h = pad_h.to_literal();
-                let pad_w = pad_w.to_literal();
-                let maxpool = kernel::MaxPoolKernel {
-                    ty: input_ty.elem_type,
-                    out,
-                    in_,
-                    nbatch,
-                    channels,
-                    height,
-                    width,
-                    o_height,
-                    o_width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                };
-                let output_size = output_ty.dims.size();
-                let block_size = DEFAULT_BLOCK_SIZE.to_literal();
-                let grid_size = output_size.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
-                self.stmts.push(
-                    kernel::LaunchKernel {
-                        cuda_kernel: kernel::CUDAKernel::MaxPoolKernel(maxpool),
-                        grid_size,
-                        block_size,
-                        shared_mem_bytes: None,
-                        stream_id: kernel_stream,
+            KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+                Operator::MaxPool(ref pool) => {
+                    if pool.kernel_shape.ndim() != 2 {
+                        unimplemented!("Only 2D max pooling is supported");
                     }
-                    .into(),
-                );
-            }
+
+                    assert!(kernel.inputs.len() == 1);
+                    assert!(kernel.outputs.len() == 1);
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ = self.device_identifier(kernel.inputs[0])?;
+                    let input_ty = self
+                        .schedule
+                        .get_resolved_tensor_type(kernel.inputs[0])
+                        .ok_or(BuildError::UnresolvedType(kernel.inputs[0]))?;
+                    let output_ty = self
+                        .schedule
+                        .get_resolved_tensor_type(kernel.outputs[0])
+                        .ok_or(BuildError::UnresolvedType(kernel.outputs[0]))?;
+                    assert!(input_ty.dims.ndim() == 4 && output_ty.dims.ndim() == 4);
+                    assert!(input_ty.is_contiguous() && output_ty.is_contiguous());
+                    assert!(input_ty.dims[0] == output_ty.dims[0]);
+                    assert!(input_ty.dims[1] == output_ty.dims[1]);
+                    let nbatch = input_ty.dims[0].to_literal();
+                    let channels = input_ty.dims[1].to_literal();
+                    let height = input_ty.dims[2].to_literal();
+                    let width = input_ty.dims[3].to_literal();
+                    let o_height = output_ty.dims[2].to_literal();
+                    let o_width = output_ty.dims[3].to_literal();
+                    let kernel_h = pool.kernel_shape[0].to_literal();
+                    let kernel_w = pool.kernel_shape[1].to_literal();
+                    let stride_h = pool.strides[0].to_literal();
+                    let stride_w = pool.strides[1].to_literal();
+                    let (pad_h, pad_w) = match pool.pad {
+                        ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
+                        _ => unimplemented!("Padding type not implemented"),
+                    };
+                    let pad_h = pad_h.to_literal();
+                    let pad_w = pad_w.to_literal();
+                    let maxpool = kernel::MaxPoolKernel {
+                        ty: input_ty.elem_type,
+                        out,
+                        in_,
+                        nbatch,
+                        channels,
+                        height,
+                        width,
+                        o_height,
+                        o_width,
+                        kernel_h,
+                        kernel_w,
+                        stride_h,
+                        stride_w,
+                        pad_h,
+                        pad_w,
+                    };
+                    let output_size = output_ty.dims.size();
+                    let block_size = DEFAULT_BLOCK_SIZE.to_literal();
+                    let grid_size = output_size.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel: kernel::CUDAKernel::MaxPoolKernel(maxpool),
+                            grid_size,
+                            block_size,
+                            shared_mem_bytes: None,
+                            stream_id: kernel_stream,
+                        }
+                        .into(),
+                    );
+                }
+                _ => unimplemented!("Kernel body not implemented"),
+            },
             _ => unimplemented!("Kernel body not implemented"),
         }
 
@@ -715,15 +716,12 @@ impl HostCode {
 
 #[cfg(test)]
 mod test {
-    
 
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
     use crate::options::*;
     use crate::schedule::Schedule;
-    
-    
 
     #[ignore]
     #[test]
