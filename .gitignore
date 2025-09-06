@@ -10,4 +10,3 @@
 models/*.onnx
 download
 venv
-model.onnx

@@ -291,6 +291,31 @@ mod test {
         Ok(())
     }
 
+    fn with_session_and_tensors<P, F>(dir: P, targets: &[Target], f: F) -> TestResult
+    where
+        P: AsRef<std::path::Path>,
+        F: Fn(Session, (Tensor, Tensor)) -> TestResult,
+    {
+        use std::path::PathBuf;
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models/test/operator")
+            .join(dir);
+        let input = Tensor::load_from_path(dir.join("input.pb"))
+            .map_err(|e| SessionError::OtherError(format!("Failed to load input: {:?}", e)))?;
+        let output = Tensor::load_from_path(dir.join("output.pb"))
+            .map_err(|e| SessionError::OtherError(format!("Failed to load output: {:?}", e)))?;
+
+        for target in targets.iter().copied() {
+            let opt = match target {
+                Target::CPU => Options::builder().target(target).omp_threshold(10).build(),
+                Target::CUDA => Options::builder().target(target).build(),
+            };
+            let session = Session::new(dir.join("model.onnx"), None, &opt)?;
+            f(session, (input.clone(), output.clone()))?;
+        }
+        Ok(())
+    }
+
     fn with_cpu_session<P, F>(p: P, f: F) -> TestResult
     where
         P: AsRef<std::path::Path>,
@@ -645,6 +670,15 @@ mod test {
                 [[[12.0, 27.0, 24.0], [63.0, 108.0, 81.0], [72.0, 117.0, 84.0],]],
             )?;
             assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn conv_bias() -> TestResult {
+        with_session_and_tensors("conv_bias", &[Target::CPU], |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1e-4);
             Ok(())
         })
     }
