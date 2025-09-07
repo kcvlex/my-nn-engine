@@ -152,7 +152,7 @@ impl Schedule {
                 Operator::Input(v) => v,
                 _ => unreachable!(),
             })
-            .chain(graph.initializer.keys().copied())
+            //.chain(graph.initializer.keys().copied())
             .collect::<Vec<_>>();
         let outputs = graph
             .outputs

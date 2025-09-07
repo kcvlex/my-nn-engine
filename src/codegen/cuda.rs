@@ -26,6 +26,7 @@ pub enum BuildError {
     NoHostVariable(ValueId),
     NoDeviceVariable(ChunkId),
     EventNotFound(ValueId),
+    ActivationNotFound(KernelId),
 }
 
 impl DataType {
@@ -43,6 +44,7 @@ impl DataType {
 enum MemSize {
     Single(SingleMemSize),
     Chunk(ChunkMemSize),
+    Raw(Expr),
 }
 
 impl MemSize {
@@ -50,6 +52,7 @@ impl MemSize {
         to match self {
             MemSize::Single(size) => size,
             MemSize::Chunk(size) => size,
+            MemSize::Raw(expr) => expr,
         } {
             fn fragment(&self) -> String;
         }
@@ -218,6 +221,7 @@ pub struct HostCodeGenerator<'sched> {
 
     cudnn_handlers: IndexMap<StreamId, (CudnnHandler, Vec<KernelId>)>,
     conv_algo: HashMap<KernelId, CudnnConvolutionFwdAlgo>,
+    activation: HashMap<KernelId, CudnnActivationMode>,
 }
 
 pub struct HostCode {
@@ -322,6 +326,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             event_slot: IdSlot::new(EventId),
             cudnn_handlers: IndexMap::new(),
             conv_algo: HashMap::new(),
+            activation: HashMap::new(),
         }
     }
 
@@ -448,8 +453,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                 "void *{workspace_ptr};",
                 workspace_ptr = handler.workspace_ptr()
             )));
+            // TODO: Is it OK to initialize with 0?
             self.stmts.push(Statement::Raw(format!(
-                "size_t {workspace_max_size} = 0;",
+                "size_t {workspace_max_size} = 1;",
                 workspace_max_size = handler.workspace_max_size()
             )));
 
@@ -496,11 +502,11 @@ impl<'sched> HostCodeGenerator<'sched> {
                 );
                 let input_desc = TensorDescriptor {
                     id: kernel_id,
-                    is_input: true,
+                    role: TensorRole::Input,
                 };
                 let output_desc = TensorDescriptor {
                     id: kernel_id,
-                    is_input: false,
+                    role: TensorRole::Output,
                 };
                 self.stmts
                     .push(CudnnOps::CreateTensorDescriptor(input_desc).into());
@@ -517,13 +523,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                     .into(),
                 );
 
-                self.stmts.push(
-                    CudnnOps::CreateTensorDescriptor(TensorDescriptor {
-                        id: kernel_id,
-                        is_input: false,
-                    })
-                    .into(),
-                );
+                self.stmts
+                    .push(CudnnOps::CreateTensorDescriptor(output_desc).into());
                 self.stmts.push(
                     CudnnOps::SetTensor4dDescriptor {
                         desc: output_desc,
@@ -552,6 +553,55 @@ impl<'sched> HostCodeGenerator<'sched> {
                     .into(),
                 );
 
+                if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
+                    let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
+                    assert!(bias_ty.dims.ndim() == 1);
+                    assert!(bias_ty.is_contiguous());
+                    self.stmts.push(Statement::Raw(format!(
+                        "cudnnTensorDescriptor_t {};",
+                        kernel_id.bias_descriptor()
+                    )));
+                    let bias_desc = TensorDescriptor {
+                        id: kernel_id,
+                        role: TensorRole::Bias,
+                    };
+                    self.stmts
+                        .push(CudnnOps::CreateTensorDescriptor(bias_desc).into());
+                    self.stmts.push(
+                        CudnnOps::SetTensor4dDescriptor {
+                            desc: bias_desc,
+                            data_type: bias_ty.elem_type,
+                            format: CudnnTensorFormat::NCHW,
+                            nbatch: 1,
+                            channels: bias_ty.dims[0],
+                            height: 1,
+                            width: 1,
+                        }
+                        .into(),
+                    );
+
+                    let activation = self
+                        .activation
+                        .get(&kernel_id)
+                        .copied()
+                        .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
+                    self.stmts.push(Statement::Raw(format!(
+                        "cudnnActivationDescriptor_t {};",
+                        kernel_id.activation_descriptor()
+                    )));
+                    self.stmts
+                        .push(CudnnOps::CreateActivationDescriptor(kernel_id).into());
+                    self.stmts.push(
+                        CudnnOps::SetActivationDescriptor {
+                            id: kernel_id,
+                            mode: activation,
+                            nan_prop: CudnnNanPropagation::NotPropagateNan,
+                            coef: 0.0, // only used for clipped ReLU
+                        }
+                        .into(),
+                    );
+                }
+
                 let conv = match kernel.body {
                     KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
                         Operator::Conv(ref conv) => conv,
@@ -575,7 +625,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                         stride_w: conv.strides[1],
                         dilation_h: conv.dilations[0],
                         dilation_w: conv.dilations[1],
-                        mode: CudnnConvolutionMode::Convolution,
+                        mode: CudnnConvolutionMode::CrossCorrelation,
                     }
                     .into(),
                 );
@@ -595,6 +645,14 @@ impl<'sched> HostCodeGenerator<'sched> {
                     workspace_size = kernel_id.workspace_size(),
                 )));
             }
+
+            self.stmts.push(
+                Malloc {
+                    dst: Expr::Identifier(handler.workspace_ptr()),
+                    mem_size: MemSize::Raw(Expr::Identifier(handler.workspace_max_size())),
+                }
+                .into(),
+            );
         }
 
         Ok(self.move_statements())
@@ -773,36 +831,73 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let output = self.device_identifier(kernel.outputs[0])?;
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
 
-                    let alpha = format!("alpha_{}", kernel_id.index());
-                    let beta = format!("beta_{}", kernel_id.index());
-                    self.stmts.push(Statement::Raw(format!(
-                        "const {ty} {alpha} = 1.0f;",
-                        ty = input_ty.elem_type.fragment(),
-                        alpha = alpha
-                    )));
-                    self.stmts.push(Statement::Raw(format!(
-                        "const {ty} {beta} = 0.0f;",
-                        ty = input_ty.elem_type.fragment(),
-                        beta = beta
-                    )));
+                    if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
+                        let bias = self.device_identifier(bias)?;
+                        let alpha1 = format!("alpha1_{}", kernel_id.index());
+                        let alpha2 = format!("alpha2_{}", kernel_id.index());
+                        self.stmts.push(Statement::Raw(format!(
+                            "const {ty} {alpha1} = 1.0f;",
+                            ty = input_ty.elem_type.fragment(),
+                            alpha1 = alpha1
+                        )));
+                        self.stmts.push(Statement::Raw(format!(
+                            "const {ty} {alpha2} = 0.0f;",
+                            ty = input_ty.elem_type.fragment(),
+                            alpha2 = alpha2
+                        )));
 
-                    let alpha = alpha.to_identifier();
-                    let beta = beta.to_identifier();
-                    let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
-                    self.conv_algo.insert(kernel_id, algo);
-                    self.stmts.push(
-                        CudnnConvForward {
-                            id: kernel_id,
-                            handler: cudnn_handler,
-                            alpha,
-                            in_: input,
-                            weights,
-                            algo,
-                            beta,
-                            out: output,
-                        }
-                        .into(),
-                    );
+                        let alpha1 = alpha1.to_identifier();
+                        let alpha2 = alpha2.to_identifier();
+                        let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
+                        self.conv_algo.insert(kernel_id, algo);
+                        self.activation
+                            .insert(kernel_id, CudnnActivationMode::Identity);
+                        self.stmts.push(
+                            CudnnConvBiasActivationForward {
+                                id: kernel_id,
+                                handler: cudnn_handler,
+                                alpha1,
+                                in_: input,
+                                weights,
+                                bias,
+                                algo,
+                                alpha2,
+                                out: output,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        let alpha = format!("alpha_{}", kernel_id.index());
+                        let beta = format!("beta_{}", kernel_id.index());
+                        self.stmts.push(Statement::Raw(format!(
+                            "const {ty} {alpha} = 1.0f;",
+                            ty = input_ty.elem_type.fragment(),
+                            alpha = alpha
+                        )));
+                        self.stmts.push(Statement::Raw(format!(
+                            "const {ty} {beta} = 0.0f;",
+                            ty = input_ty.elem_type.fragment(),
+                            beta = beta
+                        )));
+
+                        let alpha = alpha.to_identifier();
+                        let beta = beta.to_identifier();
+                        let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
+                        self.conv_algo.insert(kernel_id, algo);
+                        self.stmts.push(
+                            CudnnConvForward {
+                                id: kernel_id,
+                                handler: cudnn_handler,
+                                alpha,
+                                in_: input,
+                                weights,
+                                algo,
+                                beta,
+                                out: output,
+                            }
+                            .into(),
+                        );
+                    }
                 }
 
                 Operator::MaxPool(ref pool) => {

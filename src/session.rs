@@ -676,11 +676,15 @@ mod test {
 
     #[test]
     fn conv_bias() -> TestResult {
-        with_session_and_tensors("conv_bias", &[Target::CPU], |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1e-4);
-            Ok(())
-        })
+        with_session_and_tensors(
+            "conv_bias",
+            &[Target::CPU, Target::CUDA],
+            |session, (input, output)| {
+                let outputs = session.run(&[input])?;
+                assert_eq_epsilon!(outputs[0], output, 1e-4);
+                Ok(())
+            },
+        )
     }
 
     #[test]
