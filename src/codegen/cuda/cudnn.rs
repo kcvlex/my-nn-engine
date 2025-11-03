@@ -99,42 +99,44 @@ pub enum CudnnNanPropagation {
 }
 
 pub trait CudnnIdentifier {
-    fn input_descriptor(&self) -> String;
-    fn output_descriptor(&self) -> String;
-    fn filter_descriptor(&self) -> String;
-    fn bias_descriptor(&self) -> String;
-    fn convolution_descriptor(&self) -> String;
-    fn activation_descriptor(&self) -> String;
-    fn workspace_size(&self) -> String;
-}
+    fn setting(&self) -> String;
 
-impl CudnnIdentifier for KernelId {
     fn input_descriptor(&self) -> String {
-        format!("input_desc{}", self.index())
+        format!("{}.x_desc", self.setting())
     }
 
     fn output_descriptor(&self) -> String {
-        format!("output_desc{}", self.index())
+        format!("{}.y_desc", self.setting())
     }
 
     fn filter_descriptor(&self) -> String {
-        format!("filter_desc{}", self.index())
+        format!("{}.w_desc", self.setting())
     }
 
     fn bias_descriptor(&self) -> String {
-        format!("bias_desc{}", self.index())
+        format!("{}.bias_desc", self.setting())
     }
 
     fn convolution_descriptor(&self) -> String {
-        format!("conv_desc{}", self.index())
+        format!("{}.conv_desc", self.setting())
     }
 
     fn activation_descriptor(&self) -> String {
-        format!("activation_desc{}", self.index())
+        format!("{}.activation_desc", self.setting())
     }
 
     fn workspace_size(&self) -> String {
-        format!("workspace_size{}", self.index())
+        format!("{}.workspace_size_in_bytes", self.setting())
+    }
+
+    fn fwd_algo(&self) -> String {
+        format!("{}.algo", self.setting())
+    }
+}
+
+impl CudnnIdentifier for KernelId {
+    fn setting(&self) -> String {
+        format!("cudnn_setting{}", self.index())
     }
 }
 
@@ -171,16 +173,20 @@ impl CudnnHandler {
         Self { stream_id }
     }
 
+    pub fn ctx(&self) -> String {
+        format!("cudnn_handler_ctx{}", self.stream_id.0)
+    }
+
     pub fn handler(&self) -> String {
-        format!("cudnn_handler{}", self.stream_id.0)
+        format!("{}.handle", self.ctx())
     }
 
     pub fn workspace_ptr(&self) -> String {
-        format!("workspace_ptr{}", self.stream_id.0)
+        format!("{}.workspace", self.ctx())
     }
 
     pub fn workspace_max_size(&self) -> String {
-        format!("workspace_max_size{}", self.stream_id.0)
+        format!("{}.workspace_max_size_in_bytes", self.ctx())
     }
 }
 
@@ -234,7 +240,6 @@ pub enum CudnnOps {
     GetConvolutionForwardWorkspaceSize {
         handler: CudnnHandler,
         id: KernelId,
-        algo: CudnnConvolutionFwdAlgo,
     },
 }
 
@@ -344,7 +349,7 @@ impl CudnnOps {
                     stream = handler.stream_id.to_identifier().fragment()
                 )
             }
-            Self::GetConvolutionForwardWorkspaceSize { handler, id, algo } => {
+            Self::GetConvolutionForwardWorkspaceSize { handler, id } => {
                 format!(
                     "cudnnGetConvolutionForwardWorkspaceSize({handler}, {input_desc}, {filter_desc}, {conv_desc}, {output_desc}, {algo}, &{workspace_size})",
                     handler = handler.handler(),
@@ -352,8 +357,8 @@ impl CudnnOps {
                     filter_desc = id.filter_descriptor(),
                     conv_desc = id.convolution_descriptor(),
                     output_desc = id.output_descriptor(),
-                    algo = algo.as_ref(),
-                    workspace_size = id.workspace_size()
+                    algo = id.fwd_algo(),
+                    workspace_size = id.workspace_size(),
                 )
             }
         }
@@ -458,3 +463,7 @@ macro_rules! impl_into_stmt {
 impl_into_stmt!(CudnnOps);
 impl_into_stmt!(CudnnConvForward);
 impl_into_stmt!(CudnnConvBiasActivationForward);
+
+pub mod identifiers {
+    pub const CUDNN_SETTING_ARRAY: &str = "cudnn_settings";
+}

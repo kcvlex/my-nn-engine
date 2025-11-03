@@ -220,7 +220,6 @@ pub struct HostCodeGenerator<'sched> {
     event_slot: IdSlot<EventId, fn(usize) -> EventId>,
 
     cudnn_handlers: IndexMap<StreamId, (CudnnHandler, Vec<KernelId>)>,
-    conv_algo: HashMap<KernelId, CudnnConvolutionFwdAlgo>,
     activation: HashMap<KernelId, CudnnActivationMode>,
 }
 
@@ -325,7 +324,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .collect(),
             event_slot: IdSlot::new(EventId),
             cudnn_handlers: IndexMap::new(),
-            conv_algo: HashMap::new(),
             activation: HashMap::new(),
         }
     }
@@ -446,41 +444,16 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         for (_, (handler, kernels)) in self.cudnn_handlers.iter() {
             self.stmts.push(Statement::Raw(format!(
-                "cudnnHandle_t {cudnn_handler};",
-                cudnn_handler = handler.handler()
-            )));
-            self.stmts.push(Statement::Raw(format!(
-                "void *{workspace_ptr};",
-                workspace_ptr = handler.workspace_ptr()
-            )));
-            // TODO: Is it OK to initialize with 0?
-            self.stmts.push(Statement::Raw(format!(
-                "size_t {workspace_max_size} = 1;",
-                workspace_max_size = handler.workspace_max_size()
+                "CudnnHandlerContext {ctx};",
+                ctx = handler.ctx()
             )));
 
             self.stmts.push(CudnnOps::Create(*handler).into());
             self.stmts.push(CudnnOps::SetStream(*handler).into());
             for kernel_id in kernels.iter().copied() {
                 self.stmts.push(Statement::Raw(format!(
-                    "cudnnTensorDescriptor_t {};",
-                    kernel_id.input_descriptor()
-                )));
-                self.stmts.push(Statement::Raw(format!(
-                    "cudnnTensorDescriptor_t {};",
-                    kernel_id.output_descriptor()
-                )));
-                self.stmts.push(Statement::Raw(format!(
-                    "cudnnFilterDescriptor_t {};",
-                    kernel_id.filter_descriptor()
-                )));
-                self.stmts.push(Statement::Raw(format!(
-                    "cudnnConvolutionDescriptor_t {};",
-                    kernel_id.convolution_descriptor()
-                )));
-                self.stmts.push(Statement::Raw(format!(
-                    "size_t {};",
-                    kernel_id.workspace_size()
+                    "CudnnConvSetting {setting};",
+                    setting = kernel_id.setting()
                 )));
 
                 let kernel = &self.schedule.kernels[kernel_id];
@@ -557,10 +530,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
                     assert!(bias_ty.dims.ndim() == 1);
                     assert!(bias_ty.is_contiguous());
-                    self.stmts.push(Statement::Raw(format!(
-                        "cudnnTensorDescriptor_t {};",
-                        kernel_id.bias_descriptor()
-                    )));
+                    // self.stmts.push(Statement::Raw(format!(
+                    //     "cudnnTensorDescriptor_t {};",
+                    //     kernel_id.bias_descriptor()
+                    // )));
                     let bias_desc = TensorDescriptor {
                         id: kernel_id,
                         role: TensorRole::Bias,
@@ -585,10 +558,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .get(&kernel_id)
                         .copied()
                         .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
-                    self.stmts.push(Statement::Raw(format!(
-                        "cudnnActivationDescriptor_t {};",
-                        kernel_id.activation_descriptor()
-                    )));
+                    // self.stmts.push(Statement::Raw(format!(
+                    //     "cudnnActivationDescriptor_t {};",
+                    //     kernel_id.activation_descriptor()
+                    // )));
                     self.stmts
                         .push(CudnnOps::CreateActivationDescriptor(kernel_id).into());
                     self.stmts.push(
@@ -634,7 +607,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                     CudnnOps::GetConvolutionForwardWorkspaceSize {
                         handler: *handler,
                         id: kernel_id,
-                        algo: self.conv_algo[&kernel_id],
                     }
                     .into(),
                 );
@@ -830,73 +802,106 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let weights = self.device_identifier(kernel.inputs[args::CONV_WEIGHT])?;
                     let output = self.device_identifier(kernel.outputs[0])?;
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
+                    let template_ty = input_ty.elem_type.fragment();
 
+                    self.stmts.push(Statement::Raw(format!(
+                        "{setting}.x = {input};",
+                        setting = kernel_id.setting(),
+                        input = input.fragment(),
+                    )));
+                    self.stmts.push(Statement::Raw(format!(
+                        "{setting}.w = {weights};",
+                        setting = kernel_id.setting(),
+                        weights = weights.fragment(),
+                    )));
+                    self.stmts.push(Statement::Raw(format!(
+                        "{setting}.y = {output};",
+                        setting = kernel_id.setting(),
+                        output = output.fragment(),
+                    )));
                     if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
-                        let bias = self.device_identifier(bias)?;
-                        let alpha1 = format!("alpha1_{}", kernel_id.index());
-                        let alpha2 = format!("alpha2_{}", kernel_id.index());
-                        self.stmts.push(Statement::Raw(format!(
-                            "const {ty} {alpha1} = 1.0f;",
-                            ty = input_ty.elem_type.fragment(),
-                            alpha1 = alpha1
-                        )));
-                        self.stmts.push(Statement::Raw(format!(
-                            "const {ty} {alpha2} = 0.0f;",
-                            ty = input_ty.elem_type.fragment(),
-                            alpha2 = alpha2
-                        )));
-
-                        let alpha1 = alpha1.to_identifier();
-                        let alpha2 = alpha2.to_identifier();
-                        let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
-                        self.conv_algo.insert(kernel_id, algo);
                         self.activation
                             .insert(kernel_id, CudnnActivationMode::Identity);
-                        self.stmts.push(
-                            CudnnConvBiasActivationForward {
-                                id: kernel_id,
-                                handler: cudnn_handler,
-                                alpha1,
-                                in_: input,
-                                weights,
-                                bias,
-                                algo,
-                                alpha2,
-                                out: output,
-                            }
-                            .into(),
-                        );
-                    } else {
-                        let alpha = format!("alpha_{}", kernel_id.index());
-                        let beta = format!("beta_{}", kernel_id.index());
                         self.stmts.push(Statement::Raw(format!(
-                            "const {ty} {alpha} = 1.0f;",
-                            ty = input_ty.elem_type.fragment(),
-                            alpha = alpha
+                            "{setting}.bias = {bias};",
+                            setting = kernel_id.setting(),
+                            bias = self.device_identifier(bias)?.fragment(),
                         )));
                         self.stmts.push(Statement::Raw(format!(
-                            "const {ty} {beta} = 0.0f;",
-                            ty = input_ty.elem_type.fragment(),
-                            beta = beta
+                            "{setting}.call_conv_bias_activation_forward<{ty}>(&{ctx});",
+                            setting = kernel_id.setting(),
+                            ty = template_ty,
+                            ctx = cudnn_handler.ctx()
                         )));
+                        // let bias = self.device_identifier(bias)?;
+                        // let alpha1 = format!("alpha1_{}", kernel_id.index());
+                        // let alpha2 = format!("alpha2_{}", kernel_id.index());
+                        // self.stmts.push(Statement::Raw(format!(
+                        //     "const {ty} {alpha1} = 1.0f;",
+                        //     ty = input_ty.elem_type.fragment(),
+                        //     alpha1 = alpha1
+                        // )));
+                        // self.stmts.push(Statement::Raw(format!(
+                        //     "const {ty} {alpha2} = 0.0f;",
+                        //     ty = input_ty.elem_type.fragment(),
+                        //     alpha2 = alpha2
+                        // )));
 
-                        let alpha = alpha.to_identifier();
-                        let beta = beta.to_identifier();
-                        let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
-                        self.conv_algo.insert(kernel_id, algo);
-                        self.stmts.push(
-                            CudnnConvForward {
-                                id: kernel_id,
-                                handler: cudnn_handler,
-                                alpha,
-                                in_: input,
-                                weights,
-                                algo,
-                                beta,
-                                out: output,
-                            }
-                            .into(),
-                        );
+                        // let alpha1 = alpha1.to_identifier();
+                        // let alpha2 = alpha2.to_identifier();
+                        // let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
+                        // self.conv_algo.insert(kernel_id, algo);
+                        // self.stmts.push(
+                        //     CudnnConvBiasActivationForward {
+                        //         id: kernel_id,
+                        //         handler: cudnn_handler,
+                        //         alpha1,
+                        //         in_: input,
+                        //         weights,
+                        //         bias,
+                        //         algo,
+                        //         alpha2,
+                        //         out: output,
+                        //     }
+                        //     .into(),
+                        // );
+                    } else {
+                        self.stmts.push(Statement::Raw(format!(
+                            "{setting}.call_conv_forward<{ty}>(&{ctx});",
+                            setting = kernel_id.setting(),
+                            ty = template_ty,
+                            ctx = cudnn_handler.ctx()
+                        )));
+                        // let alpha = format!("alpha_{}", kernel_id.index());
+                        // let beta = format!("beta_{}", kernel_id.index());
+                        // self.stmts.push(Statement::Raw(format!(
+                        //     "const {ty} {alpha} = 1.0f;",
+                        //     ty = input_ty.elem_type.fragment(),
+                        //     alpha = alpha
+                        // )));
+                        // self.stmts.push(Statement::Raw(format!(
+                        //     "const {ty} {beta} = 0.0f;",
+                        //     ty = input_ty.elem_type.fragment(),
+                        //     beta = beta
+                        // )));
+
+                        // let alpha = alpha.to_identifier();
+                        // let beta = beta.to_identifier();
+                        // let algo = CudnnConvolutionFwdAlgo::ImplicitPrecompGemm;
+                        // self.conv_algo.insert(kernel_id, algo);
+                        // self.stmts.push(
+                        //     CudnnConvForward {
+                        //         id: kernel_id,
+                        //         handler: cudnn_handler,
+                        //         alpha,
+                        //         in_: input,
+                        //         weights,
+                        //         algo,
+                        //         beta,
+                        //         out: output,
+                        //     }
+                        //     .into(),
+                        // );
                     }
                 }
 
@@ -1004,7 +1009,13 @@ impl HostCode {
         for h in ["algorithm", "limits"] {
             writer.write_all(format!("#include <{}>\n", h).as_bytes())?;
         }
-        for h in ["common.h", "cuda.h", "cudnn.h", "pool.cu"] {
+        for h in [
+            "common.h",
+            "cuda.h",
+            "cudnn.h",
+            "pool.cu",
+            "cudnn_setting.h",
+        ] {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
         }
 
