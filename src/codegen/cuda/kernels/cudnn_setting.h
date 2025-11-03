@@ -56,6 +56,8 @@ struct CudnnConvSetting {
     cudnnStatus_t call_conv_bias_activation_forward(CudnnHandlerContext *ctx) {
         Float alpha1 = static_cast<Float>(alpha_);
         Float alpha2 = static_cast<Float>(alpha2_);
+
+        // y = act (alpha1 * conv(x) + alpha2 * z + bias)
         return cudnnConvolutionBiasActivationForward(
             ctx->handle,
             &alpha1,

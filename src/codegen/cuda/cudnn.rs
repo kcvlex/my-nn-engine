@@ -9,16 +9,12 @@ use strum_macros::AsRefStr;
 #[derive(From)]
 pub enum CudnnApi {
     CudnnOps(CudnnOps),
-    CudnnConvForward(CudnnConvForward),
-    CudnnConvBiasActivationForward(CudnnConvBiasActivationForward),
 }
 
 impl CudnnApi {
     delegate! {
         to match self {
             CudnnApi::CudnnOps(cudnn_ops) => cudnn_ops,
-            CudnnApi::CudnnConvForward(cudnn_conv_fwd) => cudnn_conv_fwd,
-            CudnnApi::CudnnConvBiasActivationForward(cudnn_conv_bias_act_fwd) => cudnn_conv_bias_act_fwd,
         } {
             pub fn fragment(&self) -> String;
         }
@@ -55,12 +51,6 @@ pub enum CudnnTensorFormat {
 
     #[strum(serialize = "CUDNN_TENSOR_NHWC")]
     NHWC,
-}
-
-#[derive(AsRefStr, Clone, Copy)]
-pub enum CudnnConvolutionFwdAlgo {
-    #[strum(serialize = "CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM")]
-    ImplicitPrecompGemm,
 }
 
 #[allow(dead_code)]
@@ -164,11 +154,11 @@ impl TensorDescriptor {
 }
 
 #[derive(Clone, Copy)]
-pub struct CudnnHandler {
+pub struct CudnnContext {
     pub stream_id: StreamId,
 }
 
-impl CudnnHandler {
+impl CudnnContext {
     pub fn new(stream_id: StreamId) -> Self {
         Self { stream_id }
     }
@@ -192,7 +182,7 @@ impl CudnnHandler {
 
 // TODO: Bias
 pub enum CudnnOps {
-    Create(CudnnHandler),
+    Create(CudnnContext),
     CreateTensorDescriptor(TensorDescriptor),
     CreateFilterDescriptor(KernelId),
     CreateConvolutionDescriptor(KernelId),
@@ -235,10 +225,10 @@ pub enum CudnnOps {
         // ceiling for clipped RELU, alpha for ELU (copied from cudnn_ops.h)
         coef: f64,
     },
-    SetStream(CudnnHandler),
+    SetStream(CudnnContext),
 
     GetConvolutionForwardWorkspaceSize {
-        handler: CudnnHandler,
+        handler: CudnnContext,
         id: KernelId,
     },
 }
@@ -365,91 +355,6 @@ impl CudnnOps {
     }
 }
 
-pub struct CudnnConvForward {
-    pub id: KernelId,
-
-    pub handler: CudnnHandler,
-    pub alpha: Expr,
-    pub in_: Expr,
-    pub weights: Expr,
-    pub algo: CudnnConvolutionFwdAlgo,
-    pub beta: Expr,
-    pub out: Expr,
-}
-
-impl CudnnConvForward {
-    pub fn fragment(&self) -> String {
-        assert!(!matches!(self.alpha, Expr::Literal(_)));
-        assert!(!matches!(self.beta, Expr::Literal(_)));
-        let args = vec![
-            self.handler.handler(),
-            self.alpha.ref_fragment(),
-            self.id.input_descriptor(),
-            self.in_.fragment(),
-            self.id.filter_descriptor(),
-            self.weights.fragment(),
-            self.id.convolution_descriptor(),
-            self.algo.as_ref().to_string(),
-            self.handler.workspace_ptr(),
-            self.id.workspace_size(),
-            self.beta.ref_fragment(),
-            self.id.output_descriptor(),
-            self.out.fragment(),
-        ];
-        format!("cudnnConvolutionForward({})", args.join(", "))
-    }
-}
-
-pub struct CudnnConvBiasActivationForward {
-    pub id: KernelId,
-
-    pub handler: CudnnHandler,
-    pub alpha1: Expr,
-    pub in_: Expr,
-    pub weights: Expr,
-    pub algo: CudnnConvolutionFwdAlgo,
-    pub alpha2: Expr,
-    pub bias: Expr,
-    pub out: Expr,
-}
-
-impl CudnnConvBiasActivationForward {
-    // y = act (alpha1 * conv(x) + alpha2 * z + bias)
-    pub fn fragment(&self) -> String {
-        assert!(!matches!(self.alpha1, Expr::Literal(_)));
-        assert!(!matches!(self.alpha2, Expr::Literal(_)));
-        let args = vec![
-            self.handler.handler(),
-            self.alpha1.ref_fragment(),
-            // Input tensor (x)
-            self.id.input_descriptor(),
-            self.in_.fragment(),
-            // Weight tensor
-            self.id.filter_descriptor(),
-            self.weights.fragment(),
-            self.id.convolution_descriptor(),
-            self.algo.as_ref().to_string(),
-            // Workspace
-            self.handler.workspace_ptr(),
-            self.id.workspace_size(),
-            // Should be 0.0
-            self.alpha2.ref_fragment(),
-            // Z tensor (use same as output tensor)
-            self.id.output_descriptor(),
-            self.out.fragment(),
-            // Bias Tensor
-            self.id.bias_descriptor(),
-            self.bias.fragment(),
-            // Activation
-            self.id.activation_descriptor(),
-            // Output tensor (y)
-            self.id.output_descriptor(),
-            self.out.fragment(),
-        ];
-        format!("cudnnConvolutionBiasActivationForward({})", args.join(", "))
-    }
-}
-
 macro_rules! impl_into_stmt {
     ($name:ident) => {
         impl From<$name> for Statement {
@@ -461,9 +366,3 @@ macro_rules! impl_into_stmt {
 }
 
 impl_into_stmt!(CudnnOps);
-impl_into_stmt!(CudnnConvForward);
-impl_into_stmt!(CudnnConvBiasActivationForward);
-
-pub mod identifiers {
-    pub const CUDNN_SETTING_ARRAY: &str = "cudnn_settings";
-}
