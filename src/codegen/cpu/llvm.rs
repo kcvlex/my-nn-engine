@@ -22,6 +22,7 @@ impl<'ctx> FloatIntrinsics<'ctx> {
     }
 }
 
+#[allow(dead_code)]
 pub struct Intrinsics<'ll> {
     pub ceil: FloatIntrinsics<'ll>,
     pub exp: FloatIntrinsics<'ll>,

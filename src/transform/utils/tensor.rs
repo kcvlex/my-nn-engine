@@ -110,6 +110,7 @@ pub struct ReshapeGenerator {
     allow_contiguous: Option<bool>,
 }
 
+#[allow(dead_code)]
 impl ReshapeGenerator {
     pub fn set_input(mut self, input: ValueId) -> Self {
         self.input = Some(input);

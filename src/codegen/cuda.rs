@@ -133,13 +133,6 @@ impl Expr {
             Expr::Literal(lit) => lit.clone(),
         }
     }
-
-    fn ref_fragment(&self) -> String {
-        match self {
-            Expr::Identifier(name) => format!("&{}", name),
-            Expr::Literal(_) => panic!(),
-        }
-    }
 }
 
 trait ToIdentifier {
@@ -451,11 +444,11 @@ impl<'sched> HostCodeGenerator<'sched> {
         assert!(output_ty.dims.ndim() == 4);
         assert!(input_ty.is_contiguous() && weight_ty.is_contiguous() && output_ty.is_contiguous());
         let input_desc = TensorDescriptor {
-            id: kernel_id,
+            id: setting,
             role: TensorRole::Input,
         };
         let output_desc = TensorDescriptor {
-            id: kernel_id,
+            id: setting,
             role: TensorRole::Output,
         };
         res.push(CudnnOps::CreateTensorDescriptor(input_desc).into());
@@ -485,10 +478,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             .into(),
         );
 
-        res.push(CudnnOps::CreateFilterDescriptor(kernel_id).into());
+        res.push(CudnnOps::CreateFilterDescriptor(setting).into());
         res.push(
             CudnnOps::SetFilter4dDescriptor {
-                id: kernel_id,
+                id: setting,
                 data_type: weight_ty.elem_type,
                 format: CudnnTensorFormat::NCHW,
                 out_feature_maps: weight_ty.dims[0],
@@ -503,7 +496,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             assert!(bias_ty.dims.ndim() == 1);
             assert!(bias_ty.is_contiguous());
             let bias_desc = TensorDescriptor {
-                id: kernel_id,
+                id: setting,
                 role: TensorRole::Bias,
             };
             res.push(CudnnOps::CreateTensorDescriptor(bias_desc).into());
@@ -522,13 +515,13 @@ impl<'sched> HostCodeGenerator<'sched> {
 
             let activation = self
                 .activation
-                .get(&kernel_id)
+                .get(&setting)
                 .copied()
-                .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
-            res.push(CudnnOps::CreateActivationDescriptor(kernel_id).into());
+                .ok_or(BuildError::UnresolvedAllocateInfo(setting))?;
+            res.push(CudnnOps::CreateActivationDescriptor(setting).into());
             res.push(
                 CudnnOps::SetActivationDescriptor {
-                    id: kernel_id,
+                    id: setting,
                     mode: activation,
                     nan_prop: CudnnNanPropagation::NotPropagateNan,
                     coef: 0.0, // only used for clipped ReLU
@@ -548,10 +541,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
             _ => unimplemented!("Padding type not implemented"),
         };
-        res.push(CudnnOps::CreateConvolutionDescriptor(kernel_id).into());
+        res.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
         res.push(
             CudnnOps::SetConvolution2dDescriptor {
-                id: kernel_id,
+                id: setting,
                 ty: weight_ty.elem_type,
                 pad_h,
                 pad_w,
@@ -567,7 +560,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         res.push(
             CudnnOps::GetConvolutionForwardWorkspaceSize {
                 handler: cudnn_ctx,
-                id: kernel_id,
+                id: setting,
             }
             .into(),
         );

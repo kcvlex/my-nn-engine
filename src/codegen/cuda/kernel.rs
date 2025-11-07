@@ -2,23 +2,10 @@ use crate::codegen::cuda::*;
 use crate::tensor::types::DataType;
 use delegate::delegate;
 use derive_more::From;
-use itertools::Itertools;
 
 #[derive(From)]
 pub enum CUDAKernel {
-    Generated(Generated),
     MaxPoolKernel(MaxPoolKernel),
-}
-
-pub struct Generated {
-    pub name: String,
-    pub args: Vec<Expr>,
-}
-
-impl Generated {
-    fn fragment(&self) -> (String, Vec<String>) {
-        todo!()
-    }
 }
 
 pub struct MaxPoolKernel {
@@ -80,7 +67,6 @@ pub struct LaunchKernel {
 impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
-            CUDAKernel::Generated(g) => g,
             CUDAKernel::MaxPoolKernel(m) => m,
         } {
             #[call(fragment)]

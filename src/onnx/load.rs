@@ -71,6 +71,7 @@ enum Attribute {
     Tensor(Tensor),
 }
 
+#[allow(dead_code)]
 impl Attribute {
     fn f(&self) -> LoadResult<f32> {
         match self {

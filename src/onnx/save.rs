@@ -96,6 +96,7 @@ impl Tensor {
     }
 }
 
+#[allow(dead_code)]
 impl AttributeProto {
     fn with_name(mut self, name: &str) -> Self {
         self.name = name.to_string();
@@ -184,6 +185,7 @@ impl Concat {
     }
 }
 
+#[allow(dead_code)]
 impl Conv {
     fn to_proto(&self) -> Vec<AttributeProto> {
         let mut vec = Vec::new();
@@ -245,6 +247,7 @@ impl Conv {
     }
 }
 
+#[allow(dead_code)]
 impl Gather {
     fn to_proto(&self) -> Vec<AttributeProto> {
         vec![AttributeProto::default()
@@ -280,6 +283,7 @@ impl LeakyReLU {
     }
 }
 
+#[allow(dead_code)]
 impl Transpose {
     fn to_proto(&self) -> Vec<AttributeProto> {
         let mut vec = Vec::with_capacity(1);

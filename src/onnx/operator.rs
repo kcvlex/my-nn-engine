@@ -199,7 +199,7 @@ impl Conv {
         for i in 0..ndim {
             let stride = self.strides[i];
             let dim = if let Some(ref conv_shape) = &conv_shape {
-                let (q, rem) = num_integer::div_rem(
+                let (q, _) = num_integer::div_rem(
                     conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i),
                     stride,
                 );

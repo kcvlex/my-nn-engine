@@ -16,8 +16,6 @@ use crate::tensor::{
 };
 use crate::transform::transform_graph;
 
-use rayon::prelude::*;
-
 use std::path::Path;
 
 enum StrictTensor {

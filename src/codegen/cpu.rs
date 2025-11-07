@@ -552,7 +552,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
                 let call = builder.build_call(function, &args[..], "")?;
-                //call.set_tail_call(true);
+                call.set_tail_call(true);
             }
         }
         builder.position_at_end(self.unit.entry);
