@@ -972,7 +972,6 @@ mod test {
     #[test]
     fn test_cuda() {
         use std::fs::OpenOptions;
-        use std::io::prelude::*;
         use std::io::BufWriter;
         use std::path::PathBuf;
 
