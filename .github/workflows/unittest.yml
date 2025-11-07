@@ -21,6 +21,11 @@ jobs:
       with:
         toolchain: stable
 
+    - name: Install LLVM and Clang
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-18-dev libpolly-18-dev clang-18
+
     - name: Cache cargo registry
       uses: actions/cache@v4
       with:
