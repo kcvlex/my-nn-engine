@@ -25,14 +25,14 @@ jobs:
       uses: actions/cache@v4
       with:
         path: /var/cache/apt/archives
-        key: ${{ runner.os }}-apt-llvm-18
+        key: ${{ runner.os }}-apt-packages
         restore-keys: |
           ${{ runner.os }}-apt-
 
-    - name: Install LLVM and Clang
+    - name: Install Packages
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm-18-dev libpolly-18-dev clang-18
+        sudo apt-get install -y llvm-18-dev libpolly-18-dev clang-18 protobuf-compiler
 
     - name: Cache cargo registry
       uses: actions/cache@v4
