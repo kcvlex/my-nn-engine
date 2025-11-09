@@ -212,8 +212,9 @@ pub struct HostCodeGenerator<'sched> {
 
     event_slot: IdSlot<EventId, fn(usize) -> EventId>,
 
-    cudnn_ctxs: IndexMap<StreamId, (CudnnContext, Vec<KernelId>)>,
-    activation: HashMap<KernelId, CudnnActivationMode>,
+    cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
+
+    cudnn_codes: Vec<CudnnCode>,
 }
 
 pub struct HostCode {
@@ -221,6 +222,7 @@ pub struct HostCode {
     decl_cuda_objs: Vec<Statement>,
     computes: Vec<Statement>,
     finalize: Vec<Statement>,
+    cudnn_codes: Vec<CudnnCode>,
 }
 
 const ARG_INPUT: &str = "input";
@@ -228,6 +230,195 @@ const ARG_OUTPUT: &str = "output";
 const ARG_INITIALIZER: &str = "initializer";
 const MAX_STREAMS: usize = 16;
 const DEFAULT_BLOCK_SIZE: usize = 256;
+
+struct CudnnCodeGenerator<'sched> {
+    schedule: &'sched Schedule,
+    kernel_id: KernelId,
+}
+
+struct CudnnCode {
+    stmts: Vec<Statement>,
+    init_fn: String,
+    init_fn_decl: String,
+}
+
+impl<'sched> CudnnCodeGenerator<'sched> {
+    pub fn new(schedule: &'sched Schedule, kernel_id: KernelId) -> Self {
+        CudnnCodeGenerator {
+            schedule,
+            kernel_id,
+        }
+    }
+
+    // TODO: Borrow
+    fn get_resolved_tensor_type(
+        &self,
+        value_id: ValueId,
+    ) -> Result<&ResolvedTensorType, BuildError> {
+        self.schedule
+            .get_resolved_tensor_type(value_id)
+            .ok_or(BuildError::UnresolvedType(value_id))
+    }
+
+    fn generate(&self) -> Result<CudnnCode, BuildError> {
+        let mut stmts = Vec::new();
+        let setting = CudnnSettingName::DefaultName;
+
+        let kernel = &self.schedule.kernels[self.kernel_id];
+        let input_ty = self
+            .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
+            .clone();
+        let weight_ty = self
+            .get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT])?
+            .clone();
+        let output_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.clone();
+
+        assert!(input_ty.dims.ndim() == 4);
+        assert!(weight_ty.dims.ndim() == 4);
+        assert!(output_ty.dims.ndim() == 4);
+        assert!(input_ty.is_contiguous() && weight_ty.is_contiguous() && output_ty.is_contiguous());
+        let input_desc = TensorDescriptor {
+            id: setting,
+            role: TensorRole::Input,
+        };
+        let output_desc = TensorDescriptor {
+            id: setting,
+            role: TensorRole::Output,
+        };
+        stmts.push(CudnnOps::CreateTensorDescriptor(input_desc).into());
+        stmts.push(
+            CudnnOps::SetTensor4dDescriptor {
+                desc: input_desc,
+                data_type: input_ty.elem_type,
+                format: CudnnTensorFormat::NCHW,
+                nbatch: input_ty.dims[0],
+                channels: input_ty.dims[1],
+                height: input_ty.dims[2],
+                width: input_ty.dims[3],
+            }
+            .into(),
+        );
+        stmts.push(CudnnOps::CreateTensorDescriptor(output_desc).into());
+        stmts.push(
+            CudnnOps::SetTensor4dDescriptor {
+                desc: output_desc,
+                data_type: output_ty.elem_type,
+                format: CudnnTensorFormat::NCHW,
+                nbatch: output_ty.dims[0],
+                channels: output_ty.dims[1],
+                height: output_ty.dims[2],
+                width: output_ty.dims[3],
+            }
+            .into(),
+        );
+
+        stmts.push(CudnnOps::CreateFilterDescriptor(setting).into());
+        stmts.push(
+            CudnnOps::SetFilter4dDescriptor {
+                id: setting,
+                data_type: weight_ty.elem_type,
+                format: CudnnTensorFormat::NCHW,
+                out_feature_maps: weight_ty.dims[0],
+                in_feature_maps: weight_ty.dims[1],
+                height: weight_ty.dims[2],
+                width: weight_ty.dims[3],
+            }
+            .into(),
+        );
+        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
+            let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
+            assert!(bias_ty.dims.ndim() == 1);
+            assert!(bias_ty.is_contiguous());
+            let bias_desc = TensorDescriptor {
+                id: setting,
+                role: TensorRole::Bias,
+            };
+            stmts.push(CudnnOps::CreateTensorDescriptor(bias_desc).into());
+            stmts.push(
+                CudnnOps::SetTensor4dDescriptor {
+                    desc: bias_desc,
+                    data_type: bias_ty.elem_type,
+                    format: CudnnTensorFormat::NCHW,
+                    nbatch: 1,
+                    channels: bias_ty.dims[0],
+                    height: 1,
+                    width: 1,
+                }
+                .into(),
+            );
+
+            // TODO: Set proper activation.
+            let activation = CudnnActivationMode::Identity;
+            stmts.push(CudnnOps::CreateActivationDescriptor(setting).into());
+            stmts.push(
+                CudnnOps::SetActivationDescriptor {
+                    id: setting,
+                    mode: activation,
+                    nan_prop: CudnnNanPropagation::NotPropagateNan,
+                    coef: 0.0, // only used for clipped ReLU
+                }
+                .into(),
+            );
+        }
+
+        let conv = match kernel.body {
+            KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+                Operator::Conv(ref conv) => conv,
+                _ => unimplemented!(),
+            },
+            _ => unimplemented!(),
+        };
+        let (pad_h, pad_w) = match conv.pad {
+            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
+            _ => unimplemented!("Padding type not implemented"),
+        };
+        stmts.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
+        stmts.push(
+            CudnnOps::SetConvolution2dDescriptor {
+                id: setting,
+                ty: weight_ty.elem_type,
+                pad_h,
+                pad_w,
+                stride_h: conv.strides[0],
+                stride_w: conv.strides[1],
+                dilation_h: conv.dilations[0],
+                dilation_w: conv.dilations[1],
+                mode: CudnnConvolutionMode::CrossCorrelation,
+            }
+            .into(),
+        );
+
+        let ctx = CudnnContext::DefaultContext;
+        stmts.push(CudnnOps::GetConvolutionForwardWorkspaceSize { ctx, id: setting }.into());
+
+        let init_fn = format!("init_cudnn_{}", self.kernel_id.index());
+        let init_fn_decl = format!(
+            "void {init_fn}(CudnnConvSetting &{setting}, CudnnHandlerContext &{ctx})",
+            init_fn = init_fn,
+            setting = setting.setting(),
+            ctx = ctx.ctx(),
+        );
+
+        Ok(CudnnCode {
+            stmts,
+            init_fn,
+            init_fn_decl,
+        })
+    }
+}
+
+impl CudnnCode {
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(format!("extern \"C\" {} {{\n", self.init_fn_decl).as_bytes())?;
+        for stmt in self.stmts.iter() {
+            writer.write_all(b"  ")?;
+            writer.write_all(stmt.fragment().as_bytes())?;
+            writer.write_all(b"\n")?;
+        }
+        writer.write_all(b"}\n")?;
+        Ok(())
+    }
+}
 
 struct Streams {
     inner: Vec<StreamId>,
@@ -317,7 +508,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .collect(),
             event_slot: IdSlot::new(EventId),
             cudnn_ctxs: IndexMap::new(),
-            activation: HashMap::new(),
+            cudnn_codes: Vec::new(),
         }
     }
 
@@ -420,154 +611,6 @@ impl<'sched> HostCodeGenerator<'sched> {
         Ok(self.move_statements())
     }
 
-    fn gen_conv_setting(
-        &self,
-        kernel_id: KernelId,
-        cudnn_ctx: CudnnContext,
-    ) -> Result<Vec<Statement>, BuildError> {
-        // TODO: Replace with the argument name.
-        let setting = kernel_id;
-
-        let mut res = Vec::new();
-
-        let kernel = &self.schedule.kernels[kernel_id];
-        let input_ty = self
-            .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
-            .clone();
-        let weight_ty = self
-            .get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT])?
-            .clone();
-        let output_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.clone();
-
-        assert!(input_ty.dims.ndim() == 4);
-        assert!(weight_ty.dims.ndim() == 4);
-        assert!(output_ty.dims.ndim() == 4);
-        assert!(input_ty.is_contiguous() && weight_ty.is_contiguous() && output_ty.is_contiguous());
-        let input_desc = TensorDescriptor {
-            id: setting,
-            role: TensorRole::Input,
-        };
-        let output_desc = TensorDescriptor {
-            id: setting,
-            role: TensorRole::Output,
-        };
-        res.push(CudnnOps::CreateTensorDescriptor(input_desc).into());
-        res.push(
-            CudnnOps::SetTensor4dDescriptor {
-                desc: input_desc,
-                data_type: input_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
-                nbatch: input_ty.dims[0],
-                channels: input_ty.dims[1],
-                height: input_ty.dims[2],
-                width: input_ty.dims[3],
-            }
-            .into(),
-        );
-        res.push(CudnnOps::CreateTensorDescriptor(output_desc).into());
-        res.push(
-            CudnnOps::SetTensor4dDescriptor {
-                desc: output_desc,
-                data_type: output_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
-                nbatch: output_ty.dims[0],
-                channels: output_ty.dims[1],
-                height: output_ty.dims[2],
-                width: output_ty.dims[3],
-            }
-            .into(),
-        );
-
-        res.push(CudnnOps::CreateFilterDescriptor(setting).into());
-        res.push(
-            CudnnOps::SetFilter4dDescriptor {
-                id: setting,
-                data_type: weight_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
-                out_feature_maps: weight_ty.dims[0],
-                in_feature_maps: weight_ty.dims[1],
-                height: weight_ty.dims[2],
-                width: weight_ty.dims[3],
-            }
-            .into(),
-        );
-        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
-            let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
-            assert!(bias_ty.dims.ndim() == 1);
-            assert!(bias_ty.is_contiguous());
-            let bias_desc = TensorDescriptor {
-                id: setting,
-                role: TensorRole::Bias,
-            };
-            res.push(CudnnOps::CreateTensorDescriptor(bias_desc).into());
-            res.push(
-                CudnnOps::SetTensor4dDescriptor {
-                    desc: bias_desc,
-                    data_type: bias_ty.elem_type,
-                    format: CudnnTensorFormat::NCHW,
-                    nbatch: 1,
-                    channels: bias_ty.dims[0],
-                    height: 1,
-                    width: 1,
-                }
-                .into(),
-            );
-
-            let activation = self
-                .activation
-                .get(&setting)
-                .copied()
-                .ok_or(BuildError::UnresolvedAllocateInfo(setting))?;
-            res.push(CudnnOps::CreateActivationDescriptor(setting).into());
-            res.push(
-                CudnnOps::SetActivationDescriptor {
-                    id: setting,
-                    mode: activation,
-                    nan_prop: CudnnNanPropagation::NotPropagateNan,
-                    coef: 0.0, // only used for clipped ReLU
-                }
-                .into(),
-            );
-        }
-
-        let conv = match kernel.body {
-            KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
-                Operator::Conv(ref conv) => conv,
-                _ => unimplemented!(),
-            },
-            _ => unimplemented!(),
-        };
-        let (pad_h, pad_w) = match conv.pad {
-            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
-            _ => unimplemented!("Padding type not implemented"),
-        };
-        res.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
-        res.push(
-            CudnnOps::SetConvolution2dDescriptor {
-                id: setting,
-                ty: weight_ty.elem_type,
-                pad_h,
-                pad_w,
-                stride_h: conv.strides[0],
-                stride_w: conv.strides[1],
-                dilation_h: conv.dilations[0],
-                dilation_w: conv.dilations[1],
-                mode: CudnnConvolutionMode::CrossCorrelation,
-            }
-            .into(),
-        );
-
-        res.push(
-            CudnnOps::GetConvolutionForwardWorkspaceSize {
-                handler: cudnn_ctx,
-                id: setting,
-            }
-            .into(),
-        );
-
-        Ok(res)
-    }
-
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
         for event_id in self.used_event.iter().copied() {
             let name = event_id.to_identifier().fragment();
@@ -583,32 +626,40 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(StreamCreate { stream_id }.into());
         }
 
-        for (_, (handler, kernels)) in self.cudnn_ctxs.iter() {
+        for (stream_id, kernels) in self.cudnn_ctxs.iter() {
+            let ctx = CudnnContext::StreamContext(*stream_id);
             self.stmts.push(Statement::Raw(format!(
                 "CudnnHandlerContext {ctx};",
-                ctx = handler.ctx()
+                ctx = ctx.ctx()
             )));
 
-            self.stmts.push(CudnnOps::Create(*handler).into());
-            self.stmts.push(CudnnOps::SetStream(*handler).into());
+            self.stmts.push(CudnnOps::Create(ctx).into());
+            self.stmts.push(CudnnOps::SetStream(*stream_id).into());
             for kernel_id in kernels.iter().copied() {
+                let setting = CudnnSettingName::KernelId(kernel_id);
                 self.stmts.push(Statement::Raw(format!(
                     "CudnnConvSetting {setting};",
-                    setting = kernel_id.setting()
+                    setting = setting.setting()
                 )));
-                let mut setting = self.gen_conv_setting(kernel_id, *handler)?;
-                self.stmts.append(&mut setting);
+                let code = CudnnCodeGenerator::new(self.schedule, kernel_id).generate()?;
+                self.stmts.push(Statement::Raw(format!(
+                    "{init_fn}({setting}, {ctx});",
+                    init_fn = code.init_fn,
+                    setting = setting.setting(),
+                    ctx = CudnnContext::StreamContext(*stream_id).ctx(),
+                )));
                 self.stmts.push(Statement::Raw(format!(
                     "{workspace_size_max} = std::max({workspace_size_max}, {workspace_size});",
-                    workspace_size_max = handler.workspace_max_size(),
-                    workspace_size = kernel_id.workspace_size(),
+                    workspace_size_max = ctx.workspace_max_size(),
+                    workspace_size = setting.workspace_size(),
                 )));
+                self.cudnn_codes.push(code);
             }
 
             self.stmts.push(
                 Malloc {
-                    dst: Expr::Identifier(handler.workspace_ptr()),
-                    mem_size: MemSize::Raw(Expr::Identifier(handler.workspace_max_size())),
+                    dst: Expr::Identifier(ctx.workspace_ptr()),
+                    mem_size: MemSize::Raw(Expr::Identifier(ctx.workspace_max_size())),
                 }
                 .into(),
             );
@@ -777,12 +828,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
 
                     let cudnn_handler = {
-                        let (handler, kernels) = self
-                            .cudnn_ctxs
-                            .entry(kernel_stream)
-                            .or_insert((CudnnContext::new(kernel_stream), Vec::new()));
+                        let kernels = self.cudnn_ctxs.entry(kernel_stream).or_default();
                         kernels.push(kernel_id);
-                        *handler
+                        CudnnContext::StreamContext(kernel_stream)
                     };
 
                     let input = self.device_identifier(kernel.inputs[args::CONV_DATA])?;
@@ -790,28 +838,27 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let output = self.device_identifier(kernel.outputs[0])?;
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
                     let template_ty = input_ty.elem_type.fragment();
+                    let setting = CudnnSettingName::KernelId(kernel_id);
 
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.x = {input};",
-                        setting = kernel_id.setting(),
+                        setting = setting.setting(),
                         input = input.fragment(),
                     )));
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.w = {weights};",
-                        setting = kernel_id.setting(),
+                        setting = setting.setting(),
                         weights = weights.fragment(),
                     )));
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.y = {output};",
-                        setting = kernel_id.setting(),
+                        setting = setting.setting(),
                         output = output.fragment(),
                     )));
                     let func = if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
-                        self.activation
-                            .insert(kernel_id, CudnnActivationMode::Identity);
                         self.stmts.push(Statement::Raw(format!(
                             "{setting}.bias = {bias};",
-                            setting = kernel_id.setting(),
+                            setting = setting.setting(),
                             bias = self.device_identifier(bias)?.fragment(),
                         )));
                         "call_conv_bias_activation_forward"
@@ -820,7 +867,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     };
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.{func}<{ty}>(&{ctx});",
-                        setting = kernel_id.setting(),
+                        setting = setting.setting(),
                         func = func,
                         ty = template_ty,
                         ctx = cudnn_handler.ctx()
@@ -917,11 +964,15 @@ impl<'sched> HostCodeGenerator<'sched> {
         // NOTE: This must be called at the very end.
         let decl_cuda_objs = self.gen_decl_cuda_objs()?;
 
+        let mut cudnn_codes = Vec::new();
+        std::mem::swap(&mut self.cudnn_codes, &mut cudnn_codes);
+
         Ok(HostCode {
             decl_values,
             decl_cuda_objs,
             computes,
             finalize,
+            cudnn_codes,
         })
     }
 }
@@ -939,6 +990,10 @@ impl HostCode {
             "cudnn_setting.h",
         ] {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+        }
+
+        for code in self.cudnn_codes.iter() {
+            code.write(writer)?;
         }
 
         writer.write_all(format!("extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{\n").as_bytes())?;

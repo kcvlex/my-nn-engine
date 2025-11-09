@@ -124,9 +124,18 @@ pub trait CudnnIdentifier {
     }
 }
 
-impl CudnnIdentifier for KernelId {
+#[derive(Clone, Copy)]
+pub enum CudnnSettingName {
+    DefaultName,
+    KernelId(KernelId),
+}
+
+impl CudnnIdentifier for CudnnSettingName {
     fn setting(&self) -> String {
-        format!("cudnn_setting{}", self.index())
+        match self {
+            CudnnSettingName::DefaultName => "setting".to_string(),
+            CudnnSettingName::KernelId(id) => format!("cudnn_setting{}", id.index()),
+        }
     }
 }
 
@@ -139,7 +148,7 @@ pub enum TensorRole {
 
 #[derive(Clone, Copy)]
 pub struct TensorDescriptor {
-    pub id: KernelId,
+    pub id: CudnnSettingName,
     pub role: TensorRole,
 }
 
@@ -154,17 +163,17 @@ impl TensorDescriptor {
 }
 
 #[derive(Clone, Copy)]
-pub struct CudnnContext {
-    pub stream_id: StreamId,
+pub enum CudnnContext {
+    DefaultContext,
+    StreamContext(StreamId),
 }
 
 impl CudnnContext {
-    pub fn new(stream_id: StreamId) -> Self {
-        Self { stream_id }
-    }
-
     pub fn ctx(&self) -> String {
-        format!("cudnn_handler_ctx{}", self.stream_id.0)
+        match self {
+            CudnnContext::DefaultContext => "cudnn_handler_ctx".to_string(),
+            CudnnContext::StreamContext(id) => format!("cudnn_handler_ctx{}", id.0),
+        }
     }
 
     pub fn handler(&self) -> String {
@@ -184,9 +193,9 @@ impl CudnnContext {
 pub enum CudnnOps {
     Create(CudnnContext),
     CreateTensorDescriptor(TensorDescriptor),
-    CreateFilterDescriptor(KernelId),
-    CreateConvolutionDescriptor(KernelId),
-    CreateActivationDescriptor(KernelId),
+    CreateFilterDescriptor(CudnnSettingName),
+    CreateConvolutionDescriptor(CudnnSettingName),
+    CreateActivationDescriptor(CudnnSettingName),
 
     SetTensor4dDescriptor {
         desc: TensorDescriptor,
@@ -198,7 +207,7 @@ pub enum CudnnOps {
         width: usize,
     },
     SetFilter4dDescriptor {
-        id: KernelId,
+        id: CudnnSettingName,
         data_type: DataType,
         format: CudnnTensorFormat,
         out_feature_maps: usize,
@@ -207,7 +216,7 @@ pub enum CudnnOps {
         width: usize,
     },
     SetConvolution2dDescriptor {
-        id: KernelId,
+        id: CudnnSettingName,
         pad_h: usize,
         pad_w: usize,
         stride_h: usize,
@@ -218,18 +227,18 @@ pub enum CudnnOps {
         ty: DataType,
     },
     SetActivationDescriptor {
-        id: KernelId,
+        id: CudnnSettingName,
         mode: CudnnActivationMode,
         nan_prop: CudnnNanPropagation,
 
         // ceiling for clipped RELU, alpha for ELU (copied from cudnn_ops.h)
         coef: f64,
     },
-    SetStream(CudnnContext),
+    SetStream(StreamId),
 
     GetConvolutionForwardWorkspaceSize {
-        handler: CudnnContext,
-        id: KernelId,
+        ctx: CudnnContext,
+        id: CudnnSettingName,
     },
 }
 
@@ -332,14 +341,14 @@ impl CudnnOps {
                     coef = coef
                 )
             }
-            Self::SetStream(handler) => {
+            Self::SetStream(stream_id) => {
                 format!(
                     "cudnnSetStream({handler}, {stream})",
-                    handler = handler.handler(),
-                    stream = handler.stream_id.to_identifier().fragment()
+                    handler = CudnnContext::StreamContext(*stream_id).handler(),
+                    stream = stream_id.to_identifier().fragment()
                 )
             }
-            Self::GetConvolutionForwardWorkspaceSize { handler, id } => {
+            Self::GetConvolutionForwardWorkspaceSize { ctx: handler, id } => {
                 format!(
                     "cudnnGetConvolutionForwardWorkspaceSize({handler}, {input_desc}, {filter_desc}, {conv_desc}, {output_desc}, {algo}, &{workspace_size})",
                     handler = handler.handler(),
