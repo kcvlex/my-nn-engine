@@ -9,6 +9,8 @@ use std::io::BufWriter;
 use std::io::Write;
 use tempfile::TempDir;
 
+use rayon::prelude::*;
+
 use itertools::zip_eq;
 
 use std::process::Command;
@@ -46,6 +48,7 @@ impl SessionCUDA {
 
         let tmp_dir = TempDir::with_prefix("my_model_")
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
         let main_file = tmp_dir.path().join("main.cu");
         let mut writer = std::fs::File::create(&main_file)
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
@@ -56,13 +59,30 @@ impl SessionCUDA {
         writer
             .flush()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
+        let mut paths = hostcode
+            .cudnn_codes
+            .par_iter()
+            .map(|code| {
+                let filepath = format!("kernel_{}.cu", code.kernel_id.index());
+                let filepath = tmp_dir.path().join(filepath);
+                let mut writer = std::fs::File::create(&filepath)
+                    .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
+                    .map(BufWriter::new)?;
+                code.write(&mut writer).map_err(|e| {
+                    SessionError::OtherError(format!("Failed to write kernel code: {:?}", e))
+                })?;
+                writer.flush().map_err(|e| {
+                    SessionError::OtherError(format!("Failed to flush kernel code: {:?}", e))
+                })?;
+                Ok::<PathBuf, SessionError>(filepath)
+            })
+            .collect::<Result<Vec<_>, SessionError>>()?;
+        paths.push(main_file);
         println!("Generated");
 
-        let shared_obj = tmp_dir.path().join("libmodel.so");
-
-        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
-
         dbg!(&tmp_dir);
+        let shared_lib = tmp_dir.path().join("libmodel.so");
         let tmp_dir = if PERSIST {
             let _ = tmp_dir.into_path();
             None
@@ -70,24 +90,44 @@ impl SessionCUDA {
             Some(tmp_dir)
         };
 
+        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
+        let objs = paths
+            .par_iter()
+            .map(|path| {
+                let obj_path = path.with_extension("o");
+                Command::new("nvcc")
+                    .args([
+                        path.to_str().unwrap(),
+                        format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
+                        "-c",
+                        "-o",
+                        obj_path.to_str().unwrap(),
+                        "-lcudnn",
+                        "--compiler-options",
+                        "'-fPIC'",
+                    ])
+                    .status()
+                    .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+                Ok::<PathBuf, SessionError>(obj_path)
+            })
+            .collect::<Result<Vec<_>, SessionError>>()?;
+
         Command::new("nvcc")
             .args([
-                main_file.to_str().unwrap(),
-                format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
                 "--shared",
                 "-o",
-                shared_obj.to_str().unwrap(),
+                shared_lib.to_str().unwrap(),
                 "-lcudnn",
                 "--compiler-options",
                 "'-fPIC'",
             ])
-            // .args(objs.iter().map(|p| p.to_str().unwrap()))
+            .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
         println!("Compiled");
 
-        let lib = unsafe { libloading::Library::new(shared_obj.as_os_str()) }
+        let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let func: libloading::Symbol<CodeType> = unsafe { lib.get(b"model") }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;

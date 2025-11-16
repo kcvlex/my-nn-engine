@@ -100,6 +100,8 @@ pub enum SessionError {
     OtherError(String),
 }
 
+unsafe impl Send for SessionError {}
+
 pub enum Session {
     CPU(SessionCPU),
     CUDA(SessionCUDA),

@@ -222,7 +222,7 @@ pub struct HostCode {
     decl_cuda_objs: Vec<Statement>,
     computes: Vec<Statement>,
     finalize: Vec<Statement>,
-    cudnn_codes: Vec<CudnnCode>,
+    pub cudnn_codes: Vec<CudnnCode>,
 }
 
 const ARG_INPUT: &str = "input";
@@ -236,7 +236,8 @@ struct CudnnCodeGenerator<'sched> {
     kernel_id: KernelId,
 }
 
-struct CudnnCode {
+pub struct CudnnCode {
+    pub kernel_id: KernelId,
     stmts: Vec<Statement>,
     init_fn: String,
     init_fn_decl: String,
@@ -400,6 +401,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         );
 
         Ok(CudnnCode {
+            kernel_id: self.kernel_id,
             stmts,
             init_fn,
             init_fn_decl,
@@ -409,6 +411,10 @@ impl<'sched> CudnnCodeGenerator<'sched> {
 
 impl CudnnCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        for h in ["common.h", "cuda.h", "cudnn.h", "cudnn_setting.h"] {
+            writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+        }
+
         writer.write_all(format!("extern \"C\" {} {{\n", self.init_fn_decl).as_bytes())?;
         for stmt in self.stmts.iter() {
             writer.write_all(b"  ")?;
@@ -993,7 +999,7 @@ impl HostCode {
         }
 
         for code in self.cudnn_codes.iter() {
-            code.write(writer)?;
+            writer.write_all(format!("extern \"C\" {};\n", code.init_fn_decl).as_bytes())?;
         }
 
         writer.write_all(format!("extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{\n").as_bytes())?;
