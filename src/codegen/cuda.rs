@@ -214,7 +214,7 @@ pub struct HostCodeGenerator<'sched> {
 
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
-    cudnn_codes: Vec<CudnnCode>,
+    kernel_codes: Vec<KernelCode>,
 }
 
 pub struct HostCode {
@@ -222,7 +222,7 @@ pub struct HostCode {
     decl_cuda_objs: Vec<Statement>,
     computes: Vec<Statement>,
     finalize: Vec<Statement>,
-    pub cudnn_codes: Vec<CudnnCode>,
+    pub kernel_codes: Vec<KernelCode>,
 }
 
 const ARG_INPUT: &str = "input";
@@ -236,8 +236,23 @@ struct CudnnCodeGenerator<'sched> {
     kernel_id: KernelId,
 }
 
+pub enum KernelCode {
+    Cudnn(CudnnCode),
+}
+
+impl KernelCode {
+    delegate! {
+        to match self {
+            KernelCode::Cudnn(code) => code,
+        } {
+            pub fn kernel_id(&self) -> KernelId;
+            pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
+        }
+    }
+}
+
 pub struct CudnnCode {
-    pub kernel_id: KernelId,
+    kernel_id: KernelId,
     stmts: Vec<Statement>,
     init_fn: String,
     init_fn_decl: String,
@@ -424,6 +439,10 @@ impl CudnnCode {
         writer.write_all(b"}\n")?;
         Ok(())
     }
+
+    pub fn kernel_id(&self) -> KernelId {
+        self.kernel_id
+    }
 }
 
 struct Streams {
@@ -514,7 +533,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .collect(),
             event_slot: IdSlot::new(EventId),
             cudnn_ctxs: IndexMap::new(),
-            cudnn_codes: Vec::new(),
+            kernel_codes: Vec::new(),
         }
     }
 
@@ -659,7 +678,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     workspace_size_max = ctx.workspace_max_size(),
                     workspace_size = setting.workspace_size(),
                 )));
-                self.cudnn_codes.push(code);
+                self.kernel_codes.push(KernelCode::Cudnn(code));
             }
 
             self.stmts.push(
@@ -970,15 +989,15 @@ impl<'sched> HostCodeGenerator<'sched> {
         // NOTE: This must be called at the very end.
         let decl_cuda_objs = self.gen_decl_cuda_objs()?;
 
-        let mut cudnn_codes = Vec::new();
-        std::mem::swap(&mut self.cudnn_codes, &mut cudnn_codes);
+        let mut kernel_codes = Vec::new();
+        std::mem::swap(&mut self.kernel_codes, &mut kernel_codes);
 
         Ok(HostCode {
             decl_values,
             decl_cuda_objs,
             computes,
             finalize,
-            cudnn_codes,
+            kernel_codes,
         })
     }
 }
@@ -998,8 +1017,12 @@ impl HostCode {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
         }
 
-        for code in self.cudnn_codes.iter() {
-            writer.write_all(format!("extern \"C\" {};\n", code.init_fn_decl).as_bytes())?;
+        for code in self.kernel_codes.iter() {
+            match code {
+                KernelCode::Cudnn(code) => {
+                    writer.write_all(format!("extern \"C\" {};\n", code.init_fn_decl).as_bytes())?
+                }
+            }
         }
 
         writer.write_all(format!("extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{\n").as_bytes())?;

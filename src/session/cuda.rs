@@ -61,10 +61,10 @@ impl SessionCUDA {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
         let mut paths = hostcode
-            .cudnn_codes
+            .kernel_codes
             .par_iter()
             .map(|code| {
-                let filepath = format!("kernel_{}.cu", code.kernel_id.index());
+                let filepath = format!("kernel_{}.cu", code.kernel_id().index());
                 let filepath = tmp_dir.path().join(filepath);
                 let mut writer = std::fs::File::create(&filepath)
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
