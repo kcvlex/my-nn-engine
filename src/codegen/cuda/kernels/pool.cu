@@ -1,12 +1,7 @@
-#include "common.h"
+#include "common.cuh"
 #include <cuda.h>
 
 #pragma once
-
-__device__ void divmod(i64 x, i64 y, i64 *q, i64 *r) {
-    *q = x / y;
-    *r = x % y;
-}
 
 template <typename T>
 __global__ void max_pool_kernel(

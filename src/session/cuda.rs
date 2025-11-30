@@ -60,6 +60,7 @@ impl SessionCUDA {
             .flush()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
+        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
         let mut paths = hostcode
             .kernel_codes
             .par_iter()
@@ -75,10 +76,17 @@ impl SessionCUDA {
                 writer.flush().map_err(|e| {
                     SessionError::OtherError(format!("Failed to flush kernel code: {:?}", e))
                 })?;
-                Ok::<PathBuf, SessionError>(filepath)
+                Ok::<(PathBuf, PathBuf), SessionError>((
+                    filepath.clone(),
+                    filepath.with_extension("o"),
+                ))
             })
             .collect::<Result<Vec<_>, SessionError>>()?;
-        paths.push(main_file);
+        paths.push((main_file.clone(), main_file.with_extension("o")));
+        paths.push((
+            kernel_dir.join("common.cu"),
+            tmp_dir.path().join("common.o"),
+        ));
         println!("Generated");
 
         dbg!(&tmp_dir);
@@ -90,25 +98,23 @@ impl SessionCUDA {
             Some(tmp_dir)
         };
 
-        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
         let objs = paths
             .par_iter()
-            .map(|path| {
-                let obj_path = path.with_extension("o");
+            .map(|(src, obj)| {
                 Command::new("nvcc")
                     .args([
-                        path.to_str().unwrap(),
+                        src.to_str().unwrap(),
                         format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
                         "-c",
                         "-o",
-                        obj_path.to_str().unwrap(),
+                        obj.to_str().unwrap(),
                         "-lcudnn",
                         "--compiler-options",
                         "'-fPIC'",
                     ])
                     .status()
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-                Ok::<PathBuf, SessionError>(obj_path)
+                Ok::<PathBuf, SessionError>(obj.to_path_buf())
             })
             .collect::<Result<Vec<_>, SessionError>>()?;
 

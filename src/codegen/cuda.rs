@@ -3,6 +3,12 @@ mod kernel;
 mod runtime_api;
 
 use crate::codegen::cuda::cudnn::*;
+use crate::codegen::cuda::kernel::GeneratedKernel;
+use crate::codegen::cuda::kernel::KernelBuilder;
+use crate::codegen::cuda::kernel::KernelDecl;
+use crate::codegen::cuda::kernel::KernelExpr;
+use crate::codegen::cuda::kernel::KernelVar;
+use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
@@ -27,6 +33,7 @@ pub enum BuildError {
     NoDeviceVariable(ChunkId),
     EventNotFound(ValueId),
     ActivationNotFound(KernelId),
+    UnsupportedTensorDim(ValueId, usize),
 }
 
 impl DataType {
@@ -214,7 +221,7 @@ pub struct HostCodeGenerator<'sched> {
 
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
-    kernel_codes: Vec<KernelCode>,
+    separated_codes: Vec<SeparatedCode>,
 }
 
 pub struct HostCode {
@@ -222,7 +229,7 @@ pub struct HostCode {
     decl_cuda_objs: Vec<Statement>,
     computes: Vec<Statement>,
     finalize: Vec<Statement>,
-    pub kernel_codes: Vec<KernelCode>,
+    pub kernel_codes: Vec<SeparatedCode>,
 }
 
 const ARG_INPUT: &str = "input";
@@ -236,18 +243,39 @@ struct CudnnCodeGenerator<'sched> {
     kernel_id: KernelId,
 }
 
-pub enum KernelCode {
+pub enum SeparatedCode {
+    Device(DeviceCode),
     Cudnn(CudnnCode),
 }
 
-impl KernelCode {
+impl SeparatedCode {
     delegate! {
         to match self {
-            KernelCode::Cudnn(code) => code,
+            SeparatedCode::Device(code) => code,
+            SeparatedCode::Cudnn(code) => code,
         } {
             pub fn kernel_id(&self) -> KernelId;
             pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
         }
+    }
+}
+
+pub struct DeviceCode {
+    decl: KernelDecl,
+    body: String,
+}
+
+impl DeviceCode {
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        for h in ["common.cuh", "cuda.h"] {
+            writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+        }
+        writer.write_all(self.body.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn kernel_id(&self) -> KernelId {
+        self.decl.kernel_id
     }
 }
 
@@ -426,7 +454,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
 
 impl CudnnCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for h in ["common.h", "cuda.h", "cudnn.h", "cudnn_setting.h"] {
+        for h in ["common.cuh", "cuda.h", "cudnn.h", "cudnn_setting.h"] {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
         }
 
@@ -533,7 +561,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .collect(),
             event_slot: IdSlot::new(EventId),
             cudnn_ctxs: IndexMap::new(),
-            kernel_codes: Vec::new(),
+            separated_codes: Vec::new(),
         }
     }
 
@@ -678,7 +706,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     workspace_size_max = ctx.workspace_max_size(),
                     workspace_size = setting.workspace_size(),
                 )));
-                self.kernel_codes.push(KernelCode::Cudnn(code));
+                self.separated_codes.push(SeparatedCode::Cudnn(code));
             }
 
             self.stmts.push(
@@ -775,6 +803,51 @@ impl<'sched> HostCodeGenerator<'sched> {
             .map(|x| x.into())
     }
 
+    fn generate_kernel(&mut self, kernel_id: KernelId) -> Result<GeneratedKernel, BuildError> {
+        let mut params = Vec::new();
+
+        let add_param = |params: &mut Vec<(KernelVar, TypeSymbol)>, id: ValueId| {
+            let ty = self.get_resolved_tensor_type(id).unwrap();
+            let type_symbol = TypeSymbol::Pointer(Box::new(TypeSymbol::Primitive(ty.elem_type)));
+            params.push((KernelVar::Value(id), type_symbol));
+        };
+        let [output] = self.schedule.kernels[kernel_id].outputs[..] else {
+            unimplemented!("Only single output kernels are supported");
+        };
+        add_param(&mut params, output);
+        for input in self.schedule.kernels[kernel_id].inputs.iter() {
+            add_param(&mut params, *input);
+        }
+        // TODO: Other params (e.g., BatchNorm).
+        params.push((
+            KernelVar::Size,
+            TypeSymbol::Primitive(DataType::SInt(SIntType::I64)),
+        ));
+
+        let mut args = Vec::with_capacity(params.len());
+        for (param, ty) in params.iter() {
+            let arg = match param {
+                KernelVar::Value(p) => {
+                    let ptr = self.device_identifier(*p)?;
+                    Expr::Literal(format!("({}){}", ty, ptr.fragment()))
+                }
+                KernelVar::Size => {
+                    let size = self.get_resolved_tensor_type(output)?.dims.size();
+                    Expr::Literal(size.to_string())
+                }
+                KernelVar::Gid | KernelVar::Local(_) => unreachable!(),
+            };
+            args.push(arg);
+        }
+
+        let decl = KernelDecl { kernel_id, params };
+        self.separated_codes.push(SeparatedCode::Device(DeviceCode {
+            body: KernelBuilder::new(self.schedule, decl.clone()).build()?,
+            decl: decl.clone(),
+        }));
+        Ok(GeneratedKernel { decl, args })
+    }
+
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
         let kernel = &self.schedule.kernels[kernel_id];
         let mem_alloc = kernel
@@ -844,9 +917,30 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
+        let create_launch_kernel = |slf: &Self, cuda_kernel: kernel::CUDAKernel| {
+            let output_ty = slf.get_resolved_tensor_type(kernel.outputs[0])?;
+            let output_size = output_ty.dims.size();
+            let block_size = DEFAULT_BLOCK_SIZE.to_literal();
+            let grid_size = output_size.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
+            Ok(kernel::LaunchKernel {
+                cuda_kernel,
+                grid_size,
+                block_size,
+                shared_mem_bytes: None,
+                stream_id: kernel_stream,
+            })
+        };
+
         // Launch the kernel
         match kernel.body {
             KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+                Operator::Add | Operator::Sub | Operator::Mul => {
+                    let generated = self.generate_kernel(kernel_id)?;
+                    self.stmts.push(
+                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
+                            .into(),
+                    );
+                }
                 Operator::Conv(ref conv) => {
                     if conv.kernel_shape.ndim() != 2 {
                         unimplemented!("Only 2D convolution is supported");
@@ -947,23 +1041,14 @@ impl<'sched> HostCodeGenerator<'sched> {
                         pad_h,
                         pad_w,
                     };
-                    let output_size = output_ty.dims.size();
-                    let block_size = DEFAULT_BLOCK_SIZE.to_literal();
-                    let grid_size = output_size.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
                     self.stmts.push(
-                        kernel::LaunchKernel {
-                            cuda_kernel: kernel::CUDAKernel::MaxPoolKernel(maxpool),
-                            grid_size,
-                            block_size,
-                            shared_mem_bytes: None,
-                            stream_id: kernel_stream,
-                        }
-                        .into(),
+                        create_launch_kernel(self, kernel::CUDAKernel::MaxPoolKernel(maxpool))?
+                            .into(),
                     );
                 }
-                _ => unimplemented!("Kernel body not implemented"),
+                _ => unimplemented!("Kernel body not implemented: {:?}", op),
             },
-            _ => unimplemented!("Kernel body not implemented"),
+            _ => unimplemented!("Kernel body not implemented: {:?}", kernel.body),
         }
 
         self.record_event(kernel_stream, &kernel.outputs);
@@ -990,7 +1075,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         let decl_cuda_objs = self.gen_decl_cuda_objs()?;
 
         let mut kernel_codes = Vec::new();
-        std::mem::swap(&mut self.kernel_codes, &mut kernel_codes);
+        std::mem::swap(&mut self.separated_codes, &mut kernel_codes);
 
         Ok(HostCode {
             decl_values,
@@ -1008,7 +1093,7 @@ impl HostCode {
             writer.write_all(format!("#include <{}>\n", h).as_bytes())?;
         }
         for h in [
-            "common.h",
+            "common.cuh",
             "cuda.h",
             "cudnn.h",
             "pool.cu",
@@ -1019,8 +1104,11 @@ impl HostCode {
 
         for code in self.kernel_codes.iter() {
             match code {
-                KernelCode::Cudnn(code) => {
+                SeparatedCode::Cudnn(code) => {
                     writer.write_all(format!("extern \"C\" {};\n", code.init_fn_decl).as_bytes())?
+                }
+                SeparatedCode::Device(code) => {
+                    writer.write_all(format!("extern \"C\" {};\n", code.decl.decl()).as_bytes())?
                 }
             }
         }
