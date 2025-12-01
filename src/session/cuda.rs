@@ -105,7 +105,7 @@ impl SessionCUDA {
                     .args([
                         src.to_str().unwrap(),
                         format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
-                        "-c",
+                        "-dc",
                         "-o",
                         obj.to_str().unwrap(),
                         "-lcudnn",

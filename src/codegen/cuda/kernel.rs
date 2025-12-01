@@ -1,4 +1,5 @@
 use crate::codegen::cuda::*;
+use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use delegate::delegate;
 use derive_more::From;
@@ -138,6 +139,7 @@ enum KernelStmt {
     },
 }
 
+#[derive(Clone)]
 pub enum KernelExpr {
     KernelVar(KernelVar),
     ArrayAccess {
@@ -266,8 +268,17 @@ impl<'sched> KernelBuilder<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
-    fn tensor_idx(&self, value_id: ValueId) -> Result<KernelExpr, BuildError> {
+    fn tensor_idx(
+        &self,
+        value_id: ValueId,
+        target_dims: Option<&ResolvedTensorDims>,
+    ) -> Result<KernelExpr, BuildError> {
         let ty = self.get_resolved_tensor_type(value_id)?;
+        let ty = if let Some(target_dims) = target_dims {
+            ty.broadcast(target_dims)
+        } else {
+            ty.clone()
+        };
         match ty.dims.ndim() {
             1 => Ok(KernelVar::Gid.into()),
             d @ (2..=4) => {
@@ -282,7 +293,7 @@ impl<'sched> KernelBuilder<'sched> {
         }
     }
 
-    fn single_op(&self, op: &Operator, inputs: &[KernelVar]) -> KernelExpr {
+    fn single_op(&self, op: &Operator, inputs: &[KernelExpr]) -> KernelExpr {
         match op {
             binop @ (Operator::Add | Operator::Sub | Operator::Mul) => {
                 let [a, b] = inputs else {
@@ -308,26 +319,55 @@ impl<'sched> KernelBuilder<'sched> {
     fn build_body(&mut self) -> Result<Vec<KernelStmt>, BuildError> {
         let mut stmts = Vec::new();
         let kernel = &self.schedule.kernels[self.decl.kernel_id];
+
+        macro_rules! handle_input_value {
+            ($value_id: expr, $target_dims: expr) => {{
+                let idx = self.tensor_idx($value_id, $target_dims)?;
+                let array = KernelVar::Value($value_id);
+                let var = self.new_local_var();
+                stmts.push(KernelStmt::DefineVar {
+                    ty: TypeSymbol::Primitive(self.get_resolved_tensor_type($value_id)?.elem_type),
+                    var,
+                    init: KernelExpr::ArrayAccess {
+                        array: Box::new(array.into()),
+                        index: Box::new(idx),
+                    },
+                });
+                var.into()
+            }};
+        }
+
+        let output_dims = self
+            .get_resolved_tensor_type(kernel.outputs[0])?
+            .dims
+            .clone();
         let output = match &kernel.body {
             KernelBody::SingleKernel(SingleKernel { op }) => {
                 let mut inputs = Vec::with_capacity(kernel.inputs.len());
                 for input in kernel.inputs.iter() {
-                    let idx = self.tensor_idx(*input)?;
-                    let array = KernelVar::Value(*input);
-                    let var = self.new_local_var();
+                    let var = handle_input_value!(*input, Some(&output_dims));
                     inputs.push(var);
-                    stmts.push(KernelStmt::DefineVar {
-                        ty: TypeSymbol::Primitive(self.get_resolved_tensor_type(*input)?.elem_type),
-                        var,
-                        init: KernelExpr::ArrayAccess {
-                            array: Box::new(array.into()),
-                            index: Box::new(idx),
-                        },
-                    });
                 }
                 self.single_op(op, &inputs)
             }
-            KernelBody::FusedElementWises(_) => unimplemented!(),
+            KernelBody::FusedElementWises(FusedElementWises { ops }) => {
+                let mut outputs: Vec<KernelExpr> = Vec::new();
+                for (op, args) in ops.iter() {
+                    let mut inputs = Vec::with_capacity(args.len());
+                    for input in args.iter() {
+                        match input {
+                            ElementwiseOpArg::Input(i) => {
+                                let var =
+                                    handle_input_value!(kernel.inputs[*i], Some(&output_dims));
+                                inputs.push(var);
+                            }
+                            ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i].clone()),
+                        }
+                    }
+                    outputs.push(self.single_op(op, &inputs))
+                }
+                outputs.pop().unwrap()
+            }
         };
 
         assert!(kernel.outputs.len() == 1);
@@ -335,7 +375,7 @@ impl<'sched> KernelBuilder<'sched> {
         stmts.push(KernelStmt::Assign {
             lhs: KernelExpr::ArrayAccess {
                 array: Box::new(KernelVar::Value(output_array).into()),
-                index: Box::new(self.tensor_idx(output_array)?),
+                index: Box::new(self.tensor_idx(output_array, None)?),
             },
             rhs: output,
         });

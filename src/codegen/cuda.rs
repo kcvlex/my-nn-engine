@@ -6,7 +6,6 @@ use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelBuilder;
 use crate::codegen::cuda::kernel::KernelDecl;
-use crate::codegen::cuda::kernel::KernelExpr;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
@@ -1048,7 +1047,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
                 _ => unimplemented!("Kernel body not implemented: {:?}", op),
             },
-            _ => unimplemented!("Kernel body not implemented: {:?}", kernel.body),
+            KernelBody::FusedElementWises(_) => {
+                let generated = self.generate_kernel(kernel_id)?;
+                self.stmts.push(
+                    create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
+                        .into(),
+                );
+            }
         }
 
         self.record_event(kernel_stream, &kernel.outputs);
