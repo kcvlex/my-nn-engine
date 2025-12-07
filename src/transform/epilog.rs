@@ -1,4 +1,6 @@
 use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::options::*;
 use crate::transform::modify::GraphOp;
@@ -24,7 +26,25 @@ impl<T: GraphOp> Pass<T> for Ops2Identity {
             })
             .collect::<Vec<_>>();
         for id in ids.iter() {
-            modifier.replace_op(graph, *id, Operator::Identity);
+            let node = &graph.nodes[*id];
+            let input = node.inputs[0];
+            let old_output = node.outputs[0];
+            let new_output = modifier.register_new_value(
+                graph,
+                format!("Identity_{}", old_output.index()),
+                graph.get_resolved_tensor_type(old_output).unwrap().clone(),
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![input],
+                    outputs: vec![new_output],
+                    name: format!("Identity_{}", id.index()),
+                    op: Operator::Identity,
+                    meta: NodeMeta::default(),
+                }
+            );
+            modifier.replace_input_value(graph, old_output, new_output);
         }
     }
 }

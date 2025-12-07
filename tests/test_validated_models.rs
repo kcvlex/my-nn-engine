@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;
 
-fn run_test(model: &str, epsilon: f64) -> Result {
+fn run_test(model: &str, epsilon: f64, target: Target) -> Result {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model);
@@ -20,7 +20,7 @@ fn run_test(model: &str, epsilon: f64) -> Result {
     let session = Session::new(
         &model_path,
         Some(&[input.tensor_type()]),
-        &Options::builder().build(),
+        &Options::builder().target(target).build(),
     )?;
     let output = session.run(&[input])?;
     let expected = Tensor::load_from_path(output_path).map_err(SessionError::ModelLoadError)?;
@@ -32,21 +32,26 @@ fn run_test(model: &str, epsilon: f64) -> Result {
 }
 
 #[test]
-fn test_mnist12() -> Result {
-    run_test("mnist-12", 1e-3)
+fn test_mnist12_cpu() -> Result {
+    run_test("mnist-12", 1e-3, Target::CPU)
 }
 
 #[test]
-fn test_resnet18() -> Result {
-    run_test("resnet18-v2-7", 1e-3)
+fn test_resnet18_cpu() -> Result {
+    run_test("resnet18-v2-7", 1e-3, Target::CPU)
 }
 
 #[test]
-fn test_resnet152() -> Result {
-    run_test("resnet152-v2-7", 1e-3)
+fn test_resnet152_cpu() -> Result {
+    run_test("resnet152-v2-7", 1e-3, Target::CPU)
 }
 
 #[test]
-fn test_yolov4() -> Result {
-    run_test("yolov4", 1e-3)
+fn test_yolov4_cpu() -> Result {
+    run_test("yolov4", 1e-3, Target::CPU)
+}
+
+#[test]
+fn test_mnist12_cuda() -> Result {
+    run_test("mnist-12", 1e-2, Target::CUDA)
 }

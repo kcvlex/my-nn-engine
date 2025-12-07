@@ -662,7 +662,7 @@ mod test {
 
     #[test]
     fn conv_with_autopad_same() -> TestResult {
-        with_cpu_session("conv_with_autopad_same.onnx", |session| {
+        with_all_sessions("conv_with_autopad_same.onnx", |session| {
             // (1 x 1 x 5 x 5)
             let (input0, _) = make_tensor!(
                 f32,

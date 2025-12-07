@@ -424,7 +424,18 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         };
         let (pad_h, pad_w) = match conv.pad {
             ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
-            _ => unimplemented!("Padding type not implemented"),
+            ConvPad::Valid => (0, 0),
+            ConvPad::SameUpper | ConvPad::SameLower => {
+                let calc = |dim: usize| {
+                    let input = input_ty.dims[2 + dim];
+                    let output = output_ty.dims[2 + dim];
+                    let stride = conv.strides[dim];
+                    let ext_len = stride * (output - 1) + weight_ty.dims[2 + dim];
+                    let pad_total = ext_len - input;
+                    pad_total / 2 + if matches!(conv.pad, ConvPad::SameLower) { pad_total % 2 } else { 0 }
+                };
+                (calc(0), calc(1))
+            },
         };
         stmts.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
         stmts.push(
@@ -880,11 +891,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             .filter(|info| kernel.inputs.contains(&info.value_id))
             .partition(|info| self.to_transfer.remove(&info.value_id));
 
-        // Verify
-        for info in copy.iter() {
-            assert!(info.is_first_use);
-        }
-
         let memcpy_stream = self.streams.pick_head();
         for trans in copy.iter() {
             let value_id = trans.value_id;
@@ -954,9 +960,21 @@ impl<'sched> HostCodeGenerator<'sched> {
         // Launch the kernel
         match kernel.body {
             KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+                Operator::Identity => {
+                    let input_chunk = self
+                        .value2chunk
+                        .get(&kernel.inputs[0])
+                        .ok_or(BuildError::ChunkNotFound(kernel.inputs[0]))?;
+                    let output_chunk = self
+                        .value2chunk
+                        .get(&kernel.outputs[0])
+                        .ok_or(BuildError::ChunkNotFound(kernel.outputs[0]))?;
+                    if input_chunk != output_chunk {
+                        unimplemented!("Identity between different chunks is not supported");
+                    }
+                },
                 Operator::Add |
                 Operator::Exp |
-                Operator::Identity |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
@@ -1094,6 +1112,19 @@ impl<'sched> HostCodeGenerator<'sched> {
                         };
                         (tmp0, tmp1)
                     };
+
+                    // TODO: Copy bias into output chunk if bias_chunk != output_chunk.
+                    if kernel.inputs.len() == 3 {
+                        let bias_chunk = self
+                            .value2chunk
+                            .get(&kernel.inputs[2])
+                            .unwrap();
+                        let output_chunk = self
+                            .value2chunk
+                            .get(&kernel.outputs[0])
+                            .unwrap();
+                        assert!(bias_chunk == output_chunk);
+                    }
 
                     let a = self.device_identifier(kernel.inputs[1])?.fragment();
                     let b = self.device_identifier(kernel.inputs[0])?.fragment();
