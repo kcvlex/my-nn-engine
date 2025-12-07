@@ -444,7 +444,7 @@ mod test {
 
     #[test]
     fn matmul() -> TestResult {
-        with_cpu_session("matmul.onnx", |session| {
+        with_all_sessions("matmul.onnx", |session| {
             let (input0, orig0) = make_tensor!(
                 f32,
                 [1.0, 2.0, 3.0],
@@ -461,7 +461,7 @@ mod test {
 
     #[test]
     fn matmul_a_x_tb() -> TestResult {
-        with_cpu_session("matmul_a_x_tb.onnx", |session| {
+        with_all_sessions("matmul_a_x_tb.onnx", |session| {
             let (input0, orig0) = make_range_tensor!(f32, 5, 7)?;
             let (input1, orig1) = make_range_tensor!(f32, 6, 7)?;
 

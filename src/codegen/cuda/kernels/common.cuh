@@ -29,6 +29,19 @@
     } \
   } while (0)
 
+#define cublasCheckErr(expression) \
+  do { \
+    cublasStatus_t status = (expression); \
+    if (status != CUBLAS_STATUS_SUCCESS) { \
+        fprintf(stderr, \
+                "cuBLAS eror: %d %s %d \n", \
+                status, \
+                __FILE__, \
+                __LINE__); \
+      exit(EXIT_FAILURE); \
+    } \
+  } while (0)
+
 using i64 = std::int64_t;
 using u64 = std::uint64_t;
 

@@ -1,7 +1,9 @@
+mod cublas;
 mod cudnn;
 mod kernel;
 mod runtime_api;
 
+use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelBuilder;
@@ -164,6 +166,12 @@ impl<T: ToString> ToLiteral for T {
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
 struct StreamId(usize);
 
+impl StreamId {
+    fn index(&self) -> usize {
+        self.0
+    }
+}
+
 impl ToIdentifier for StreamId {
     fn to_identifier(&self) -> Expr {
         Expr::Identifier(format!("stream_{}", self.0))
@@ -183,6 +191,7 @@ impl ToIdentifier for EventId {
 enum Statement {
     LaunchKernel(kernel::LaunchKernel),
     CudaRuntimeApi(CudaRuntimeApi),
+    CublasApi(CublasApi),
     CudnnApi(CudnnApi),
     Raw(String),
 }
@@ -193,6 +202,7 @@ impl Statement {
             // TODO: Error handling for kernel launch
             Statement::LaunchKernel(kernel) => format!("{};", kernel.fragment()),
             Statement::CudaRuntimeApi(api) => format!("cudaCheckErr({});", api.fragment()),
+            Statement::CublasApi(api) => format!("cublasCheckErr({});", api),
             Statement::CudnnApi(api) => format!("cudnnCheckErr({});", api.fragment()),
             Statement::Raw(stmt) => stmt.clone(),
         }
@@ -218,6 +228,7 @@ pub struct HostCodeGenerator<'sched> {
 
     event_slot: IdSlot<EventId, fn(usize) -> EventId>,
 
+    cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
     separated_codes: Vec<SeparatedCode>,
@@ -559,6 +570,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .copied()
                 .collect(),
             event_slot: IdSlot::new(EventId),
+            cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
         }
@@ -676,6 +688,15 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts
                 .push(Statement::Raw(format!("cudaStream_t {name};")));
             self.stmts.push(StreamCreate { stream_id }.into());
+        }
+
+        for (_, handler) in self.cublas_handlers.iter() {
+            self.stmts.push(Statement::Raw(format!(
+                "cublasHandle_t {handler};",
+                handler = handler,
+            )));
+            self.stmts.push(CublasApi::Create(*handler).into());
+            self.stmts.push(CublasApi::SetStream(*handler).into());
         }
 
         for (stream_id, kernels) in self.cudnn_ctxs.iter() {
@@ -1004,6 +1025,102 @@ impl<'sched> HostCodeGenerator<'sched> {
                     )));
                 }
 
+                Operator::Gemm(Gemm {
+                    alpha,
+                    beta,
+                    trans_a,
+                    trans_b,
+                }) => {
+                    let elem_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type;
+                    let c_data_ty = elem_ty.fragment();
+                    let alpha = {
+                        let var_name = format!("alpha_{}", kernel_id.index());
+                        self.stmts.push(Statement::Raw(format!(
+                            "{ty} {name} = {value};",
+                            ty = c_data_ty,
+                            name = var_name,
+                            value = alpha,
+                        )));
+                        var_name
+                    };
+                    let beta = {
+                        let var_name = format!("beta_{}", kernel_id.index());
+                        self.stmts.push(Statement::Raw(format!(
+                            "{ty} {name} = {value};",
+                            ty = c_data_ty,
+                            name = var_name,
+                            value = beta,
+                        )));
+                        var_name
+                    };
+                    let handler = *self
+                        .cublas_handlers
+                        .entry(kernel_stream)
+                        .or_insert_with(|| CublasHandler::new(kernel_stream));
+
+                    // cuBLAS is column-major!
+                    // We have t(A) and t(B), and want t(C).
+                    // t(C) = t(A * B) = t(B) * t(A).
+                    let (m, k, n) = {
+                        let a_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
+                        let b_ty = self.get_resolved_tensor_type(kernel.inputs[1])?.clone();
+                        assert!(a_ty.is_contiguous());
+                        assert!(b_ty.is_contiguous());
+                        let [m, k] = a_ty.dims[..] else {
+                            panic!("Invalid GEMM input A shape");
+                        };
+                        let (m, k) = if *trans_a { (k, m) } else { (m, k) };
+                        let [k_, n] = b_ty.dims[..] else {
+                            panic!("Invalid GEMM input B shape");
+                        };
+                        let (k_, n) = if *trans_b { (n, k_) } else { (k_, n) };
+                        assert!(k == k_);
+                        (n, k, m)
+                    };
+                    let lda = if !*trans_b { m } else { k };
+                    let ldb = if !*trans_a { k } else { n };
+                    let ldc = m;
+                    let (trans_a, trans_b) = {
+                        let tmp0 = if *trans_b {
+                            CublasOperation::Transpose
+                        } else {
+                            CublasOperation::Non
+                        };
+
+                        let tmp1 = if *trans_a {
+                            CublasOperation::Transpose
+                        } else {
+                            CublasOperation::Non
+                        };
+                        (tmp0, tmp1)
+                    };
+
+                    let a = self.device_identifier(kernel.inputs[1])?.fragment();
+                    let b = self.device_identifier(kernel.inputs[0])?.fragment();
+                    let c = self.device_identifier(kernel.outputs[0])?.fragment();
+
+                    self.stmts.push(
+                        CublasApi::Gemm(GemmArgs {
+                            handler,
+                            trans_a,
+                            trans_b,
+                            a,
+                            b,
+                            c,
+                            m,
+                            n,
+                            k,
+                            lda,
+                            ldb,
+                            ldc,
+                            alpha,
+                            beta,
+                            data_ty: elem_ty,
+                        })
+                        .into(),
+                    );
+                }
+
                 Operator::MaxPool(ref pool) => {
                     if pool.kernel_shape.ndim() != 2 {
                         unimplemented!("Only 2D max pooling is supported");
@@ -1112,6 +1229,7 @@ impl HostCode {
         for h in [
             "common.cuh",
             "cuda.h",
+            "cublas_v2.h",
             "cudnn.h",
             "pool.cu",
             "cudnn_setting.h",

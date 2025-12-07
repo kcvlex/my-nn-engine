@@ -109,6 +109,7 @@ impl SessionCUDA {
                         "-o",
                         obj.to_str().unwrap(),
                         "-lcudnn",
+                        "-lcublas",
                         "--compiler-options",
                         "'-fPIC'",
                     ])
@@ -124,6 +125,7 @@ impl SessionCUDA {
                 "-o",
                 shared_lib.to_str().unwrap(),
                 "-lcudnn",
+                "-lcublas",
                 "--compiler-options",
                 "'-fPIC'",
             ])
