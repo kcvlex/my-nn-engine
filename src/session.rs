@@ -324,6 +324,22 @@ mod test {
         with_session(p, &[Target::CPU], f)
     }
 
+    fn with_all_sessions<P, F>(p: P, f: F) -> TestResult
+    where
+        P: AsRef<std::path::Path>,
+        F: Fn(Session) -> TestResult,
+    {
+        with_session(p, &[Target::CPU, Target::CUDA], f)
+    }
+
+    fn with_all_sessions_and_tensors<P, F>(p: P, f: F) -> TestResult
+    where
+        P: AsRef<std::path::Path>,
+        F: Fn(Session, (Tensor, Tensor)) -> TestResult,
+    {
+        with_session_and_tensors(p, &[Target::CPU, Target::CUDA], f)
+    }
+
     type TestResult = Result<(), SessionError>;
 
     trait Sigmoid {
@@ -349,7 +365,7 @@ mod test {
 
     #[test]
     fn add_large() -> TestResult {
-        with_session("add_large.onnx", &[Target::CPU, Target::CUDA], |session| {
+        with_all_sessions("add_large.onnx", |session| {
             let (input0, orig0) = make_tensor!(
                 f32, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0,
                 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
@@ -366,47 +382,43 @@ mod test {
 
     #[test]
     fn add_broadcast() -> TestResult {
-        with_session(
-            "add_broadcast.onnx",
-            &[Target::CPU, Target::CUDA],
-            |session| {
-                // (1 x 4 x 5)
-                let (input0, orig0) = make_tensor!(
-                    f32,
-                    [
-                        [1.0, 2.0, 3.0, 4.0, 5.0],
-                        [2.0, 3.0, 4.0, 5.0, 6.0],
-                        [3.0, 4.0, 5.0, 6.0, 7.0],
-                        [4.0, 5.0, 6.0, 7.0, 8.0],
-                    ],
-                )?;
+        with_all_sessions("add_broadcast.onnx", |session| {
+            // (1 x 4 x 5)
+            let (input0, orig0) = make_tensor!(
+                f32,
+                [
+                    [1.0, 2.0, 3.0, 4.0, 5.0],
+                    [2.0, 3.0, 4.0, 5.0, 6.0],
+                    [3.0, 4.0, 5.0, 6.0, 7.0],
+                    [4.0, 5.0, 6.0, 7.0, 8.0],
+                ],
+            )?;
 
-                // (2 x 3 x 1 x 1)
-                let (input1, orig1) = make_tensor!(
-                    f32,
-                    [[[1.0]], [[2.0]], [[3.0]]],
-                    [[[1.0]], [[2.0]], [[3.0]]],
-                )?;
+            // (2 x 3 x 1 x 1)
+            let (input1, orig1) = make_tensor!(
+                f32,
+                [[[1.0]], [[2.0]], [[3.0]]],
+                [[[1.0]], [[2.0]], [[3.0]]],
+            )?;
 
-                // (4 x 5)
-                let (input2, orig2) = make_tensor!(
-                    f32,
-                    [10.0, 11.0, 12.0, 13.0, 14.0],
-                    [20.0, 21.0, 22.0, 23.0, 24.0],
-                    [30.0, 31.0, 32.0, 33.0, 34.0],
-                    [40.0, 41.0, 42.0, 43.0, 44.0],
-                )?;
+            // (4 x 5)
+            let (input2, orig2) = make_tensor!(
+                f32,
+                [10.0, 11.0, 12.0, 13.0, 14.0],
+                [20.0, 21.0, 22.0, 23.0, 24.0],
+                [30.0, 31.0, 32.0, 33.0, 34.0],
+                [40.0, 41.0, 42.0, 43.0, 44.0],
+            )?;
 
-                let output = session.run(&[input0, input1, input2])?;
-                tensor_assert_eq!(output[0], (orig0 + orig1 + orig2).into_dyn());
-                Ok(())
-            },
-        )
+            let output = session.run(&[input0, input1, input2])?;
+            tensor_assert_eq!(output[0], (orig0 + orig1 + orig2).into_dyn());
+            Ok(())
+        })
     }
 
     #[test]
     fn relu() -> TestResult {
-        with_cpu_session("relu.onnx", |session| {
+        with_all_sessions("relu.onnx", |session| {
             let (input, orig) =
                 make_tensor!(f32, [[1.0, -2.0], [42.0, 4.0]], [[-5.0, 6.0], [-7.0, -8.0]],)?;
             let output = session.run(&[input])?;
@@ -462,7 +474,7 @@ mod test {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-32
     #[test]
     fn conv() -> TestResult {
-        with_session("conv.onnx", &[Target::CPU, Target::CUDA], |session| {
+        with_all_sessions("conv.onnx", |session| {
             // (1 x 1 x 5 x 5)
             let (input0, _) = make_tensor!(
                 f32,
@@ -498,89 +510,111 @@ mod test {
 
     #[test]
     fn conv_with_strides0() -> TestResult {
-        with_session(
-            "conv_with_strides0.onnx",
-            &[Target::CPU, Target::CUDA],
-            |session| {
-                // (1 x 1 x 7 x 5)
-                let (input0, _) = make_tensor!(
-                    f32,
-                    [[
-                        [0.0, 1.0, 2.0, 3.0, 4.0],
-                        [5.0, 6.0, 7.0, 8.0, 9.0],
-                        [10.0, 11.0, 12.0, 13.0, 14.0],
-                        [15.0, 16.0, 17.0, 18.0, 19.0],
-                        [20.0, 21.0, 22.0, 23.0, 24.0],
-                        [25.0, 26.0, 27.0, 28.0, 29.0],
-                        [30.0, 31.0, 32.0, 33.0, 34.0],
-                    ]],
-                )?;
+        with_all_sessions("conv_with_strides0.onnx", |session| {
+            // (1 x 1 x 7 x 5)
+            let (input0, _) = make_tensor!(
+                f32,
+                [[
+                    [0.0, 1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0, 13.0, 14.0],
+                    [15.0, 16.0, 17.0, 18.0, 19.0],
+                    [20.0, 21.0, 22.0, 23.0, 24.0],
+                    [25.0, 26.0, 27.0, 28.0, 29.0],
+                    [30.0, 31.0, 32.0, 33.0, 34.0],
+                ]],
+            )?;
 
-                // (1 x 1 x 3 x 3)
-                let (input1, _) =
-                    make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
-                let output = session.run(&[input0, input1])?;
+            // (1 x 1 x 3 x 3)
+            let (input1, _) =
+                make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+            let output = session.run(&[input0, input1])?;
 
-                // (1 x 1 x 4 x 3)
-                let (expected, _) = make_tensor!(
-                    f32,
-                    [[
-                        [12.0, 27.0, 24.0],
-                        [63.0, 108.0, 81.0],
-                        [123.0, 198.0, 141.0],
-                        [112.0, 177.0, 124.0],
-                    ]],
-                )?;
-                assert_eq!(output[0], expected);
-                Ok(())
-            },
-        )
+            // (1 x 1 x 4 x 3)
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [12.0, 27.0, 24.0],
+                    [63.0, 108.0, 81.0],
+                    [123.0, 198.0, 141.0],
+                    [112.0, 177.0, 124.0],
+                ]],
+            )?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
     }
 
     #[test]
     fn conv_with_strides1() -> TestResult {
-        with_session(
-            "conv_with_strides1.onnx",
-            &[Target::CPU, Target::CUDA],
-            |session| {
-                // (1 x 1 x 7 x 5)
-                let (input0, _) = make_tensor!(
-                    f32,
-                    [[
-                        [0.0, 1.0, 2.0, 3.0, 4.0],
-                        [5.0, 6.0, 7.0, 8.0, 9.0],
-                        [10.0, 11.0, 12.0, 13.0, 14.0],
-                        [15.0, 16.0, 17.0, 18.0, 19.0],
-                        [20.0, 21.0, 22.0, 23.0, 24.0],
-                        [25.0, 26.0, 27.0, 28.0, 29.0],
-                        [30.0, 31.0, 32.0, 33.0, 34.0],
-                    ]],
-                )?;
+        with_all_sessions("conv_with_strides1.onnx", |session| {
+            // (1 x 1 x 7 x 5)
+            let (input0, _) = make_tensor!(
+                f32,
+                [[
+                    [0.0, 1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0, 13.0, 14.0],
+                    [15.0, 16.0, 17.0, 18.0, 19.0],
+                    [20.0, 21.0, 22.0, 23.0, 24.0],
+                    [25.0, 26.0, 27.0, 28.0, 29.0],
+                    [30.0, 31.0, 32.0, 33.0, 34.0],
+                ]],
+            )?;
 
-                // (1 x 1 x 3 x 3)
-                let (input1, _) =
-                    make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
-                let output = session.run(&[input0, input1])?;
+            // (1 x 1 x 3 x 3)
+            let (input1, _) =
+                make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+            let output = session.run(&[input0, input1])?;
 
-                // (1 x 1 x 3 x 2)
-                let (expected, _) =
-                    make_tensor!(f32, [[[54.0, 72.0], [144.0, 162.0], [234.0, 252.0],]],)?;
-                assert_eq!(output[0], expected);
-                Ok(())
-            },
-        )
+            // (1 x 1 x 3 x 2)
+            let (expected, _) =
+                make_tensor!(f32, [[[54.0, 72.0], [144.0, 162.0], [234.0, 252.0],]],)?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
     }
 
     #[test]
     fn conv_with_strides2() -> TestResult {
-        with_session(
-            "conv_with_strides2.onnx",
-            &[Target::CPU, Target::CUDA],
-            |session| {
-                // (1 x 1 x 7 x 5)
-                let (input0, _) = make_tensor!(
-                    f32,
-                    [[
+        with_all_sessions("conv_with_strides2.onnx", |session| {
+            // (1 x 1 x 7 x 5)
+            let (input0, _) = make_tensor!(
+                f32,
+                [[
+                    [0.0, 1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0, 13.0, 14.0],
+                    [15.0, 16.0, 17.0, 18.0, 19.0],
+                    [20.0, 21.0, 22.0, 23.0, 24.0],
+                    [25.0, 26.0, 27.0, 28.0, 29.0],
+                    [30.0, 31.0, 32.0, 33.0, 34.0],
+                ]],
+            )?;
+
+            // (1 x 1 x 3 x 3)
+            let (input1, _) =
+                make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
+            let output = session.run(&[input0, input1])?;
+
+            // (1 x 1 x 4 x 2)
+            let (expected, _) = make_tensor!(
+                f32,
+                [[[21.0, 33.0], [99.0, 117.0], [189.0, 207.0], [171.0, 183.0],]],
+            )?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn conv_channels() -> TestResult {
+        with_all_sessions("conv_channels.onnx", |session| {
+            // (1 x 2 x 7 x 5)
+            let (input0, _) = make_tensor!(
+                f32,
+                [
+                    [
                         [0.0, 1.0, 2.0, 3.0, 4.0],
                         [5.0, 6.0, 7.0, 8.0, 9.0],
                         [10.0, 11.0, 12.0, 13.0, 14.0],
@@ -588,80 +622,42 @@ mod test {
                         [20.0, 21.0, 22.0, 23.0, 24.0],
                         [25.0, 26.0, 27.0, 28.0, 29.0],
                         [30.0, 31.0, 32.0, 33.0, 34.0],
-                    ]],
-                )?;
-
-                // (1 x 1 x 3 x 3)
-                let (input1, _) =
-                    make_tensor!(f32, [[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0],]],)?;
-                let output = session.run(&[input0, input1])?;
-
-                // (1 x 1 x 4 x 2)
-                let (expected, _) = make_tensor!(
-                    f32,
-                    [[[21.0, 33.0], [99.0, 117.0], [189.0, 207.0], [171.0, 183.0],]],
-                )?;
-                assert_eq!(output[0], expected);
-                Ok(())
-            },
-        )
-    }
-
-    #[test]
-    fn conv_channels() -> TestResult {
-        with_session(
-            "conv_channels.onnx",
-            &[Target::CPU, Target::CUDA],
-            |session| {
-                // (1 x 2 x 7 x 5)
-                let (input0, _) = make_tensor!(
-                    f32,
-                    [
-                        [
-                            [0.0, 1.0, 2.0, 3.0, 4.0],
-                            [5.0, 6.0, 7.0, 8.0, 9.0],
-                            [10.0, 11.0, 12.0, 13.0, 14.0],
-                            [15.0, 16.0, 17.0, 18.0, 19.0],
-                            [20.0, 21.0, 22.0, 23.0, 24.0],
-                            [25.0, 26.0, 27.0, 28.0, 29.0],
-                            [30.0, 31.0, 32.0, 33.0, 34.0],
-                        ],
-                        [
-                            [1.0, 2.0, 3.0, 4.0, 5.0],
-                            [6.0, 7.0, 8.0, 9.0, 10.0],
-                            [11.0, 12.0, 13.0, 14.0, 15.0],
-                            [16.0, 17.0, 18.0, 19.0, 20.0],
-                            [21.0, 22.0, 23.0, 24.0, 25.0],
-                            [26.0, 27.0, 28.0, 29.0, 30.0],
-                            [31.0, 32.0, 33.0, 34.0, 35.0],
-                        ]
                     ],
-                )?;
-
-                // (1 x 2 x 3 x 3)
-                let (input1, _) = make_tensor!(
-                    f32,
                     [
-                        [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-                        [[2.0, 2.0, 2.0], [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]],
-                    ],
-                )?;
-                let output = session.run(&[input0, input1])?;
+                        [1.0, 2.0, 3.0, 4.0, 5.0],
+                        [6.0, 7.0, 8.0, 9.0, 10.0],
+                        [11.0, 12.0, 13.0, 14.0, 15.0],
+                        [16.0, 17.0, 18.0, 19.0, 20.0],
+                        [21.0, 22.0, 23.0, 24.0, 25.0],
+                        [26.0, 27.0, 28.0, 29.0, 30.0],
+                        [31.0, 32.0, 33.0, 34.0, 35.0],
+                    ]
+                ],
+            )?;
 
-                // (1 x 1 x 4 x 3)
-                let (expected, _) = make_tensor!(
-                    f32,
-                    [[
-                        [44.0, 93.0, 80.0],
-                        [201.0, 342.0, 255.0],
-                        [381.0, 612.0, 435.0],
-                        [344.0, 543.0, 380.0],
-                    ]],
-                )?;
-                assert_eq!(output[0], expected);
-                Ok(())
-            },
-        )
+            // (1 x 2 x 3 x 3)
+            let (input1, _) = make_tensor!(
+                f32,
+                [
+                    [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+                    [[2.0, 2.0, 2.0], [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]],
+                ],
+            )?;
+            let output = session.run(&[input0, input1])?;
+
+            // (1 x 1 x 4 x 3)
+            let (expected, _) = make_tensor!(
+                f32,
+                [[
+                    [44.0, 93.0, 80.0],
+                    [201.0, 342.0, 255.0],
+                    [381.0, 612.0, 435.0],
+                    [344.0, 543.0, 380.0],
+                ]],
+            )?;
+            assert_eq!(output[0], expected);
+            Ok(())
+        })
     }
 
     #[test]
@@ -696,20 +692,16 @@ mod test {
 
     #[test]
     fn conv_bias() -> TestResult {
-        with_session_and_tensors(
-            "conv_bias",
-            &[Target::CPU, Target::CUDA],
-            |session, (input, output)| {
-                let outputs = session.run(&[input])?;
-                assert_eq_epsilon!(outputs[0], output, 1e-4);
-                Ok(())
-            },
-        )
+        with_all_sessions_and_tensors("conv_bias", |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1e-4);
+            Ok(())
+        })
     }
 
     #[test]
     fn maxpool() -> TestResult {
-        with_session("maxpool.onnx", &[Target::CPU, Target::CUDA], |session| {
+        with_all_sessions("maxpool.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 3, 8, 8)?;
             let output = session.run(&[input])?;
 
@@ -816,7 +808,7 @@ mod test {
 
     #[test]
     fn leaky_relu() -> TestResult {
-        with_cpu_session("leakyrelu.onnx", |session| {
+        with_all_sessions("leakyrelu.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
             let alpha = 0.42;
             let expected = orig.map(|x| if *x < 0.0 { *x * alpha } else { *x });
@@ -828,29 +820,37 @@ mod test {
 
     #[test]
     fn exp() -> TestResult {
-        with_cpu_session("exp.onnx", |session| {
+        with_all_sessions("exp.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
-            let expected = orig.map(|x| x.exp());
+            let expected = orig
+                .map(|x| x.exp())
+                .into_dyn()
+                .try_into()
+                .map_err(SessionError::TypeError)?;
             let output = session.run(&[input])?;
-            tensor_assert_eq!(output[0], expected.into_dyn());
+            assert_eq_epsilon!(output[0], expected, 1e-6);
             Ok(())
         })
     }
 
     #[test]
     fn log() -> TestResult {
-        with_cpu_session("log.onnx", |session| {
+        with_all_sessions("log.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4_pos!()?;
-            let expected = orig.map(|x| x.ln());
+            let expected = orig
+                .map(|x| x.ln())
+                .into_dyn()
+                .try_into()
+                .map_err(SessionError::TypeError)?;
             let output = session.run(&[input])?;
-            tensor_assert_eq!(output[0], expected.into_dyn());
+            assert_eq_epsilon!(output[0], expected, 1e-6);
             Ok(())
         })
     }
 
     #[test]
     fn tanh() -> TestResult {
-        with_cpu_session("tanh.onnx", |session| {
+        with_all_sessions("tanh.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
             let expected: Tensor = orig
                 .map(|x| x.tanh())
@@ -865,7 +865,7 @@ mod test {
 
     #[test]
     fn sigmoid() -> TestResult {
-        with_cpu_session("sigmoid.onnx", |session| {
+        with_all_sessions("sigmoid.onnx", |session| {
             let (input, orig) = make_tensor_3x2x4!()?;
             let expected: Tensor = orig
                 .map(|x| x.sigmoid())
@@ -1198,11 +1198,22 @@ mod test {
 
         for (x, z, lty) in izip!(xv, zv, ty_lit) {
             for (y, rty) in izip!(yv.iter(), ty_lit) {
-                with_cpu_session(format!("pow_{}_{}.onnx", lty, rty), |session| {
-                    let output = session.run(&[x.clone(), y.clone()])?;
-                    assert_eq!(output[0], z.clone());
-                    Ok(())
-                })?;
+                let onnx = format!("pow_{}_{}.onnx", lty, rty);
+
+                // TODO: Support integer types for CUDA.
+                if lty.starts_with('f') && rty.starts_with('f') {
+                    with_all_sessions(onnx, |session| {
+                        let output = session.run(&[x.clone(), y.clone()])?;
+                        assert_eq_epsilon!(output[0], z.clone(), 1e-6);
+                        Ok(())
+                    })?;
+                } else {
+                    with_cpu_session(onnx, |session| {
+                        let output = session.run(&[x.clone(), y.clone()])?;
+                        assert_eq!(output[0], z.clone());
+                        Ok(())
+                    })?;
+                }
             }
         }
 
@@ -1211,7 +1222,7 @@ mod test {
 
     #[test]
     fn sub() -> TestResult {
-        with_cpu_session("sub.onnx", |session| {
+        with_all_sessions("sub.onnx", |session| {
             // (1 x 4 x 5)
             let (input0, orig0) = make_tensor!(
                 f32,

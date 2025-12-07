@@ -933,7 +933,19 @@ impl<'sched> HostCodeGenerator<'sched> {
         // Launch the kernel
         match kernel.body {
             KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
-                Operator::Add | Operator::Sub | Operator::Mul => {
+                Operator::Add |
+                Operator::Exp |
+                Operator::Identity |
+                Operator::LeakyReLU(_) |
+                Operator::Log |
+                Operator::Mul |
+                Operator::Pow |
+                Operator::Reciprocal |
+                Operator::ReLU |
+                Operator::Sigmoid |
+                Operator::Sqrt |
+                Operator::Sub |
+                Operator::Tanh => {
                     let generated = self.generate_kernel(kernel_id)?;
                     self.stmts.push(
                         create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?

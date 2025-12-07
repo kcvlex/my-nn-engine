@@ -293,18 +293,55 @@ impl<'sched> KernelBuilder<'sched> {
         }
     }
 
+    fn unary_op(&self, op: &Operator, x: KernelVar) -> KernelExpr {
+        KernelExpr::Raw(match op {
+            Operator::Exp => format!("exp({})", x),
+            Operator::Identity => format!("{}", x),
+            Operator::LeakyReLU(LeakyReLU { alpha }) => {
+                format!("((0 <= {}) ? {} : {} * {})", x, x, alpha, x)
+            }
+            Operator::Log => format!("log({})", x),
+            Operator::Reciprocal => format!("(1.0 / {})", x),
+            Operator::ReLU => format!("((0 <= {}) ? {} : 0)", x, x),
+            Operator::Sigmoid => format!("(1.0 / (1.0 + exp(-{})))", x),
+            Operator::Sqrt => format!("sqrt({})", x),
+            Operator::Tanh => format!("tanh({})", x),
+            _ => unreachable!(),
+        })
+    }
+
+    fn binary_op(&self, op: &Operator, lhs: KernelVar, rhs: KernelVar) -> KernelExpr {
+        KernelExpr::Raw(match op {
+            Operator::Add => format!("({} + {})", lhs, rhs),
+            Operator::Mul => format!("({} * {})", lhs, rhs),
+            // TODO: Support integer types.
+            Operator::Pow => format!("pow({}, {})", lhs, rhs),
+            Operator::Sub => format!("({} - {})", lhs, rhs),
+            _ => unreachable!(),
+        })
+    }
+
     fn single_op(&self, op: &Operator, inputs: &[KernelVar]) -> KernelExpr {
         match op {
-            binop @ (Operator::Add | Operator::Sub | Operator::Mul) => {
+            uop @ (Operator::Exp |
+            Operator::Identity |
+            Operator::LeakyReLU(_) |
+            Operator::Log |
+            Operator::Reciprocal |
+            Operator::ReLU |
+            Operator::Sigmoid |
+            Operator::Sqrt |
+            Operator::Tanh) => {
+                let [a] = inputs else {
+                    panic!("Expected 1 input for unary operator")
+                };
+                self.unary_op(uop, *a)
+            }
+            binop @ (Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub) => {
                 let [a, b] = inputs else {
                     panic!("Expected 2 inputs for binary operator")
                 };
-                KernelExpr::Raw(match binop {
-                    Operator::Add => format!("({} + {})", a, b),
-                    Operator::Sub => format!("({} - {})", a, b),
-                    Operator::Mul => format!("({} * {})", a, b),
-                    _ => unreachable!(),
-                })
+                self.binary_op(binop, *a, *b)
             }
             _ => unimplemented!(),
         }
