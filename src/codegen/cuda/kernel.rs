@@ -293,7 +293,7 @@ impl<'sched> KernelBuilder<'sched> {
         }
     }
 
-    fn single_op(&self, op: &Operator, inputs: &[KernelExpr]) -> KernelExpr {
+    fn single_op(&self, op: &Operator, inputs: &[KernelVar]) -> KernelExpr {
         match op {
             binop @ (Operator::Add | Operator::Sub | Operator::Mul) => {
                 let [a, b] = inputs else {
@@ -333,7 +333,7 @@ impl<'sched> KernelBuilder<'sched> {
                         index: Box::new(idx),
                     },
                 });
-                var.into()
+                var
             }};
         }
 
@@ -351,7 +351,7 @@ impl<'sched> KernelBuilder<'sched> {
                 self.single_op(op, &inputs)
             }
             KernelBody::FusedElementWises(FusedElementWises { ops }) => {
-                let mut outputs: Vec<KernelExpr> = Vec::new();
+                let mut outputs = Vec::new();
                 for (op, args) in ops.iter() {
                     let mut inputs = Vec::with_capacity(args.len());
                     for input in args.iter() {
@@ -361,12 +361,20 @@ impl<'sched> KernelBuilder<'sched> {
                                     handle_input_value!(kernel.inputs[*i], Some(&output_dims));
                                 inputs.push(var);
                             }
-                            ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i].clone()),
+                            ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                         }
                     }
-                    outputs.push(self.single_op(op, &inputs))
+                    let var = self.new_local_var();
+                    stmts.push(KernelStmt::DefineVar {
+                        ty: TypeSymbol::Primitive(
+                            self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type,
+                        ),
+                        var,
+                        init: self.single_op(op, &inputs),
+                    });
+                    outputs.push(var)
                 }
-                outputs.pop().unwrap()
+                outputs.pop().unwrap().into()
             }
         };
 
