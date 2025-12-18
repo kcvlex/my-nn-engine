@@ -42,7 +42,7 @@ impl<T: GraphOp> Pass<T> for Ops2Identity {
                     name: format!("Identity_{}", id.index()),
                     op: Operator::Identity,
                     meta: NodeMeta::default(),
-                }
+                },
             );
             modifier.replace_input_value(graph, old_output, new_output);
         }

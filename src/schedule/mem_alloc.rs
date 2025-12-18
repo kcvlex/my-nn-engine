@@ -1,6 +1,6 @@
 use crate::onnx::model::ValueId;
-use crate::onnx::operator::Operator;
 use crate::onnx::operator::args;
+use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{HashMap, HashSet};
@@ -278,7 +278,13 @@ impl<'sched> MemoryPlanner<'sched> {
                     // TODO: correct?
                     Operator::Identity => return Some(*input),
                     Operator::Gemm(_) => {
-                        if !is_input && kernel.inputs.get(args::GEMM_C).map(|x| x == input).unwrap_or(false) {
+                        if !is_input &&
+                            kernel
+                                .inputs
+                                .get(args::GEMM_C)
+                                .map(|x| x == input)
+                                .unwrap_or(false)
+                        {
                             return Some(*input);
                         }
                     }
@@ -312,9 +318,12 @@ impl<'sched> MemoryPlanner<'sched> {
         match &self.schedule.kernels.0[kernel_id].body {
             KernelBody::SingleKernel(SingleKernel { op }) => match op {
                 Operator::Identity => true,
-                Operator::Gemm(_) => self.schedule.kernels.0[kernel_id].inputs.get(args::GEMM_C).is_some(),
+                Operator::Gemm(_) => self.schedule.kernels.0[kernel_id]
+                    .inputs
+                    .get(args::GEMM_C)
+                    .is_some(),
                 _ => op.is_elementwise(),
-            }
+            },
             KernelBody::FusedElementWises(_) => true,
         }
     }

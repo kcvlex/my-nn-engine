@@ -432,10 +432,15 @@ impl<'sched> CudnnCodeGenerator<'sched> {
                     let stride = conv.strides[dim];
                     let ext_len = stride * (output - 1) + weight_ty.dims[2 + dim];
                     let pad_total = ext_len - input;
-                    pad_total / 2 + if matches!(conv.pad, ConvPad::SameLower) { pad_total % 2 } else { 0 }
+                    pad_total / 2 +
+                        if matches!(conv.pad, ConvPad::SameLower) {
+                            pad_total % 2
+                        } else {
+                            0
+                        }
                 };
                 (calc(0), calc(1))
-            },
+            }
         };
         stmts.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
         stmts.push(
@@ -972,7 +977,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     if input_chunk != output_chunk {
                         unimplemented!("Identity between different chunks is not supported");
                     }
-                },
+                }
                 Operator::Add |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
@@ -1115,14 +1120,8 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     // TODO: Copy bias into output chunk if bias_chunk != output_chunk.
                     if kernel.inputs.len() == 3 {
-                        let bias_chunk = self
-                            .value2chunk
-                            .get(&kernel.inputs[2])
-                            .unwrap();
-                        let output_chunk = self
-                            .value2chunk
-                            .get(&kernel.outputs[0])
-                            .unwrap();
+                        let bias_chunk = self.value2chunk.get(&kernel.inputs[2]).unwrap();
+                        let output_chunk = self.value2chunk.get(&kernel.outputs[0]).unwrap();
                         assert!(bias_chunk == output_chunk);
                     }
 
