@@ -743,7 +743,7 @@ mod test {
 
     #[test]
     fn batchnorm() -> TestResult {
-        with_cpu_session("batchnorm.onnx", |session| {
+        with_all_sessions("batchnorm.onnx", |session| {
             let (input, _) = make_tensor!(
                 f32,
                 [

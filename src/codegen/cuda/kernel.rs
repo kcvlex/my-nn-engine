@@ -1,4 +1,5 @@
 use crate::codegen::cuda::*;
+use crate::onnx::operator::args;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use delegate::delegate;
@@ -323,6 +324,16 @@ impl<'sched> KernelBuilder<'sched> {
 
     fn single_op(&self, op: &Operator, inputs: &[KernelVar]) -> KernelExpr {
         match op {
+            Operator::BatchNormalization(BatchNormalization { epsilon, .. }) => {
+                let x = inputs[args::BATCHNORM_DATA];
+                let scale = inputs[args::BATCHNORM_SCALE];
+                let bias = inputs[args::BATCHNORM_BIAS];
+                let mean = inputs[args::BATCHNORM_MEAN];
+                let var = inputs[args::BATCHNORM_VAR];
+                KernelExpr::Raw(format!(
+                    "(({x} - {mean}) / sqrt({var} + {epsilon})) * {scale} + {bias}"
+                ))
+            }
             uop @ (Operator::Exp |
             Operator::Identity |
             Operator::LeakyReLU(_) |
@@ -433,7 +444,7 @@ impl<'sched> KernelBuilder<'sched> {
             "{decl} {{\n\
 i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
 if ({size} <= {gid}) return;\n\
-{body}\
+{body}\n\
 }}",
             decl = self.decl.decl(),
             gid = KernelVar::Gid.to_string(),

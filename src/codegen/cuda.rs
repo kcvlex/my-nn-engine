@@ -979,6 +979,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
                 Operator::Add |
+                Operator::BatchNormalization(_) |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
