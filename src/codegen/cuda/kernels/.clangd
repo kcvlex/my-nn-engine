@@ -2,3 +2,4 @@ If:
   PathMatch: .*\.cuh?
 CompileFlags:
   Compiler: /opt/cuda/bin/nvcc
+  Add: [-x, cuda]

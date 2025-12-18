@@ -1261,7 +1261,7 @@ impl HostCode {
             "cuda.h",
             "cublas_v2.h",
             "cudnn.h",
-            "pool.cu",
+            "pool.cuh",
             "cudnn_setting.h",
         ] {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;

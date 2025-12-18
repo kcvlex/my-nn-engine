@@ -1,7 +1,8 @@
+#ifndef INCLUDE_POOL_CUH_
+#define INCLUDE_POOL_CUH_
+
 #include "common.cuh"
 #include <cuda.h>
-
-#pragma once
 
 template <typename T>
 __global__ void max_pool_kernel(
@@ -48,3 +49,5 @@ __global__ void max_pool_kernel(
 
     out[id] = max_val;
 }
+
+#endif
