@@ -1,6 +1,7 @@
 use crate::onnx::model::{Graph, UnifyMode};
 use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::shape::early_broadcst::EarlyBroadcast;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::utils::const_fold::fold_constant;
@@ -75,5 +76,6 @@ pub fn create_infer_passes(verify: bool) -> SimplePassManager<SimpleGraphOp> {
             check_strides: false,
         }));
     }
+    manager.add_pass(Box::new(EarlyBroadcast::default()));
     manager
 }

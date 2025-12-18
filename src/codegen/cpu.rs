@@ -663,17 +663,8 @@ impl<'ll> CodeGen<'ll, '_> {
                     }
                 }
 
-                Operator::BatchNormalization(_) => {
-                    assert!(operands.len() == 5);
-                    for i in operands.iter().skip(1).filter_map(|x| *x) {
-                        ptrs[i].ty = ptrs[i].ty.extend_per_channel_params(&ptrs[0].ty.dims);
-                    }
-                    for i in operands.iter().filter_map(|x| *x) {
-                        ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
-                    }
-                }
-
                 Operator::Contiguous |
+                Operator::BatchNormalization(_) |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |

@@ -153,6 +153,19 @@ impl ResolvedTensorType {
         }
     }
 
+    pub fn with_stride(
+        elem_type: DataType,
+        dims: ResolvedTensorDims,
+        stride: ResolvedTensorDims,
+    ) -> Self {
+        assert_eq!(dims.ndim(), stride.ndim());
+        Self {
+            elem_type,
+            dims,
+            stride,
+        }
+    }
+
     pub fn stride(&self, i: usize) -> usize {
         self.stride[i]
     }

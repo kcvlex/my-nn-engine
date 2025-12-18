@@ -66,6 +66,10 @@ pub trait GraphOp {
     fn replace_op(&mut self, graph: &mut Graph, node_id: NodeId, op: Operator) {
         graph.nodes[node_id].op = op;
     }
+
+    fn replace_tensor_type(&self, graph: &mut Graph, value_id: ValueId, ty: ResolvedTensorType) {
+        graph.values[value_id].ty = Some(TensorType::Resolved(ty));
+    }
 }
 
 pub trait NodeDelete {
