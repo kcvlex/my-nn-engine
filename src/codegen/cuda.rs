@@ -9,6 +9,8 @@ use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelBuilder;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
+use crate::codegen::cuda::kernel::ReduceMatrixKernel;
+use crate::codegen::cuda::kernel::ReduceType;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
@@ -22,6 +24,7 @@ use delegate::delegate;
 use derive_more::From;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
@@ -1209,6 +1212,37 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .into(),
                     );
                 }
+
+                Operator::ReduceMatrix(op) => {
+                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ = self.device_identifier(kernel.inputs[0])?;
+                    let [row, col] = input_ty.dims[..] else {
+                        panic!("Invalid ReduceMatrix output shape");
+                    };
+                    let block_size = min(DEFAULT_BLOCK_SIZE, col);
+                    let grid_size = input_ty.dims.size().div_ceil(block_size).to_literal();
+                    let cuda_kernel = kernel::CUDAKernel::ReduceMatrixKernel(ReduceMatrixKernel {
+                        data_ty: input_ty.elem_type,
+                        reduce_ty: (*op).into(),
+                        block_size,
+                        out,
+                        in_,
+                        row,
+                        col,
+                    });
+                    let block_size = block_size.to_literal();
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size,
+                            block_size,
+                            shared_mem_bytes: None,
+                            stream_id: kernel_stream,
+                        }
+                        .into(),
+                    );
+                }
                 _ => unimplemented!("Kernel body not implemented: {:?}", op),
             },
             KernelBody::FusedElementWises(_) => {
@@ -1267,6 +1301,7 @@ impl HostCode {
             "cublas_v2.h",
             "cudnn.h",
             "pool.cuh",
+            "reduce.cuh",
             "cudnn_setting.h",
         ] {
             writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;

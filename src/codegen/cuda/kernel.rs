@@ -1,15 +1,18 @@
 use crate::codegen::cuda::*;
+use crate::onnx::operator;
 use crate::onnx::operator::args;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use delegate::delegate;
 use derive_more::From;
 use std::fmt::Display;
+use strum_macros::AsRefStr;
 
 #[derive(From)]
 pub enum CUDAKernel {
     MaxPoolKernel(MaxPoolKernel),
     GeneratedKernel(GeneratedKernel),
+    ReduceMatrixKernel(ReduceMatrixKernel),
 }
 
 pub struct GeneratedKernel {
@@ -48,17 +51,18 @@ pub struct MaxPoolKernel {
     pub pad_w: Expr,
 }
 
+macro_rules! cast {
+    ($ty:expr, $e:expr) => {
+        format!("({} *)({})", $ty, $e)
+    };
+}
+
 impl MaxPoolKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
-        macro_rules! cast {
-            ($e:expr) => {
-                format!("({} *)({})", self.ty, $e)
-            };
-        }
         let id = format!("max_pool_kernel<{}>", self.ty);
         let args = vec![
-            cast!(self.out),
-            cast!(self.in_),
+            cast!(self.ty, self.out),
+            cast!(self.ty, self.in_),
             format!("std::numeric_limits<{}>::min()", self.ty),
             self.nbatch.to_string(),
             self.channels.to_string(),
@@ -77,6 +81,54 @@ impl MaxPoolKernel {
     }
 }
 
+#[derive(Clone, Copy, AsRefStr)]
+pub enum ReduceType {
+    #[strum(serialize = "ReduceType::Max")]
+    Max,
+
+    #[strum(serialize = "ReduceType::Mean")]
+    Mean,
+}
+
+impl From<ReduceOp> for ReduceType {
+    fn from(op: ReduceOp) -> Self {
+        match op {
+            ReduceOp::Max => ReduceType::Max,
+            ReduceOp::Mean => ReduceType::Mean,
+            _ => unimplemented!(),
+        }
+    }
+}
+
+pub struct ReduceMatrixKernel {
+    pub data_ty: DataType,
+    pub reduce_ty: ReduceType,
+    pub block_size: usize,
+
+    pub out: Expr,
+    pub in_: Expr,
+    pub row: usize,
+    pub col: usize,
+}
+
+impl ReduceMatrixKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "reduce2d<{}, {}, {}>",
+            self.data_ty,
+            self.reduce_ty.as_ref(),
+            self.block_size
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            self.row.to_string(),
+            self.col.to_string(),
+        ];
+        (id, args)
+    }
+}
+
 pub struct LaunchKernel {
     pub cuda_kernel: CUDAKernel,
     pub grid_size: Expr,
@@ -90,6 +142,7 @@ impl LaunchKernel {
         to match &self.cuda_kernel {
             CUDAKernel::MaxPoolKernel(m) => m,
             CUDAKernel::GeneratedKernel(g) => g,
+            CUDAKernel::ReduceMatrixKernel(r) => r,
         } {
             #[call(fragment)]
             fn kernel_fragment(&self) -> (String, Vec<String>);

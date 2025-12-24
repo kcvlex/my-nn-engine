@@ -742,6 +742,15 @@ mod test {
     }
 
     #[test]
+    fn large_global_avg() -> TestResult {
+        with_all_sessions_and_tensors("large_global_avg", |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1e-2);
+            Ok(())
+        })
+    }
+
+    #[test]
     fn batchnorm() -> TestResult {
         with_all_sessions("batchnorm.onnx", |session| {
             let (input, _) = make_tensor!(
