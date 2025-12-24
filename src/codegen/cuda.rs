@@ -37,15 +37,19 @@ pub enum BuildError {
     UnsupportedTensorDim(ValueId, usize),
 }
 
-impl DataType {
-    fn fragment(&self) -> &'static str {
-        match self {
-            DataType::SInt(SIntType::I32) => "i32",
-            DataType::SInt(SIntType::I64) => "i64",
-            DataType::UInt(UIntType::U64) => "u64",
-            DataType::Float(FloatType::F32) => "float",
-            DataType::Float(FloatType::F64) => "double",
-        }
+impl std::fmt::Display for DataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                DataType::SInt(SIntType::I32) => "i32",
+                DataType::SInt(SIntType::I64) => "i64",
+                DataType::UInt(UIntType::U64) => "u64",
+                DataType::Float(FloatType::F32) => "float",
+                DataType::Float(FloatType::F64) => "double",
+            }
+        )
     }
 }
 
@@ -55,14 +59,12 @@ enum MemSize {
     Raw(Expr),
 }
 
-impl MemSize {
-    delegate! {
-        to match self {
-            MemSize::Single(size) => size,
-            MemSize::Chunk(size) => size,
-            MemSize::Raw(expr) => expr,
-        } {
-            fn fragment(&self) -> String;
+impl std::fmt::Display for MemSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemSize::Single(size) => write!(f, "{}", size),
+            MemSize::Chunk(size) => write!(f, "{}", size),
+            MemSize::Raw(expr) => write!(f, "{}", expr),
         }
     }
 }
@@ -73,12 +75,12 @@ struct SingleMemSize {
     elem_num: usize,
 }
 
-impl SingleMemSize {
-    fn fragment(&self) -> String {
+impl std::fmt::Display for SingleMemSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.elem_num == 0 {
-            "0".to_owned()
+            write!(f, "0")
         } else {
-            format!("{} * sizeof({})", self.elem_num, self.ty.fragment())
+            write!(f, "{} * sizeof({})", self.elem_num, self.ty)
         }
     }
 }
@@ -113,18 +115,20 @@ impl ChunkMemSize {
         }
         self.sizes.push(size);
     }
+}
 
-    fn fragment(&self) -> String {
+impl std::fmt::Display for ChunkMemSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let res = self
             .sizes
             .iter()
             .filter(|s| 0 < s.elem_num)
-            .map(|s| s.fragment())
+            .map(|s| s.to_string())
             .join(", ");
         if res.is_empty() {
-            "0".to_owned()
+            write!(f, "0")
         } else {
-            format!("std::max({{ {} }})", res)
+            write!(f, "std::max({{ {} }})", res)
         }
     }
 }
@@ -134,11 +138,11 @@ enum Expr {
     Literal(String),
 }
 
-impl Expr {
-    fn fragment(&self) -> String {
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Identifier(name) => name.clone(),
-            Expr::Literal(lit) => lit.clone(),
+            Expr::Identifier(name) => write!(f, "{}", name),
+            Expr::Literal(lit) => write!(f, "{}", lit),
         }
     }
 }
@@ -196,15 +200,15 @@ enum Statement {
     Raw(String),
 }
 
-impl Statement {
-    fn fragment(&self) -> String {
+impl std::fmt::Display for Statement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             // TODO: Error handling for kernel launch
-            Statement::LaunchKernel(kernel) => format!("{};", kernel.fragment()),
-            Statement::CudaRuntimeApi(api) => format!("cudaCheckErr({});", api.fragment()),
-            Statement::CublasApi(api) => format!("cublasCheckErr({});", api),
-            Statement::CudnnApi(api) => format!("cudnnCheckErr({});", api.fragment()),
-            Statement::Raw(stmt) => stmt.clone(),
+            Statement::LaunchKernel(kernel) => write!(f, "{};", kernel),
+            Statement::CudaRuntimeApi(api) => write!(f, "cudaCheckErr({});", api),
+            Statement::CublasApi(api) => write!(f, "cublasCheckErr({});", api),
+            Statement::CudnnApi(api) => write!(f, "cudnnCheckErr({});", api),
+            Statement::Raw(stmt) => write!(f, "{}", stmt),
         }
     }
 }
@@ -487,7 +491,7 @@ impl CudnnCode {
         writer.write_all(format!("extern \"C\" {} {{\n", self.init_fn_decl).as_bytes())?;
         for stmt in self.stmts.iter() {
             writer.write_all(b"  ")?;
-            writer.write_all(stmt.fragment().as_bytes())?;
+            writer.write_all(stmt.to_string().as_bytes())?;
             writer.write_all(b"\n")?;
         }
         writer.write_all(b"}\n")?;
@@ -617,7 +621,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             (ARG_INITIALIZER, &self.schedule.initializers[..]),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
-                let ty = self.get_resolved_tensor_type(*value)?.elem_type.fragment();
+                let ty = self.get_resolved_tensor_type(*value)?.elem_type.to_string();
                 let value_name = format!("h_{}_{}", arg_name, value.index());
                 let stmt = format!("{ty} *{value_name} = ({ty} *)({arg_name}[{idx}]);",);
                 self.stmts.push(Statement::Raw(stmt));
@@ -693,14 +697,14 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
         for event_id in self.used_event.iter().copied() {
-            let name = event_id.to_identifier().fragment();
+            let name = event_id.to_identifier().to_string();
             self.stmts
                 .push(Statement::Raw(format!("cudaEvent_t {name};")));
             self.stmts.push(EventCreate { event_id }.into());
         }
 
         for stream_id in self.streams.inner.iter().copied() {
-            let name = stream_id.to_identifier().fragment();
+            let name = stream_id.to_identifier().to_string();
             self.stmts
                 .push(Statement::Raw(format!("cudaStream_t {name};")));
             self.stmts.push(StreamCreate { stream_id }.into());
@@ -865,7 +869,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             let arg = match param {
                 KernelVar::Value(p) => {
                     let ptr = self.device_identifier(*p)?;
-                    Expr::Literal(format!("({}){}", ty, ptr.fragment()))
+                    Expr::Literal(format!("({}){}", ty, ptr))
                 }
                 KernelVar::Size => {
                     let size = self.get_resolved_tensor_type(output)?.dims.size();
@@ -1012,29 +1016,29 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let weights = self.device_identifier(kernel.inputs[args::CONV_WEIGHT])?;
                     let output = self.device_identifier(kernel.outputs[0])?;
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
-                    let template_ty = input_ty.elem_type.fragment();
+                    let template_ty = input_ty.elem_type.to_string();
                     let setting = CudnnSettingName::KernelId(kernel_id);
 
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.x = {input};",
                         setting = setting.setting(),
-                        input = input.fragment(),
+                        input = input,
                     )));
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.w = {weights};",
                         setting = setting.setting(),
-                        weights = weights.fragment(),
+                        weights = weights,
                     )));
                     self.stmts.push(Statement::Raw(format!(
                         "{setting}.y = {output};",
                         setting = setting.setting(),
-                        output = output.fragment(),
+                        output = output,
                     )));
                     let func = if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
                         self.stmts.push(Statement::Raw(format!(
                             "{setting}.bias = {bias};",
                             setting = setting.setting(),
-                            bias = self.device_identifier(bias)?.fragment(),
+                            bias = self.device_identifier(bias)?,
                         )));
                         "call_conv_bias_activation_forward"
                     } else {
@@ -1056,7 +1060,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     trans_b,
                 }) => {
                     let elem_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type;
-                    let c_data_ty = elem_ty.fragment();
+                    let c_data_ty = elem_ty.to_string();
                     let alpha = {
                         let var_name = format!("alpha_{}", kernel_id.index());
                         self.stmts.push(Statement::Raw(format!(
@@ -1126,9 +1130,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                         assert!(bias_chunk == output_chunk);
                     }
 
-                    let a = self.device_identifier(kernel.inputs[1])?.fragment();
-                    let b = self.device_identifier(kernel.inputs[0])?.fragment();
-                    let c = self.device_identifier(kernel.outputs[0])?.fragment();
+                    let a = self.device_identifier(kernel.inputs[1])?.to_string();
+                    let b = self.device_identifier(kernel.inputs[0])?.to_string();
+                    let c = self.device_identifier(kernel.outputs[0])?.to_string();
 
                     self.stmts.push(
                         CublasApi::Gemm(GemmArgs {
@@ -1288,7 +1292,7 @@ impl HostCode {
         ] {
             for stmt in stmts.iter() {
                 writer.write_all(b"  ")?;
-                writer.write_all(stmt.fragment().as_bytes())?;
+                writer.write_all(stmt.to_string().as_bytes())?;
                 writer.write_all(b"\n")?;
             }
         }

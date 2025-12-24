@@ -11,12 +11,10 @@ pub enum CudnnApi {
     CudnnOps(CudnnOps),
 }
 
-impl CudnnApi {
-    delegate! {
-        to match self {
-            CudnnApi::CudnnOps(cudnn_ops) => cudnn_ops,
-        } {
-            pub fn fragment(&self) -> String;
+impl std::fmt::Display for CudnnApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CudnnApi::CudnnOps(cudnn_ops) => write!(f, "{}", cudnn_ops),
         }
     }
 }
@@ -152,13 +150,17 @@ pub struct TensorDescriptor {
     pub role: TensorRole,
 }
 
-impl TensorDescriptor {
-    fn fragment(&self) -> String {
-        match self.role {
-            TensorRole::Input => self.id.input_descriptor(),
-            TensorRole::Bias => self.id.bias_descriptor(),
-            TensorRole::Output => self.id.output_descriptor(),
-        }
+impl std::fmt::Display for TensorDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self.role {
+                TensorRole::Input => self.id.input_descriptor(),
+                TensorRole::Bias => self.id.bias_descriptor(),
+                TensorRole::Output => self.id.output_descriptor(),
+            }
+        )
     }
 }
 
@@ -242,23 +244,29 @@ pub enum CudnnOps {
     },
 }
 
-impl CudnnOps {
-    pub fn fragment(&self) -> String {
+impl std::fmt::Display for CudnnOps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Create(handler) => {
-                format!("cudnnCreate(&{})", handler.handler())
+                write!(f, "cudnnCreate(&{})", handler.handler())
             }
             Self::CreateTensorDescriptor(desc) => {
-                format!("cudnnCreateTensorDescriptor(&{})", desc.fragment())
+                write!(f, "cudnnCreateTensorDescriptor(&{})", desc)
             }
             Self::CreateFilterDescriptor(id) => {
-                format!("cudnnCreateFilterDescriptor(&{})", id.filter_descriptor())
+                write!(
+                    f,
+                    "cudnnCreateFilterDescriptor(&{})",
+                    id.filter_descriptor()
+                )
             }
-            Self::CreateConvolutionDescriptor(id) => format!(
+            Self::CreateConvolutionDescriptor(id) => write!(
+                f,
                 "cudnnCreateConvolutionDescriptor(&{})",
                 id.convolution_descriptor()
             ),
-            Self::CreateActivationDescriptor(id) => format!(
+            Self::CreateActivationDescriptor(id) => write!(
+                f,
                 "cudnnCreateActivationDescriptor(&{})",
                 id.activation_descriptor()
             ),
@@ -272,15 +280,16 @@ impl CudnnOps {
                 height,
                 width,
             } => {
-                format!(
-                    "cudnnSetTensor4dDescriptor({desc}, {format}, {ty}, {n}, {c}, {h}, {w})",
-                    desc = desc.fragment(),
-                    format = format.as_ref(),
-                    ty = data_type.cudnn(),
-                    n = nbatch,
-                    c = channels,
-                    h = height,
-                    w = width,
+                write!(
+                    f,
+                    "cudnnSetTensor4dDescriptor({}, {}, {}, {}, {}, {}, {})",
+                    desc,
+                    format.as_ref(),
+                    data_type.cudnn(),
+                    nbatch,
+                    channels,
+                    height,
+                    width,
                 )
             }
             Self::SetFilter4dDescriptor {
@@ -292,15 +301,16 @@ impl CudnnOps {
                 height,
                 width,
             } => {
-                format!(
-                    "cudnnSetFilter4dDescriptor({desc}, {ty}, {format}, {k}, {c}, {h}, {w})",
-                    desc = id.filter_descriptor(),
-                    ty = data_type.cudnn(),
-                    format = format.as_ref(),
-                    k = out_feature_maps,
-                    c = in_feature_maps,
-                    h = height,
-                    w = width,
+                write!(
+                    f,
+                    "cudnnSetFilter4dDescriptor({}, {}, {}, {}, {}, {}, {})",
+                    id.filter_descriptor(),
+                    data_type.cudnn(),
+                    format.as_ref(),
+                    out_feature_maps,
+                    in_feature_maps,
+                    height,
+                    width,
                 )
             }
             Self::SetConvolution2dDescriptor {
@@ -314,17 +324,18 @@ impl CudnnOps {
                 mode,
                 ty,
             } => {
-                format!(
-                    "cudnnSetConvolution2dDescriptor({desc}, {pad_h}, {pad_w}, {stride_h}, {stride_w}, {dilation_h}, {dilation_w}, {mode}, {ty})",
-                    desc = id.convolution_descriptor(),
-                    pad_h = pad_h,
-                    pad_w = pad_w,
-                    stride_h = stride_h,
-                    stride_w = stride_w,
-                    dilation_h = dilation_h,
-                    dilation_w = dilation_w,
-                    mode = mode.as_ref(),
-                    ty = ty.cudnn()
+                write!(
+                    f,
+                    "cudnnSetConvolution2dDescriptor({}, {}, {}, {}, {}, {}, {}, {}, {})",
+                    id.convolution_descriptor(),
+                    pad_h,
+                    pad_w,
+                    stride_h,
+                    stride_w,
+                    dilation_h,
+                    dilation_w,
+                    mode.as_ref(),
+                    ty.cudnn()
                 )
             }
             Self::SetActivationDescriptor {
@@ -333,31 +344,34 @@ impl CudnnOps {
                 nan_prop,
                 coef,
             } => {
-                format!(
-                    "cudnnSetActivationDescriptor({desc}, {mode}, {nan_prop}, {coef})",
-                    desc = id.activation_descriptor(),
-                    mode = mode.as_ref(),
-                    nan_prop = nan_prop.as_ref(),
-                    coef = coef
+                write!(
+                    f,
+                    "cudnnSetActivationDescriptor({}, {}, {}, {})",
+                    id.activation_descriptor(),
+                    mode.as_ref(),
+                    nan_prop.as_ref(),
+                    coef
                 )
             }
             Self::SetStream(stream_id) => {
-                format!(
-                    "cudnnSetStream({handler}, {stream})",
-                    handler = CudnnContext::StreamContext(*stream_id).handler(),
-                    stream = stream_id.to_identifier().fragment()
+                write!(
+                    f,
+                    "cudnnSetStream({}, {})",
+                    CudnnContext::StreamContext(*stream_id).handler(),
+                    stream_id.to_identifier()
                 )
             }
             Self::GetConvolutionForwardWorkspaceSize { ctx: handler, id } => {
-                format!(
-                    "cudnnGetConvolutionForwardWorkspaceSize({handler}, {input_desc}, {filter_desc}, {conv_desc}, {output_desc}, {algo}, &{workspace_size})",
-                    handler = handler.handler(),
-                    input_desc = id.input_descriptor(),
-                    filter_desc = id.filter_descriptor(),
-                    conv_desc = id.convolution_descriptor(),
-                    output_desc = id.output_descriptor(),
-                    algo = id.fwd_algo(),
-                    workspace_size = id.workspace_size(),
+                write!(
+                    f,
+                    "cudnnGetConvolutionForwardWorkspaceSize({}, {}, {}, {}, {}, {}, &{})",
+                    handler.handler(),
+                    id.input_descriptor(),
+                    id.filter_descriptor(),
+                    id.convolution_descriptor(),
+                    id.output_descriptor(),
+                    id.fwd_algo(),
+                    id.workspace_size(),
                 )
             }
         }

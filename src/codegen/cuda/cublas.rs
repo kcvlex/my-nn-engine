@@ -75,7 +75,7 @@ impl Display for CublasApi {
                     f,
                     "cublasSetStream({}, {})",
                     handler,
-                    handler.0.to_identifier().fragment()
+                    handler.0.to_identifier()
                 )
             }
             Self::Gemm(GemmArgs {

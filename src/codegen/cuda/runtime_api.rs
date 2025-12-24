@@ -1,5 +1,4 @@
 use crate::codegen::cuda::*;
-use delegate::delegate;
 use derive_more::From;
 
 #[derive(From)]
@@ -13,18 +12,16 @@ pub enum CudaRuntimeApi {
     WaitEvent(WaitEvent),
 }
 
-impl CudaRuntimeApi {
-    delegate! {
-        to match self {
-            CudaRuntimeApi::EventCreate(event_create) => event_create,
-            CudaRuntimeApi::EventSynchronize(event_sync) => event_sync,
-            CudaRuntimeApi::StreamCreate(stream_create) => stream_create,
-            CudaRuntimeApi::RecordEvent(event) => event,
-            CudaRuntimeApi::Malloc(malloc) => malloc,
-            CudaRuntimeApi::Memcpy(memcpy) => memcpy,
-            CudaRuntimeApi::WaitEvent(wait_event) => wait_event,
-        } {
-            pub fn fragment(&self) -> String;
+impl std::fmt::Display for CudaRuntimeApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CudaRuntimeApi::EventCreate(event_create) => write!(f, "{}", event_create),
+            CudaRuntimeApi::EventSynchronize(event_sync) => write!(f, "{}", event_sync),
+            CudaRuntimeApi::StreamCreate(stream_create) => write!(f, "{}", stream_create),
+            CudaRuntimeApi::RecordEvent(event) => write!(f, "{}", event),
+            CudaRuntimeApi::Malloc(malloc) => write!(f, "{}", malloc),
+            CudaRuntimeApi::Memcpy(memcpy) => write!(f, "{}", memcpy),
+            CudaRuntimeApi::WaitEvent(wait_event) => write!(f, "{}", wait_event),
         }
     }
 }
@@ -33,12 +30,9 @@ pub struct EventCreate {
     pub event_id: EventId,
 }
 
-impl EventCreate {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaEventCreate(&{})",
-            self.event_id.to_identifier().fragment()
-        )
+impl std::fmt::Display for EventCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaEventCreate(&{})", self.event_id.to_identifier())
     }
 }
 
@@ -46,12 +40,9 @@ pub struct EventSynchronize {
     pub event_id: EventId,
 }
 
-impl EventSynchronize {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaEventSynchronize({})",
-            self.event_id.to_identifier().fragment()
-        )
+impl std::fmt::Display for EventSynchronize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaEventSynchronize({})", self.event_id.to_identifier())
     }
 }
 
@@ -59,12 +50,9 @@ pub struct StreamCreate {
     pub stream_id: StreamId,
 }
 
-impl StreamCreate {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaStreamCreate(&{})",
-            self.stream_id.to_identifier().fragment()
-        )
+impl std::fmt::Display for StreamCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaStreamCreate(&{})", self.stream_id.to_identifier())
     }
 }
 
@@ -73,12 +61,13 @@ pub struct RecordEvent {
     pub stream_id: StreamId,
 }
 
-impl RecordEvent {
-    fn fragment(&self) -> String {
-        format!(
+impl std::fmt::Display for RecordEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "cudaEventRecord({}, {})",
-            self.event_id.to_identifier().fragment(),
-            self.stream_id.to_identifier().fragment()
+            self.event_id.to_identifier(),
+            self.stream_id.to_identifier()
         )
     }
 }
@@ -88,13 +77,9 @@ pub struct Malloc {
     pub mem_size: MemSize,
 }
 
-impl Malloc {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaMalloc(&{dst}, {mem_size})",
-            dst = self.dst.fragment(),
-            mem_size = self.mem_size.fragment()
-        )
+impl std::fmt::Display for Malloc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaMalloc(&{}, {})", self.dst, self.mem_size)
     }
 }
 
@@ -103,12 +88,16 @@ pub enum CudaMemcpyKind {
     DeviceToHost,
 }
 
-impl CudaMemcpyKind {
-    fn fragment(&self) -> &'static str {
-        match self {
-            CudaMemcpyKind::HostToDevice => "cudaMemcpyHostToDevice",
-            CudaMemcpyKind::DeviceToHost => "cudaMemcpyDeviceToHost",
-        }
+impl std::fmt::Display for CudaMemcpyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                CudaMemcpyKind::HostToDevice => "cudaMemcpyHostToDevice",
+                CudaMemcpyKind::DeviceToHost => "cudaMemcpyDeviceToHost",
+            }
+        )
     }
 }
 
@@ -120,15 +109,16 @@ pub struct Memcpy {
     pub stream: StreamId,
 }
 
-impl Memcpy {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaMemcpyAsync({dst}, {src}, {mem_size}, {kind}, {stream})",
-            dst = self.dst.fragment(),
-            src = self.src.fragment(),
-            mem_size = self.mem_size.fragment(),
-            kind = self.kind.fragment(),
-            stream = self.stream.to_identifier().fragment()
+impl std::fmt::Display for Memcpy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cudaMemcpyAsync({}, {}, {}, {}, {})",
+            self.dst,
+            self.src,
+            self.mem_size,
+            self.kind,
+            self.stream.to_identifier()
         )
     }
 }
@@ -138,12 +128,13 @@ pub struct WaitEvent {
     pub event_id: EventId,
 }
 
-impl WaitEvent {
-    fn fragment(&self) -> String {
-        format!(
-            "cudaStreamWaitEvent({stream}, {event})",
-            stream = self.stream_id.to_identifier().fragment(),
-            event = self.event_id.to_identifier().fragment()
+impl std::fmt::Display for WaitEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cudaStreamWaitEvent({}, {})",
+            self.stream_id.to_identifier(),
+            self.event_id.to_identifier()
         )
     }
 }

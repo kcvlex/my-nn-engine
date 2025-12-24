@@ -23,7 +23,7 @@ impl GeneratedKernel {
         let args = self
             .args
             .iter()
-            .map(|arg| arg.fragment())
+            .map(|arg| arg.to_string())
             .collect::<Vec<_>>();
         (id, args)
     }
@@ -52,26 +52,26 @@ impl MaxPoolKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
         macro_rules! cast {
             ($e:expr) => {
-                format!("({} *)({})", self.ty.fragment(), $e.fragment())
+                format!("({} *)({})", self.ty, $e)
             };
         }
-        let id = format!("max_pool_kernel<{}>", self.ty.fragment());
+        let id = format!("max_pool_kernel<{}>", self.ty);
         let args = vec![
             cast!(self.out),
             cast!(self.in_),
-            format!("std::numeric_limits<{}>::min()", self.ty.fragment()),
-            self.nbatch.fragment(),
-            self.channels.fragment(),
-            self.height.fragment(),
-            self.width.fragment(),
-            self.o_height.fragment(),
-            self.o_width.fragment(),
-            self.kernel_h.fragment(),
-            self.kernel_w.fragment(),
-            self.stride_h.fragment(),
-            self.stride_w.fragment(),
-            self.pad_h.fragment(),
-            self.pad_w.fragment(),
+            format!("std::numeric_limits<{}>::min()", self.ty),
+            self.nbatch.to_string(),
+            self.channels.to_string(),
+            self.height.to_string(),
+            self.width.to_string(),
+            self.o_height.to_string(),
+            self.o_width.to_string(),
+            self.kernel_h.to_string(),
+            self.kernel_w.to_string(),
+            self.stride_h.to_string(),
+            self.stride_w.to_string(),
+            self.pad_h.to_string(),
+            self.pad_w.to_string(),
         ];
         (id, args)
     }
@@ -95,15 +95,18 @@ impl LaunchKernel {
             fn kernel_fragment(&self) -> (String, Vec<String>);
         }
     }
+}
 
-    pub fn fragment(&self) -> String {
+impl std::fmt::Display for LaunchKernel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (id, args) = self.kernel_fragment();
-        format!(
-            "{id}<<<{grid_size}, {block_size}, {shared_mem_size}, {stream}>>>({args})",
-            grid_size = self.grid_size.fragment(),
-            block_size = self.block_size.fragment(),
-            shared_mem_size = self.shared_mem_bytes.unwrap_or(0),
-            stream = self.stream_id.to_identifier().fragment(),
+        write!(
+            f,
+            "{id}<<<{}, {}, {}, {}>>>({args})",
+            self.grid_size,
+            self.block_size,
+            self.shared_mem_bytes.unwrap_or(0),
+            self.stream_id.to_identifier(),
             args = args.join(", ")
         )
     }
@@ -121,7 +124,7 @@ impl Display for TypeSymbol {
             f,
             "{}",
             match self {
-                Self::Primitive(dt) => dt.fragment().to_string(),
+                Self::Primitive(dt) => dt.to_string(),
                 Self::Pointer(inner) => format!("{}*", inner),
             }
         )
