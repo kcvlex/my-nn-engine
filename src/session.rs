@@ -1,22 +1,27 @@
 mod cpu;
 mod cuda;
 
+use std::path::Path;
+
 use crate::codegen::CodeGenError;
 use crate::onnx::load::*;
-use crate::onnx::model::{Graph, Model, ValueId};
+use crate::onnx::model::Graph;
+use crate::onnx::model::Model;
+use crate::onnx::model::ValueId;
 use crate::options::*;
 use crate::schedule::Schedule;
 use crate::session::cpu::SessionCPU;
 use crate::session::cuda::SessionCUDA;
-use crate::tensor::{
-    data::TensorData,
-    dimensions::ResolvedTensorDims,
-    types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType},
-    Tensor,
-};
+use crate::tensor::data::TensorData;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::TypeError;
+use crate::tensor::types::UIntType;
+use crate::tensor::Tensor;
 use crate::transform::transform_graph;
-
-use std::path::Path;
 
 enum StrictTensor {
     I32(Vec<i32>),
@@ -178,12 +183,12 @@ impl Session {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use itertools::izip;
 
+    use super::*;
     use crate::session::Session;
     use crate::tensor::data::CompPolicy;
     use crate::tensor::Tensor;
-    use itertools::izip;
 
     macro_rules! make_tensor {
         ($ty: ty, $($expr: expr,)*) => {{

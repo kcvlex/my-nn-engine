@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::onnx::model::Graph;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
@@ -5,7 +7,6 @@ use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
-use itertools::Itertools;
 
 #[derive(Default)]
 pub struct EarlyBroadcast {}

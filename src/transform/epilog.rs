@@ -5,8 +5,9 @@ use crate::onnx::operator::*;
 use crate::options::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::Pass;
+use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
-use crate::transform::{Pass, PassManager};
 
 #[derive(Default)]
 pub struct Ops2Identity {}

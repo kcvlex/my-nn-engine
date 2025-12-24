@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
+use itertools::zip_eq;
+
 use crate::onnx::model::*;
 use crate::onnx::utils;
 use crate::schedule::*;
 use crate::transform::modify::GraphOp;
 use crate::utils::UnionFind;
-use itertools::zip_eq;
-use std::collections::HashMap;
 
 struct OrderedNodeId {
     ordered: Vec<NodeId>,

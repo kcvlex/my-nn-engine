@@ -1,4 +1,5 @@
-use inkwell::builder::{Builder, BuilderError};
+use inkwell::builder::Builder;
+use inkwell::builder::BuilderError;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::*;

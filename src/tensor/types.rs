@@ -1,8 +1,10 @@
-use crate::onnx::operator::{Slice, TensorIndex};
+use itertools::izip;
+use itertools::zip_eq;
+
+use crate::onnx::operator::Slice;
+use crate::onnx::operator::TensorIndex;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::dimensions::UnresolvedTensorDims;
-
-use itertools::{izip, zip_eq};
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum DataType {

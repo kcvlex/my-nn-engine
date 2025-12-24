@@ -1,8 +1,10 @@
+use std::fmt::Display;
+
+use strum_macros::AsRefStr;
+
 use crate::codegen::cuda::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
-use std::fmt::Display;
-use strum_macros::AsRefStr;
 
 #[allow(dead_code)]
 #[derive(AsRefStr)]

@@ -1,9 +1,12 @@
+use std::iter::FromIterator;
+use std::ops::Index;
+use std::ops::IndexMut;
+
 use crate::onnx::operator::Slice;
 use crate::tensor::types;
 use crate::tensor::types::TypeError;
-use crate::tensor::{Tensor, TensorData};
-use std::iter::FromIterator;
-use std::ops::{Index, IndexMut};
+use crate::tensor::Tensor;
+use crate::tensor::TensorData;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTensorDims(Vec<usize>);

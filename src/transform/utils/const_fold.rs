@@ -1,11 +1,11 @@
-use crate::onnx::model::{Graph, NodeId};
+use crate::onnx::model::Graph;
+use crate::onnx::model::NodeId;
 use crate::onnx::operator::*;
-use crate::tensor::{
-    data::TensorData,
-    dimensions::ResolvedTensorDims,
-    types::{DataType, SIntType},
-    Tensor,
-};
+use crate::tensor::data::TensorData;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::DataType;
+use crate::tensor::types::SIntType;
+use crate::tensor::Tensor;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];

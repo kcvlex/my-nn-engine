@@ -3,11 +3,18 @@ pub mod dimensions;
 mod ops;
 pub mod types;
 
-use crate::onnx::operator::TensorIndex;
-use data::{CompPolicy, TensorData};
+use data::CompPolicy;
+use data::TensorData;
 use dimensions::ResolvedTensorDims;
 use ops::*;
-use types::{DataType, FloatType, ResolvedTensorType, SIntType, TypeError, UIntType};
+use types::DataType;
+use types::FloatType;
+use types::ResolvedTensorType;
+use types::SIntType;
+use types::TypeError;
+use types::UIntType;
+
+use crate::onnx::operator::TensorIndex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tensor {

@@ -1,10 +1,14 @@
-use crate::onnx::model::{Graph, NodeId, UnifyMode};
+use crate::onnx::model::Graph;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::UnifyMode;
 use crate::onnx::operator::*;
-use crate::tensor::{
-    data::TensorData,
-    dimensions::{broadcast_shape, ResolvedTensorDims},
-    types::{ResolvedTensorType, SIntType, TensorType, TypeError},
-};
+use crate::tensor::data::TensorData;
+use crate::tensor::dimensions::broadcast_shape;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::TensorType;
+use crate::tensor::types::TypeError;
 
 pub fn infer_node_output(
     graph: &Graph,

@@ -3,6 +3,16 @@ mod cudnn;
 mod kernel;
 mod runtime_api;
 
+use std::cmp::min;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use delegate::delegate;
+use derive_more::From;
+use indexmap::IndexMap;
+use indexmap::IndexSet;
+use itertools::Itertools;
+
 use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::GeneratedKernel;
@@ -14,17 +24,12 @@ use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
+use crate::schedule::*;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorType;
-use crate::{
-    schedule::*,
-    tensor::types::{DataType, FloatType, SIntType, UIntType},
-};
-use delegate::delegate;
-use derive_more::From;
-use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
+use crate::tensor::types::SIntType;
+use crate::tensor::types::UIntType;
 
 #[derive(Debug)]
 pub enum BuildError {

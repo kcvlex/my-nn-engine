@@ -1,5 +1,12 @@
+use ndarray::concatenate;
+use ndarray::stack;
+use ndarray::Array;
+use ndarray::ArrayView;
+use ndarray::Axis;
+use ndarray::IxDyn;
+use ndarray::Slice;
+
 use crate::onnx::operator::TensorIndex;
-use ndarray::{concatenate, stack, Array, ArrayView, Axis, IxDyn, Slice};
 
 pub struct RawTensor<'a, T> {
     pub data: Vec<T>,

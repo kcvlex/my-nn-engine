@@ -1,14 +1,21 @@
-use crate::onnx::operator::Operator;
-use crate::tensor::{
-    dimensions::ResolvedTensorDims,
-    dimensions::{Dimension, ParamKey},
-    types::{ResolvedTensorType, TensorType, TypeError, UnresolvedTensorType},
-    Tensor,
-};
-use id_arena::{Arena, Id};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::ops::Index;
+use std::ops::IndexMut;
+
+use id_arena::Arena;
+use id_arena::Id;
 use itertools::zip_eq;
-use std::collections::{BTreeMap, HashMap};
-use std::ops::{Index, IndexMut};
+
+use crate::onnx::operator::Operator;
+use crate::tensor::dimensions::Dimension;
+use crate::tensor::dimensions::ParamKey;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::TensorType;
+use crate::tensor::types::TypeError;
+use crate::tensor::types::UnresolvedTensorType;
+use crate::tensor::Tensor;
 
 #[derive(Debug)]
 pub struct Model {

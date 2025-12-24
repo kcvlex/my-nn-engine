@@ -1,4 +1,7 @@
-use crate::onnx::model::{Graph, Node, NodeId, NodeMeta};
+use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;

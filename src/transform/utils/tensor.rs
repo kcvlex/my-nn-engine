@@ -1,9 +1,15 @@
-use crate::onnx::model::{Graph, Node, NodeMeta, ValueId, ValueInfo};
+use std::io::Error;
+use std::io::Result;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeMeta;
+use crate::onnx::model::ValueId;
+use crate::onnx::model::ValueInfo;
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
-use std::io::{Error, Result};
 
 #[derive(Default)]
 pub struct TransposeGenerator {

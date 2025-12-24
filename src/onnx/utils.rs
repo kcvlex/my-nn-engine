@@ -1,8 +1,16 @@
-use crate::onnx::model::{Graph, NodeId, Nodes, ValueId, ValueInfo};
-use crate::onnx::operator::*;
-use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use indexmap::IndexMap;
+use indexmap::IndexSet;
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::Nodes;
+use crate::onnx::model::ValueId;
+use crate::onnx::model::ValueInfo;
+use crate::onnx::operator::*;
 
 pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     fn dfs(
@@ -67,9 +75,11 @@ pub fn compare_graphs(left: &Graph, right: &Graph) -> Result<(), InequalityError
 
 mod comp {
 
-    use super::*;
-    use indexmap::IndexMap;
     use std::hash::Hash;
+
+    use indexmap::IndexMap;
+
+    use super::*;
 
     struct Bijective<T: Eq + Hash + Clone> {
         left2right: HashMap<T, T>,
@@ -295,10 +305,12 @@ mod comp {
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+    use std::path::PathBuf;
+
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
-    use std::path::{Path, PathBuf};
 
     fn compare_models<P0: AsRef<Path>, P1: AsRef<Path>>(
         p0: P0,

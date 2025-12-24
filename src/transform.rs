@@ -5,15 +5,18 @@ pub mod optimize;
 pub mod shape;
 mod utils;
 
-use crate::onnx::model::Graph;
-use crate::options::*;
-use modify::{GraphOp, NodeDelete, SimpleGraphOp};
-
 pub use epilog::create_epilog_passes;
 pub use lower::create_lower_passes;
-pub use optimize::{create_optimize_passes0, create_optimize_passes1};
+use modify::GraphOp;
+use modify::NodeDelete;
+use modify::SimpleGraphOp;
+pub use optimize::create_optimize_passes0;
+pub use optimize::create_optimize_passes1;
 pub use shape::infer::create_infer_passes;
 pub use shape::strides::create_strides_passes;
+
+use crate::onnx::model::Graph;
+use crate::options::*;
 
 pub trait Pass<T: GraphOp> {
     fn summary(&self) -> &str;

@@ -1,17 +1,20 @@
+use inkwell::basic_block::BasicBlock;
+use inkwell::builder::Builder;
+use inkwell::builder::BuilderError;
+use inkwell::context::Context;
+use inkwell::module::Module;
+use inkwell::types::*;
+use inkwell::values::*;
+use smallvec::smallvec;
+
 use crate::codegen::cpu::blas::*;
 use crate::codegen::cpu::llvm::*;
 use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::onnx::operator;
 use crate::schedule::ElementwiseOpArg;
-use crate::tensor::types::{DataType, FloatType};
-use inkwell::basic_block::BasicBlock;
-use inkwell::builder::{Builder, BuilderError};
-use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::types::*;
-use inkwell::values::*;
-use smallvec::smallvec;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
 
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {

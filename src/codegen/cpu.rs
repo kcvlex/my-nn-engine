@@ -4,6 +4,25 @@ mod omp;
 mod op;
 mod translator;
 
+use std::collections::HashMap;
+use std::path::Path;
+
+use inkwell::basic_block::BasicBlock;
+use inkwell::builder::BuilderError;
+use inkwell::context::Context;
+use inkwell::intrinsics::Intrinsic;
+use inkwell::module::Module;
+use inkwell::targets::CodeModel;
+use inkwell::targets::FileType;
+use inkwell::targets::InitializationConfig;
+use inkwell::targets::RelocMode;
+use inkwell::targets::Target;
+use inkwell::targets::TargetMachine;
+use inkwell::types::*;
+use inkwell::values::*;
+use inkwell::AddressSpace;
+use inkwell::OptimizationLevel;
+
 use crate::codegen::cpu::blas::*;
 use crate::codegen::cpu::llvm::*;
 use crate::codegen::cpu::omp::*;
@@ -15,20 +34,10 @@ use crate::onnx::operator;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::types::{DataType, FloatType, SIntType, UIntType};
-use inkwell::basic_block::BasicBlock;
-use inkwell::builder::BuilderError;
-use inkwell::context::Context;
-use inkwell::intrinsics::Intrinsic;
-use inkwell::module::Module;
-use inkwell::targets::FileType;
-use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
-use inkwell::types::*;
-use inkwell::values::*;
-use inkwell::AddressSpace;
-use inkwell::OptimizationLevel;
-use std::collections::HashMap;
-use std::path::Path;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::UIntType;
 
 struct UnitInfo<'ll> {
     ty: UnitType,

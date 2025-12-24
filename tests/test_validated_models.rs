@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+
 use my_onnx::onnx::load::*;
 use my_onnx::options::*;
-use my_onnx::session::{Session, SessionError};
+use my_onnx::session::Session;
+use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
-use std::path::PathBuf;
 
 type Result = std::result::Result<(), SessionError>;
 

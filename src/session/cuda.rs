@@ -1,19 +1,19 @@
+use std::io::BufWriter;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::Command;
+
+use itertools::zip_eq;
+use rayon::prelude::*;
+use tempfile::TempDir;
+
 use crate::codegen::cuda::*;
 use crate::codegen::*;
 use crate::schedule::Schedule;
-use crate::session::{SessionError, StrictTensor};
-use crate::tensor::{types::ResolvedTensorType, Tensor};
-use std::path::PathBuf;
-
-use std::io::BufWriter;
-use std::io::Write;
-use tempfile::TempDir;
-
-use rayon::prelude::*;
-
-use itertools::zip_eq;
-
-use std::process::Command;
+use crate::session::SessionError;
+use crate::session::StrictTensor;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::Tensor;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 

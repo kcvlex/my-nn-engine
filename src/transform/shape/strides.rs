@@ -1,14 +1,23 @@
-use crate::onnx::model::{Graph, Node, NodeId, NodeMeta, UnifyMode, ValueId};
+use std::collections::HashSet;
+use std::collections::VecDeque;
+
+use itertools::zip_eq;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::NodeMeta;
+use crate::onnx::model::UnifyMode;
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
+use crate::transform::GraphOp;
+use crate::transform::Pass;
+use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
-use crate::transform::{GraphOp, Pass, PassManager};
-use itertools::zip_eq;
-use std::collections::HashSet;
-use std::collections::VecDeque;
 
 #[derive(Default)]
 pub struct AssignStrides {}

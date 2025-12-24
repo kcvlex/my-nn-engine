@@ -1,9 +1,12 @@
-use crate::tensor::types::FloatType;
-use inkwell::builder::{Builder, BuilderError};
+use inkwell::builder::Builder;
+use inkwell::builder::BuilderError;
 use inkwell::context::Context;
-use inkwell::module::{Linkage, Module};
+use inkwell::module::Linkage;
+use inkwell::module::Module;
 use inkwell::values::*;
 use inkwell::AddressSpace;
+
+use crate::tensor::types::FloatType;
 
 #[allow(non_camel_case_types)]
 pub enum CBLAS_ORDER {

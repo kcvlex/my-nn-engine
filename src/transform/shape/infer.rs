@@ -1,13 +1,17 @@
-use crate::onnx::model::{Graph, UnifyMode};
+use itertools::zip_eq;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::UnifyMode;
 use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::early_broadcst::EarlyBroadcast;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::utils::const_fold::fold_constant;
+use crate::transform::GraphOp;
+use crate::transform::Pass;
+use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
-use crate::transform::{GraphOp, Pass, PassManager};
-use itertools::zip_eq;
 
 pub struct Config {
     pub unify_mode: UnifyMode,

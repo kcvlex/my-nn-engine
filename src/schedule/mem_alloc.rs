@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use indexmap::IndexMap;
+use indexmap::IndexSet;
+
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
-use indexmap::{IndexMap, IndexSet};
-use std::collections::{HashMap, HashSet};
 
 // TODO: Make the order deterministic
 #[derive(Debug)]
@@ -321,6 +325,10 @@ impl<'sched> MemoryPlanner<'sched> {
 
 #[cfg(test)]
 mod test {
+    use std::io::Error;
+    use std::io::Result;
+    use std::path::PathBuf;
+
     use itertools::Itertools;
 
     use super::*;
@@ -329,8 +337,6 @@ mod test {
     use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::*;
     use crate::transform::*;
-    use std::io::{Error, Result};
-    use std::path::PathBuf;
 
     fn load_model(path: &str) -> Result<Model> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

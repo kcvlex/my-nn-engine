@@ -1,10 +1,18 @@
-use crate::onnx::model::{Graph, Node, NodeId, ValueId, ValueInfo};
-use crate::onnx::operator::Operator;
-use crate::tensor::types::{ResolvedTensorType, TensorType};
-use crate::tensor::Tensor;
-use indexmap::IndexSet;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use indexmap::IndexSet;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::ValueId;
+use crate::onnx::model::ValueInfo;
+use crate::onnx::operator::Operator;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::TensorType;
+use crate::tensor::Tensor;
 
 pub trait GraphOp {
     // fn new(graph: &Graph) -> Self;

@@ -1,15 +1,34 @@
-use crate::onnx::model::{Graph, Model, Node, NodeMeta, Nodes, ValueId, ValueInfo, Values};
-use crate::onnx::operator::*;
-use crate::tensor::{
-    data::{ScalarData, TensorData},
-    dimensions::{Dimension, ResolvedTensorDims, UnresolvedTensorDims},
-    types::{DataType, FloatType, SIntType, TensorType, TypeError, UIntType, UnresolvedTensorType},
-    Tensor,
-};
-use itertools::Itertools;
-use prost::{DecodeError, Message};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
+
+use itertools::Itertools;
+use prost::DecodeError;
+use prost::Message;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::Model;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeMeta;
+use crate::onnx::model::Nodes;
+use crate::onnx::model::ValueId;
+use crate::onnx::model::ValueInfo;
+use crate::onnx::model::Values;
+use crate::onnx::operator::*;
+use crate::tensor::data::ScalarData;
+use crate::tensor::data::TensorData;
+use crate::tensor::dimensions::Dimension;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::dimensions::UnresolvedTensorDims;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::TensorType;
+use crate::tensor::types::TypeError;
+use crate::tensor::types::UIntType;
+use crate::tensor::types::UnresolvedTensorType;
+use crate::tensor::Tensor;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
 #[derive(Debug)]

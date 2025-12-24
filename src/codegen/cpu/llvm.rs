@@ -1,4 +1,3 @@
-use crate::tensor::types::{DataType, FloatType, SIntType, UIntType};
 use inkwell::attributes::*;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -7,6 +6,11 @@ use inkwell::targets::TargetMachine;
 use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
+
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::UIntType;
 
 pub struct FloatIntrinsics<'ll> {
     pub f_f32: FunctionValue<'ll>,

@@ -1,10 +1,15 @@
-use crate::onnx::model::{Graph, NodeId, ValueId};
+use std::ops::Index;
+
+use itertools::izip;
+use itertools::zip_eq;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::ValueId;
 use crate::tensor::data::ScalarData;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use crate::tensor::Tensor;
-use itertools::{izip, zip_eq};
-use std::ops::Index;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

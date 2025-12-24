@@ -1,12 +1,15 @@
-use crate::onnx::model::{Graph, UnifyMode, ValueId};
-use crate::onnx::operator::*;
-use crate::tensor::{
-    dimensions::ResolvedTensorDims,
-    types::{ResolvedTensorType, TypeError},
-};
-use crate::transform::shape::util;
-use crate::transform::{GraphOp, Pass};
 use itertools::zip_eq;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::UnifyMode;
+use crate::onnx::model::ValueId;
+use crate::onnx::operator::*;
+use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::TypeError;
+use crate::transform::shape::util;
+use crate::transform::GraphOp;
+use crate::transform::Pass;
 
 #[derive(Default)]
 pub struct VerifyShape {
@@ -77,6 +80,8 @@ impl VerifyShape {
 
 #[cfg(test)]
 mod test {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::*;
@@ -85,7 +90,6 @@ mod test {
     use crate::transform::shape::infer::ShapeInference;
     use crate::transform::shape::strides::AssignStrides;
     use crate::transform::*;
-    use std::path::PathBuf;
 
     #[test]
     fn infer_yolov4() {

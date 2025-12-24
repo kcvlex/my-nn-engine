@@ -1,11 +1,13 @@
+use std::fmt::Display;
+
+use delegate::delegate;
+use derive_more::From;
+use strum_macros::AsRefStr;
+
 use crate::codegen::cuda::*;
 use crate::onnx::operator::args;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
-use delegate::delegate;
-use derive_more::From;
-use std::fmt::Display;
-use strum_macros::AsRefStr;
 
 #[derive(From)]
 pub enum CUDAKernel {

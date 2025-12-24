@@ -1,5 +1,6 @@
-use crate::codegen::cuda::*;
 use derive_more::From;
+
+use crate::codegen::cuda::*;
 
 #[derive(From)]
 pub enum CudaRuntimeApi {

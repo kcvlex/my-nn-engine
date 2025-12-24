@@ -2,16 +2,22 @@ pub mod kernel;
 pub mod mem_alloc;
 pub mod omp;
 
-use crate::onnx::model::{Graph, ValueId, ValueInfo};
+use std::ops::Index;
+use std::ops::IndexMut;
+
+use id_arena::Arena;
+use id_arena::Id;
+use itertools::zip_eq;
+use serde::Serialize;
+use serde_derive::Serialize;
+
+use crate::onnx::model::Graph;
+use crate::onnx::model::ValueId;
+use crate::onnx::model::ValueInfo;
 use crate::onnx::operator::Operator;
 use crate::options::*;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
-use id_arena::{Arena, Id};
-use itertools::zip_eq;
-use serde::Serialize;
-use serde_derive::Serialize;
-use std::ops::{Index, IndexMut};
 
 #[derive(Default)]
 pub struct Kernels(Arena<Kernel>);

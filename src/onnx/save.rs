@@ -1,20 +1,23 @@
-use crate::onnx::model::*;
-use crate::onnx::operator::*;
-use crate::onnx::utils;
-use crate::tensor::{
-    data::TensorData,
-    dimensions::Dimension,
-    types::{
-        DataType, FloatType, ResolvedTensorType, SIntType, TensorType, UIntType,
-        UnresolvedTensorType,
-    },
-    Tensor,
-};
-use itertools::Itertools;
-use prost::Message;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
+
+use itertools::Itertools;
+use prost::Message;
+
+use crate::onnx::model::*;
+use crate::onnx::operator::*;
+use crate::onnx::utils;
+use crate::tensor::data::TensorData;
+use crate::tensor::dimensions::Dimension;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::TensorType;
+use crate::tensor::types::UIntType;
+use crate::tensor::types::UnresolvedTensorType;
+use crate::tensor::Tensor;
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
 // FIXME: This module is not tested at all!

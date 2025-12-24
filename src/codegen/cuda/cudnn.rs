@@ -1,10 +1,12 @@
-use crate::codegen::cuda::*;
-use crate::{
-    schedule::*,
-    tensor::types::{DataType, FloatType, SIntType, UIntType},
-};
 use derive_more::From;
 use strum_macros::AsRefStr;
+
+use crate::codegen::cuda::*;
+use crate::schedule::*;
+use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::UIntType;
 
 #[derive(From)]
 pub enum CudnnApi {

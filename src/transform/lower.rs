@@ -1,12 +1,15 @@
-use crate::onnx::model::{Graph, Node, NodeMeta};
+use crate::onnx::model::Graph;
+use crate::onnx::model::Node;
+use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::utils::tensor::*;
+use crate::transform::Pass;
+use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
-use crate::transform::{Pass, PassManager};
 
 #[derive(Default)]
 pub struct EliminateGlobalAvgPool {}
