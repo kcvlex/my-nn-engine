@@ -10,7 +10,6 @@ use crate::codegen::cuda::kernel::KernelBuilder;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::ReduceMatrixKernel;
-use crate::codegen::cuda::kernel::ReduceType;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;

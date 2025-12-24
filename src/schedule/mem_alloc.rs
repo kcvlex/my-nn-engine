@@ -109,18 +109,8 @@ impl<'sched> MemoryPlanner<'sched> {
                 .insert(*output, AllocateType::Output(*output));
         }
 
-        for (kernel_id, kernel) in self.schedule.kernels.iter() {
+        for (kernel_id, _) in self.schedule.kernels.iter() {
             let allocated = self.run_kernel(kernel_id);
-
-            // Verify
-            // if self.schedule.options.target == Target::CUDA {
-            //     zip_eq(
-            //         allocated.iter(),
-            //         kernel.inputs.iter().chain(kernel.outputs.iter()),
-            //     )
-            //     .for_each(|(allocated, value_id)| assert!(allocated.0 == *value_id))
-            // }
-
             for (value_id, allocated) in allocated {
                 self.allocations.insert(value_id, allocated);
             }

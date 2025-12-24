@@ -1,5 +1,4 @@
 use crate::codegen::cuda::*;
-use crate::onnx::operator;
 use crate::onnx::operator::args;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
