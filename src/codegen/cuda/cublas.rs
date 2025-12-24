@@ -73,12 +73,7 @@ impl Display for CublasApi {
                 write!(f, "cublasCreate(&{})", handler)
             }
             Self::SetStream(handler) => {
-                write!(
-                    f,
-                    "cublasSetStream({}, {})",
-                    handler,
-                    handler.0.to_identifier()
-                )
+                write!(f, "cublasSetStream({}, {})", handler, handler.0)
             }
             Self::Gemm(GemmArgs {
                 handler,

@@ -360,7 +360,7 @@ impl std::fmt::Display for CudnnOps {
                     f,
                     "cudnnSetStream({}, {})",
                     CudnnContext::StreamContext(*stream_id).handler(),
-                    stream_id.to_identifier()
+                    stream_id
                 )
             }
             Self::GetConvolutionForwardWorkspaceSize { ctx: handler, id } => {

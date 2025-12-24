@@ -160,7 +160,7 @@ impl std::fmt::Display for LaunchKernel {
             self.grid_size,
             self.block_size,
             self.shared_mem_bytes.unwrap_or(0),
-            self.stream_id.to_identifier(),
+            self.stream_id,
             args = args.join(", ")
         )
     }

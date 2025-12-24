@@ -33,7 +33,7 @@ pub struct EventCreate {
 
 impl std::fmt::Display for EventCreate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cudaEventCreate(&{})", self.event_id.to_identifier())
+        write!(f, "cudaEventCreate(&{})", self.event_id)
     }
 }
 
@@ -43,7 +43,7 @@ pub struct EventSynchronize {
 
 impl std::fmt::Display for EventSynchronize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cudaEventSynchronize({})", self.event_id.to_identifier())
+        write!(f, "cudaEventSynchronize({})", self.event_id)
     }
 }
 
@@ -53,7 +53,7 @@ pub struct StreamCreate {
 
 impl std::fmt::Display for StreamCreate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cudaStreamCreate(&{})", self.stream_id.to_identifier())
+        write!(f, "cudaStreamCreate(&{})", self.stream_id)
     }
 }
 
@@ -64,12 +64,7 @@ pub struct RecordEvent {
 
 impl std::fmt::Display for RecordEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "cudaEventRecord({}, {})",
-            self.event_id.to_identifier(),
-            self.stream_id.to_identifier()
-        )
+        write!(f, "cudaEventRecord({}, {})", self.event_id, self.stream_id)
     }
 }
 
@@ -115,11 +110,7 @@ impl std::fmt::Display for Memcpy {
         write!(
             f,
             "cudaMemcpyAsync({}, {}, {}, {}, {})",
-            self.dst,
-            self.src,
-            self.mem_size,
-            self.kind,
-            self.stream.to_identifier()
+            self.dst, self.src, self.mem_size, self.kind, self.stream
         )
     }
 }
@@ -134,8 +125,7 @@ impl std::fmt::Display for WaitEvent {
         write!(
             f,
             "cudaStreamWaitEvent({}, {})",
-            self.stream_id.to_identifier(),
-            self.event_id.to_identifier()
+            self.stream_id, self.event_id
         )
     }
 }

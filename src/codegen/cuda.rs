@@ -154,16 +154,6 @@ impl std::fmt::Display for Expr {
     }
 }
 
-trait ToIdentifier {
-    fn to_identifier(&self) -> Expr;
-}
-
-impl ToIdentifier for String {
-    fn to_identifier(&self) -> Expr {
-        Expr::Identifier(self.clone())
-    }
-}
-
 trait ToLiteral {
     fn to_literal(&self) -> Expr;
 }
@@ -183,18 +173,18 @@ impl StreamId {
     }
 }
 
-impl ToIdentifier for StreamId {
-    fn to_identifier(&self) -> Expr {
-        Expr::Identifier(format!("stream_{}", self.0))
+impl std::fmt::Display for StreamId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stream_{}", self.0)
     }
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
 struct EventId(usize);
 
-impl ToIdentifier for EventId {
-    fn to_identifier(&self) -> Expr {
-        Expr::Identifier(format!("event_{}", self.0))
+impl std::fmt::Display for EventId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "event_{}", self.0)
     }
 }
 
@@ -704,16 +694,14 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
         for event_id in self.used_event.iter().copied() {
-            let name = event_id.to_identifier().to_string();
             self.stmts
-                .push(Statement::Raw(format!("cudaEvent_t {name};")));
+                .push(Statement::Raw(format!("cudaEvent_t {event_id};")));
             self.stmts.push(EventCreate { event_id }.into());
         }
 
         for stream_id in self.streams.inner.iter().copied() {
-            let name = stream_id.to_identifier().to_string();
             self.stmts
-                .push(Statement::Raw(format!("cudaStream_t {name};")));
+                .push(Statement::Raw(format!("cudaStream_t {stream_id};")));
             self.stmts.push(StreamCreate { stream_id }.into());
         }
 
