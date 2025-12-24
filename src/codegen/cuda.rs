@@ -279,7 +279,7 @@ pub struct DeviceCode {
 impl DeviceCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         for h in ["common.cuh", "cuda.h"] {
-            writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+            writeln!(writer, "#include \"{}\"", h)?;
         }
         writer.write_all(self.body.as_bytes())?;
         Ok(())
@@ -482,16 +482,14 @@ impl<'sched> CudnnCodeGenerator<'sched> {
 impl CudnnCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         for h in ["common.cuh", "cuda.h", "cudnn.h", "cudnn_setting.h"] {
-            writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+            writeln!(writer, "#include \"{}\"", h)?;
         }
 
-        writer.write_all(format!("extern \"C\" {} {{\n", self.init_fn_decl).as_bytes())?;
+        writeln!(writer, "extern \"C\" {} {{", self.init_fn_decl)?;
         for stmt in self.stmts.iter() {
-            writer.write_all(b"  ")?;
-            writer.write_all(stmt.to_string().as_bytes())?;
-            writer.write_all(b"\n")?;
+            writeln!(writer, "  {stmt}")?;
         }
-        writer.write_all(b"}\n")?;
+        writeln!(writer, "}}")?;
         Ok(())
     }
 
@@ -1285,7 +1283,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 impl HostCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         for h in ["algorithm", "limits"] {
-            writer.write_all(format!("#include <{}>\n", h).as_bytes())?;
+            writeln!(writer, "#include <{}>", h)?;
         }
         for h in [
             "common.cuh",
@@ -1296,21 +1294,21 @@ impl HostCode {
             "reduce.cuh",
             "cudnn_setting.h",
         ] {
-            writer.write_all(format!("#include \"{}\"\n", h).as_bytes())?;
+            writeln!(writer, "#include \"{}\"", h)?;
         }
 
         for code in self.kernel_codes.iter() {
             match code {
                 SeparatedCode::Cudnn(code) => {
-                    writer.write_all(format!("extern \"C\" {};\n", code.init_fn_decl).as_bytes())?
+                    writeln!(writer, "extern \"C\" {};", code.init_fn_decl)?
                 }
                 SeparatedCode::Device(code) => {
-                    writer.write_all(format!("extern \"C\" {};\n", code.decl.decl()).as_bytes())?
+                    writeln!(writer, "extern \"C\" {};", code.decl.decl())?
                 }
             }
         }
 
-        writer.write_all(format!("extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{\n").as_bytes())?;
+        writeln!(writer, "extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{")?;
         for stmts in &[
             self.decl_values.as_slice(),
             self.decl_cuda_objs.as_slice(),
@@ -1318,12 +1316,10 @@ impl HostCode {
             self.finalize.as_slice(),
         ] {
             for stmt in stmts.iter() {
-                writer.write_all(b"  ")?;
-                writer.write_all(stmt.to_string().as_bytes())?;
-                writer.write_all(b"\n")?;
+                writeln!(writer, "  {stmt}")?;
             }
         }
-        writer.write_all(b"}\n")?;
+        writeln!(writer, "}}")?;
         Ok(())
     }
 }
