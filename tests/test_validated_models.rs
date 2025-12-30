@@ -57,3 +57,14 @@ fn test_yolov4_cpu() -> Result {
 fn test_mnist12_cuda() -> Result {
     run_test("mnist-12", 1e-2, Target::CUDA)
 }
+
+#[test]
+fn test_resnet18_cuda() -> Result {
+    run_test("resnet18-v2-7", 1e-2, Target::CUDA)
+}
+
+#[test]
+fn test_resnet152_cuda() -> Result {
+    run_test("resnet152-v2-7", 1e-1, Target::CUDA)
+}
+
