@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+
 use crate::onnx::model::Graph;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
-use std::collections::HashSet;
-use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct CleanupTensors {}
