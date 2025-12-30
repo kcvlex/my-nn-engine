@@ -110,8 +110,8 @@ impl SessionCUDA {
                         obj.to_str().unwrap(),
                         "-lcudnn",
                         "-lcublas",
-                        "--compiler-options",
-                        "'-fPIC'",
+                        "-Xcompiler",
+                        "-fPIC",
                     ])
                     .status()
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -126,8 +126,8 @@ impl SessionCUDA {
                 shared_lib.to_str().unwrap(),
                 "-lcudnn",
                 "-lcublas",
-                "--compiler-options",
-                "'-fPIC'",
+                "-Xcompiler",
+                "-fPIC",
             ])
             .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()
