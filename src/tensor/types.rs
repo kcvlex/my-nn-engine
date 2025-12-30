@@ -356,6 +356,17 @@ impl ResolvedTensorType {
     pub fn is_scalar(&self) -> bool {
         self.dims.is_scalar()
     }
+
+    pub fn storage_num_elements(&self) -> usize {
+        if self.is_scalar() {
+            return 1;
+        }
+
+        izip!(self.dims.iter(), self.stride.iter())
+            .map(|(dim, stride)| dim.max(&1) * stride)
+            .max()
+            .unwrap()
+    }
 }
 
 impl TensorType {

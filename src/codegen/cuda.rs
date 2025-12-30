@@ -76,6 +76,15 @@ impl std::fmt::Display for MemSize {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SizeOf(pub DataType);
+
+impl std::fmt::Display for SizeOf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sizeof({})", self.0)
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct SingleMemSize {
     ty: DataType,
@@ -87,7 +96,7 @@ impl std::fmt::Display for SingleMemSize {
         if self.elem_num == 0 {
             write!(f, "0")
         } else {
-            write!(f, "{} * sizeof({})", self.elem_num, self.ty)
+            write!(f, "{} * {}", self.elem_num, SizeOf(self.ty))
         }
     }
 }
@@ -96,7 +105,7 @@ impl From<&ResolvedTensorType> for SingleMemSize {
     fn from(ty: &ResolvedTensorType) -> Self {
         SingleMemSize {
             ty: ty.elem_type,
-            elem_num: ty.dims.size(),
+            elem_num: ty.storage_num_elements(),
         }
     }
 }
@@ -1221,13 +1230,14 @@ impl<'sched> HostCodeGenerator<'sched> {
                         row,
                         col,
                     });
+                    let shared_mem_bytes = Some(format!("{} * {}", block_size, SizeOf(data_ty)));
                     let block_size = block_size.to_literal();
                     self.stmts.push(
                         kernel::LaunchKernel {
                             cuda_kernel,
                             grid_size,
                             block_size,
-                            shared_mem_bytes: None,
+                            shared_mem_bytes,
                             stream_id: kernel_stream,
                         }
                         .into(),

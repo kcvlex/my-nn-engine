@@ -134,7 +134,7 @@ pub struct LaunchKernel {
     pub cuda_kernel: CUDAKernel,
     pub grid_size: Expr,
     pub block_size: Expr,
-    pub shared_mem_bytes: Option<usize>,
+    pub shared_mem_bytes: Option<String>,
     pub stream_id: StreamId,
 }
 
@@ -159,7 +159,7 @@ impl std::fmt::Display for LaunchKernel {
             "{id}<<<{}, {}, {}, {}>>>({args})",
             self.grid_size,
             self.block_size,
-            self.shared_mem_bytes.unwrap_or(0),
+            self.shared_mem_bytes.clone().unwrap_or("0".to_string()),
             self.stream_id,
             args = args.join(", ")
         )
