@@ -758,48 +758,7 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
-        let mut output_events = IndexMap::new();
-        for value_id in self.schedule.outputs.iter().copied() {
-            let event_id = self
-                .value2event
-                .get(&value_id)
-                .copied()
-                .ok_or(BuildError::EventNotFound(value_id))?;
-            output_events
-                .entry(event_id)
-                .or_insert_with(Vec::new)
-                .push(value_id);
-        }
-
-        let mut events_sync = Vec::with_capacity(output_events.len());
-        for (event_id, values) in output_events.iter() {
-            let stream_id = self.event2stream[event_id.0];
-            for value_id in values.iter().copied() {
-                let dst = self
-                    .hostmem2identifier
-                    .get(&value_id)
-                    .ok_or(BuildError::NoHostVariable(value_id))?;
-                let src = self.device_identifier(value_id)?;
-                let mem_size = MemSize::Single(self.single_mem_size(value_id)?);
-                self.stmts.push(
-                    Memcpy {
-                        dst: Expr::Identifier(dst.clone()),
-                        src,
-                        mem_size,
-                        kind: CudaMemcpyKind::DeviceToHost,
-                        stream: stream_id,
-                    }
-                    .into(),
-                );
-            }
-            let new_event = self.record_event(stream_id, values);
-            events_sync.push(new_event);
-        }
-
-        for event_id in events_sync.iter().copied() {
-            self.stmts.push(EventSynchronize { event_id }.into());
-            self.used_event.insert(event_id);
-        }
+        self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
 
@@ -1248,6 +1207,28 @@ impl<'sched> HostCodeGenerator<'sched> {
             }
         }
 
+        for output in kernel
+            .outputs
+            .iter()
+            .filter(|v| self.schedule.outputs.contains(v))
+        {
+            let dst = self
+                .hostmem2identifier
+                .get(output)
+                .ok_or(BuildError::NoHostVariable(*output))?;
+            let src = self.device_identifier(*output)?;
+            let mem_size = MemSize::Single(self.single_mem_size(*output)?);
+            self.stmts.push(
+                Memcpy {
+                    dst: Expr::Identifier(dst.clone()),
+                    src,
+                    mem_size,
+                    kind: CudaMemcpyKind::DeviceToHost,
+                    stream: kernel_stream,
+                }
+                .into(),
+            );
+        }
         self.record_event(kernel_stream, &kernel.outputs);
 
         Ok(())

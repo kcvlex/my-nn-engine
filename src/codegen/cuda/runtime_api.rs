@@ -11,6 +11,7 @@ pub enum CudaRuntimeApi {
     Malloc(Malloc),
     Memcpy(Memcpy),
     WaitEvent(WaitEvent),
+    DeviceSynchronize,
 }
 
 impl std::fmt::Display for CudaRuntimeApi {
@@ -23,6 +24,7 @@ impl std::fmt::Display for CudaRuntimeApi {
             CudaRuntimeApi::Malloc(malloc) => write!(f, "{}", malloc),
             CudaRuntimeApi::Memcpy(memcpy) => write!(f, "{}", memcpy),
             CudaRuntimeApi::WaitEvent(wait_event) => write!(f, "{}", wait_event),
+            CudaRuntimeApi::DeviceSynchronize => write!(f, "cudaDeviceSynchronize()"),
         }
     }
 }

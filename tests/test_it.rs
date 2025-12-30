@@ -92,11 +92,21 @@ fn test_elementwise_chain_single_cuda() -> Result {
 }
 
 #[test]
-fn test_elementwise_chain_branch() -> Result {
+fn test_elementwise_chain_branch_cpu() -> Result {
     run_test(
         "elementwise_chain_branch",
         1e-3,
         &Options::builder().build(),
+        (1, 2),
+    )
+}
+
+#[test]
+fn test_elementwise_chain_branch_cuda() -> Result {
+    run_test(
+        "elementwise_chain_branch",
+        1e-3,
+        &Options::builder().target(Target::CUDA).build(),
         (1, 2),
     )
 }
