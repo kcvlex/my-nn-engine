@@ -29,8 +29,18 @@ fn run_test(model: &str, epsilon: f64, target: Target) -> Result {
         if true {
             assert_eq!(output[0], expected);
         } else {
-            let left = output[0].clone().data.into_1d_tensor().to_1d_floats().unwrap();
-            let right = expected.clone().data.into_1d_tensor().to_1d_floats().unwrap();
+            let left = output[0]
+                .clone()
+                .data
+                .into_1d_tensor()
+                .to_1d_floats()
+                .unwrap();
+            let right = expected
+                .clone()
+                .data
+                .into_1d_tensor()
+                .to_1d_floats()
+                .unwrap();
             // For pretty printing
             assert_eq!(&left[..10], &right[..10]);
         }

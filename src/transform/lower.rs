@@ -66,7 +66,14 @@ impl<T: GraphOp> Pass<T> for EliminateGlobalAvgPool {
                 },
             );
 
-            let mut new_dims = vec![1; graph.get_resolved_tensor_type(old_output).unwrap().dims.ndim()];
+            let mut new_dims = vec![
+                1;
+                graph
+                    .get_resolved_tensor_type(old_output)
+                    .unwrap()
+                    .dims
+                    .ndim()
+            ];
             new_dims[0] = nbatch;
             new_dims[1] = channel;
             let new_output = ReshapeGenerator::default()

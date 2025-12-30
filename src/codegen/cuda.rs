@@ -255,7 +255,7 @@ pub struct HostCode {
 const ARG_INPUT: &str = "input";
 const ARG_OUTPUT: &str = "output";
 const ARG_INITIALIZER: &str = "initializer";
-const MAX_STREAMS: usize = 1;// 16;
+const MAX_STREAMS: usize = 1; // 16;
 const DEFAULT_BLOCK_SIZE: usize = 256;
 
 struct CudnnCodeGenerator<'sched> {

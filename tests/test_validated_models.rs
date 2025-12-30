@@ -67,4 +67,3 @@ fn test_resnet18_cuda() -> Result {
 fn test_resnet152_cuda() -> Result {
     run_test("resnet152-v2-7", 1e-1, Target::CUDA)
 }
-

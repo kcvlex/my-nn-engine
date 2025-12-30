@@ -754,7 +754,7 @@ mod test {
             Ok(())
         })
     }
-    
+
     #[test]
     fn global_avg_non_pow2() -> TestResult {
         with_all_sessions_and_tensors("global_avg_non_pow2", |session, (input, output)| {
@@ -763,7 +763,6 @@ mod test {
             Ok(())
         })
     }
-
 
     #[test]
     fn batchnorm() -> TestResult {
