@@ -1,0 +1,31 @@
+use crate::onnx::model::Graph;
+use crate::transform::modify::GraphOp;
+use crate::transform::Pass;
+use std::collections::HashSet;
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+pub struct CleanupTensors {}
+
+impl<T: GraphOp> Pass<T> for CleanupTensors {
+    fn summary(&self) -> &'static str {
+        "Cleanup unused tensors (initializers) from the graph"
+    }
+
+    fn run(&self, graph: &mut Graph, _modifier: &mut T) {
+        let used_values: HashSet<_> = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| !node.is_dummy())
+            .flat_map(|(_, node)| node.inputs.iter())
+            .copied()
+            .collect();
+
+        let mut tmp = BTreeMap::new();
+        std::mem::swap(&mut graph.initializer, &mut tmp);
+        graph.initializer = tmp
+            .into_iter()
+            .filter(|(v, _)| used_values.contains(v))
+            .collect();
+    }
+}

@@ -1,3 +1,5 @@
+mod cleanup;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeMeta;
@@ -86,5 +88,6 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));
     }
+    manager.add_pass(Box::new(cleanup::CleanupTensors::default()));
     manager
 }
