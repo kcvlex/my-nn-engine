@@ -167,8 +167,21 @@ type Attributes = HashMap<String, Attribute>;
 
 impl GraphLoader {
     fn load_graph(mut self, graph: GraphProto) -> LoadResult<Graph> {
+        let input = {
+            let initializer_names: HashSet<_> = graph
+                .initializer
+                .iter()
+                .map(|x| x.name.as_str())
+                .collect();
+            let input: Vec<_> = graph
+                .input
+                .into_iter()
+                .filter(|x| !initializer_names.contains(x.name.as_str()))
+                .collect();
+            input
+        };
         let initializer = self.load_initializer(graph.initializer)?;
-        let inputs = self.load_value_info_vec(graph.input)?;
+        let inputs = self.load_value_info_vec(input)?;
         let outputs = self.load_value_info_vec(graph.output)?;
         let mut nodes = self.load_nodes(graph.node)?;
         let inputs = {
