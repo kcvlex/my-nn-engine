@@ -359,7 +359,7 @@ mod test {
 
     #[test]
     fn add() -> TestResult {
-        with_cpu_session("add.onnx", |session| {
+        with_all_sessions("add.onnx", |session| {
             let (input0, orig0) = make_tensor!(f32, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0],)?;
             let (input1, orig1) = make_tensor!(f32, [1.0, 2.0, 3.0], [-4.0, -5.0, -6.0],)?;
             let output = session.run(&[input0, input1])?;
@@ -1132,7 +1132,7 @@ mod test {
 
     #[test]
     fn squeeze() -> TestResult {
-        with_cpu_session("squeeze.onnx", |session| {
+        with_all_sessions("squeeze.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 2, 1, 3, 4)?;
             let expected = orig
                 .into_shape_with_order((1, 2, 3, 4))
@@ -1146,7 +1146,7 @@ mod test {
 
     #[test]
     fn squeeze_opt() -> TestResult {
-        with_cpu_session("squeeze_opt.onnx", |session| {
+        with_all_sessions("squeeze_opt.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 1, 2, 1, 3, 4)?;
             let expected = orig
                 .into_shape_with_order((2, 3, 4))
@@ -1160,7 +1160,7 @@ mod test {
 
     #[test]
     fn unsqueeze() -> TestResult {
-        with_cpu_session("unsqueeze.onnx", |session| {
+        with_all_sessions("unsqueeze.onnx", |session| {
             let (input, orig) = make_range_tensor!(f32, 2, 3, 4)?;
             let expected = orig
                 .into_shape_with_order((1, 2, 3, 4, 1))
@@ -1174,7 +1174,7 @@ mod test {
 
     #[test]
     fn reciprocal() -> TestResult {
-        with_cpu_session("reciprocal.onnx", |session| {
+        with_all_sessions("reciprocal.onnx", |session| {
             let (input, orig) = make_tensor!(f32, [1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],)?;
             let expected = orig.map(|x| 1.0 / x).into_dyn();
             let output = session.run(&[input])?;
@@ -1185,7 +1185,7 @@ mod test {
 
     #[test]
     fn sqrt() -> TestResult {
-        with_cpu_session("sqrt.onnx", |session| {
+        with_all_sessions("sqrt.onnx", |session| {
             let (input, orig) = make_tensor!(f32, [1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],)?;
             let expected = orig.map(|x| x.sqrt()).into_dyn();
             let output = session.run(&[input])?;
