@@ -178,7 +178,11 @@ pub fn infer_node_output(
         }
         Operator::GlobalAveragePool => {
             let x = &inputs[0];
-            let dims = x.dims[..2].to_vec();
+            let nbatch = x.dims[0];
+            let channel = x.dims[1];
+            let mut dims = vec![1; x.dims.ndim()];
+            dims[0] = nbatch;
+            dims[1] = channel;
             res.push(ResolvedTensorType::new(
                 x.elem_type,
                 ResolvedTensorDims::new(dims),
