@@ -754,6 +754,16 @@ mod test {
             Ok(())
         })
     }
+    
+    #[test]
+    fn global_avg_non_pow2() -> TestResult {
+        with_all_sessions_and_tensors("global_avg_non_pow2", |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1e-2);
+            Ok(())
+        })
+    }
+
 
     #[test]
     fn batchnorm() -> TestResult {

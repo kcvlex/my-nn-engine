@@ -575,6 +575,19 @@ impl<T, F: Fn(usize) -> T> IdSlot<T, F> {
     }
 }
 
+fn ceil_pow2(mut x: usize) -> usize {
+    if x == 0 {
+        return 1;
+    }
+    x -= 1;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    x + 1
+}
+
 impl<'sched> HostCodeGenerator<'sched> {
     pub fn new(schedule: &'sched Schedule) -> Self {
         HostCodeGenerator {
@@ -1219,10 +1232,11 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let [row, col] = input_ty.dims[..] else {
                         panic!("Invalid ReduceMatrix output shape");
                     };
-                    let block_size = min(DEFAULT_BLOCK_SIZE, col);
-                    let grid_size = input_ty.dims.size().div_ceil(block_size).to_literal();
+                    let block_size = min(DEFAULT_BLOCK_SIZE, ceil_pow2(col));
+                    let grid_size = input_ty.dims[0].to_literal();
+                    let data_ty = input_ty.elem_type;
                     let cuda_kernel = kernel::CUDAKernel::ReduceMatrixKernel(ReduceMatrixKernel {
-                        data_ty: input_ty.elem_type,
+                        data_ty,
                         reduce_ty: (*op).into(),
                         block_size,
                         out,

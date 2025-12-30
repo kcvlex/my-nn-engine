@@ -66,7 +66,7 @@ __global__ void reduce2d(
     shared_data[tid] = acc_block;
     cg::sync(cta);
 
-    for (int s = blockDim.x / 2; 32 <= s; s >>= 1) {
+    for (i64 s = BLOCK_SIZE / 2; 32 <= s; s >>= 1) {
         if (tid < s) {
             shared_data[tid] = reduce_op<T, RT>(shared_data[tid], shared_data[tid + s]);
         }
