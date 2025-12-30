@@ -189,7 +189,8 @@ impl<'sched> MemoryPlanner<'sched> {
                         let chunk_id = self.chunks.reuse_or_new();
                         self.allocations
                             .insert(*input, AllocateType::Chunk(chunk_id));
-                        *self.liveness_counter.entry(chunk_id).or_insert(0) += 1;
+                        *self.liveness_counter.entry(chunk_id).or_insert(0) +=
+                            self.deps.value2used.get(input).unwrap().len();
                         res.push((*input, AllocateType::Chunk(chunk_id)));
                     }
                 };

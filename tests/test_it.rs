@@ -54,7 +54,7 @@ fn test_transpose_conv2d() -> Result {
 }
 
 #[test]
-fn test_add_same_tensor() -> Result {
+fn test_add_same_tensor_cpu() -> Result {
     run_test(
         "add_same_tensor",
         1e-5,
@@ -64,8 +64,31 @@ fn test_add_same_tensor() -> Result {
 }
 
 #[test]
-fn test_elementwise_chain_single() -> Result {
+fn test_add_same_tensor_cuda() -> Result {
+    run_test(
+        "add_same_tensor",
+        1e-5,
+        &Options::builder()
+            .target(Target::CUDA)
+            .enable_fuse_ops(false)
+            .build(),
+        (1, 1),
+    )
+}
+
+#[test]
+fn test_elementwise_chain_single_cpu() -> Result {
     run_test_default("elementwise_chain_single", 1e-3)
+}
+
+#[test]
+fn test_elementwise_chain_single_cuda() -> Result {
+    run_test(
+        "elementwise_chain_single",
+        1e-3,
+        &Options::builder().target(Target::CUDA).build(),
+        (1, 1),
+    )
 }
 
 #[test]
@@ -79,6 +102,16 @@ fn test_elementwise_chain_branch() -> Result {
 }
 
 #[test]
-fn test_elementwise_complex() -> Result {
+fn test_elementwise_complex_cpu() -> Result {
     run_test_default("elementwise_complex", 1e-3)
+}
+
+#[test]
+fn test_elementwise_complex_cuda() -> Result {
+    run_test(
+        "elementwise_complex",
+        1e-3,
+        &Options::builder().target(Target::CUDA).build(),
+        (1, 1),
+    )
 }
