@@ -61,32 +61,13 @@ impl SessionCUDA {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
         let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
-        let mut paths = hostcode
-            .kernel_codes
-            .par_iter()
-            .map(|code| {
-                let filepath = format!("kernel_{}.cu", code.kernel_id().index());
-                let filepath = tmp_dir.path().join(filepath);
-                let mut writer = std::fs::File::create(&filepath)
-                    .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
-                    .map(BufWriter::new)?;
-                code.write(&mut writer).map_err(|e| {
-                    SessionError::OtherError(format!("Failed to write kernel code: {:?}", e))
-                })?;
-                writer.flush().map_err(|e| {
-                    SessionError::OtherError(format!("Failed to flush kernel code: {:?}", e))
-                })?;
-                Ok::<(PathBuf, PathBuf), SessionError>((
-                    filepath.clone(),
-                    filepath.with_extension("o"),
-                ))
-            })
-            .collect::<Result<Vec<_>, SessionError>>()?;
-        paths.push((main_file.clone(), main_file.with_extension("o")));
-        paths.push((
-            kernel_dir.join("common.cu"),
-            tmp_dir.path().join("common.o"),
-        ));
+        let paths = vec![
+            (main_file.clone(), main_file.with_extension("o")),
+            (
+                kernel_dir.join("common.cu"),
+                tmp_dir.path().join("common.o"),
+            ),
+        ];
         println!("Generated");
 
         dbg!(&tmp_dir);

@@ -274,33 +274,23 @@ impl SeparatedCode {
             SeparatedCode::Device(code) => code,
             SeparatedCode::Cudnn(code) => code,
         } {
-            pub fn kernel_id(&self) -> KernelId;
-            pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
+            pub fn write_body<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
         }
     }
 }
 
 pub struct DeviceCode {
-    decl: KernelDecl,
     body: String,
 }
 
 impl DeviceCode {
-    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for h in ["common.cuh", "cuda.h"] {
-            writeln!(writer, "#include \"{}\"", h)?;
-        }
+    pub fn write_body<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(self.body.as_bytes())?;
         Ok(())
-    }
-
-    pub fn kernel_id(&self) -> KernelId {
-        self.decl.kernel_id
     }
 }
 
 pub struct CudnnCode {
-    kernel_id: KernelId,
     stmts: Vec<Statement>,
     init_fn: String,
     init_fn_decl: String,
@@ -480,7 +470,6 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         );
 
         Ok(CudnnCode {
-            kernel_id: self.kernel_id,
             stmts,
             init_fn,
             init_fn_decl,
@@ -489,21 +478,13 @@ impl<'sched> CudnnCodeGenerator<'sched> {
 }
 
 impl CudnnCode {
-    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for h in ["common.cuh", "cuda.h", "cudnn.h", "cudnn_setting.h"] {
-            writeln!(writer, "#include \"{}\"", h)?;
-        }
-
-        writeln!(writer, "extern \"C\" {} {{", self.init_fn_decl)?;
+    pub fn write_body<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writeln!(writer, "{} {{", self.init_fn_decl)?;
         for stmt in self.stmts.iter() {
             writeln!(writer, "  {stmt}")?;
         }
         writeln!(writer, "}}")?;
         Ok(())
-    }
-
-    pub fn kernel_id(&self) -> KernelId {
-        self.kernel_id
     }
 }
 
@@ -898,7 +879,6 @@ impl<'sched> HostCodeGenerator<'sched> {
         let decl = KernelDecl { kernel_id, params };
         self.separated_codes.push(SeparatedCode::Device(DeviceCode {
             body: KernelBuilder::new(self.schedule, decl.clone()).build()?,
-            decl: decl.clone(),
         }));
         Ok(GeneratedKernel { decl, args })
     }
@@ -1324,10 +1304,10 @@ impl HostCode {
         for code in self.kernel_codes.iter() {
             match code {
                 SeparatedCode::Cudnn(code) => {
-                    writeln!(writer, "extern \"C\" {};", code.init_fn_decl)?
+                    code.write_body(writer)?;
                 }
                 SeparatedCode::Device(code) => {
-                    writeln!(writer, "extern \"C\" {};", code.decl.decl())?
+                    code.write_body(writer)?;
                 }
             }
         }
