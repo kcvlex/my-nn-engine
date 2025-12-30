@@ -98,6 +98,19 @@ impl SessionCUDA {
             Some(tmp_dir)
         };
 
+        let cuda_arch = Command::new("nvidia-smi")
+            .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+            .output()
+            .map(|o| {
+                let arch = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("75")
+                    .replace('.', "");
+                format!("sm_{}", arch)
+            })
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
         let objs = paths
             .par_iter()
             .map(|(src, obj)| {
@@ -112,6 +125,8 @@ impl SessionCUDA {
                         "-lcublas",
                         "-Xcompiler",
                         "-fPIC",
+                        "-arch",
+                        cuda_arch.as_str(),
                     ])
                     .status()
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -128,6 +143,8 @@ impl SessionCUDA {
                 "-lcublas",
                 "-Xcompiler",
                 "-fPIC",
+                "-arch",
+                cuda_arch.as_str(),
             ])
             .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()
