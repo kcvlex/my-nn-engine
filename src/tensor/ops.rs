@@ -75,6 +75,17 @@ pub fn ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
         .to_owned()
 }
 
+pub fn ndarray_broadcast<T: Clone>(
+    tensor: RawTensor<'_, T>,
+    target_dims: &[usize],
+) -> Array<T, IxDyn> {
+    into_array_view!(tensor)
+        .unwrap()
+        .broadcast(target_dims)
+        .unwrap()
+        .to_owned()
+}
+
 #[allow(unused)]
 fn experimental_ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
     data: RawTensor<'_, T>,

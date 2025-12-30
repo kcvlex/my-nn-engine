@@ -844,9 +844,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         entry: BasicBlock<'ctx>,
         gemm: &operator::Gemm,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        // TODO?: Omit if c.ptr == dst.ptr.
         let entry = if let Some(c) = c {
-            let mut c = c.clone();
-            c.ty = c.ty.broadcast(&dst.ty.dims);
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
                 operands: smallvec![dst.clone(), c.clone()],

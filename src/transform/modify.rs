@@ -78,6 +78,11 @@ pub trait GraphOp {
     fn replace_tensor_type(&self, graph: &mut Graph, value_id: ValueId, ty: ResolvedTensorType) {
         graph.values[value_id].ty = Some(TensorType::Resolved(ty));
     }
+
+    fn replace_tensor(&self, graph: &mut Graph, value_id: ValueId, tensor: Tensor) {
+        self.replace_tensor_type(graph, value_id, tensor.tensor_type());
+        *graph.initializer.get_mut(&value_id).unwrap() = tensor;
+    }
 }
 
 pub trait NodeDelete {

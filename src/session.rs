@@ -1118,7 +1118,7 @@ mod test {
 
     #[test]
     fn bias_gemm() -> TestResult {
-        with_cpu_session("bias_gemm.onnx", |session| {
+        with_all_sessions("bias_gemm.onnx", |session| {
             let (input0, orig0) = make_range_tensor!(f32, 4, 7)?;
             let (input1, orig1) = make_range_tensor!(f32, 7, 2)?;
             let bias = ndarray::array![[0.42, 0.63]];

@@ -185,6 +185,10 @@ impl Tensor {
             _ => panic!(),
         }
     }
+
+    pub fn broadcast(&self, dims: &ResolvedTensorDims) -> Self {
+        apply_ndarray_ops!(self, ndarray_broadcast, &dims[..]).unwrap()
+    }
 }
 
 macro_rules! define_try_from {
