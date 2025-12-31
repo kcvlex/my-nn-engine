@@ -15,8 +15,8 @@ use itertools::Itertools;
 
 use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
+use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
-use crate::codegen::cuda::kernel::KernelBuilder;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::ReduceMatrixKernel;
@@ -814,21 +814,20 @@ impl<'sched> HostCodeGenerator<'sched> {
             add_param(&mut params, *input);
         }
 
-        let mut args = Vec::with_capacity(params.len());
-        for (param, ty) in params.iter() {
-            let arg = match param {
-                KernelVar::Value(p) => {
-                    let ptr = self.device_identifier(*p)?;
-                    Expr::Literal(format!("({}){}", ty, ptr))
-                }
-                KernelVar::Gid | KernelVar::Local(_) => unreachable!(),
-            };
-            args.push(arg);
-        }
+        let args = params
+            .iter()
+            .map(|(param, ty)| {
+                let KernelVar::Value(p) = param else {
+                    unreachable!()
+                };
+                let ptr = self.device_identifier(*p)?;
+                Ok(Expr::Literal(format!("({}){}", ty, ptr)))
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?;
 
         let decl = KernelDecl { kernel_id, params };
         self.separated_codes.push(SeparatedCode::Device(DeviceCode {
-            body: KernelBuilder::new(self.schedule, decl.clone()).build()?,
+            body: ElementwiseKernelBuilder::new(self.schedule, decl.clone()).build()?,
         }));
         Ok(GeneratedKernel { decl, args })
     }

@@ -316,13 +316,13 @@ impl LocalVarGen {
     }
 }
 
-pub struct KernelBuilder<'sched> {
+pub struct ElementwiseKernelBuilder<'sched> {
     schedule: &'sched Schedule,
     decl: KernelDecl,
     local_gen: LocalVarGen,
 }
 
-impl<'sched> KernelBuilder<'sched> {
+impl<'sched> ElementwiseKernelBuilder<'sched> {
     pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
         Self {
             schedule,
