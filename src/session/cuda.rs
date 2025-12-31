@@ -108,6 +108,7 @@ impl SessionCUDA {
                         "-fPIC",
                         "-arch",
                         cuda_arch.as_str(),
+                        "--expt-relaxed-constexpr",
                     ])
                     .status()
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -126,6 +127,7 @@ impl SessionCUDA {
                 "-fPIC",
                 "-arch",
                 cuda_arch.as_str(),
+                "--expt-relaxed-constexpr",
             ])
             .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()

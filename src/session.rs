@@ -726,7 +726,7 @@ mod test {
 
     #[test]
     fn reducemax() -> TestResult {
-        with_cpu_session("reducemax.onnx", |session| {
+        with_all_sessions("reducemax.onnx", |session| {
             let (input, orig) = make_tensor!(
                 f32,
                 [
