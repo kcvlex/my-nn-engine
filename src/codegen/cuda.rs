@@ -21,6 +21,7 @@ use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::ReduceMatrixKernel;
+use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
@@ -43,6 +44,7 @@ pub enum BuildError {
     EventNotFound(ValueId),
     ActivationNotFound(KernelId),
     UnsupportedTensorDim(ValueId, usize),
+    NonContiguousTensor(ValueId),
 }
 
 impl std::fmt::Display for DataType {
@@ -799,14 +801,22 @@ impl<'sched> HostCodeGenerator<'sched> {
             .map(|x| x.into())
     }
 
-    fn generate_kernel(&mut self, kernel_id: KernelId) -> Result<GeneratedKernel, BuildError> {
+    fn generate_kernel<F>(
+        &mut self,
+        kernel_id: KernelId,
+        generator: F,
+    ) -> Result<GeneratedKernel, BuildError>
+    where
+        F: Fn(&Schedule, KernelDecl) -> Result<String, BuildError>,
+    {
         let params = chain(
             self.schedule.kernels[kernel_id].outputs.iter(),
             self.schedule.kernels[kernel_id].inputs.iter(),
         )
         .map(|id| {
             let ty = self.get_resolved_tensor_type(*id)?;
-            let type_symbol = TypeSymbol::Pointer(Box::new(TypeSymbol::Primitive(ty.elem_type)));
+            let type_symbol: TypeSymbol = ty.elem_type.into();
+            let type_symbol = type_symbol.to_pointer();
             Ok((KernelVar::Value(*id), type_symbol))
         })
         .collect::<Result<Vec<_>, BuildError>>()?;
@@ -824,7 +834,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         let decl = KernelDecl { kernel_id, params };
         self.separated_codes.push(SeparatedCode::Device(DeviceCode {
-            body: ElementwiseKernelBuilder::new(self.schedule, decl.clone()).build()?,
+            body: generator(self.schedule, decl.clone())?,
         }));
         Ok(GeneratedKernel { decl, args })
     }
@@ -936,7 +946,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Sqrt |
                 Operator::Sub |
                 Operator::Tanh => {
-                    let generated = self.generate_kernel(kernel_id)?;
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        ElementwiseKernelBuilder::new(sched, decl).build()
+                    })?;
                     self.stmts.push(
                         create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
                             .into(),
@@ -1183,10 +1195,23 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .into(),
                     );
                 }
+
+                Operator::Split(_) => {
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        SplitBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
+                            .into(),
+                    );
+                }
+
                 _ => unimplemented!("Kernel body not implemented: {:?}", op),
             },
             KernelBody::FusedElementWises(_) => {
-                let generated = self.generate_kernel(kernel_id)?;
+                let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                    ElementwiseKernelBuilder::new(sched, decl).build()
+                })?;
                 self.stmts.push(
                     create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
                         .into(),

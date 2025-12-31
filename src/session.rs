@@ -1049,7 +1049,7 @@ mod test {
 
     #[test]
     fn split_axis_2() -> TestResult {
-        with_cpu_session("split_axis_2.onnx", |session| {
+        with_all_sessions("split_axis_2.onnx", |session| {
             let (input, _) = make_tensor!(
                 f32,
                 [[
@@ -1073,7 +1073,7 @@ mod test {
 
     #[test]
     fn split_axis_3() -> TestResult {
-        with_cpu_session("split_axis_3.onnx", |session| {
+        with_all_sessions("split_axis_3.onnx", |session| {
             let (input, _) = make_tensor!(
                 f32,
                 [[

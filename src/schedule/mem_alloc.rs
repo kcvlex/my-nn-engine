@@ -335,10 +335,10 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
+    use crate::options::Target;
     use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::*;
     use crate::transform::*;
-    use crate::options::Target;
 
     fn load_model(path: &str) -> Result<Model> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
