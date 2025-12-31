@@ -13,7 +13,7 @@ pub struct EarlyBroadcast {}
 
 impl<T: GraphOp> Pass<T> for EarlyBroadcast {
     fn summary(&self) -> &'static str {
-        "Perform early broadcast primary for constant tensors"
+        "Perform early broadcast primarily for constant tensors"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
