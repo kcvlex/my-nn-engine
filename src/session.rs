@@ -903,7 +903,7 @@ mod test {
 
     #[test]
     fn resize_downsample_sizes_nearest() -> TestResult {
-        with_cpu_session("resize_downsample_sizes_nearest.onnx", |session| {
+        with_all_sessions("resize_downsample_sizes_nearest.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],]],)?;
             let (expected, _) = make_tensor!(f32, [[[1.0, 2.0, 4.0]]],)?;
             let output = session.run(&[input])?;
@@ -914,7 +914,7 @@ mod test {
 
     #[test]
     fn resize_upsample_scales_nearest() -> TestResult {
-        with_cpu_session("resize_upsample_scales_nearest.onnx", |session| {
+        with_all_sessions("resize_upsample_scales_nearest.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
             let (expected, _) = make_tensor!(
                 f32,
@@ -933,7 +933,7 @@ mod test {
 
     #[test]
     fn resize_upsample_scales_nearest_axes_2_3() -> TestResult {
-        with_cpu_session("resize_upsample_scales_nearest_axes_2_3.onnx", |session| {
+        with_all_sessions("resize_upsample_scales_nearest_axes_2_3.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
             let (expected, _) = make_tensor!(
                 f32,
@@ -952,7 +952,7 @@ mod test {
 
     #[test]
     fn resize_upsample_scales_nearest_axes_3_2() -> TestResult {
-        with_cpu_session("resize_upsample_scales_nearest_axes_3_2.onnx", |session| {
+        with_all_sessions("resize_upsample_scales_nearest_axes_3_2.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
             let (expected, _) = make_tensor!(
                 f32,
@@ -971,7 +971,7 @@ mod test {
 
     #[test]
     fn resize_upsample_sizes_nearest_axes_2_3() -> TestResult {
-        with_cpu_session("resize_upsample_sizes_nearest_axes_2_3.onnx", |session| {
+        with_all_sessions("resize_upsample_sizes_nearest_axes_2_3.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
             let (expected, _) = make_tensor!(
                 f32,
@@ -993,7 +993,7 @@ mod test {
 
     #[test]
     fn resize_upsample_sizes_nearest_axes_3_2() -> TestResult {
-        with_cpu_session("resize_upsample_sizes_nearest_axes_3_2.onnx", |session| {
+        with_all_sessions("resize_upsample_sizes_nearest_axes_3_2.onnx", |session| {
             let (input, _) = make_tensor!(f32, [[[1.0, 2.0], [3.0, 4.0],]],)?;
             let (expected, _) = make_tensor!(
                 f32,
@@ -1015,7 +1015,7 @@ mod test {
 
     #[test]
     fn resize_upsample_sizes_nearest_ceil_half_pixel() -> TestResult {
-        with_cpu_session(
+        with_all_sessions(
             "resize_upsample_sizes_nearest_ceil_half_pixel.onnx",
             |session| {
                 let (input, _) = make_tensor!(

@@ -23,6 +23,7 @@ use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::ReduceMatrixKernel;
+use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
@@ -1216,6 +1217,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                             stream_id: kernel_stream,
                         }
                         .into(),
+                    );
+                }
+
+                Operator::Resize(_) => {
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        ResizeBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
+                            .into(),
                     );
                 }
 

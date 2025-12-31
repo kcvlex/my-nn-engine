@@ -5,6 +5,7 @@ use derive_more::From;
 use strum_macros::AsRefStr;
 
 use crate::codegen::cuda::*;
+use crate::onnx::operator;
 use crate::onnx::operator::args;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
@@ -819,6 +820,139 @@ impl<'sched> ContiguousBuilder<'sched> {
     i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
     {out}[{gid}] = {in_}[{input_idx}];\n\
+}}
+"
+        ))
+    }
+}
+
+pub struct ResizeBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+    stmts: Vec<String>,
+}
+
+impl<'sched> ResizeBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+            stmts: Vec::new(),
+        }
+    }
+
+    fn output_dims(&self) -> Result<Vec<String>, BuildError> {
+        let output_ty = self.ctx.schedule.kernels[self.ctx.decl.kernel_id].outputs[0];
+        let output_ty = self.ctx.get_resolved_tensor_type(output_ty)?;
+
+        let mut res = Vec::with_capacity(output_ty.dims.ndim());
+        let mut acc = 1;
+        let gid = KernelVar::Gid;
+        for dim in output_ty.dims.iter().rev() {
+            res.push(format!("{gid} / {acc} % {dim}"));
+            acc *= *dim;
+        }
+
+        res.reverse();
+        Ok(res)
+    }
+
+    fn resize_axis(
+        &mut self,
+        axis: usize,
+        i_dim: usize,
+        x_resized: KernelVar,
+        resize: &operator::Resize,
+    ) -> Result<KernelVar, BuildError> {
+        let x_original_var = self.ctx.new_local_var();
+        let scale = match resize.scale {
+            Some(ref scale) => match scale {
+                operator::ResizeScale::Scales(ref scales) => scales[axis] as f32,
+                operator::ResizeScale::Sizes(ref sizes) => sizes[axis] as f32 / i_dim as f32,
+            },
+            None => unreachable!(),
+        };
+        let x_original = format!("({x_resized} + 0.5) / {scale} - 0.5");
+        self.stmts
+            .push(format!("float {x_original_var} = {x_original};"));
+
+        let x_original = match resize.mode {
+            operator::ResizeMode::Nearest(nearest) => match nearest {
+                operator::ResizeNearestMode::RoundPreferFloor => {
+                    format!("ceil({x_original_var} - 0.5)")
+                }
+                operator::ResizeNearestMode::RoundPreferCeil => {
+                    format!("floor({x_original_var} + 0.5)")
+                }
+                operator::ResizeNearestMode::Floor => format!("floor({x_original_var})"),
+                operator::ResizeNearestMode::Ceil => format!("ceil({x_original_var})"),
+            },
+        };
+        let x_original_var = self.ctx.new_local_var();
+        self.stmts.push(format!(
+            "int {x_original_var} = max(0, min((int){x_original}, {v}));",
+            v = i_dim - 1
+        ));
+        Ok(x_original_var)
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let output = kernel.outputs[0];
+        let input = kernel.inputs[0];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::Resize(resize),
+        }) = &kernel.body
+        else {
+            panic!("Expected Resize operator");
+        };
+
+        let x_resized_vec_var = self.ctx.new_local_var();
+        let output_dims = self.output_dims()?.join(", ");
+        self.stmts
+            .push(format!("int {x_resized_vec_var}[] = {{{output_dims}}};"));
+
+        let output_ty = self.ctx.get_resolved_tensor_type(output)?.clone();
+        let input_ty = self.ctx.get_resolved_tensor_type(input)?.clone();
+        let axes = match &resize.axes {
+            Some(axes) => axes
+                .iter()
+                .map(|a| a.index(output_ty.dims.ndim()))
+                .collect::<Vec<_>>(),
+            None => (0..output_ty.dims.ndim()).collect(),
+        };
+        for (i, axis) in axes.iter().copied().enumerate() {
+            let x_resized_var = self.ctx.new_local_var();
+            self.stmts.push(format!(
+                "float {x_resized_var} = (float){x_resized_vec_var}[{axis}];"
+            ));
+            let x_original_var = self.resize_axis(i, input_ty.dims[axis], x_resized_var, resize)?;
+            self.stmts
+                .push(format!("{x_resized_vec_var}[{axis}] = {x_original_var};"));
+        }
+
+        let in_offset_var = self.ctx.new_local_var();
+        let in_offset = input_ty
+            .strides()
+            .iter()
+            .enumerate()
+            .map(|(i, stride)| format!("{x_resized_vec_var}[{i}] * {stride}"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        self.stmts
+            .push(format!("int {in_offset_var} = {in_offset};"));
+
+        let gid = KernelVar::Gid;
+        let size = output_ty.dims.size();
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let body = self.stmts.join("\n");
+        let decl = self.ctx.decl.decl();
+        Ok(format!(
+            "
+{decl} {{\n\
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    if ({size} <= {gid}) return;\n\
+    {body}\n\
+    {out}[{gid}] = {in_}[{in_offset_var}];\n\
 }}
 "
         ))

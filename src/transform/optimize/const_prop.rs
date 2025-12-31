@@ -36,7 +36,8 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
             };
             resize.scale = Some(scale);
 
-            let mut args = [args::RESIZE_SCALES, args::RESIZE_SIZES];
+            // TODO: Don't drop ROI.
+            let mut args = [args::RESIZE_ROI, args::RESIZE_SCALES, args::RESIZE_SIZES];
             args.sort();
             for arg in args.iter().rev() {
                 if graph.nodes[node_id].inputs.get(*arg).is_some() {

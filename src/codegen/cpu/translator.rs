@@ -1447,7 +1447,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let half = self.context.f32_type().const_float(0.5);
                 let x_original = match resize.coordinate_transformation_mode {
                     operator::ResizeCoordinateTransformationMode::HalfPixel => {
-                        // (x_resized + 0.5) * scale - 0.5
+                        // (x_resized + 0.5) / scale - 0.5
                         let res = self.builder.build_float_add(x_resized, half, "res")?;
                         let res = self.builder.build_float_div(res, scale, "res")?;
                         self.builder.build_float_sub(res, half, "res")?
