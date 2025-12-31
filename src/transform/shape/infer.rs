@@ -9,9 +9,11 @@ use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::utils::const_fold::fold_constant;
 use crate::transform::GraphOp;
+use crate::transform::Options;
 use crate::transform::Pass;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
+use crate::transform::Target;
 
 pub struct Config {
     pub unify_mode: UnifyMode,
@@ -25,8 +27,9 @@ impl Default for Config {
     }
 }
 
-#[derive(Default)]
-pub struct ShapeInference {}
+pub struct ShapeInference {
+    pub target: Target,
+}
 
 impl<T: GraphOp> Pass<T> for ShapeInference {
     fn summary(&self) -> &'static str {
@@ -48,7 +51,7 @@ impl ShapeInference {
             .collect::<Vec<_>>();
         let unify_mode = UnifyMode::OverwriteStrides;
         for id in ids {
-            let types = util::infer_node_output(graph, id, unify_mode)?;
+            let types = util::infer_node_output(graph, id, unify_mode, self.target)?;
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
                 graph.try_unify_type(*value_id, &inferred, unify_mode)?;
@@ -72,11 +75,13 @@ impl ShapeInference {
     }
 }
 
-pub fn create_infer_passes(verify: bool) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_infer_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Shape inference".to_string());
-    manager.add_pass(Box::new(ShapeInference::default()));
-    if verify {
+    let target = opt.target;
+    manager.add_pass(Box::new(ShapeInference { target }));
+    if opt.verify_after_inference {
         manager.add_pass(Box::new(verify::VerifyShape {
+            target,
             check_strides: false,
         }));
     }

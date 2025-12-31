@@ -10,10 +10,11 @@ use crate::tensor::types::TypeError;
 use crate::transform::shape::util;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
+use crate::transform::Target;
 
-#[derive(Default)]
 pub struct VerifyShape {
     pub check_strides: bool,
+    pub target: Target,
 }
 
 #[derive(Debug, Clone)]
@@ -50,8 +51,13 @@ impl VerifyShape {
                     }
                 }
                 _ => {
-                    let resolved = util::infer_node_output(graph, node_id, UnifyMode::CheckStrides)
-                        .map_err(VerifyShapeError::TypeError)?;
+                    let resolved = util::infer_node_output(
+                        graph,
+                        node_id,
+                        UnifyMode::CheckStrides,
+                        self.target,
+                    )
+                    .map_err(VerifyShapeError::TypeError)?;
                     for (value_id, inferred) in zip_eq(node.outputs.iter(), resolved.into_iter()) {
                         let cur = graph
                             .get_resolved_tensor_type(*value_id)
@@ -108,9 +114,13 @@ mod test {
             .unwrap();
         let mut modifier = SimpleGraphOp::new(&graph);
         let mut pass_manager = SimplePassManager::new("Shape".to_string());
-        pass_manager.add_pass(Box::new(ShapeInference::default()));
-        pass_manager.add_pass(Box::new(AssignStrides::default()));
-        pass_manager.add_pass(Box::new(VerifyShape::default()));
+        let target = Target::CPU;
+        pass_manager.add_pass(Box::new(ShapeInference { target }));
+        pass_manager.add_pass(Box::new(AssignStrides { target }));
+        pass_manager.add_pass(Box::new(VerifyShape {
+            target,
+            check_strides: true,
+        }));
         pass_manager.run(&mut graph, &mut modifier);
     }
 }

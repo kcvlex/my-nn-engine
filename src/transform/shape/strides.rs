@@ -15,12 +15,15 @@ use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::GraphOp;
+use crate::transform::Options;
 use crate::transform::Pass;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
+use crate::transform::Target;
 
-#[derive(Default)]
-pub struct AssignStrides {}
+pub struct AssignStrides {
+    pub target: Target,
+}
 
 impl<T: GraphOp> Pass<T> for AssignStrides {
     fn summary(&self) -> &'static str {
@@ -28,19 +31,28 @@ impl<T: GraphOp> Pass<T> for AssignStrides {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let mut impl_ = AssignStridesImpl::default();
+        let mut impl_ = AssignStridesImpl::new(self.target);
         impl_.run(graph, modifier).unwrap();
     }
 }
 
-#[derive(Default)]
 struct AssignStridesImpl {
+    target: Target,
     computed_values: HashSet<ValueId>,
     visited: HashSet<NodeId>,
     queue: VecDeque<NodeId>,
 }
 
 impl AssignStridesImpl {
+    fn new(target: Target) -> Self {
+        Self {
+            target,
+            computed_values: HashSet::new(),
+            visited: HashSet::new(),
+            queue: VecDeque::new(),
+        }
+    }
+
     fn run(&mut self, graph: &mut Graph, modifier: &mut impl GraphOp) -> Option<()> {
         for id in graph
             .nodes
@@ -204,17 +216,19 @@ impl AssignStridesImpl {
             _ => node_id,
         };
 
-        let resolved = util::infer_node_output(graph, new_node_id, UnifyMode::CheckStrides)
-            .expect("Invalid strides");
+        let resolved =
+            util::infer_node_output(graph, new_node_id, UnifyMode::CheckStrides, self.target)
+                .expect("Invalid strides");
         Some((new_node_id, resolved))
     }
 }
 
-pub fn create_strides_passes(verify: bool) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_strides_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Assign strides".to_string());
-    manager.add_pass(Box::new(AssignStrides::default()));
-    if verify {
+    manager.add_pass(Box::new(AssignStrides { target: opt.target }));
+    if opt.verify_after_strides {
         manager.add_pass(Box::new(verify::VerifyShape {
+            target: opt.target,
             check_strides: true,
         }));
     }

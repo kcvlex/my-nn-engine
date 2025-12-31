@@ -54,6 +54,17 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
             println!("-- Running pass: {}", opt.summary());
             opt.run(graph, modifier);
             modifier.update_deleted_nodes(graph);
+
+            // TODO: Move this assertion to somewhere else.
+            for (id, _) in graph.values.inner().iter() {
+                if let Some(shape) = graph.get_resolved_tensor_type(id) {
+                    for (dim, stride) in shape.dims.iter().zip(shape.strides().iter()) {
+                        if *dim == 1 {
+                            assert_eq!(*stride, 0);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -64,11 +75,11 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
-        create_infer_passes(options.verify_after_inference),
+        create_infer_passes(options),
         create_optimize_passes0(),
         create_lower_passes(),
         create_optimize_passes1(options),
-        create_strides_passes(options.verify_after_strides),
+        create_strides_passes(options),
         create_epilog_passes(options),
     ];
 

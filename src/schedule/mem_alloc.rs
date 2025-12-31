@@ -338,6 +338,7 @@ mod test {
     use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::*;
     use crate::transform::*;
+    use crate::options::Target;
 
     fn load_model(path: &str) -> Result<Model> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -346,8 +347,9 @@ mod test {
         let mut model =
             Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;
         let mut pass_manager = SimplePassManager::new("Shape".to_string());
-        pass_manager.add_pass(Box::new(infer::ShapeInference::default()));
-        pass_manager.add_pass(Box::new(strides::AssignStrides::default()));
+        let target = Target::CPU;
+        pass_manager.add_pass(Box::new(infer::ShapeInference { target }));
+        pass_manager.add_pass(Box::new(strides::AssignStrides { target }));
         let mut modifier = SimpleGraphOp::new(&model.graph);
         pass_manager.run(&mut model.graph, &mut modifier);
         Ok(model)

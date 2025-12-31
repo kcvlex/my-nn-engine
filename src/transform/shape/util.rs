@@ -9,11 +9,13 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
+use crate::transform::Target;
 
 pub fn infer_node_output(
     graph: &Graph,
     node_id: NodeId,
     mode: UnifyMode,
+    target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
     macro_rules! cond_error {
         ($cond: expr) => {{
@@ -275,11 +277,20 @@ pub fn infer_node_output(
                 .split(&input.dims)
                 .ok_or(TypeError::InferError("Invalid split dims".to_string()))?
                 .into_iter()
-                .for_each(|x| {
-                    // Use the same strides as the input tensor
-                    let mut ty = input.clone();
-                    ty.dims[axis] = x;
-                    res.push(ty);
+                .for_each(|x| match target {
+                    // TODO: Stop target-dependent behavior.
+                    Target::CPU => {
+                        // Use the same strides as the input tensor
+                        let mut ty = input.clone();
+                        ty.dims[axis] = x;
+                        ty.normalize_strides();
+                        res.push(ty);
+                    }
+                    Target::CUDA => {
+                        let mut dims = input.dims.clone();
+                        dims[axis] = x;
+                        res.push(ResolvedTensorType::new(input.elem_type, dims))
+                    }
                 });
         }
 

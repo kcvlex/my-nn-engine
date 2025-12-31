@@ -338,7 +338,7 @@ impl ResolvedTensorType {
         self.stride[rank] * start
     }
 
-    fn normalize_strides(&mut self) {
+    pub(crate) fn normalize_strides(&mut self) {
         for (dim, stride) in izip!(self.dims.iter(), self.stride.iter_mut()) {
             if *dim == 1 {
                 *stride = 0;
