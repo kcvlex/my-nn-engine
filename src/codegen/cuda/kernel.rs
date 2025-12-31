@@ -302,10 +302,26 @@ impl KernelDecl {
     }
 }
 
+struct LocalVarGen {
+    next_slot: usize,
+}
+
+impl LocalVarGen {
+    pub fn new() -> Self {
+        Self { next_slot: 0 }
+    }
+
+    pub fn new_var(&mut self) -> KernelVar {
+        let var = KernelVar::Local(self.next_slot);
+        self.next_slot += 1;
+        var
+    }
+}
+
 pub struct KernelBuilder<'sched> {
     schedule: &'sched Schedule,
     decl: KernelDecl,
-    local_slot: usize,
+    local_gen: LocalVarGen,
 }
 
 impl<'sched> KernelBuilder<'sched> {
@@ -313,7 +329,7 @@ impl<'sched> KernelBuilder<'sched> {
         Self {
             schedule,
             decl,
-            local_slot: 0,
+            local_gen: LocalVarGen::new(),
         }
     }
 
@@ -415,12 +431,6 @@ impl<'sched> KernelBuilder<'sched> {
         }
     }
 
-    fn new_local_var(&mut self) -> KernelVar {
-        let var = KernelVar::Local(self.local_slot);
-        self.local_slot += 1;
-        var
-    }
-
     fn build_body(&mut self) -> Result<Vec<KernelStmt>, BuildError> {
         let mut stmts = Vec::new();
         let kernel = &self.schedule.kernels[self.decl.kernel_id];
@@ -429,7 +439,7 @@ impl<'sched> KernelBuilder<'sched> {
             ($value_id: expr, $target_dims: expr) => {{
                 let idx = self.tensor_idx($value_id, $target_dims)?;
                 let array = KernelVar::Value($value_id);
-                let var = self.new_local_var();
+                let var = self.local_gen.new_var();
                 stmts.push(KernelStmt::DefineVar {
                     ty: TypeSymbol::Primitive(self.get_resolved_tensor_type($value_id)?.elem_type),
                     var,
@@ -469,7 +479,7 @@ impl<'sched> KernelBuilder<'sched> {
                             ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                         }
                     }
-                    let var = self.new_local_var();
+                    let var = self.local_gen.new_var();
                     stmts.push(KernelStmt::DefineVar {
                         ty: TypeSymbol::Primitive(
                             self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type,
