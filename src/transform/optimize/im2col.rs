@@ -6,7 +6,7 @@ use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
-use crate::transform::utils::tensor::*;
+use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]

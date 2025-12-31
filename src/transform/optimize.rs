@@ -1,3 +1,4 @@
+pub mod const_fold;
 pub mod const_prop;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
