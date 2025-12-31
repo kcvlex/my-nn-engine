@@ -312,34 +312,18 @@ impl KernelDecl {
     }
 }
 
-struct LocalVarGen {
-    next_slot: usize,
-}
-
-impl LocalVarGen {
-    pub fn new() -> Self {
-        Self { next_slot: 0 }
-    }
-
-    pub fn new_var(&mut self) -> KernelVar {
-        let var = KernelVar::Local(self.next_slot);
-        self.next_slot += 1;
-        var
-    }
-}
-
-pub struct ElementwiseKernelBuilder<'sched> {
+struct BuilderContext<'sched> {
     schedule: &'sched Schedule,
     decl: KernelDecl,
-    local_gen: LocalVarGen,
+    local_slot: usize,
 }
 
-impl<'sched> ElementwiseKernelBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+impl<'sched> BuilderContext<'sched> {
+    fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
         Self {
             schedule,
             decl,
-            local_gen: LocalVarGen::new(),
+            local_slot: 0,
         }
     }
 
@@ -352,12 +336,30 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
+    fn new_local_var(&mut self) -> KernelVar {
+        let var = KernelVar::Local(self.local_slot);
+        self.local_slot += 1;
+        var
+    }
+}
+
+pub struct ElementwiseKernelBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> ElementwiseKernelBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
     fn tensor_idx(
         &self,
         value_id: ValueId,
         target_dims: Option<&ResolvedTensorDims>,
     ) -> Result<KernelExpr, BuildError> {
-        let ty = self.get_resolved_tensor_type(value_id)?;
+        let ty = self.ctx.get_resolved_tensor_type(value_id)?;
         let ty = if let Some(target_dims) = target_dims {
             ty.broadcast(target_dims)
         } else {
@@ -443,15 +445,17 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
 
     fn build_body(&mut self) -> Result<Vec<KernelStmt>, BuildError> {
         let mut stmts = Vec::new();
-        let kernel = &self.schedule.kernels[self.decl.kernel_id];
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
 
         macro_rules! handle_input_value {
             ($value_id: expr, $target_dims: expr) => {{
                 let idx = self.tensor_idx($value_id, $target_dims)?;
                 let array = KernelVar::Value($value_id);
-                let var = self.local_gen.new_var();
+                let var = self.ctx.new_local_var();
                 stmts.push(KernelStmt::DefineVar {
-                    ty: TypeSymbol::Primitive(self.get_resolved_tensor_type($value_id)?.elem_type),
+                    ty: TypeSymbol::Primitive(
+                        self.ctx.get_resolved_tensor_type($value_id)?.elem_type,
+                    ),
                     var,
                     init: KernelExpr::ArrayAccess {
                         array: Box::new(array.into()),
@@ -463,6 +467,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         }
 
         let output_dims = self
+            .ctx
             .get_resolved_tensor_type(kernel.outputs[0])?
             .dims
             .clone();
@@ -489,10 +494,12 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                             ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                         }
                     }
-                    let var = self.local_gen.new_var();
+                    let var = self.ctx.new_local_var();
                     stmts.push(KernelStmt::DefineVar {
                         ty: TypeSymbol::Primitive(
-                            self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type,
+                            self.ctx
+                                .get_resolved_tensor_type(kernel.outputs[0])?
+                                .elem_type,
                         ),
                         var,
                         init: self.single_op(op, &inputs),
@@ -518,8 +525,8 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
     pub fn build(&mut self) -> Result<String, BuildError> {
         let body = self.build_body()?;
         let size = {
-            let output = self.schedule.kernels[self.decl.kernel_id].outputs[0];
-            self.get_resolved_tensor_type(output)?.dims.size()
+            let output = self.ctx.schedule.kernels[self.ctx.decl.kernel_id].outputs[0];
+            self.ctx.get_resolved_tensor_type(output)?.dims.size()
         };
         Ok(format!(
             "{decl} {{\n\
@@ -527,7 +534,7 @@ i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
 if ({size} <= {gid}) return;\n\
 {body}\n\
 }}",
-            decl = self.decl.decl(),
+            decl = self.ctx.decl.decl(),
             gid = KernelVar::Gid,
             size = size,
             body = body
@@ -540,21 +547,16 @@ if ({size} <= {gid}) return;\n\
 }
 
 pub struct SplitBuilder<'sched> {
-    schedule: &'sched Schedule,
-    decl: KernelDecl,
-    local_gen: LocalVarGen,
+    ctx: BuilderContext<'sched>,
 }
 
-impl<'sched> SplitBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
-        Self {
-            schedule,
-            decl,
-            local_gen: LocalVarGen::new(),
-        }
-    }
-
-    fn select_rec(sizes: &[usize], axis_idx: KernelVar, acc_sz: usize, depth: usize) -> String {
+fn select_rec<T: Display>(sizes: &[usize], pivot: &T) -> String {
+    fn select_rec_impl<T: Display>(
+        sizes: &[usize],
+        pivot: &T,
+        acc_sz: usize,
+        depth: usize,
+    ) -> String {
         if sizes.len() == 1 {
             return depth.to_string();
         }
@@ -562,21 +564,22 @@ impl<'sched> SplitBuilder<'sched> {
         let size = sizes[0];
         let sizes = &sizes[1..];
         let next_acc_sz = acc_sz + size;
-        let next_select = Self::select_rec(sizes, axis_idx, next_acc_sz, depth + 1);
-        format!("({axis_idx} < {next_acc_sz} ? {depth} : {next_select})")
+        let next_select = select_rec_impl(sizes, pivot, next_acc_sz, depth + 1);
+        format!("({pivot} < {next_acc_sz} ? {depth} : {next_select})")
     }
 
-    fn get_resolved_tensor_type(
-        &self,
-        value_id: ValueId,
-    ) -> Result<&ResolvedTensorType, BuildError> {
-        self.schedule
-            .get_resolved_tensor_type(value_id)
-            .ok_or(BuildError::UnresolvedType(value_id))
+    select_rec_impl(sizes, pivot, 0, 0)
+}
+
+impl<'sched> SplitBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
     }
 
     pub fn build(&mut self) -> Result<String, BuildError> {
-        let kernel = &self.schedule.kernels[self.decl.kernel_id];
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         let KernelBody::SingleKernel(SingleKernel {
             op: Operator::Split(split),
         }) = &kernel.body
@@ -584,18 +587,18 @@ impl<'sched> SplitBuilder<'sched> {
             panic!("Expected Split operator");
         };
 
-        let axis_idx_var = self.local_gen.new_var();
-        let inner_offset_var = self.local_gen.new_var();
-        let outer_offset_var = self.local_gen.new_var();
-        let out_offset_var = self.local_gen.new_var();
-        let sizes_var = self.local_gen.new_var();
-        let outs_var = self.local_gen.new_var();
-        let select_var = self.local_gen.new_var();
-        let sizes_acc_var = self.local_gen.new_var();
-        let load_var = self.local_gen.new_var();
+        let axis_idx_var = self.ctx.new_local_var();
+        let inner_offset_var = self.ctx.new_local_var();
+        let outer_offset_var = self.ctx.new_local_var();
+        let out_offset_var = self.ctx.new_local_var();
+        let sizes_var = self.ctx.new_local_var();
+        let outs_var = self.ctx.new_local_var();
+        let select_var = self.ctx.new_local_var();
+        let sizes_acc_var = self.ctx.new_local_var();
+        let load_var = self.ctx.new_local_var();
 
         let input_id = kernel.inputs[0];
-        let input_ty = self.get_resolved_tensor_type(input_id)?;
+        let input_ty = self.ctx.get_resolved_tensor_type(input_id)?;
         if !input_ty.is_contiguous() {
             return Err(BuildError::NonContiguousTensor(input_id));
         }
@@ -610,7 +613,7 @@ impl<'sched> SplitBuilder<'sched> {
             .outputs
             .iter()
             .map(|id| {
-                let output_ty = self.get_resolved_tensor_type(*id)?;
+                let output_ty = self.ctx.get_resolved_tensor_type(*id)?;
                 let sz = output_ty.dims[axis];
                 Ok((*id, sz))
             })
@@ -618,7 +621,7 @@ impl<'sched> SplitBuilder<'sched> {
             .into_iter()
             .unzip();
         let in_ = KernelVar::Value(input_id);
-        let select = Self::select_rec(&sizes[..], axis_idx_var, 0, 0);
+        let select = select_rec(&sizes[..], &axis_idx_var);
         let sizes_acc = {
             let mut vec = Vec::with_capacity(sizes.len());
             let mut acc = 0;
@@ -628,7 +631,7 @@ impl<'sched> SplitBuilder<'sched> {
             }
             vec
         };
-        let decl = self.decl.decl();
+        let decl = self.ctx.decl.decl();
         let outs = outs
             .into_iter()
             .map(|id| format!("{}", KernelVar::Value(id)))
