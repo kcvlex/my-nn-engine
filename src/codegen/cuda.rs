@@ -11,6 +11,7 @@ use delegate::delegate;
 use derive_more::From;
 use indexmap::IndexMap;
 use indexmap::IndexSet;
+use itertools::chain;
 use itertools::Itertools;
 
 use crate::codegen::cuda::cublas::*;
@@ -799,20 +800,16 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn generate_kernel(&mut self, kernel_id: KernelId) -> Result<GeneratedKernel, BuildError> {
-        let mut params = Vec::new();
-
-        let add_param = |params: &mut Vec<(KernelVar, TypeSymbol)>, id: ValueId| {
-            let ty = self.get_resolved_tensor_type(id).unwrap();
+        let params = chain(
+            self.schedule.kernels[kernel_id].outputs.iter(),
+            self.schedule.kernels[kernel_id].inputs.iter(),
+        )
+        .map(|id| {
+            let ty = self.get_resolved_tensor_type(*id)?;
             let type_symbol = TypeSymbol::Pointer(Box::new(TypeSymbol::Primitive(ty.elem_type)));
-            params.push((KernelVar::Value(id), type_symbol));
-        };
-        let [output] = self.schedule.kernels[kernel_id].outputs[..] else {
-            unimplemented!("Only single output kernels are supported");
-        };
-        add_param(&mut params, output);
-        for input in self.schedule.kernels[kernel_id].inputs.iter() {
-            add_param(&mut params, *input);
-        }
+            Ok((KernelVar::Value(*id), type_symbol))
+        })
+        .collect::<Result<Vec<_>, BuildError>>()?;
 
         let args = params
             .iter()
