@@ -1097,7 +1097,7 @@ mod test {
 
     #[test]
     fn concat_axis_2() -> TestResult {
-        with_cpu_session("concat_axis_2.onnx", |session| {
+        with_all_sessions("concat_axis_2.onnx", |session| {
             let (input0, _) = make_tensor!(f32, [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0],]],)?;
             let (input1, _) = make_tensor!(f32, [[[9.0, 10.0, 11.0, 12.0],]],)?;
             let (input2, _) = make_tensor!(f32, [[[13.0, 14.0, 15.0, 16.0],]],)?;

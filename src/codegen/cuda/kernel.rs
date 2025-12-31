@@ -571,6 +571,16 @@ fn select_rec<T: Display>(sizes: &[usize], pivot: &T) -> String {
     select_rec_impl(sizes, pivot, 0, 0)
 }
 
+fn acc_sizes(sizes: &[usize]) -> Vec<usize> {
+    let mut vec = Vec::with_capacity(sizes.len());
+    let mut acc = 0;
+    for s in sizes.iter() {
+        vec.push(acc);
+        acc += *s;
+    }
+    vec
+}
+
 impl<'sched> SplitBuilder<'sched> {
     pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
         Self {
@@ -622,15 +632,7 @@ impl<'sched> SplitBuilder<'sched> {
             .unzip();
         let in_ = KernelVar::Value(input_id);
         let select = select_rec(&sizes[..], &axis_idx_var);
-        let sizes_acc = {
-            let mut vec = Vec::with_capacity(sizes.len());
-            let mut acc = 0;
-            for s in sizes.iter() {
-                vec.push(acc);
-                acc += *s;
-            }
-            vec
-        };
+        let sizes_acc = acc_sizes(&sizes[..]);
         let decl = self.ctx.decl.decl();
         let outs = outs
             .into_iter()
@@ -663,6 +665,118 @@ impl<'sched> SplitBuilder<'sched> {
     i64 {select_var} = {select};\n\
     i64 {out_offset_var} = {inner_offset_var} + ({axis_idx_var} - {sizes_acc_var}[{select}]) * {axis_stride} + {outer_offset_var} / {axis_dim} * {sizes_var}[{select_var}];\n\
     {outs_var}[{select_var}][{out_offset_var}] = {load_var};\n
+}}
+"
+        ))
+    }
+}
+
+pub struct ConcatBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> ConcatBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::Concat(concat),
+        }) = &kernel.body
+        else {
+            panic!("Expected Concat operator");
+        };
+
+        let ins_var = self.ctx.new_local_var();
+        let in_select_var = self.ctx.new_local_var();
+        let in_sizes_acc_var = self.ctx.new_local_var();
+        let in_offset = self.ctx.new_local_var();
+        let load_var = self.ctx.new_local_var();
+        let in_axis_sizes_var = self.ctx.new_local_var();
+        let in_axis_size_var = self.ctx.new_local_var();
+        let in_axis_sizes_acc_var = self.ctx.new_local_var();
+        let in_axis_idx_var = self.ctx.new_local_var();
+        let out_axis_idx_var = self.ctx.new_local_var();
+        let out_offset = self.ctx.new_local_var();
+
+        let output_id = kernel.outputs[0];
+        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
+        if !output_ty.is_contiguous() {
+            return Err(BuildError::NonContiguousTensor(output_id));
+        }
+        let size = output_ty.dims.size();
+        let value_ty: TypeSymbol = output_ty.elem_type.into();
+        let ptr_ty = value_ty.to_pointer();
+        let gid = KernelVar::Gid;
+        let axis = concat.axis.index(output_ty.dims.ndim());
+        let input_tensor_sizes = kernel
+            .inputs
+            .iter()
+            .map(|id| {
+                self.ctx
+                    .get_resolved_tensor_type(*id)
+                    .map(|ty| ty.dims.size())
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?;
+        let input_select = select_rec(&input_tensor_sizes[..], &gid);
+        let input_tensor_sizes_acc = acc_sizes(&input_tensor_sizes[..]);
+        let input_axis_sizes = kernel
+            .inputs
+            .iter()
+            .map(|id| {
+                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                Ok(input_ty.dims[axis])
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?;
+        let input_axis_sizes_acc = acc_sizes(&input_axis_sizes[..]);
+        let output_axis_size = output_ty.dims[axis];
+
+        let out = KernelVar::Value(output_id);
+        let axis_stride = output_ty.strides()[axis].max(1);
+        let ins = kernel
+            .inputs
+            .iter()
+            .map(|id| format!("{}", KernelVar::Value(*id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input_tensor_sizes_acc = input_tensor_sizes_acc
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input_axis_sizes = input_axis_sizes
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input_axis_sizes_acc = input_axis_sizes_acc
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{\n\
+    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    if ({size} <= {gid}) return;\n\
+    {ptr_ty} {ins_var}[] = {{{ins}}};\n\
+    i64 {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};\n\
+    i64 {in_select_var} = {input_select};\n\
+    i64 {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];\n\
+    {value_ty} {load_var} = {ins_var}[{in_select_var}][{in_offset}];\n\
+    i64 {in_axis_sizes_var}[] = {{{input_axis_sizes}}};\n\
+    i64 {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};\n\
+    i64 {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];\n\
+    i64 {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};\n\
+    i64 {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];\n\
+    i64 {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};\n\
+    {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};\n\
 }}
 "
         ))
