@@ -83,6 +83,8 @@ pub trait GraphOp {
         self.replace_tensor_type(graph, value_id, tensor.tensor_type());
         *graph.initializer.get_mut(&value_id).unwrap() = tensor;
     }
+
+    fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize);
 }
 
 pub trait NodeDelete {
@@ -193,6 +195,21 @@ impl GraphOp for SimpleGraphOp {
 
     fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>> {
         self.value2used.get(&value)
+    }
+
+    fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize) {
+        if graph.nodes[node_id].inputs.len() != index + 1 {
+            panic!("Can only drop the last input");
+        }
+
+        let old_value = graph.nodes[node_id].inputs.pop().unwrap();
+        let Entry::Occupied(mut old) = self.value2used.entry(old_value) else {
+            panic!("Inconsistent value2used");
+        };
+        old.get_mut().shift_remove(&(node_id, index));
+        if old.get().is_empty() {
+            old.remove();
+        }
     }
 }
 
@@ -351,6 +368,10 @@ impl GraphOp for ExperimentalGraphOp {
 
     fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>> {
         self.value2used.get(&value)
+    }
+
+    fn drop_node_input(&mut self, _graph: &mut Graph, _node_id: NodeId, _index: usize) {
+        unimplemented!()
     }
 }
 

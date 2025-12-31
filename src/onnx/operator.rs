@@ -9,7 +9,6 @@ use crate::onnx::model::ValueId;
 use crate::tensor::data::ScalarData;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
-use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,11 +308,19 @@ pub enum ResizeMode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ResizeScale {
+    Scales(Vec<f64>),
+    Sizes(Vec<i64>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Resize {
     pub axes: Option<Vec<TensorIndex>>,
     pub coordinate_transformation_mode: ResizeCoordinateTransformationMode,
     pub keep_aspect_ratio_policy: ResizeKeepAspectRatioPolicy,
     pub mode: ResizeMode,
+
+    pub scale: Option<ResizeScale>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -481,7 +488,9 @@ impl Im2Col {
 impl Resize {
     pub fn resized_shape(&self, graph: &Graph, node_id: NodeId) -> Option<ResolvedTensorDims> {
         let node = &graph.nodes[node_id];
-        assert!(matches!(node.op, Operator::Resize(_)));
+        let Operator::Resize(resize) = &node.op else {
+            unreachable!()
+        };
 
         let mut dims = graph.get_resolved_tensor_type(node.inputs[0])?.dims.clone();
         if let Some(roi) = &node
@@ -499,32 +508,20 @@ impl Resize {
             None => (0..dims.ndim()).collect(),
         };
 
-        let scales = &node
-            .inputs
-            .get(args::RESIZE_SCALES)
-            .and_then(|x| graph.initializer.get(x));
-        let sizes = &node
-            .inputs
-            .get(args::RESIZE_SIZES)
-            .and_then(|x| graph.initializer.get(x));
-        let sizes2scales = |sizes: &Tensor| {
-            let res = zip_eq(axes.iter(), sizes.to_indices()?.iter())
-                .map(|(dim, size)| {
-                    let old = dims[*dim] as f64;
-                    let new = size.raw() as f64;
-                    new / old
-                })
-                .collect::<Vec<_>>();
-            Some(res)
+        let scale = resize.scale.as_ref()?;
+        let scale = match scale {
+            ResizeScale::Scales(scales) => scales.clone(),
+            ResizeScale::Sizes(sizes) => {
+                let res = zip_eq(axes.iter(), sizes.iter())
+                    .map(|(dim, size)| {
+                        let old = dims[*dim] as f64;
+                        let new = *size as f64;
+                        new / old
+                    })
+                    .collect::<Vec<_>>();
+                res
+            }
         };
-        let scales = match (scales, sizes) {
-            (Some(scales), None) => scales.to_1d_floats(),
-            (Some(scales), Some(sizes)) if scales.dims.is_scalar() => sizes2scales(sizes),
-            (None, Some(sizes)) => sizes2scales(sizes),
-
-            // Invalid inputs
-            (Some(_), Some(_)) | (None, None) => None,
-        }?;
 
         if !matches!(
             self.keep_aspect_ratio_policy,
@@ -533,7 +530,7 @@ impl Resize {
             unimplemented!()
         }
 
-        for (dim, scale) in zip_eq(axes.iter(), scales.iter()) {
+        for (dim, scale) in zip_eq(axes.iter(), scale.iter()) {
             dims[*dim] = (dims[*dim] as f64 * scale).round() as usize;
         }
 

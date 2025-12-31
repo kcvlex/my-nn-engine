@@ -4,6 +4,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::UnifyMode;
 use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::optimize::const_prop::prop_constant;
 use crate::transform::shape::early_broadcst::EarlyBroadcast;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
@@ -51,6 +52,7 @@ impl ShapeInference {
             .collect::<Vec<_>>();
         let unify_mode = UnifyMode::OverwriteStrides;
         for id in ids {
+            prop_constant(graph, id, modifier);
             let types = util::infer_node_output(graph, id, unify_mode, self.target)?;
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {

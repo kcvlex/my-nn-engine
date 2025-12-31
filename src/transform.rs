@@ -10,7 +10,6 @@ pub use lower::create_lower_passes;
 use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
-pub use optimize::create_optimize_passes0;
 pub use optimize::create_optimize_passes1;
 pub use shape::infer::create_infer_passes;
 pub use shape::strides::create_strides_passes;
@@ -76,7 +75,6 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options),
-        create_optimize_passes0(),
         create_lower_passes(),
         create_optimize_passes1(options),
         create_strides_passes(options),

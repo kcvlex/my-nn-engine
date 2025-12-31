@@ -751,6 +751,8 @@ impl Resize {
             coordinate_transformation_mode,
             keep_aspect_ratio_policy,
             mode,
+
+            scale: None,
         })
     }
 }

@@ -30,7 +30,6 @@ use crate::codegen::cpu::op::*;
 use crate::codegen::cpu::translator::*;
 use crate::codegen::*;
 use crate::onnx::model::ValueId;
-use crate::onnx::operator;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
@@ -788,14 +787,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     let elem_type = ptrs[0].ty.elem_type;
                     translator.build_matrix_reduce(&ptrs, elem_type, (m, n), *op, entry)
                 }
-                Operator::Resize(ref resize) => translator.build_resize(
-                    ptrs[0].clone(),
-                    ptrs[1].clone(),
-                    ptrs.get(1 + operator::args::RESIZE_SCALES),
-                    ptrs.get(1 + operator::args::RESIZE_SIZES),
-                    entry,
-                    resize,
-                ),
+                Operator::Resize(ref resize) => {
+                    translator.build_resize(ptrs[0].clone(), ptrs[1].clone(), entry, resize)
+                }
                 _ => todo!("{:?}", op),
             },
             KernelBody::FusedElementWises(FusedElementWises { ops }) => {

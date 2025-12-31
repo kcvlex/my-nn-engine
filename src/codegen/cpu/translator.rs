@@ -1386,7 +1386,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let ResizeParam {
             mut dst,
             mut src,
-            scale,
             axes,
             loop_bb,
             dim,
@@ -1421,18 +1420,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let nth_resize = axes.iter().position(|&x| x == dim);
         let x_original = match nth_resize {
             Some(n) => {
-                let idx = self
-                    .context
-                    .i64_type()
-                    .const_int(n.try_into().unwrap(), false);
+                let Some(scale) = resize.scale.as_ref() else {
+                    unreachable!();
+                };
                 let scale = match scale {
-                    ResizeScale::Scale(s) => self
-                        .build_raw_load(self.context.f32_type(), s, idx)?
-                        .into_float_value(),
-                    ResizeScale::Size(resized) => {
-                        let resized = self.build_raw_load(self.context.i64_type(), resized, idx)?;
+                    operator::ResizeScale::Scales(s) => self.context.f32_type().const_float(s[n]),
+                    operator::ResizeScale::Sizes(resized) => {
+                        let resized = self.context.i64_type().const_int(resized[n] as u64, false);
                         let resized = self.builder.build_signed_int_to_float(
-                            resized.into_int_value(),
+                            resized,
                             self.context.f32_type(),
                             "resized",
                         )?;
@@ -1565,7 +1561,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let param = ResizeParam {
             dst,
             src,
-            scale,
             axes,
             loop_bb,
             dim: dim + 1,
@@ -1579,18 +1574,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         &self,
         dst: TensorPtr<'ctx>,
         src: TensorPtr<'ctx>,
-        scales: Option<&TensorPtr<'ctx>>,
-        sizes: Option<&TensorPtr<'ctx>>,
         entry: BasicBlock<'ctx>,
         resize: &operator::Resize,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let resize_scale = match (scales, sizes) {
-            (Some(scales), None) => ResizeScale::Scale(scales.ptr),
-            (Some(scales), Some(sizes)) if scales.ty.dims.is_scalar() => {
-                ResizeScale::Size(sizes.ptr)
-            }
-            _ => unreachable!(),
-        };
+        if resize.scale.is_none() {
+            unimplemented!();
+        }
         let ndim = dst.ty.dims.ndim();
         let axes: Vec<_> = match resize.axes {
             Some(ref axes) => axes.iter().map(|x| x.index(ndim)).collect(),
@@ -1612,7 +1601,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let param = ResizeParam {
             dst,
             src,
-            scale: resize_scale,
             axes,
             loop_bb,
             dim: 0,
@@ -1683,17 +1671,10 @@ struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
     nest: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum ResizeScale<'ctx> {
-    Scale(PointerValue<'ctx>),
-    Size(PointerValue<'ctx>),
-}
-
 #[derive(Debug)]
 struct ResizeParam<'a, 'ctx> {
     dst: TensorPtr<'ctx>,
     src: TensorPtr<'ctx>,
-    scale: ResizeScale<'ctx>,
     axes: Vec<usize>,
     loop_bb: LoopBB<'ctx>,
     dim: usize,

@@ -1,3 +1,4 @@
+pub mod const_prop;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
 pub mod im2col;
@@ -7,17 +8,10 @@ use crate::transform::modify::SimpleGraphOp;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_optimize_passes0() -> SimplePassManager<SimpleGraphOp> {
-    let pass_manager = SimplePassManager::new("Optimization before Lowering".to_string());
-    // if enable_fuse {
-    //     pass_manager.add_pass(Box::new(elementwise_fuse::FuseElementwiseOps::default()));
-    // }
-    pass_manager
-}
-
 pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager =
         SimplePassManager::new("Optimization between Lowering and Strides".to_string());
+    // pass_manager.add_pass(Box::new(const_prop::ConstProp::default()));
     if matches!(opt.target, Target::CPU) {
         pass_manager.add_pass(Box::new(im2col::InsertIm2Col::default()));
     }

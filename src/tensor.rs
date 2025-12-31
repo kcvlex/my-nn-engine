@@ -59,6 +59,17 @@ impl Tensor {
         }
     }
 
+    pub fn to_1d_sints(&self) -> Option<Vec<i64>> {
+        if self.dims.ndim() != 1 {
+            return None;
+        }
+
+        match &self.data {
+            TensorData::SInt(_, ref v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
     pub fn tensor_type(&self) -> ResolvedTensorType {
         ResolvedTensorType::new(self.data.elem_type(), self.dims.clone())
     }
