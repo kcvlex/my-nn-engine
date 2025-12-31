@@ -523,25 +523,26 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
     }
 
     pub fn build(&mut self) -> Result<String, BuildError> {
-        let body = self.build_body()?;
+        let body = self
+            .build_body()?
+            .iter()
+            .map(|stmt| stmt.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         let size = {
             let output = self.ctx.schedule.kernels[self.ctx.decl.kernel_id].outputs[0];
             self.ctx.get_resolved_tensor_type(output)?.dims.size()
         };
+        let gid = KernelVar::Gid;
+        let decl = self.ctx.decl.decl();
         Ok(format!(
-            "{decl} {{\n\
-i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-if ({size} <= {gid}) return;\n\
-{body}\n\
-}}",
-            decl = self.ctx.decl.decl(),
-            gid = KernelVar::Gid,
-            size = size,
-            body = body
-                .iter()
-                .map(|stmt| stmt.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
+            "
+{decl} {{\n\
+    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    if ({size} <= {gid}) return;\n\
+    {body}\n\
+}}
+"
         ))
     }
 }
