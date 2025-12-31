@@ -341,25 +341,13 @@ impl<'sched> BuilderContext<'sched> {
         self.local_slot += 1;
         var
     }
-}
-
-pub struct ElementwiseKernelBuilder<'sched> {
-    ctx: BuilderContext<'sched>,
-}
-
-impl<'sched> ElementwiseKernelBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
-        Self {
-            ctx: BuilderContext::new(schedule, decl),
-        }
-    }
 
     fn tensor_idx(
         &self,
         value_id: ValueId,
         target_dims: Option<&ResolvedTensorDims>,
     ) -> Result<KernelExpr, BuildError> {
-        let ty = self.ctx.get_resolved_tensor_type(value_id)?;
+        let ty = self.get_resolved_tensor_type(value_id)?;
         let ty = if let Some(target_dims) = target_dims {
             ty.broadcast(target_dims)
         } else {
@@ -376,6 +364,18 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 Ok(KernelExpr::CallFunction { name, args })
             }
             d => Err(BuildError::UnsupportedTensorDim(value_id, d)),
+        }
+    }
+}
+
+pub struct ElementwiseKernelBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> ElementwiseKernelBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
         }
     }
 
@@ -449,7 +449,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
 
         macro_rules! handle_input_value {
             ($value_id: expr, $target_dims: expr) => {{
-                let idx = self.tensor_idx($value_id, $target_dims)?;
+                let idx = self.ctx.tensor_idx($value_id, $target_dims)?;
                 let array = KernelVar::Value($value_id);
                 let var = self.ctx.new_local_var();
                 stmts.push(KernelStmt::DefineVar {
@@ -515,7 +515,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         stmts.push(KernelStmt::Assign {
             lhs: KernelExpr::ArrayAccess {
                 array: Box::new(KernelVar::Value(output_array).into()),
-                index: Box::new(self.tensor_idx(output_array, None)?),
+                index: Box::new(self.ctx.tensor_idx(output_array, None)?),
             },
             rhs: output,
         });
@@ -777,6 +777,47 @@ impl<'sched> ConcatBuilder<'sched> {
     i64 {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];\n\
     i64 {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};\n\
     {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};\n\
+}}
+"
+        ))
+    }
+}
+
+pub struct ContiguousBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> ContiguousBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        assert!(matches!(
+            kernel.body,
+            KernelBody::SingleKernel(SingleKernel {
+                op: Operator::Contiguous,
+            })
+        ));
+
+        let gid = KernelVar::Gid;
+        let input = kernel.inputs[0];
+        let output = kernel.outputs[0];
+        let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
+        let input_idx = self.ctx.tensor_idx(input, None)?;
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{\n\
+    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    if ({size} <= {gid}) return;\n\
+    {out}[{gid}] = {in_}[{input_idx}];\n\
 }}
 "
         ))

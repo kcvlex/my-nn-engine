@@ -17,6 +17,7 @@ use itertools::Itertools;
 use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::ConcatBuilder;
+use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
@@ -959,6 +960,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Concat(_) => {
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ConcatBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
+                            .into(),
+                    );
+                }
+
+                Operator::Contiguous => {
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        ContiguousBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
                         create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
