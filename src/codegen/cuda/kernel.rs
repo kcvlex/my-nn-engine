@@ -504,8 +504,8 @@ if ({size} <= {gid}) return;\n\
 {body}\n\
 }}",
             decl = self.decl.decl(),
-            gid = KernelVar::Gid.to_string(),
-            size = KernelVar::Size.to_string(),
+            gid = KernelVar::Gid,
+            size = KernelVar::Size,
             body = body
                 .iter()
                 .map(|stmt| stmt.to_string())
