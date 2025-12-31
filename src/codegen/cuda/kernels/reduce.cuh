@@ -40,18 +40,18 @@ template <typename T, ReduceType RT, size_t BLOCK_SIZE>
 __global__ void reduce2d(
     T *out,
     T *in,
-    i64 row,
-    i64 col
+    int row,
+    int col
 ) {
     extern __shared__ T shared_data[];
-    i64 tid = threadIdx.x;
-    i64 idx = blockIdx.x * blockDim.x + threadIdx.x;
-    i64 ceil_col = (col + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
-    i64 row_id = idx / ceil_col;
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int ceil_col = (col + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+    int row_id = idx / ceil_col;
     if (row <= row_id) return;
 
     T acc_block = reduce_init<T, RT>();
-    for (i64 i = tid; i < ceil_col; i += blockDim.x) {
+    for (int i = tid; i < ceil_col; i += blockDim.x) {
         if (i < col) {
             acc_block = reduce_op<T, RT>(acc_block, in[row_id * col + i]);
         }
@@ -66,7 +66,7 @@ __global__ void reduce2d(
     shared_data[tid] = acc_block;
     cg::sync(cta);
 
-    for (i64 s = BLOCK_SIZE / 2; 32 <= s; s >>= 1) {
+    for (int s = BLOCK_SIZE / 2; 32 <= s; s >>= 1) {
         if (tid < s) {
             shared_data[tid] = reduce_op<T, RT>(shared_data[tid], shared_data[tid + s]);
         }

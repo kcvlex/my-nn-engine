@@ -539,7 +539,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         Ok(format!(
             "
 {decl} {{\n\
-    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
     {body}\n\
 }}
@@ -655,17 +655,17 @@ impl<'sched> SplitBuilder<'sched> {
         Ok(format!(
             "
 {decl} {{\n\
-    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
     {value_ty} {load_var} = {in_}[{gid}];\n\
-    i64 {axis_idx_var} = ({gid} / {axis_stride}) % {axis_dim};\n\
-    i64 {inner_offset_var} = {gid} % {axis_stride};\n\
-    i64 {outer_offset_var} = {gid} - ({axis_idx_var} * {axis_stride}) - {inner_offset_var};\n\
-    i64 {sizes_var}[] = {{{sizes}}};\n\
-    i64 {sizes_acc_var}[] = {{{sizes_acc}}};\n\
+    int {axis_idx_var} = ({gid} / {axis_stride}) % {axis_dim};\n\
+    int {inner_offset_var} = {gid} % {axis_stride};\n\
+    int {outer_offset_var} = {gid} - ({axis_idx_var} * {axis_stride}) - {inner_offset_var};\n\
+    int {sizes_var}[] = {{{sizes}}};\n\
+    int {sizes_acc_var}[] = {{{sizes_acc}}};\n\
     {ptr_ty} {outs_var}[] = {{{outs}}};\n\
-    i64 {select_var} = {select};\n\
-    i64 {out_offset_var} = {inner_offset_var} + ({axis_idx_var} - {sizes_acc_var}[{select}]) * {axis_stride} + {outer_offset_var} / {axis_dim} * {sizes_var}[{select_var}];\n\
+    int {select_var} = {select};\n\
+    int {out_offset_var} = {inner_offset_var} + ({axis_idx_var} - {sizes_acc_var}[{select}]) * {axis_stride} + {outer_offset_var} / {axis_dim} * {sizes_var}[{select_var}];\n\
     {outs_var}[{select_var}][{out_offset_var}] = {load_var};\n
 }}
 "
@@ -765,19 +765,19 @@ impl<'sched> ConcatBuilder<'sched> {
         Ok(format!(
             "
 {decl} {{\n\
-    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
     {ptr_ty} {ins_var}[] = {{{ins}}};\n\
-    i64 {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};\n\
-    i64 {in_select_var} = {input_select};\n\
-    i64 {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];\n\
+    int {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};\n\
+    int {in_select_var} = {input_select};\n\
+    int {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];\n\
     {value_ty} {load_var} = {ins_var}[{in_select_var}][{in_offset}];\n\
-    i64 {in_axis_sizes_var}[] = {{{input_axis_sizes}}};\n\
-    i64 {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};\n\
-    i64 {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];\n\
-    i64 {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};\n\
-    i64 {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];\n\
-    i64 {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};\n\
+    int {in_axis_sizes_var}[] = {{{input_axis_sizes}}};\n\
+    int {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};\n\
+    int {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];\n\
+    int {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};\n\
+    int {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];\n\
+    int {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};\n\
     {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};\n\
 }}
 "
@@ -817,7 +817,7 @@ impl<'sched> ContiguousBuilder<'sched> {
         Ok(format!(
             "
 {decl} {{\n\
-    i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
     {out}[{gid}] = {in_}[{input_idx}];\n\
 }}
