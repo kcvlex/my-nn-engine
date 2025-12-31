@@ -215,7 +215,6 @@ pub enum KernelExpr {
 pub enum KernelVar {
     Gid,
     Value(ValueId),
-    Size,
     Local(usize),
 }
 
@@ -270,7 +269,6 @@ impl Display for KernelVar {
             match self {
                 KernelVar::Gid => "gid".to_string(),
                 KernelVar::Value(value_id) => format!("value_{}", value_id.index()),
-                KernelVar::Size => "N".to_string(),
                 KernelVar::Local(idx) => format!("local_{}", idx),
             }
         )
@@ -507,6 +505,10 @@ impl<'sched> KernelBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let body = self.build_body()?;
+        let size = {
+            let output = self.schedule.kernels[self.decl.kernel_id].outputs[0];
+            self.get_resolved_tensor_type(output)?.dims.size()
+        };
         Ok(format!(
             "{decl} {{\n\
 i64 {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
@@ -515,7 +517,7 @@ if ({size} <= {gid}) return;\n\
 }}",
             decl = self.decl.decl(),
             gid = KernelVar::Gid,
-            size = KernelVar::Size,
+            size = size,
             body = body
                 .iter()
                 .map(|stmt| stmt.to_string())

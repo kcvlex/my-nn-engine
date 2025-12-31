@@ -813,11 +813,6 @@ impl<'sched> HostCodeGenerator<'sched> {
         for input in self.schedule.kernels[kernel_id].inputs.iter() {
             add_param(&mut params, *input);
         }
-        // TODO: Other params (e.g., BatchNorm).
-        params.push((
-            KernelVar::Size,
-            TypeSymbol::Primitive(DataType::SInt(SIntType::I64)),
-        ));
 
         let mut args = Vec::with_capacity(params.len());
         for (param, ty) in params.iter() {
@@ -825,10 +820,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                 KernelVar::Value(p) => {
                     let ptr = self.device_identifier(*p)?;
                     Expr::Literal(format!("({}){}", ty, ptr))
-                }
-                KernelVar::Size => {
-                    let size = self.get_resolved_tensor_type(output)?.dims.size();
-                    Expr::Literal(size.to_string())
                 }
                 KernelVar::Gid | KernelVar::Local(_) => unreachable!(),
             };
