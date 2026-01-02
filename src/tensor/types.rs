@@ -354,7 +354,7 @@ impl ResolvedTensorType {
     }
 
     pub fn is_scalar(&self) -> bool {
-        self.dims.is_scalar()
+        self.dims.is_scalar() || self.dims.size() == 1
     }
 
     pub fn storage_num_elements(&self) -> usize {
