@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::operator::*;
@@ -31,6 +33,19 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 _ => return None,
             };
             let tensor = Tensor::new(dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
+        Operator::ConstantOfShape(ConstantOfShape { ref value }) => {
+            let dims = graph.initializer.get(&node.inputs[0])?;
+            let dims = match &dims.data {
+                TensorData::SInt(SIntType::I64, data) => {
+                    Some(data.iter().map(|x| *x as usize).collect_vec())
+                }
+                _ => None,
+            }?;
+            let dims = ResolvedTensorDims::from(dims);
+            let data = value.to_tensor_data(dims.size());
+            let tensor = Tensor::new(dims, data).ok()?;
             Some(vec![tensor])
         }
         Operator::Concat(Concat { ref axis }) => {

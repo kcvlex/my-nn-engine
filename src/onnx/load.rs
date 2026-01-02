@@ -500,7 +500,7 @@ impl ConstantOfShape {
             .map(|x| x.tensor())
             .transpose()?
             .and_then(|tensor| tensor.data.try_into().ok())
-            .unwrap_or(ScalarData::Float(FloatType::F32, 1.0));
+            .unwrap_or(ScalarData::Float(FloatType::F32, 0.0));
         Ok(ConstantOfShape { value })
     }
 }

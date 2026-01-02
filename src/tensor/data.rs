@@ -44,6 +44,16 @@ impl PartialEq for ScalarData {
     }
 }
 
+impl ScalarData {
+    pub fn to_tensor_data(&self, num: usize) -> TensorData {
+        match self {
+            ScalarData::SInt(ty, v) => TensorData::SInt(*ty, vec![*v; num]),
+            ScalarData::UInt(ty, v) => TensorData::UInt(*ty, vec![*v; num]),
+            ScalarData::Float(ty, v) => TensorData::Float(*ty, vec![*v; num]),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CompPolicy {
     Abs,

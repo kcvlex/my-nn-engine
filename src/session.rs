@@ -1277,4 +1277,14 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn constantofshape_float_ones() -> TestResult {
+        with_cpu_session("constantofshape_float_ones.onnx", |session| {
+            let output = session.run(&[])?;
+            let expected = ndarray::Array::from_elem((2, 3, 4), 1.0f32).into_dyn();
+            tensor_assert_eq!(output[0], expected);
+            Ok(())
+        })
+    }
 }

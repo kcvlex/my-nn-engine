@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use crate::onnx::model::Graph;
+use crate::onnx::operator::Operator;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
@@ -17,7 +18,7 @@ impl<T: GraphOp> Pass<T> for CleanupTensors {
         let used_values: HashSet<_> = graph
             .nodes
             .iter()
-            .filter(|(_, node)| !node.is_dummy())
+            .filter(|(_, node)| !matches!(node.op, Operator::Input(_)))
             .flat_map(|(_, node)| node.inputs.iter())
             .copied()
             .collect();
