@@ -16,6 +16,7 @@ pub enum CUDAKernel {
     MaxPoolKernel(MaxPoolKernel),
     GeneratedKernel(GeneratedKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
+    SoftmaxKernel(SoftmaxKernel),
 }
 
 pub struct GeneratedKernel {
@@ -132,6 +133,32 @@ impl ReduceMatrixKernel {
     }
 }
 
+pub struct SoftmaxKernel {
+    pub data_ty: DataType,
+    pub block_size: usize,
+    pub axis_dim: usize,
+    pub axis_stride: usize,
+
+    pub out: Expr,
+    pub in_: Expr,
+    pub size: Expr,
+}
+
+impl SoftmaxKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "softmax<{}, {}, {}, {}>",
+            self.data_ty, self.block_size, self.axis_dim, self.axis_stride
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            self.size.to_string(),
+        ];
+        (id, args)
+    }
+}
+
 pub struct LaunchKernel {
     pub cuda_kernel: CUDAKernel,
     pub grid_size: Expr,
@@ -146,6 +173,7 @@ impl LaunchKernel {
             CUDAKernel::MaxPoolKernel(m) => m,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::ReduceMatrixKernel(r) => r,
+            CUDAKernel::SoftmaxKernel(s) => s,
         } {
             #[call(fragment)]
             fn kernel_fragment(&self) -> (String, Vec<String>);

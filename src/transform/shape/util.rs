@@ -65,6 +65,7 @@ pub fn infer_node_output(
         Operator::Reciprocal |
         Operator::ReLU |
         Operator::Sigmoid |
+        Operator::Softmax(_) |
         Operator::Sqrt |
         Operator::Tanh => {
             res.push(inputs[0].clone());

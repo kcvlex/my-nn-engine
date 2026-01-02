@@ -1,7 +1,6 @@
 #ifndef INCLUDE_REDUCE_CUH_
 #define INCLUDE_REDUCE_CUH_
 
-#include "common.cuh"
 #include <cuda.h>
 #include <cooperative_groups.h>
 

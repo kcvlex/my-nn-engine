@@ -1263,6 +1263,38 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
+                Operator::Softmax(Softmax { axis }) => {
+                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ = self.device_identifier(kernel.inputs[0])?;
+                    let axis = axis.index(input_ty.dims.ndim());
+                    let axis_dim = input_ty.dims[axis];
+                    let axis_stride = input_ty.stride(axis);
+                    let size = input_ty.dims.size();
+                    let block_size = min(DEFAULT_BLOCK_SIZE, ceil_pow2(axis_dim));
+                    let grid_size = size / axis_dim;
+                    let data_ty = input_ty.elem_type;
+                    let cuda_kernel = kernel::CUDAKernel::SoftmaxKernel(kernel::SoftmaxKernel {
+                        data_ty,
+                        block_size,
+                        out,
+                        in_,
+                        axis_dim,
+                        axis_stride,
+                        size: size.to_literal(),
+                    });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: grid_size.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id: kernel_stream,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::Resize(_) => {
                     let output_size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
@@ -1385,6 +1417,7 @@ impl HostCode {
             "cudnn.h",
             "pool.cuh",
             "reduce.cuh",
+            "softmax.cuh",
             "cudnn_setting.h",
         ] {
             writeln!(writer, "#include \"{}\"", h)?;

@@ -777,6 +777,17 @@ impl SplitOutputs {
     }
 }
 
+impl Softmax {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|x| x.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(-1));
+        Ok(Softmax { axis })
+    }
+}
+
 impl Split {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let axis = attributes
@@ -846,12 +857,13 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Resize" => Ok(Operator::Resize(Resize::load(attributes)?)),
         "Sigmoid" => Ok(Operator::Sigmoid),
         "Shape" => Ok(Operator::Shape(Shape::load(attributes)?)),
+        "Slice" => Ok(Operator::Slice),
+        "Softmax" => Ok(Operator::Softmax(Softmax::load(attributes)?)),
+        "Split" => Ok(Operator::Split(Split::load(attributes)?)),
         "Sqrt" => Ok(Operator::Sqrt),
         "Squeeze" => Ok(Operator::Squeeze(Squeeze::load(attributes)?)),
         "Sub" => Ok(Operator::Sub),
         "Tanh" => Ok(Operator::Tanh),
-        "Slice" => Ok(Operator::Slice),
-        "Split" => Ok(Operator::Split(Split::load(attributes)?)),
         "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
         "Unsqueeze" => Ok(Operator::Unsqueeze(Unsqueeze::load(attributes)?)),
 

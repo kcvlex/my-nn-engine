@@ -61,6 +61,7 @@ pub enum Operator {
     Shape(Shape),
     Sigmoid,
     Slice,
+    Softmax(Softmax),
     Split(Split),
     Sqrt,
     Squeeze(Squeeze),
@@ -394,6 +395,11 @@ impl Slice {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Softmax {
+    pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SplitOutputs {
     NumOutputs(usize),
     Split(Vec<usize>),
@@ -614,6 +620,7 @@ impl Operator {
             Operator::Shape(_) => "Shape",
             Operator::Sigmoid => "Sigmoid",
             Operator::Slice => "Slice",
+            Operator::Softmax(_) => "Softmax",
             Operator::Split(_) => "Split",
             Operator::Sqrt => "Sqrt",
             Operator::Squeeze(_) => "Squeeze",

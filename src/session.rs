@@ -1287,4 +1287,26 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn softmax() -> TestResult {
+        with_session_and_tensors("softmax", &[Target::CUDA], |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1.0);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn softmax_axis() -> TestResult {
+        with_session_and_tensors(
+            "softmax_axis",
+            &[Target::CUDA],
+            |session, (input, output)| {
+                let outputs = session.run(&[input])?;
+                assert_eq_epsilon!(outputs[0], output, 1.0);
+                Ok(())
+            },
+        )
+    }
 }
