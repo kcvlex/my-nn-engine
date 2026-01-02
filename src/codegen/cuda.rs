@@ -906,11 +906,9 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
-        let create_launch_kernel = |slf: &Self, cuda_kernel: kernel::CUDAKernel| {
-            let output_ty = slf.get_resolved_tensor_type(kernel.outputs[0])?;
-            let output_size = output_ty.dims.size();
+        let create_launch_kernel = |cuda_kernel: kernel::CUDAKernel, num_threads: usize| {
             let block_size = DEFAULT_BLOCK_SIZE.to_literal();
-            let grid_size = output_size.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
+            let grid_size = num_threads.div_ceil(DEFAULT_BLOCK_SIZE).to_literal();
             Ok(kernel::LaunchKernel {
                 cuda_kernel,
                 grid_size,
@@ -949,32 +947,53 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Sqrt |
                 Operator::Sub |
                 Operator::Tanh => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ElementwiseKernelBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
                     );
                 }
 
                 Operator::Concat(_) => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ConcatBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
                     );
                 }
 
                 Operator::Contiguous => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ContiguousBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
                     );
                 }
 
@@ -1181,9 +1200,17 @@ impl<'sched> HostCodeGenerator<'sched> {
                         pad_h,
                         pad_w,
                     };
+
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::MaxPoolKernel(maxpool))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::MaxPoolKernel(maxpool),
+                            output_size,
+                        )?
+                        .into(),
                     );
                 }
 
@@ -1221,34 +1248,52 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Resize(_) => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ResizeBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
                     );
                 }
 
                 Operator::Split(_) => {
+                    let input_size = self.get_resolved_tensor_type(kernel.inputs[0])?.dims.size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         SplitBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
-                        create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                            .into(),
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            input_size,
+                        )?
+                        .into(),
                     );
                 }
 
                 _ => unimplemented!("Kernel body not implemented: {:?}", op),
             },
             KernelBody::FusedElementWises(_) => {
+                let output_size = self
+                    .get_resolved_tensor_type(kernel.outputs[0])?
+                    .dims
+                    .size();
                 let generated = self.generate_kernel(kernel_id, |sched, decl| {
                     ElementwiseKernelBuilder::new(sched, decl).build()
                 })?;
                 self.stmts.push(
-                    create_launch_kernel(self, kernel::CUDAKernel::GeneratedKernel(generated))?
-                        .into(),
+                    create_launch_kernel(
+                        kernel::CUDAKernel::GeneratedKernel(generated),
+                        output_size,
+                    )?
+                    .into(),
                 );
             }
         }

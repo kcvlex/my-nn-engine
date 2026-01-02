@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use delegate::delegate;
 use derive_more::From;
+use itertools::izip;
 use strum_macros::AsRefStr;
 
 use crate::codegen::cuda::*;
@@ -600,20 +601,12 @@ impl<'sched> SplitBuilder<'sched> {
         };
 
         let axis_idx_var = self.ctx.new_local_var();
-        let inner_offset_var = self.ctx.new_local_var();
-        let outer_offset_var = self.ctx.new_local_var();
-        let out_offset_var = self.ctx.new_local_var();
-        let sizes_var = self.ctx.new_local_var();
-        let outs_var = self.ctx.new_local_var();
-        let select_var = self.ctx.new_local_var();
-        let sizes_acc_var = self.ctx.new_local_var();
-        let load_var = self.ctx.new_local_var();
 
         let input_id = kernel.inputs[0];
         let input_ty = self.ctx.get_resolved_tensor_type(input_id)?;
-        if !input_ty.is_contiguous() {
-            return Err(BuildError::NonContiguousTensor(input_id));
-        }
+        // if !input_ty.is_contiguous() {
+        //     return Err(BuildError::NonContiguousTensor(input_id));
+        // }
         let value_ty: TypeSymbol = input_ty.elem_type.into();
         let ptr_ty = value_ty.to_pointer();
         let gid = KernelVar::Gid;
@@ -635,7 +628,6 @@ impl<'sched> SplitBuilder<'sched> {
         let in_ = KernelVar::Value(input_id);
         let select = select_rec(&sizes[..], &axis_idx_var);
         let sizes_acc = acc_sizes(&sizes[..]);
-        let decl = self.ctx.decl.decl();
         let outs = outs
             .into_iter()
             .map(|id| format!("{}", KernelVar::Value(id)))
@@ -651,22 +643,43 @@ impl<'sched> SplitBuilder<'sched> {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .join(", ");
+        let indexes = izip!(input_ty.dims.iter(), input_ty.strides().iter())
+            .map(|(dim, stride)| {
+                let stride = stride.max(&1);
+                format!("({gid} / {stride}) % {dim}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let output_dims_init = input_ty
+            .dims
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ndim = input_ty.dims.ndim();
+        let decl = self.ctx.decl.decl();
 
         Ok(format!(
             "
 {decl} {{\n\
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
     if ({size} <= {gid}) return;\n\
-    {value_ty} {load_var} = {in_}[{gid}];\n\
+    {value_ty} load = {in_}[{gid}];\n\
     int {axis_idx_var} = ({gid} / {axis_stride}) % {axis_dim};\n\
-    int {inner_offset_var} = {gid} % {axis_stride};\n\
-    int {outer_offset_var} = {gid} - ({axis_idx_var} * {axis_stride}) - {inner_offset_var};\n\
-    int {sizes_var}[] = {{{sizes}}};\n\
-    int {sizes_acc_var}[] = {{{sizes_acc}}};\n\
-    {ptr_ty} {outs_var}[] = {{{outs}}};\n\
-    int {select_var} = {select};\n\
-    int {out_offset_var} = {inner_offset_var} + ({axis_idx_var} - {sizes_acc_var}[{select}]) * {axis_stride} + {outer_offset_var} / {axis_dim} * {sizes_var}[{select_var}];\n\
-    {outs_var}[{select_var}][{out_offset_var}] = {load_var};\n
+    int select = {select};\n\
+    int indexes[] = {{{indexes}}};\n\
+    int sizes[] = {{{sizes}}};\n\
+    int sizes_acc[] = {{{sizes_acc}}};\n\
+    indexes[{axis}] = {axis_idx_var} - sizes_acc[select];\n\
+    int output_dims[] = {{{output_dims_init}}};\n\
+    output_dims[{axis}] = sizes[select];
+    int out_offset = 0;
+    for (int i = 0; i < {ndim}; i++) {{\n\
+        out_offset *= output_dims[i];\n\
+        out_offset += indexes[i];\n\
+    }}\n\
+    {ptr_ty} outs[] = {{{outs}}};\n\
+    outs[select][out_offset] = load;\n
 }}
 "
         ))
