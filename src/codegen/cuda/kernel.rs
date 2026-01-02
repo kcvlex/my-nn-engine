@@ -539,10 +539,10 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         let decl = self.ctx.decl.decl();
         Ok(format!(
             "
-{decl} {{\n\
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if ({size} <= {gid}) return;\n\
-    {body}\n\
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {body}
 }}
 "
         ))
@@ -661,24 +661,24 @@ impl<'sched> SplitBuilder<'sched> {
 
         Ok(format!(
             "
-{decl} {{\n\
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if ({size} <= {gid}) return;\n\
-    {value_ty} load = {in_}[{gid}];\n\
-    int {axis_idx_var} = ({gid} / {axis_stride}) % {axis_dim};\n\
-    int select = {select};\n\
-    int indexes[] = {{{indexes}}};\n\
-    int sizes[] = {{{sizes}}};\n\
-    int sizes_acc[] = {{{sizes_acc}}};\n\
-    indexes[{axis}] = {axis_idx_var} - sizes_acc[select];\n\
-    int output_dims[] = {{{output_dims_init}}};\n\
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {value_ty} load = {in_}[{gid}];
+    int {axis_idx_var} = ({gid} / {axis_stride}) % {axis_dim};
+    int select = {select};
+    int indexes[] = {{{indexes}}};
+    int sizes[] = {{{sizes}}};
+    int sizes_acc[] = {{{sizes_acc}}};
+    indexes[{axis}] = {axis_idx_var} - sizes_acc[select];
+    int output_dims[] = {{{output_dims_init}}};
     output_dims[{axis}] = sizes[select];
     int out_offset = 0;
-    for (int i = 0; i < {ndim}; i++) {{\n\
-        out_offset *= output_dims[i];\n\
-        out_offset += indexes[i];\n\
-    }}\n\
-    {ptr_ty} outs[] = {{{outs}}};\n\
+    for (int i = 0; i < {ndim}; i++) {{
+        out_offset *= output_dims[i];
+        out_offset += indexes[i];
+    }}
+    {ptr_ty} outs[] = {{{outs}}};
     outs[select][out_offset] = load;\n
 }}
 "
@@ -777,21 +777,21 @@ impl<'sched> ConcatBuilder<'sched> {
 
         Ok(format!(
             "
-{decl} {{\n\
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if ({size} <= {gid}) return;\n\
-    {ptr_ty} {ins_var}[] = {{{ins}}};\n\
-    int {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};\n\
-    int {in_select_var} = {input_select};\n\
-    int {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];\n\
-    {value_ty} {load_var} = {ins_var}[{in_select_var}][{in_offset}];\n\
-    int {in_axis_sizes_var}[] = {{{input_axis_sizes}}};\n\
-    int {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};\n\
-    int {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];\n\
-    int {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};\n\
-    int {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];\n\
-    int {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};\n\
-    {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};\n\
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {ptr_ty} {ins_var}[] = {{{ins}}};
+    int {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};
+    int {in_select_var} = {input_select};
+    int {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];
+    {value_ty} {load_var} = {ins_var}[{in_select_var}][{in_offset}];
+    int {in_axis_sizes_var}[] = {{{input_axis_sizes}}};
+    int {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};
+    int {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];
+    int {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};
+    int {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];
+    int {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};
+    {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};
 }}
 "
         ))
@@ -829,10 +829,10 @@ impl<'sched> ContiguousBuilder<'sched> {
 
         Ok(format!(
             "
-{decl} {{\n\
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if ({size} <= {gid}) return;\n\
-    {out}[{gid}] = {in_}[{input_idx}];\n\
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {out}[{gid}] = {in_}[{input_idx}];
 }}
 "
         ))
@@ -961,11 +961,11 @@ impl<'sched> ResizeBuilder<'sched> {
         let decl = self.ctx.decl.decl();
         Ok(format!(
             "
-{decl} {{\n\
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;\n\
-    if ({size} <= {gid}) return;\n\
-    {body}\n\
-    {out}[{gid}] = {in_}[{in_offset_var}];\n\
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {body}
+    {out}[{gid}] = {in_}[{in_offset_var}];
 }}
 "
         ))
