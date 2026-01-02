@@ -357,7 +357,7 @@ impl<'sched> BuilderContext<'sched> {
         };
         match ty.dims.ndim() {
             1 => Ok(KernelVar::Gid.into()),
-            d @ (2..=4) => {
+            d @ (2..=5) => {
                 let name = format!("to_tensor_idx{}d", d);
                 let mut args = vec![KernelVar::Gid.into()];
                 for cnst in ty.dims[1..].iter().chain(ty.strides().iter()) {

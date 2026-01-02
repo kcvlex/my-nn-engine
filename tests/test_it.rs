@@ -49,8 +49,18 @@ fn run_test_default(dir: &str, epsilon: f64) -> Result {
 }
 
 #[test]
-fn test_transpose_conv2d() -> Result {
+fn test_transpose_conv2d_cpu() -> Result {
     run_test_default("transpose_conv2d", 1e-3)
+}
+
+#[test]
+fn test_transpose_conv2d_cuda() -> Result {
+    run_test(
+        "transpose_conv2d",
+        1e-3,
+        &Options::builder().target(Target::CUDA).build(),
+        (1, 1),
+    )
 }
 
 #[test]

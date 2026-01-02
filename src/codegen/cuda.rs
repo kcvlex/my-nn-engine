@@ -320,6 +320,20 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
+    fn infer_format(ty: &ResolvedTensorType) -> Option<CudnnTensorFormat> {
+        assert!(ty.dims.ndim() == 4);
+        if ty.is_contiguous() {
+            return Some(CudnnTensorFormat::NCHW);
+        }
+
+        let ty = ty.transpose(&[0, 2, 3, 1]);
+        if ty.is_contiguous() {
+            return Some(CudnnTensorFormat::NHWC);
+        }
+
+        None
+    }
+
     fn generate(&self) -> Result<CudnnCode, BuildError> {
         let mut stmts = Vec::new();
         let setting = CudnnSettingName::DefaultName;
@@ -336,7 +350,6 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         assert!(input_ty.dims.ndim() == 4);
         assert!(weight_ty.dims.ndim() == 4);
         assert!(output_ty.dims.ndim() == 4);
-        assert!(input_ty.is_contiguous() && weight_ty.is_contiguous() && output_ty.is_contiguous());
         let input_desc = TensorDescriptor {
             id: setting,
             role: TensorRole::Input,
@@ -350,7 +363,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetTensor4dDescriptor {
                 desc: input_desc,
                 data_type: input_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
+                format: Self::infer_format(&input_ty).unwrap(),
                 nbatch: input_ty.dims[0],
                 channels: input_ty.dims[1],
                 height: input_ty.dims[2],
@@ -363,7 +376,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetTensor4dDescriptor {
                 desc: output_desc,
                 data_type: output_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
+                format: Self::infer_format(&output_ty).unwrap(),
                 nbatch: output_ty.dims[0],
                 channels: output_ty.dims[1],
                 height: output_ty.dims[2],
@@ -377,7 +390,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetFilter4dDescriptor {
                 id: setting,
                 data_type: weight_ty.elem_type,
-                format: CudnnTensorFormat::NCHW,
+                format: Self::infer_format(&weight_ty).unwrap(),
                 out_feature_maps: weight_ty.dims[0],
                 in_feature_maps: weight_ty.dims[1],
                 height: weight_ty.dims[2],

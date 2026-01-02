@@ -54,5 +54,6 @@ __device__ void divmod(T x, T y, T *q, T *r) {
 __device__ int to_tensor_idx2d(int flat_idx, int dim1, int stride0, int stride1);
 __device__ int to_tensor_idx3d(int flat_idx, int dim1, int dim2, int stride0, int stride1, int stride2);
 __device__ int to_tensor_idx4d(int flat_idx, int dim1, int dim2, int dim3, int stride0, int stride1, int stride2, int stride3);
+__device__ int to_tensor_idx5d(int flat_idx, int dim1, int dim2, int dim3, int dim4, int stride0, int stride1, int stride2, int stride3, int stride4);
 
 #endif
