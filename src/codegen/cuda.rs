@@ -22,6 +22,7 @@ use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
+use crate::codegen::cuda::kernel::OneHotBuilder;
 use crate::codegen::cuda::kernel::ReduceMatrixKernel;
 use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
@@ -1227,6 +1228,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                             output_size,
                         )?
                         .into(),
+                    );
+                }
+
+                Operator::OneHot(_) => {
+                    let size = self
+                        .get_resolved_tensor_type(kernel.inputs[args::ONEHOT_INDICES])?
+                        .dims
+                        .size();
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        OneHotBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(kernel::CUDAKernel::GeneratedKernel(generated), size)?
+                            .into(),
                     );
                 }
 

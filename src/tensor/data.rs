@@ -160,6 +160,23 @@ impl TensorData {
             DataType::Float(t) => TensorData::Float(t, vec![0.0; size]),
         }
     }
+
+    pub fn to_scalar_data(&self) -> Option<ScalarData> {
+        match self {
+            TensorData::SInt(t, v) if v.len() == 1 => Some(ScalarData::SInt(*t, v[0])),
+            TensorData::UInt(t, v) if v.len() == 1 => Some(ScalarData::UInt(*t, v[0])),
+            TensorData::Float(t, v) if v.len() == 1 => Some(ScalarData::Float(*t, v[0])),
+            _ => None,
+        }
+    }
+
+    pub fn to_scalars(&self) -> Vec<ScalarData> {
+        match self {
+            TensorData::SInt(t, v) => v.iter().map(|x| ScalarData::SInt(*t, *x)).collect(),
+            TensorData::UInt(t, v) => v.iter().map(|x| ScalarData::UInt(*t, *x)).collect(),
+            TensorData::Float(t, v) => v.iter().map(|x| ScalarData::Float(*t, *x)).collect(),
+        }
+    }
 }
 
 impl From<Vec<i32>> for TensorData {
@@ -214,6 +231,16 @@ impl TryInto<ScalarData> for TensorData {
                 self.size(),
                 ResolvedTensorDims::new(vec![1]),
             )),
+        }
+    }
+}
+
+impl std::fmt::Display for ScalarData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScalarData::SInt(_, v) => write!(f, "{}", v),
+            ScalarData::UInt(_, v) => write!(f, "{}", v),
+            ScalarData::Float(_, v) => write!(f, "{}", v),
         }
     }
 }

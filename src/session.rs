@@ -1309,4 +1309,13 @@ mod test {
             },
         )
     }
+
+    #[test]
+    fn one_hot() -> TestResult {
+        with_session_and_tensors("one_hot", &[Target::CUDA], |session, (input, output)| {
+            let outputs = session.run(&[input])?;
+            assert_eq_epsilon!(outputs[0], output, 1e-6);
+            Ok(())
+        })
+    }
 }

@@ -999,3 +999,60 @@ impl<'sched> ResizeBuilder<'sched> {
         ))
     }
 }
+
+// Only supports:
+//   - on_value and off_value are constants.
+//   - axis is the last dimension.
+pub struct OneHotBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> OneHotBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::OneHot(one_hot),
+        }) = &kernel.body
+        else {
+            panic!("Expected Resize operator");
+        };
+
+        let Some(depth) = one_hot.depth else {
+            unimplemented!()
+        };
+        let Some(on_value) = one_hot.on_value else {
+            unimplemented!()
+        };
+        let Some(off_value) = one_hot.off_value else {
+            unimplemented!()
+        };
+
+        let indexes = kernel.inputs[args::ONEHOT_INDICES];
+        let size = self.ctx.get_resolved_tensor_type(indexes)?.dims.size();
+        let decl = self.ctx.decl.decl();
+        let gid = KernelVar::Gid;
+        let out = KernelVar::Value(kernel.outputs[0]);
+        let indexes = KernelVar::Value(indexes);
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+
+    int index = {indexes}[{gid}];
+    if (index < 0) index += {depth};
+    for (int i = 0; i < {depth}; i++) {{
+        {out}[{gid} * {depth} + i] = (i == index) ? {on_value} : {off_value};
+    }}
+}}
+"
+        ))
+    }
+}

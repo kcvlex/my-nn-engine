@@ -652,6 +652,23 @@ impl Pooling {
     }
 }
 
+impl OneHot {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|x| x.i())
+            .transpose()?
+            .unwrap_or(-1) as isize;
+        Ok(OneHot {
+            axis,
+
+            depth: None,
+            on_value: None,
+            off_value: None,
+        })
+    }
+}
+
 impl Reduce {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let keepdims = attributes
@@ -847,6 +864,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "MatMul" => Ok(Operator::MatMul),
         "MaxPool" => Ok(Operator::MaxPool(Pooling::load(attributes)?)),
         "Mul" => Ok(Operator::Mul),
+        "OneHot" => Ok(Operator::OneHot(OneHot::load(attributes)?)),
         "Pow" => Ok(Operator::Pow),
         "Reciprocal" => Ok(Operator::Reciprocal),
         "ReduceMax" => Ok(Operator::ReduceMax(Reduce::load(attributes)?)),

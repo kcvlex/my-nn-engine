@@ -398,6 +398,40 @@ pub fn infer_node_output(
             res.push(ty);
         }
 
+        Operator::OneHot(OneHot {
+            axis,
+            depth,
+            on_value,
+            off_value,
+        }) => {
+            let indices = &inputs[args::ONEHOT_INDICES];
+
+            let axis = if *axis < 0 {
+                axis + indices.dims.ndim() as isize + 1
+            } else {
+                *axis
+            };
+            let axis = axis as usize;
+
+            // TODO: Support non-contiguous indices.
+            cond_error!(!indices.is_contiguous());
+            // TODO: Support non-innermost axis.
+            cond_error!(axis != indices.dims.ndim());
+
+            let depth = depth.ok_or(TypeError::InferError("Unresolved depth".to_string()))?;
+
+            let on_value =
+                on_value.ok_or(TypeError::InferError("Unresolved on_value".to_string()))?;
+            let off_value =
+                off_value.ok_or(TypeError::InferError("Unresolved off_value".to_string()))?;
+            cond_error!(on_value.elem_type() != off_value.elem_type());
+            let elem_ty = on_value.elem_type();
+
+            let mut dims = indices.dims.clone();
+            dims.push(depth);
+            res.push(ResolvedTensorType::new(elem_ty, dims));
+        }
+
         // Custom
         Operator::Contiguous => {
             let input = &inputs[0];

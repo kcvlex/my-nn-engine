@@ -55,6 +55,7 @@ pub enum Operator {
     MatMul,
     MaxPool(Pooling),
     Mul,
+    OneHot(OneHot),
     ReduceMax(Reduce),
     ReduceMean(Reduce),
     ReduceSum(Reduce),
@@ -275,6 +276,15 @@ impl Pooling {
         }
         ResolvedTensorDims::new(dims)
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OneHot {
+    pub axis: isize,
+
+    pub depth: Option<usize>,
+    pub off_value: Option<ScalarData>,
+    pub on_value: Option<ScalarData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -612,6 +622,7 @@ impl Operator {
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
             Operator::Mul => "Mul",
+            Operator::OneHot(_) => "OneHot",
             Operator::Pow => "Pow",
             Operator::ReduceMax(_) => "ReduceMax",
             Operator::ReduceMean(_) => "ReduceMean",
@@ -708,6 +719,10 @@ pub mod args {
     pub const SLICE_ENDS: usize = 2;
     pub const SLICE_AXES: usize = 3;
     pub const SLICE_STEPS: usize = 4;
+
+    pub const ONEHOT_INDICES: usize = 0;
+    pub const ONEHOT_DEPTH: usize = 1;
+    pub const ONEHOT_VALUES: usize = 2;
 }
 
 //#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
