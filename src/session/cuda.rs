@@ -62,7 +62,7 @@ impl SessionCUDA {
             .flush()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
-        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/kernels");
+        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/cpp");
         let paths = vec![
             (main_file.clone(), main_file.with_extension("o")),
             (
