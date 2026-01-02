@@ -67,3 +67,8 @@ fn test_resnet18_cuda() -> Result {
 fn test_resnet152_cuda() -> Result {
     run_test("resnet152-v2-7", 1e-1, Target::CUDA)
 }
+
+#[test]
+fn test_yolov4_cuda() -> Result {
+    run_test("yolov4", 1.0, Target::CUDA)
+}

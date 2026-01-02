@@ -53,3 +53,9 @@ fn run_test(model: &str, epsilon: f64, target: Target) -> Result {
 fn test_resnet18_until() -> Result {
     run_test("resnet18-v2-7/until_pool1_fwd", 1e-2, Target::CUDA)
 }
+
+#[ignore]
+#[test]
+fn test_yolov4_until() -> Result {
+    run_test("yolov4/until_lambda_5_add", 5e-1, Target::CUDA)
+}
