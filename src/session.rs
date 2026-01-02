@@ -166,9 +166,8 @@ impl Session {
             Target::CPU => {
                 SessionCPU::new(inputs_ty, outputs_ty, initializer, schedule).map(Session::CPU)
             }
-            Target::CUDA => {
-                SessionCUDA::new(inputs_ty, outputs_ty, initializer, schedule).map(Session::CUDA)
-            }
+            Target::CUDA => SessionCUDA::new(inputs_ty, outputs_ty, initializer, schedule, options)
+                .map(Session::CUDA),
         }
     }
 

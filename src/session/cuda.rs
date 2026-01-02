@@ -9,6 +9,7 @@ use tempfile::TempDir;
 
 use crate::codegen::cuda::*;
 use crate::codegen::*;
+use crate::options::Options;
 use crate::schedule::Schedule;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
@@ -39,10 +40,11 @@ impl SessionCUDA {
         output_ty: Vec<ResolvedTensorType>,
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
+        opt: &Options,
     ) -> Result<Self, SessionError> {
         let mut hostcode_gen = HostCodeGenerator::new(&schedule);
         let hostcode = hostcode_gen
-            .generate()
+            .generate(opt)
             .map_err(CodeGenError::CudaBuildError)
             .map_err(SessionError::CodeGenError)?;
 

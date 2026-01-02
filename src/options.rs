@@ -22,4 +22,7 @@ pub struct Options {
 
     #[builder(default = Target::CPU)]
     pub target: Target,
+
+    #[builder(default = false)]
+    pub profile: bool,
 }

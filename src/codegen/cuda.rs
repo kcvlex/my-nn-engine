@@ -29,6 +29,7 @@ use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
+use crate::options::Options;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
@@ -256,6 +257,8 @@ pub struct HostCode {
     computes: Vec<Statement>,
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
+
+    profile: bool,
 }
 
 const ARG_INPUT: &str = "input";
@@ -1338,7 +1341,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         Ok(())
     }
 
-    pub fn generate(&mut self) -> Result<HostCode, BuildError> {
+    pub fn generate(&mut self, opt: &Options) -> Result<HostCode, BuildError> {
         let decl_values = self.gen_decl_values()?;
         let computes = self
             .gen_computes()?
@@ -1365,13 +1368,14 @@ impl<'sched> HostCodeGenerator<'sched> {
             computes,
             finalize,
             kernel_codes,
+            profile: opt.profile,
         })
     }
 }
 
 impl HostCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for h in ["algorithm", "limits"] {
+        for h in ["algorithm", "limits", "chrono", "iostream"] {
             writeln!(writer, "#include <{}>", h)?;
         }
         for h in [
@@ -1397,7 +1401,14 @@ impl HostCode {
             }
         }
 
-        writeln!(writer, "extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{")?;
+        let profile = if self.profile { "true" } else { "false" };
+        writeln!(
+            writer,
+            "
+extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
+    auto timer_start = std::chrono::high_resolution_clock::now();
+    "
+        )?;
         for stmts in &[
             self.decl_values.as_slice(),
             self.decl_cuda_objs.as_slice(),
@@ -1408,7 +1419,13 @@ impl HostCode {
                 writeln!(writer, "  {stmt}")?;
             }
         }
-        writeln!(writer, "}}")?;
+        writeln!(writer, "
+    auto timer_end = std::chrono::high_resolution_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timer_end - timer_start);
+    if ({profile}) std::cout << \"Elapsed time: \" << elapsed_ms.count() << \" ms\" << std::endl;
+}}
+    "
+)?;
         Ok(())
     }
 }
@@ -1448,7 +1465,7 @@ mod test {
             .open(path.clone())
             .unwrap();
         let mut file = BufWriter::new(file);
-        let code = host_gen.generate().unwrap();
+        let code = host_gen.generate(&Options::builder().build()).unwrap();
         code.write(&mut file).unwrap();
         println!("Generated CUDA code written to {:?}", path);
     }
