@@ -97,26 +97,21 @@ impl Display for CublasApi {
                     DataType::Float(FloatType::F64) => ("double", 'D'),
                     _ => panic!("Unsupported data type for cuBLAS GEMM"),
                 };
-                write!(f,
-                    "cublas{}gemm({}, {}, {}, {}, {}, {}, &{}, (const {} *){}, {}, (const {} *){}, {}, &{}, ({} *){}, {})",
-                    prefix,
-                    handler,
-                    trans_a,
-                    trans_b,
-                    m,
-                    n,
-                    k,
-                    alpha,
-                    c_ty,
-                    a,
-                    lda,
-                    c_ty,
-                    b,
-                    ldb,
-                    beta,
-                    c_ty,
-                    c,
-                    ldc,
+                write!(
+                    f,
+                    "
+cublas{prefix}gemm(
+    {handler},
+    {trans_a},
+    {trans_b},
+    {m}, {n}, {k},
+    &{alpha},
+    (const {c_ty} *){a}, {lda},
+    (const {c_ty} *){b}, {ldb},
+    &{beta},
+    ({c_ty} *){c}, {ldc}
+)
+",
                 )
             }
         }
