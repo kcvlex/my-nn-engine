@@ -6,7 +6,7 @@ use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::optimize::const_fold::fold_constant;
 use crate::transform::optimize::const_prop::prop_constant;
-use crate::transform::shape::early_broadcst::EarlyBroadcast;
+use crate::transform::shape::early_broadcast::EarlyBroadcast;
 use crate::transform::shape::util;
 use crate::transform::shape::verify;
 use crate::transform::GraphOp;
