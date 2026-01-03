@@ -1085,7 +1085,8 @@ impl<'sched> GatherBuilder<'sched> {
 
         let input_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[0])?;
         let indices_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[1])?;
-        let repeat = input_ty.dims.size() / input_ty.dims[0];
+        let axis_dim = input_ty.dims[0];
+        let repeat = input_ty.dims.size() / axis_dim;
 
         let in_ = KernelVar::Value(kernel.inputs[0]);
         let indices = KernelVar::Value(kernel.inputs[1]);
@@ -1101,6 +1102,7 @@ impl<'sched> GatherBuilder<'sched> {
     if ({size} <= {gid}) return;
 
     int index = {indices}[{gid}];
+    if (index < 0) index += {axis_dim};
     for (int i = 0; i < {repeat}; i++) {{
         {out}[{gid} * {repeat} + i] = {in_}[index * {repeat} + i];
     }}
