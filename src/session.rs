@@ -295,19 +295,35 @@ mod test {
         Ok(())
     }
 
-    fn with_session_and_tensors<P, F>(dir: P, targets: &[Target], f: F) -> TestResult
+    fn with_session_and_tensors<P, F>(
+        dir: P,
+        targets: &[Target],
+        nums: (usize, usize),
+        f: F,
+    ) -> TestResult
     where
         P: AsRef<std::path::Path>,
-        F: Fn(Session, (Tensor, Tensor)) -> TestResult,
+        F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
     {
         use std::path::PathBuf;
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("models/test/operator")
             .join(dir);
-        let input = Tensor::load_from_path(dir.join("input.pb"))
-            .map_err(|e| SessionError::OtherError(format!("Failed to load input: {:?}", e)))?;
-        let output = Tensor::load_from_path(dir.join("output.pb"))
-            .map_err(|e| SessionError::OtherError(format!("Failed to load output: {:?}", e)))?;
+        let (input_num, output_num) = nums;
+        let inputs = (0..input_num)
+            .map(|i| {
+                Tensor::load_from_path(dir.join(format!("input_{}.pb", i))).map_err(|e| {
+                    SessionError::OtherError(format!("Failed to load input {}: {:?}", i, e))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let outputs = (0..output_num)
+            .map(|i| {
+                Tensor::load_from_path(dir.join(format!("output_{}.pb", i))).map_err(|e| {
+                    SessionError::OtherError(format!("Failed to load output {}: {:?}", i, e))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         for target in targets.iter().copied() {
             let opt = match target {
@@ -315,7 +331,7 @@ mod test {
                 Target::CUDA => Options::builder().target(target).build(),
             };
             let session = Session::new(dir.join("model.onnx"), None, &opt)?;
-            f(session, (input.clone(), output.clone()))?;
+            f(session, (&inputs, &outputs))?;
         }
         Ok(())
     }
@@ -336,12 +352,12 @@ mod test {
         with_session(p, &[Target::CPU, Target::CUDA], f)
     }
 
-    fn with_all_sessions_and_tensors<P, F>(p: P, f: F) -> TestResult
+    fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
     where
         P: AsRef<std::path::Path>,
-        F: Fn(Session, (Tensor, Tensor)) -> TestResult,
+        F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
     {
-        with_session_and_tensors(p, &[Target::CPU, Target::CUDA], f)
+        with_session_and_tensors(p, &[Target::CPU, Target::CUDA], nums, f)
     }
 
     type TestResult = Result<(), SessionError>;
@@ -696,9 +712,9 @@ mod test {
 
     #[test]
     fn conv_bias() -> TestResult {
-        with_all_sessions_and_tensors("conv_bias", |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1e-4);
+        with_all_sessions_and_tensors("conv_bias", (1, 1), |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
             Ok(())
         })
     }
@@ -747,20 +763,24 @@ mod test {
 
     #[test]
     fn large_global_avg() -> TestResult {
-        with_all_sessions_and_tensors("large_global_avg", |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1e-2);
+        with_all_sessions_and_tensors("large_global_avg", (1, 1), |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq_epsilon!(outputs[0], expected[0], 1e-2);
             Ok(())
         })
     }
 
     #[test]
     fn global_avg_non_pow2() -> TestResult {
-        with_all_sessions_and_tensors("global_avg_non_pow2", |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1e-2);
-            Ok(())
-        })
+        with_all_sessions_and_tensors(
+            "global_avg_non_pow2",
+            (1, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1e-2);
+                Ok(())
+            },
+        )
     }
 
     #[test]
@@ -1290,11 +1310,16 @@ mod test {
 
     #[test]
     fn softmax() -> TestResult {
-        with_session_and_tensors("softmax", &[Target::CUDA], |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1.0);
-            Ok(())
-        })
+        with_session_and_tensors(
+            "softmax",
+            &[Target::CUDA],
+            (1, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1.0);
+                Ok(())
+            },
+        )
     }
 
     #[test]
@@ -1302,9 +1327,10 @@ mod test {
         with_session_and_tensors(
             "softmax_axis",
             &[Target::CUDA],
-            |session, (input, output)| {
-                let outputs = session.run(&[input])?;
-                assert_eq_epsilon!(outputs[0], output, 1.0);
+            (1, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1.0);
                 Ok(())
             },
         )
@@ -1312,10 +1338,15 @@ mod test {
 
     #[test]
     fn one_hot() -> TestResult {
-        with_session_and_tensors("one_hot", &[Target::CUDA], |session, (input, output)| {
-            let outputs = session.run(&[input])?;
-            assert_eq_epsilon!(outputs[0], output, 1e-6);
-            Ok(())
-        })
+        with_session_and_tensors(
+            "one_hot",
+            &[Target::CUDA],
+            (1, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+                Ok(())
+            },
+        )
     }
 }
