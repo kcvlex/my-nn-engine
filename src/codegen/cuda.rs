@@ -12,6 +12,7 @@ use derive_more::From;
 use indexmap::IndexMap;
 use indexmap::IndexSet;
 use itertools::chain;
+use itertools::izip;
 use itertools::Itertools;
 
 use crate::codegen::cuda::cublas::*;
@@ -1066,12 +1067,23 @@ impl<'sched> HostCodeGenerator<'sched> {
                     )));
                 }
 
-                Operator::Gemm(Gemm {
-                    alpha,
-                    beta,
-                    trans_a,
-                    trans_b,
-                }) => {
+                op @ (Operator::Gemm(_) | Operator::MatMul) => {
+                    let Gemm {
+                        alpha,
+                        beta,
+                        trans_a,
+                        trans_b,
+                    } = match op {
+                        Operator::Gemm(gemm) => gemm.clone(),
+                        Operator::MatMul => Gemm {
+                            alpha: 1.0,
+                            beta: 0.0,
+                            trans_a: false,
+                            trans_b: false,
+                        },
+                        _ => unreachable!(),
+                    };
+
                     let elem_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type;
                     let c_data_ty = elem_ty.to_string();
                     let alpha = {
@@ -1107,28 +1119,28 @@ impl<'sched> HostCodeGenerator<'sched> {
                         let b_ty = self.get_resolved_tensor_type(kernel.inputs[1])?.clone();
                         assert!(a_ty.is_contiguous());
                         assert!(b_ty.is_contiguous());
-                        let [m, k] = a_ty.dims[..] else {
-                            panic!("Invalid GEMM input A shape");
+                        let [m, k] = &a_ty.dims.suffix(2)[..] else {
+                            unreachable!();
                         };
-                        let (m, k) = if *trans_a { (k, m) } else { (m, k) };
-                        let [k_, n] = b_ty.dims[..] else {
-                            panic!("Invalid GEMM input B shape");
+                        let (m, k) = if trans_a { (k, m) } else { (m, k) };
+                        let [k_, n] = &b_ty.dims.suffix(2)[..] else {
+                            unreachable!();
                         };
-                        let (k_, n) = if *trans_b { (n, k_) } else { (k_, n) };
+                        let (k_, n) = if trans_b { (n, k_) } else { (k_, n) };
                         assert!(k == k_);
-                        (n, k, m)
+                        (*n, *k, *m)
                     };
-                    let lda = if !*trans_b { m } else { k };
-                    let ldb = if !*trans_a { k } else { n };
+                    let lda = if !trans_b { m } else { k };
+                    let ldb = if !trans_a { k } else { n };
                     let ldc = m;
                     let (trans_a, trans_b) = {
-                        let tmp0 = if *trans_b {
+                        let tmp0 = if trans_b {
                             CublasOperation::Transpose
                         } else {
                             CublasOperation::Non
                         };
 
-                        let tmp1 = if *trans_a {
+                        let tmp1 = if trans_a {
                             CublasOperation::Transpose
                         } else {
                             CublasOperation::Non
@@ -1138,6 +1150,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     // TODO: Copy bias into output chunk if bias_chunk != output_chunk.
                     if kernel.inputs.len() == 3 {
+                        assert!(matches!(op, Operator::Gemm(_)));
                         let bias_chunk = self.value2chunk.get(&kernel.inputs[2]).unwrap();
                         let output_chunk = self.value2chunk.get(&kernel.outputs[0]).unwrap();
                         assert!(bias_chunk == output_chunk);
@@ -1147,26 +1160,61 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let b = self.device_identifier(kernel.inputs[0])?.to_string();
                     let c = self.device_identifier(kernel.outputs[0])?.to_string();
 
-                    self.stmts.push(
-                        CublasApi::Gemm(GemmArgs {
-                            handler,
-                            trans_a,
-                            trans_b,
-                            a,
-                            b,
-                            c,
-                            m,
-                            n,
-                            k,
-                            lda,
-                            ldb,
-                            ldc,
-                            alpha,
-                            beta,
-                            data_ty: elem_ty,
-                        })
-                        .into(),
-                    );
+                    let gemm = GemmArgs {
+                        handler,
+                        trans_a,
+                        trans_b,
+                        a,
+                        b,
+                        c,
+                        m,
+                        n,
+                        k,
+                        lda,
+                        ldb,
+                        ldc,
+                        alpha,
+                        beta,
+                        data_ty: elem_ty,
+                    };
+
+                    match op {
+                        Operator::Gemm(_) => {
+                            self.stmts.push(CublasApi::Gemm(gemm).into());
+                        }
+                        Operator::MatMul => {
+                            let stride_a = m * k;
+                            let stride_b = k * n;
+                            let stride_c = m * n;
+                            let batch_count =
+                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size() /
+                                    stride_a;
+
+                            for (value, stride) in izip!(
+                                [kernel.inputs[1], kernel.inputs[0], kernel.outputs[0]],
+                                [stride_a, stride_b, stride_c]
+                            ) {
+                                let ty = self.get_resolved_tensor_type(value)?;
+
+                                // Assume both inputs are contiguous.
+                                assert!(ty.is_contiguous());
+
+                                // Consistent dimensions.
+                                assert!(ty.dims.size() / stride == batch_count);
+                                assert!(ty.dims.size() % stride == 0);
+                            }
+
+                            let bgemm = BatchedGemmArgs {
+                                gemm,
+                                stride_a,
+                                stride_b,
+                                stride_c,
+                                batch_count,
+                            };
+                            self.stmts.push(CublasApi::BatchedGemm(bgemm).into());
+                        }
+                        _ => unreachable!(),
+                    }
                 }
 
                 Operator::MaxPool(ref pool) => {

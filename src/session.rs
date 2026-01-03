@@ -1363,4 +1363,18 @@ mod test {
             },
         )
     }
+
+    #[test]
+    fn batched_gemm() -> TestResult {
+        with_session_and_tensors(
+            "batched_gemm",
+            &[Target::CUDA],
+            (2, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1.0);
+                Ok(())
+            },
+        )
+    }
 }

@@ -45,6 +45,14 @@ pub struct GemmArgs {
     pub data_ty: DataType,
 }
 
+pub struct BatchedGemmArgs {
+    pub gemm: GemmArgs,
+    pub stride_a: usize,
+    pub stride_b: usize,
+    pub stride_c: usize,
+    pub batch_count: usize,
+}
+
 #[derive(Clone, Copy)]
 pub struct CublasHandler(StreamId);
 
@@ -64,6 +72,7 @@ pub enum CublasApi {
     Create(CublasHandler),
     SetStream(CublasHandler),
     Gemm(GemmArgs),
+    BatchedGemm(BatchedGemmArgs),
 }
 
 impl Display for CublasApi {
@@ -110,6 +119,53 @@ cublas{prefix}gemm(
     (const {c_ty} *){b}, {ldb},
     &{beta},
     ({c_ty} *){c}, {ldc}
+)
+",
+                )
+            }
+            Self::BatchedGemm(BatchedGemmArgs {
+                gemm,
+                stride_a,
+                stride_b,
+                stride_c,
+                batch_count,
+            }) => {
+                let GemmArgs {
+                    handler,
+                    trans_a,
+                    trans_b,
+                    a,
+                    b,
+                    c,
+                    m,
+                    n,
+                    k,
+                    lda,
+                    ldb,
+                    ldc,
+                    alpha,
+                    beta,
+                    data_ty,
+                } = gemm;
+                let (c_ty, prefix) = match data_ty {
+                    DataType::Float(FloatType::F32) => ("float", 'S'),
+                    DataType::Float(FloatType::F64) => ("double", 'D'),
+                    _ => panic!("Unsupported data type for cuBLAS GEMM"),
+                };
+                write!(
+                    f,
+                    "
+cublas{prefix}gemmStridedBatched(
+    {handler},
+    {trans_a},
+    {trans_b},
+    {m}, {n}, {k},
+    &{alpha},
+    (const {c_ty} *){a}, {lda}, {stride_a},
+    (const {c_ty} *){b}, {ldb}, {stride_b},
+    &{beta},
+    ({c_ty} *){c}, {ldc}, {stride_c},
+    {batch_count}
 )
 ",
                 )
