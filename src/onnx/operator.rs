@@ -9,6 +9,7 @@ use crate::onnx::model::ValueId;
 use crate::tensor::data::ScalarData;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub enum Operator {
     BatchNormalization(BatchNormalization),
     Cast(Cast),
     Concat(Concat),
+    Constant(Constant),
     ConstantOfShape(ConstantOfShape),
     Conv(Conv),
     Div,
@@ -123,6 +125,11 @@ pub struct Cast {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Concat {
     pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Constant {
+    pub value: Tensor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -628,6 +635,7 @@ impl Operator {
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
             Operator::Concat(_) => "Concat",
+            Operator::Constant(_) => "Constant",
             Operator::ConstantOfShape(_) => "ConstantOfShape",
             Operator::Conv(_) => "Conv",
             Operator::Div => "Div",

@@ -432,6 +432,10 @@ pub fn infer_node_output(
             res.push(ResolvedTensorType::new(elem_ty, dims));
         }
 
+        Operator::Constant(Constant { ref value }) => {
+            res.push(value.tensor_type());
+        }
+
         // Custom
         Operator::Contiguous => {
             let input = &inputs[0];

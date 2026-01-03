@@ -91,6 +91,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let tensor = Tensor::new(dims.clone(), data).ok()?;
             Some(vec![tensor])
         }
+        Operator::Constant(Constant { ref value }) => Some(vec![value.clone()]),
         Operator::ConstantOfShape(ConstantOfShape { ref value }) => {
             let dims = graph.initializer.get(&node.inputs[0])?;
             let dims = match &dims.data {

@@ -493,6 +493,13 @@ impl Concat {
     }
 }
 
+impl Constant {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let value = attributes.required("value")?.tensor()?;
+        Ok(Constant { value })
+    }
+}
+
 impl ConstantOfShape {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let value = attributes
@@ -855,6 +862,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         )?)),
         "Cast" => Ok(Operator::Cast(Cast::load(attributes)?)),
         "Concat" => Ok(Operator::Concat(Concat::load(attributes)?)),
+        "Constant" => Ok(Operator::Constant(Constant::load(attributes)?)),
         "ConstantOfShape" => Ok(Operator::ConstantOfShape(ConstantOfShape::load(
             attributes,
         )?)),
