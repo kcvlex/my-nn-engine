@@ -281,8 +281,13 @@ impl<'sched> MemoryPlanner<'sched> {
                                 .unwrap_or(false)
                         {
                             return Some(*input);
+                        } else {
+                            continue;
                         }
                     }
+
+                    // TODO: Unnecessary?
+                    Operator::Conv(_) => continue,
                     _ => (),
                 }
             }
