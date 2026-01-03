@@ -378,13 +378,23 @@ impl<'sched> BuilderContext<'sched> {
         target_dims: Option<&ResolvedTensorDims>,
     ) -> Result<KernelExpr, BuildError> {
         let ty = self.get_resolved_tensor_type(value_id)?;
-        let ty = if let Some(target_dims) = target_dims {
-            ty.broadcast(target_dims)
+        let orig_size = ty.dims.size();
+        let (ty, broadcasted) = if let Some(target_dims) = target_dims {
+            let res = ty.broadcast(target_dims);
+            let broadcasted = res.dims != ty.dims;
+            (res, broadcasted)
         } else {
-            ty.clone()
+            (ty.clone(), false)
         };
         match ty.dims.ndim() {
-            1 => Ok(KernelVar::Gid.into()),
+            1 => {
+                if broadcasted {
+                    assert!(orig_size == 1);
+                    Ok(KernelExpr::Raw("0".to_string()))
+                } else {
+                    Ok(KernelVar::Gid.into())
+                }
+            }
             d @ (2..=5) => {
                 let name = format!("to_tensor_idx{}d", d);
                 let mut args = vec![KernelVar::Gid.into()];
