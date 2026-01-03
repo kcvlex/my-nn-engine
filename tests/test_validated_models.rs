@@ -91,5 +91,5 @@ fn test_yolov4_cuda() -> Result {
 
 #[test]
 fn test_bertsquad12_cuda() -> Result {
-    run_test("bertsquad-12", 1.0, Target::CUDA, (4, 3))
+    run_test("bertsquad-12", 1e-2, Target::CUDA, (4, 3))
 }
