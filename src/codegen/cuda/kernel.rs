@@ -411,6 +411,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
 
     fn unary_op(&self, op: &Operator, x: KernelVar) -> KernelExpr {
         KernelExpr::Raw(match op {
+            Operator::Cast(Cast { to }) => format!("({})({})", to, x),
             Operator::Exp => format!("exp({})", x),
             Operator::Identity => format!("{}", x),
             Operator::LeakyReLU(LeakyReLU { alpha }) => {
@@ -449,7 +450,8 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                     "(({x} - {mean}) / sqrt({var} + {epsilon})) * {scale} + {bias}"
                 ))
             }
-            uop @ (Operator::Exp |
+            uop @ (Operator::Cast(_) |
+            Operator::Exp |
             Operator::Identity |
             Operator::LeakyReLU(_) |
             Operator::Log |
