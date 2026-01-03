@@ -51,10 +51,15 @@ impl VerifyShape {
                     }
                 }
                 _ => {
+                    dbg!(&node);
                     let resolved = util::infer_node_output(
                         graph,
                         node_id,
-                        UnifyMode::CheckStrides,
+                        if self.check_strides {
+                            UnifyMode::CheckStrides
+                        } else {
+                            UnifyMode::IgnoreStrides
+                        },
                         self.target,
                     )
                     .map_err(VerifyShapeError::TypeError)?;
