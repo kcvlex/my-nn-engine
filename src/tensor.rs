@@ -145,6 +145,14 @@ impl Tensor {
     //     Self::new(ty.dims, data)
     // }
 
+    pub fn reshape(&self, dims: &ResolvedTensorDims) -> Self {
+        assert!(self.dims.size().max(1) == dims.size().max(1));
+        Self {
+            data: self.data.clone(),
+            dims: dims.clone(),
+        }
+    }
+
     pub fn transpose(&self, perms: &[usize]) -> Self {
         apply_ndarray_ops!(self, ndarray_transpose, perms).unwrap()
     }

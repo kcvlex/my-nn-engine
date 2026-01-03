@@ -113,6 +113,11 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(indices, axis)])
         }
+        Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
+            let input = graph.initializer.get(&node.inputs[0])?;
+            let dims = &graph.get_resolved_tensor_type(node.outputs[0])?.dims;
+            Some(vec![input.reshape(dims)])
+        }
         _ => None,
     }
 }
