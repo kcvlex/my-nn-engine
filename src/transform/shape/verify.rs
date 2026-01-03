@@ -97,9 +97,9 @@ mod test {
     use crate::onnx::load::*;
     use crate::onnx::model::*;
     use crate::tensor::types::FloatType;
+    use crate::transform::layout::strides::AssignStrides;
     use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::infer::ShapeInference;
-    use crate::transform::shape::strides::AssignStrides;
     use crate::transform::*;
 
     #[test]

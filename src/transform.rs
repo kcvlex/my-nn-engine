@@ -1,4 +1,5 @@
 pub mod epilog;
+pub mod layout;
 pub mod lower;
 pub mod modify;
 pub mod optimize;
@@ -6,13 +7,13 @@ pub mod shape;
 mod utils;
 
 pub use epilog::create_epilog_passes;
+pub use layout::create_layout_passes;
 pub use lower::create_lower_passes;
 use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
 pub use optimize::create_optimize_passes1;
 pub use shape::infer::create_infer_passes;
-pub use shape::strides::create_strides_passes;
 
 use crate::onnx::model::Graph;
 use crate::options::*;
@@ -77,7 +78,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
         create_infer_passes(options),
         create_lower_passes(),
         create_optimize_passes1(options),
-        create_strides_passes(options),
+        create_layout_passes(options),
         create_epilog_passes(options),
     ];
 

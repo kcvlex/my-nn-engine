@@ -11,14 +11,9 @@ use crate::onnx::model::UnifyMode;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::tensor::types::ResolvedTensorType;
-use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::util;
-use crate::transform::shape::verify;
 use crate::transform::GraphOp;
-use crate::transform::Options;
 use crate::transform::Pass;
-use crate::transform::PassManager;
-use crate::transform::SimplePassManager;
 use crate::transform::Target;
 
 pub struct AssignStrides {
@@ -221,16 +216,4 @@ impl AssignStridesImpl {
                 .expect("Invalid strides");
         Some((new_node_id, resolved))
     }
-}
-
-pub fn create_strides_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
-    let mut manager = SimplePassManager::new("Assign strides".to_string());
-    manager.add_pass(Box::new(AssignStrides { target: opt.target }));
-    if opt.verify_after_strides {
-        manager.add_pass(Box::new(verify::VerifyShape {
-            target: opt.target,
-            check_strides: true,
-        }));
-    }
-    manager
 }
