@@ -44,10 +44,9 @@ __global__ void reduce2d(
 ) {
     extern __shared__ T shared_data[];
     int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int ceil_col = (col + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
-    int row_id = idx / ceil_col;
-    if (row <= row_id) return;
+    int row_id = blockIdx.x;
+    assert(blockIdx.x < row);
 
     T acc_block = reduce_init<T, RT>();
     for (int i = tid; i < ceil_col; i += blockDim.x) {
@@ -58,14 +57,14 @@ __global__ void reduce2d(
     
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
-    for (int s = 16; 0 < s; s >>= 1) {
+    for (int s = tile32.size() / 2; 0 < s; s >>= 1) {
         acc_block = reduce_op<T, RT>(acc_block, tile32.shfl_down(acc_block, s));
     }
 
     shared_data[tid] = acc_block;
     cg::sync(cta);
 
-    for (int s = BLOCK_SIZE / 2; 32 <= s; s >>= 1) {
+    for (int s = BLOCK_SIZE / 2; tile32.size() <= s; s >>= 1) {
         if (tid < s) {
             shared_data[tid] = reduce_op<T, RT>(shared_data[tid], shared_data[tid + s]);
         }
