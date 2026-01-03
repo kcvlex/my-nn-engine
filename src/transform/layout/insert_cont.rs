@@ -49,7 +49,7 @@ impl InsertContiguous {
                 format!("{}_contiguous_input_{}", node_name, i),
                 input_type.contiguous(),
             );
-            let new_node = modifier.register_new_node(
+            modifier.register_new_node(
                 graph,
                 Node {
                     inputs: vec![*input],
@@ -59,8 +59,11 @@ impl InsertContiguous {
                     meta: NodeMeta::default(),
                 },
             );
-            modifier.replace_input_value_if_without_typecheck(graph, *input, new_value, |id, _| {
-                id != new_node
+
+            // TODO: Other nodes also should use new_value. Currently simply replacing all uses of
+            // *input may cause inconsistent strides computed earlier.
+            modifier.replace_input_value_if_without_typecheck(graph, *input, new_value, |id2, _| {
+                id == id2
             });
         }
     }
