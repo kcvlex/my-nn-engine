@@ -19,6 +19,7 @@ use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
+use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
@@ -950,7 +951,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .get(&kernel.outputs[0])
                         .ok_or(BuildError::ChunkNotFound(kernel.outputs[0]))?;
                     if input_chunk != output_chunk {
-                        unimplemented!("Identity between different chunks is not supported");
+                        let output_size = self
+                            .get_resolved_tensor_type(kernel.outputs[0])?
+                            .dims
+                            .size();
+                        let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                            CopyBuilder::new(sched, decl).build()
+                        })?;
+                        self.stmts.push(
+                            create_launch_kernel(
+                                kernel::CUDAKernel::GeneratedKernel(generated),
+                                output_size,
+                            )?
+                            .into(),
+                        );
                     }
                 }
                 Operator::Add |

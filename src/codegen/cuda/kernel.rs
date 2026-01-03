@@ -1107,3 +1107,44 @@ impl<'sched> GatherBuilder<'sched> {
         ))
     }
 }
+
+pub struct CopyBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> CopyBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        assert!(matches!(
+            kernel.body,
+            KernelBody::SingleKernel(SingleKernel {
+                op: Operator::Identity,
+            })
+        ));
+
+        let gid = KernelVar::Gid;
+        let input = kernel.inputs[0];
+        let output = kernel.outputs[0];
+        let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let out_idx = self.ctx.tensor_idx(output, None)?;
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {out}[{out_idx}] = {in_}[{gid}];
+}}
+"
+        ))
+    }
+}
