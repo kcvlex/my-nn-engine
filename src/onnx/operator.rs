@@ -571,9 +571,8 @@ impl Resize {
 impl Split {
     pub fn split(&self, dims: &ResolvedTensorDims) -> Option<Vec<usize>> {
         let axis = self.axis.index(dims.ndim());
-        let outputs = self.outputs.as_ref()?;
-        match outputs {
-            SplitOutputs::NumOutputs(num_outputs) => {
+        match &self.outputs {
+            Some(SplitOutputs::NumOutputs(num_outputs)) => {
                 let mut res = Vec::new();
                 let dim = dims[axis];
                 let mut cur = 0;
@@ -587,12 +586,18 @@ impl Split {
                 }
                 Some(res)
             }
-            SplitOutputs::Split(ref sizes) => {
+            Some(SplitOutputs::Split(ref sizes)) => {
                 let sum = sizes.iter().sum::<usize>();
                 if sum != dims[axis] {
                     return None;
                 }
                 Some(sizes.clone())
+            }
+            None => {
+                let dim = dims[axis];
+                let first = dim / 2;
+                let second = dim - first;
+                Some(vec![first, second])
             }
         }
     }
