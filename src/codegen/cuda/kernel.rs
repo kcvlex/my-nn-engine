@@ -751,18 +751,6 @@ impl<'sched> ConcatBuilder<'sched> {
             panic!("Expected Concat operator");
         };
 
-        let ins_var = self.ctx.new_local_var();
-        let in_select_var = self.ctx.new_local_var();
-        let in_sizes_acc_var = self.ctx.new_local_var();
-        let in_offset = self.ctx.new_local_var();
-        let load_var = self.ctx.new_local_var();
-        let in_axis_sizes_var = self.ctx.new_local_var();
-        let in_axis_size_var = self.ctx.new_local_var();
-        let in_axis_sizes_acc_var = self.ctx.new_local_var();
-        let in_axis_idx_var = self.ctx.new_local_var();
-        let out_axis_idx_var = self.ctx.new_local_var();
-        let out_offset = self.ctx.new_local_var();
-
         let output_id = kernel.outputs[0];
         let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
         if !output_ty.is_contiguous() {
@@ -793,10 +781,33 @@ impl<'sched> ConcatBuilder<'sched> {
             })
             .collect::<Result<Vec<_>, BuildError>>()?;
         let input_axis_sizes_acc = acc_sizes(&input_axis_sizes[..]);
-        let output_axis_size = output_ty.dims[axis];
+        let input_strides = kernel
+            .inputs
+            .iter()
+            .map(|id| {
+                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                Ok(format!("{{{}}}", input_ty.strides().iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")))
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?
+            .join(", ");
+        let input_dims = kernel
+            .inputs
+            .iter()
+            .map(|id| {
+                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                Ok(format!("{{{}}}", input_ty.dims.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")))
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?
+            .join(", ");
 
+        let output_dims = output_ty
+            .dims
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let out = KernelVar::Value(output_id);
-        let axis_stride = output_ty.strides()[axis].max(1);
+        let ndim = output_ty.dims.ndim();
         let ins = kernel
             .inputs
             .iter()
@@ -804,11 +815,6 @@ impl<'sched> ConcatBuilder<'sched> {
             .collect::<Vec<_>>()
             .join(", ");
         let input_tensor_sizes_acc = input_tensor_sizes_acc
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let input_axis_sizes = input_axis_sizes
             .into_iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
@@ -825,18 +831,26 @@ impl<'sched> ConcatBuilder<'sched> {
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
-    {ptr_ty} {ins_var}[] = {{{ins}}};
-    int {in_sizes_acc_var}[] = {{{input_tensor_sizes_acc}}};
-    int {in_select_var} = {input_select};
-    int {in_offset} = {gid} - {in_sizes_acc_var}[{in_select_var}];
-    {value_ty} {load_var} = {ins_var}[{in_select_var}][{in_offset}];
-    int {in_axis_sizes_var}[] = {{{input_axis_sizes}}};
-    int {in_axis_sizes_acc_var}[] = {{{input_axis_sizes_acc}}};
-    int {in_axis_size_var} = {in_axis_sizes_var}[{in_select_var}];
-    int {in_axis_idx_var} = ({in_offset} / {axis_stride}) % {in_axis_size_var};
-    int {out_axis_idx_var} = {in_axis_idx_var} + {in_axis_sizes_acc_var}[{in_select_var}];
-    int {out_offset} = ({in_offset} % {axis_stride}) + ({out_axis_idx_var} * {axis_stride}) + ({in_offset} / {axis_stride} / {in_axis_size_var}) * {output_axis_size};
-    {out}[{out_offset} < {size} ? {out_offset} : {size} - 1] = {load_var};
+    {ptr_ty} ins[] = {{{ins}}};
+    int in_sizes_acc[] = {{{input_tensor_sizes_acc}}};
+    int select = {input_select};
+    int in_offset = {gid} - in_sizes_acc[select];
+    {value_ty} load = ins[select][in_offset];
+    int input_dims[][{ndim}] = {{{input_dims}}};
+    int input_strides[][{ndim}] = {{{input_strides}}};
+    int indexes[{ndim}];
+    for (int i = 0; i < {ndim}; i++) {{
+        indexes[i] = in_offset / input_strides[select][i] % input_dims[select][i];
+    }}
+    int input_axis_sizes_acc[] = {{{input_axis_sizes_acc}}};
+    indexes[{axis}] += input_axis_sizes_acc[select];
+    int output_dims[] = {{{output_dims}}};
+    int out_offset = 0;
+    for (int i = 0; i < {ndim}; i++) {{
+        out_offset *= output_dims[i];
+        out_offset += indexes[i];
+    }}
+    {out}[out_offset] = load;
 }}
 "
         ))
