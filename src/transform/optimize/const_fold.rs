@@ -19,7 +19,7 @@ fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
 pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
     match &node.op {
-        op @ (Operator::Add | Operator::Mul | Operator::Div) => {
+        op @ (Operator::Add | Operator::Mul | Operator::Div | Operator::Sub) => {
             let left = graph.initializer.get(&node.inputs[0])?;
             let right = graph.initializer.get(&node.inputs[1])?;
 
@@ -34,6 +34,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                         Operator::Add => $lhs + $rhs,
                         Operator::Mul => $lhs * $rhs,
                         Operator::Div => $lhs / $rhs,
+                        Operator::Sub => $lhs - $rhs,
                         _ => unreachable!(),
                     }
                 }};
