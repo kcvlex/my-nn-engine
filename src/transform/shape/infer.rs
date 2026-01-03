@@ -74,7 +74,6 @@ impl ShapeInference {
                         new_value,
                         |_, _| true,
                     );
-                    dbg!(&graph.nodes[id]);
                 }
             }
         }

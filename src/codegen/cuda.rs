@@ -1143,11 +1143,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                     // cuBLAS is column-major!
                     // We have t(A) and t(B), and want t(C).
                     // t(C) = t(A * B) = t(B) * t(A).
+                    let a_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
+                    let b_ty = self.get_resolved_tensor_type(kernel.inputs[1])?.clone();
                     let (m, k, n) = {
-                        let a_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
-                        let b_ty = self.get_resolved_tensor_type(kernel.inputs[1])?.clone();
-                        assert!(a_ty.is_contiguous());
-                        assert!(b_ty.is_contiguous());
                         let [m, k] = &a_ty.dims.suffix(2)[..] else {
                             unreachable!();
                         };
@@ -1159,6 +1157,21 @@ impl<'sched> HostCodeGenerator<'sched> {
                         assert!(k == k_);
                         (*n, *k, *m)
                     };
+
+                    let transposed_layout = |ty: ResolvedTensorType| {
+                        if ty.is_contiguous() {
+                            return false;
+                        }
+
+                        let ndim = ty.dims.ndim();
+                        let row = ty.dims[ndim - 2];
+                        dbg!(&ty, &kernel);
+                        assert!(ty.strides()[ndim - 1] == row);
+                        assert!(ty.strides()[ndim - 2] == 1);
+                        true
+                    };
+                    let trans_a = trans_a ^ transposed_layout(a_ty);
+                    let trans_b = trans_b ^ transposed_layout(b_ty);
                     let lda = if !trans_b { m } else { k };
                     let ldb = if !trans_a { k } else { n };
                     let ldc = m;
