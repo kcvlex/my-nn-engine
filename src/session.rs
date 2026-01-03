@@ -1377,4 +1377,18 @@ mod test {
             },
         )
     }
+
+    #[test]
+    fn gather_default_axis() -> TestResult {
+        with_session_and_tensors(
+            "gather_default_axis",
+            &[Target::CUDA],
+            (2, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 0.0);
+                Ok(())
+            },
+        )
+    }
 }

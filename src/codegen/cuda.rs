@@ -20,6 +20,7 @@ use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
+use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
@@ -1067,6 +1068,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                     )));
                 }
 
+                Operator::Gather(_) => {
+                    let indices_size = self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size();
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        GatherBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            indices_size,
+                        )?
+                        .into(),
+                    );
+                }
+
                 op @ (Operator::Gemm(_) | Operator::MatMul) => {
                     let Gemm {
                         alpha,
@@ -1389,7 +1404,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                _ => unimplemented!("Kernel body not implemented: {:?}", op),
+                _ => {
+                    dbg!(&kernel);
+                    unimplemented!("Kernel body not implemented: {:?}", op)
+                }
             },
             KernelBody::FusedElementWises(_) => {
                 let output_size = self

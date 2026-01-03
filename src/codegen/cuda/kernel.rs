@@ -1056,3 +1056,54 @@ impl<'sched> OneHotBuilder<'sched> {
         ))
     }
 }
+
+pub struct GatherBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> GatherBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::Gather(gather),
+        }) = &kernel.body
+        else {
+            panic!("Expected Gather operator");
+        };
+
+        if gather.axis.raw() != 0 {
+            unimplemented!()
+        }
+
+        let input_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[0])?;
+        let indices_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[1])?;
+        let repeat = input_ty.dims.size() / input_ty.dims[0];
+
+        let in_ = KernelVar::Value(kernel.inputs[0]);
+        let indices = KernelVar::Value(kernel.inputs[1]);
+        let out = KernelVar::Value(kernel.outputs[0]);
+        let size = indices_ty.dims.size();
+        let gid = KernelVar::Gid;
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+
+    int index = {indices}[{gid}];
+    for (int i = 0; i < {repeat}; i++) {{
+        {out}[{gid} * {repeat} + i] = {in_}[index * {repeat} + i];
+    }}
+}}
+"
+        ))
+    }
+}
