@@ -432,7 +432,7 @@ pub enum SplitOutputs {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Split {
     pub axis: TensorIndex,
-    pub outputs: SplitOutputs,
+    pub outputs: Option<SplitOutputs>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -571,7 +571,8 @@ impl Resize {
 impl Split {
     pub fn split(&self, dims: &ResolvedTensorDims) -> Option<Vec<usize>> {
         let axis = self.axis.index(dims.ndim());
-        match self.outputs {
+        let outputs = self.outputs.as_ref()?;
+        match outputs {
             SplitOutputs::NumOutputs(num_outputs) => {
                 let mut res = Vec::new();
                 let dim = dims[axis];

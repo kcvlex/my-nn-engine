@@ -224,7 +224,7 @@ impl GraphLoader {
             .collect();
         let tensor = Tensor::new(
             ResolvedTensorDims::new(vec![]),
-            TensorData::Float(FloatType::F32, vec![]),
+            TensorData::Float(FloatType::F32, vec![-42.0]),
         )
         .unwrap();
         for value_id in nodes
@@ -786,14 +786,6 @@ impl Shape {
     }
 }
 
-impl SplitOutputs {
-    // TODO: Support version 18 (num_outputs)
-    fn load(attributes: &Attributes) -> LoadResult<Self> {
-        let split = attributes.required("split")?.ints()?.into_iter().collect();
-        Ok(Self::Split(split))
-    }
-}
-
 impl Softmax {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let axis = attributes
@@ -802,6 +794,19 @@ impl Softmax {
             .transpose()?
             .unwrap_or(TensorIndex::new(-1));
         Ok(Softmax { axis })
+    }
+}
+
+impl SplitOutputs {
+    // TODO: Support version 18 (num_outputs).
+    // TODO: When `split` is given as an input, not as an attribute.
+    fn load(attributes: &Attributes) -> LoadResult<Option<Self>> {
+        let split = attributes
+            .get("split")
+            .map(|x| x.ints())
+            .transpose()?
+            .map(|x| Self::Split(x.into_iter().collect()));
+        Ok(split)
     }
 }
 

@@ -121,7 +121,7 @@ macro_rules! apply_ndarray_ops {
 
 impl Tensor {
     pub fn new(dims: ResolvedTensorDims, data: TensorData) -> Result<Self, TypeError> {
-        if dims.size() != data.size() {
+        if dims.size().max(1) != data.size().max(1) {
             return Err(TypeError::InvalidShape(data.size(), dims));
         }
         Ok(Self { data, dims })
