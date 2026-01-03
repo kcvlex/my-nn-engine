@@ -160,14 +160,16 @@ impl ResolvedTensorDims {
     }
 
     pub fn slice_in_place(&mut self, slice: &Slice) {
-        if slice.step != 1 {
+        let Slice {
+            start,
+            end,
+            axis,
+            step,
+        } = slice;
+        if *step != 1 {
             unimplemented!();
         }
-
-        let axis = slice.axis.index(self.ndim());
-        let start = slice.start.index(self[axis]);
-        let end = slice.end.index(self[axis]);
-        self[axis] = end - start;
+        self[*axis] = (end - start) as usize;
     }
 
     pub fn slices(&self, slices: &[Slice]) -> Self {

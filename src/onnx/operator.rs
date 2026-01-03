@@ -342,10 +342,10 @@ pub struct Shape {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Slice {
-    pub start: TensorIndex,
-    pub end: TensorIndex,
-    pub axis: TensorIndex,
-    pub step: i64,
+    pub start: isize,
+    pub end: isize,
+    pub axis: usize,
+    pub step: isize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -361,6 +361,9 @@ pub struct Unsqueeze {
 impl Slice {
     pub fn collect_slices(graph: &Graph, node_id: NodeId) -> Option<Vec<Self>> {
         let node = &graph.nodes[node_id];
+        let dims = &graph
+            .get_resolved_tensor_type(node.inputs[args::SLICE_DATA])?
+            .dims;
         let starts = graph
             .initializer
             .get(&node.inputs[args::SLICE_STARTS])?
@@ -393,11 +396,22 @@ impl Slice {
                 axes.into_iter(),
                 steps.into_iter()
             )
-            .map(|(start, end, axis, step)| Slice {
-                start,
-                end,
-                axis,
-                step,
+            .map(|(start, end, axis, step)| {
+                if step < 0 {
+                    unimplemented!("Negative step in Slice")
+                }
+
+                let axis = axis.index(dims.ndim());
+                let start = start.index(dims[axis]) as isize;
+                let end = end.index(dims[axis]) as isize;
+                let start = start.clamp(0, dims[axis] as isize);
+                let end = end.clamp(0, dims[axis] as isize);
+                Slice {
+                    start,
+                    end,
+                    axis,
+                    step,
+                }
             })
             .collect::<Vec<_>>(),
         )
@@ -715,6 +729,7 @@ pub mod args {
     pub const BATCHNORM_MEAN: usize = 3;
     pub const BATCHNORM_VAR: usize = 4;
 
+    pub const SLICE_DATA: usize = 0;
     pub const SLICE_STARTS: usize = 1;
     pub const SLICE_ENDS: usize = 2;
     pub const SLICE_AXES: usize = 3;

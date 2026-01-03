@@ -1067,6 +1067,20 @@ mod test {
     }
 
     #[test]
+    fn slice_large_end() -> TestResult {
+        with_session_and_tensors(
+            "slice_large_end",
+            &[Target::CPU],
+            (0, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
     fn split_axis_2() -> TestResult {
         with_all_sessions("split_axis_2.onnx", |session| {
             let (input, _) = make_tensor!(

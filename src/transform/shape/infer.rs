@@ -68,7 +68,13 @@ impl ShapeInference {
                         tensor,
                         format!("folded_{}", graph.nodes[id].name),
                     );
-                    modifier.replace_input_value(graph, *old_value, new_value);
+                    modifier.replace_input_value_if_without_typecheck(
+                        graph,
+                        *old_value,
+                        new_value,
+                        |_, _| true,
+                    );
+                    dbg!(&graph.nodes[id]);
                 }
             }
         }

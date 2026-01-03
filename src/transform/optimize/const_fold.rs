@@ -83,12 +83,11 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 step,
             } in slices.iter()
             {
-                let axis = axis.index(input.dims.ndim());
                 if *step != 1 {
                     unimplemented!();
                 }
-                starts[axis] = start.raw();
-                ends[axis] = end.raw();
+                starts[*axis] = *start;
+                ends[*axis] = *end;
             }
             Some(vec![input.slices(&starts, &ends)])
         }
