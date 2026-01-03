@@ -40,6 +40,7 @@ pub enum Operator {
     Concat(Concat),
     ConstantOfShape(ConstantOfShape),
     Conv(Conv),
+    Div,
     Exp,
     Gather(Gather),
     Gemm(Gemm),
@@ -629,6 +630,7 @@ impl Operator {
             Operator::Concat(_) => "Concat",
             Operator::ConstantOfShape(_) => "ConstantOfShape",
             Operator::Conv(_) => "Conv",
+            Operator::Div => "Div",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
             Operator::Gemm(_) => "Gemm",
@@ -678,6 +680,7 @@ impl Operator {
             self,
             Operator::Add |
                 Operator::BatchNormalization(_) |
+                Operator::Div |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |

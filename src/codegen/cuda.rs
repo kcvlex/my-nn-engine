@@ -968,6 +968,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
                 Operator::Add |
+                Operator::Div |
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
                 Operator::Exp |

@@ -430,6 +430,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
     fn binary_op(&self, op: &Operator, lhs: KernelVar, rhs: KernelVar) -> KernelExpr {
         KernelExpr::Raw(match op {
             Operator::Add => format!("({} + {})", lhs, rhs),
+            Operator::Div => format!("({} / {})", lhs, rhs),
             Operator::Mul => format!("({} * {})", lhs, rhs),
             // TODO: Support integer types.
             Operator::Pow => format!("pow({}, {})", lhs, rhs),
@@ -465,7 +466,11 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 };
                 self.unary_op(uop, *a)
             }
-            binop @ (Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub) => {
+            binop @ (Operator::Add |
+            Operator::Div |
+            Operator::Mul |
+            Operator::Pow |
+            Operator::Sub) => {
                 let [a, b] = inputs else {
                     panic!("Expected 2 inputs for binary operator")
                 };
