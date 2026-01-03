@@ -20,17 +20,28 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     match node.op {
         Operator::Cast(Cast { ref to }) => {
             let Tensor { data, dims } = &graph.initializer.get(&node.inputs[0])?;
-            let data = match (data, to) {
-                (TensorData::SInt(_, data), DataType::SInt(to)) => {
-                    TensorData::SInt(*to, data.to_vec())
-                }
-                (TensorData::UInt(_, data), DataType::UInt(to)) => {
-                    TensorData::UInt(*to, data.to_vec())
-                }
-                (TensorData::Float(_, data), DataType::Float(to)) => {
-                    TensorData::Float(*to, data.to_vec())
-                }
-                _ => return None,
+            macro_rules! cast {
+                ($data: expr, $to: expr) => {{
+                    match $to {
+                        DataType::SInt(to) => TensorData::SInt(
+                            *to,
+                            $data.to_vec().iter().map(|x| *x as i64).collect_vec(),
+                        ),
+                        DataType::UInt(to) => TensorData::UInt(
+                            *to,
+                            $data.to_vec().iter().map(|x| *x as u64).collect_vec(),
+                        ),
+                        DataType::Float(to) => TensorData::Float(
+                            *to,
+                            $data.to_vec().iter().map(|x| *x as f64).collect_vec(),
+                        ),
+                    }
+                }};
+            }
+            let data = match data {
+                TensorData::SInt(_, data) => cast!(data, to),
+                TensorData::UInt(_, data) => cast!(data, to),
+                TensorData::Float(_, data) => cast!(data, to),
             };
             let tensor = Tensor::new(dims.clone(), data).ok()?;
             Some(vec![tensor])
