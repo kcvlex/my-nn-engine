@@ -1,3 +1,4 @@
+use itertools::izip;
 use itertools::Itertools;
 
 use crate::onnx::model::Graph;
@@ -17,7 +18,50 @@ fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
 
 pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
-    match node.op {
+    match &node.op {
+        op @ (Operator::Add | Operator::Mul) => {
+            let left = graph.initializer.get(&node.inputs[0])?;
+            let right = graph.initializer.get(&node.inputs[1])?;
+
+            // TODO: Broadcast.
+            if left.tensor_type() != right.tensor_type() {
+                return None;
+            }
+
+            macro_rules! calc {
+                ($lhs: expr, $rhs: expr) => {{
+                    match op {
+                        Operator::Add => $lhs + $rhs,
+                        Operator::Mul => $lhs * $rhs,
+                        _ => unreachable!(),
+                    }
+                }};
+            }
+
+            macro_rules! pattern {
+                ($ctor: expr, $lhs: expr, $rhs: expr, $ty: expr) => {{
+                    let data = izip!($lhs.iter(), $rhs.iter())
+                        .map(|(l, r)| calc!(l, r))
+                        .collect_vec();
+                    Some($ctor(*$ty, data))
+                }};
+            }
+
+            let tensor = match (&left.data, &right.data) {
+                (TensorData::SInt(ty, lhs), TensorData::SInt(_, rhs)) => {
+                    pattern!(TensorData::SInt, lhs, rhs, ty)
+                }
+                (TensorData::UInt(ty, lhs), TensorData::UInt(_, rhs)) => {
+                    pattern!(TensorData::UInt, lhs, rhs, ty)
+                }
+                (TensorData::Float(ty, lhs), TensorData::Float(_, rhs)) => {
+                    pattern!(TensorData::Float, lhs, rhs, ty)
+                }
+                _ => None,
+            }?;
+            let tensor = Tensor::new(left.dims.clone(), tensor).ok()?;
+            Some(vec![tensor])
+        }
         Operator::Cast(Cast { ref to }) => {
             let Tensor { data, dims } = &graph.initializer.get(&node.inputs[0])?;
             macro_rules! cast {
