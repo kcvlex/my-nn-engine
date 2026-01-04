@@ -7,7 +7,7 @@ use crate::onnx::operator::*;
 use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::TypeError;
-use crate::transform::shape::util;
+use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
 use crate::transform::Target;
@@ -51,7 +51,7 @@ impl VerifyShape {
                     }
                 }
                 _ => {
-                    let resolved = util::infer_node_output(
+                    let resolved = infer_node_output(
                         graph,
                         node_id,
                         if self.check_strides {

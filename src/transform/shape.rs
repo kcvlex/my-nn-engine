@@ -1,3 +1,7 @@
+pub mod early_broadcast;
+pub mod infer;
+pub mod verify;
+
 use itertools::izip;
 use num::Zero;
 
@@ -5,6 +9,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::UnifyMode;
 use crate::onnx::operator::*;
+use crate::options::Options;
 use crate::tensor::data::TensorData;
 use crate::tensor::dimensions::broadcast_shape;
 use crate::tensor::dimensions::ResolvedTensorDims;
@@ -12,6 +17,9 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
+use crate::transform::modify::SimpleGraphOp;
+use crate::transform::PassManager;
+use crate::transform::SimplePassManager;
 use crate::transform::Target;
 
 pub fn infer_node_output(
@@ -511,4 +519,18 @@ pub fn infer_node_output(
         }
     }
     Ok(res)
+}
+
+pub fn create_infer_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
+    let mut manager = SimplePassManager::new("Shape inference".to_string());
+    let target = opt.target;
+    manager.add_pass(Box::new(infer::ShapeInference { target }));
+    if opt.verify_after_inference {
+        manager.add_pass(Box::new(verify::VerifyShape {
+            target,
+            check_strides: false,
+        }));
+    }
+    manager.add_pass(Box::new(early_broadcast::EarlyBroadcast::default()));
+    manager
 }

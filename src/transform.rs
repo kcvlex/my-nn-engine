@@ -13,7 +13,7 @@ use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
 pub use optimize::create_optimize_passes1;
-pub use shape::infer::create_infer_passes;
+pub use shape::create_infer_passes;
 
 use crate::onnx::model::Graph;
 use crate::options::*;

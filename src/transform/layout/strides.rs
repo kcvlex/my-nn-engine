@@ -11,7 +11,7 @@ use crate::onnx::model::UnifyMode;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::tensor::types::ResolvedTensorType;
-use crate::transform::shape::util;
+use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
 use crate::transform::Target;
@@ -211,9 +211,8 @@ impl AssignStridesImpl {
             _ => node_id,
         };
 
-        let resolved =
-            util::infer_node_output(graph, new_node_id, UnifyMode::CheckStrides, self.target)
-                .expect("Invalid strides");
+        let resolved = infer_node_output(graph, new_node_id, UnifyMode::CheckStrides, self.target)
+            .expect("Invalid strides");
         Some((new_node_id, resolved))
     }
 }
