@@ -165,3 +165,13 @@ fn test_transpose_concat_cuda() -> Result {
         (2, 1),
     )
 }
+
+#[test]
+fn test_transpose_matmul_and_someone_cuda() -> Result {
+    run_test(
+        "transpose_matmul_and_someone",
+        1e-2,
+        &Options::builder().target(Target::CUDA).build(),
+        (2, 2),
+    )
+}
