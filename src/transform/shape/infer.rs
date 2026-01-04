@@ -1,4 +1,4 @@
-use itertools::zip_eq;
+use itertools::izip;
 
 use crate::onnx::model::Graph;
 use crate::onnx::model::UnifyMode;
@@ -55,14 +55,15 @@ impl ShapeInference {
             prop_constant(graph, id, modifier);
             let types = util::infer_node_output(graph, id, unify_mode, self.target)?;
             let outputs = graph.nodes[id].outputs.clone();
-            for (value_id, inferred) in zip_eq(outputs.iter(), types.into_iter()) {
-                graph.try_unify_type(*value_id, &inferred, unify_mode)?;
+            for (value_id, inferred) in izip!(outputs.iter(), types.iter()) {
+                graph.try_unify_type(*value_id, inferred, unify_mode)?;
                 // dbg!(&graph.values[*value_id]);
             }
 
             if let Some(constants) = fold_constant(graph, id) {
                 // dbg!(id, &constants);
-                for (old_value, tensor) in zip_eq(outputs.iter(), constants.into_iter()) {
+                for (old_value, tensor, ty) in izip!(outputs.iter(), constants.into_iter(), types.into_iter()) {
+                    let tensor = tensor.reshape(&ty.dims);
                     let new_value = modifier.register_new_tensor(
                         graph,
                         tensor,

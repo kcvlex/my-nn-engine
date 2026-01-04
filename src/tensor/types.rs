@@ -160,7 +160,9 @@ impl ResolvedTensorType {
         dims: ResolvedTensorDims,
         stride: ResolvedTensorDims,
     ) -> Self {
-        assert_eq!(dims.ndim(), stride.ndim());
+        if !dims.is_scalar() {
+            assert_eq!(dims.ndim(), stride.ndim());
+        }
         Self {
             elem_type,
             dims,

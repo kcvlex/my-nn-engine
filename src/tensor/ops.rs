@@ -56,7 +56,7 @@ pub fn ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
     axis: usize,
     indices: RawTensor<'_, U>,
 ) -> Array<T, IxDyn> {
-    if indices.dims.len() != 1 {
+    if indices.dims.len().max(1) != 1 {
         unimplemented!("Indices must be 1D tensor");
     }
 
