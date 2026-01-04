@@ -264,6 +264,7 @@ impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
         for id in ids.iter() {
             let input = graph.nodes[*id].inputs[0];
             let old_output = graph.nodes[*id].outputs[0];
+            let node_name = graph.nodes[*id].name.clone();
             let output_dims = graph
                 .get_resolved_tensor_type(old_output)
                 .unwrap()
@@ -272,7 +273,8 @@ impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
             let reshaped = ReshapeGenerator::default()
                 .set_input(input)
                 .set_dims(output_dims)
-                .set_node_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))
+                .set_allow_contiguous(false)
+                .set_node_name(format!("Squeeze2Reshape_{node_name}"))
                 .set_value_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))
                 .generate(graph, modifier)
                 .unwrap();
