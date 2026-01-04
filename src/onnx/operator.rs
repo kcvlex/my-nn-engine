@@ -391,11 +391,20 @@ impl Slice {
                     .map(TensorIndex::new)
                     .collect::<Vec<_>>(),
             );
-        let steps = if node.inputs.get(args::SLICE_STEPS).is_some() {
-            unimplemented!()
-        } else {
-            vec![1; starts.len()]
-        };
+
+        if node.inputs.get(args::SLICE_STEPS).is_some() {
+            let is_all_one = graph
+                .initializer
+                .get(&node.inputs[args::SLICE_STEPS])
+                .and_then(|x| x.to_1d_sints())
+                .unwrap()
+                .iter()
+                .all(|&x| x == 1);
+            if !is_all_one {
+                unimplemented!("Non-unit step in Slice")
+            }
+        }
+        let steps = vec![1; starts.len()];
 
         // TODO: Check length of each vector
         Some(
