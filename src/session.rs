@@ -129,7 +129,11 @@ impl Session {
         input_ty: Option<&[ResolvedTensorType]>,
         options: &Options,
     ) -> Result<Self, SessionError> {
+        println!("Session starting");
+
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
+        println!("Model loaded");
+
         if let Some(input_ty) = input_ty {
             model
                 .graph
@@ -138,6 +142,7 @@ impl Session {
         }
 
         transform_graph(&mut model.graph, options);
+        println!("Transformed");
 
         // {
         //     use std::path::PathBuf;
@@ -176,6 +181,7 @@ impl Session {
         let mut schedule = Schedule::new(model.graph, options.clone());
         schedule.assign_mem();
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
+        println!("Scheduled");
 
         match options.target {
             Target::CPU => {
