@@ -138,15 +138,30 @@ fn test_elementwise_complex_cuda() -> Result {
 
 #[test]
 fn test_transpose_split_cpu() -> Result {
-    run_test("transpose_split", 1e-5, &Options::builder().build(), (1, 3))
+    run_test("transpose_split", 0.0, &Options::builder().build(), (1, 3))
 }
 
 #[test]
 fn test_transpose_split_cuda() -> Result {
     run_test(
         "transpose_split",
-        1e-5,
+        0.0,
         &Options::builder().target(Target::CUDA).build(),
         (1, 3),
+    )
+}
+
+#[test]
+fn test_transpose_concat_cpu() -> Result {
+    run_test("transpose_concat", 0.0, &Options::builder().build(), (2, 1))
+}
+
+#[test]
+fn test_transpose_concat_cuda() -> Result {
+    run_test(
+        "transpose_concat",
+        0.0,
+        &Options::builder().target(Target::CUDA).build(),
+        (2, 1),
     )
 }
