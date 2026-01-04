@@ -92,3 +92,14 @@ fn test_bert_until() -> Result {
         (4, 1),
     )
 }
+
+#[ignore]
+#[test]
+fn test_gpt_until() -> Result {
+    run_test(
+        "GPT2/until_output2_277",
+        1e-2,
+        Target::CUDA,
+        (1, 2),
+    )
+}

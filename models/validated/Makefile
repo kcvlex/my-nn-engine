@@ -6,7 +6,7 @@ OBJECT_DETECTION_SEGMENTATION = $(REPO)/raw/$(HASH)/validated/vision/object_dete
 TEXT = $(REPO)/raw/$(HASH)/validated/text/machine_comprehension
 
 .PHONY: all
-all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4
+all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4 gpt2-10
 
 mnist-12: mnist-12.tar.gz
 	tar -xvf $<
@@ -37,3 +37,9 @@ yolov4: yolov4.tar.gz
 
 yolov4.tar.gz:
 	$(WGET) -O $@ $(OBJECT_DETECTION_SEGMENTATION)/yolov4/model/$@
+
+gpt2-10: gpt2-10.tar.gz
+	tar -xvf $<
+
+gpt2-10.tar.gz:
+	$(WGET) -O $@ $(TEXT)/gpt-2/model/$@
