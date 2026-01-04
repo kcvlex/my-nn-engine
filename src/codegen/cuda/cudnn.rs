@@ -176,7 +176,7 @@ impl CudnnContext {
     pub fn ctx(&self) -> String {
         match self {
             CudnnContext::DefaultContext => "cudnn_handler_ctx".to_string(),
-            CudnnContext::StreamContext(id) => format!("cudnn_handler_ctx{}", id.0),
+            CudnnContext::StreamContext(id) => format!("cudnn_handler_ctx{}", id.index()),
         }
     }
 

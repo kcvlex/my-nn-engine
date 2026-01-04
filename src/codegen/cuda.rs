@@ -2,6 +2,7 @@ mod cublas;
 mod cudnn;
 mod kernel;
 mod runtime_api;
+mod stream;
 
 use std::cmp::min;
 use std::collections::HashMap;
@@ -10,7 +11,6 @@ use std::collections::HashSet;
 use delegate::delegate;
 use derive_more::From;
 use indexmap::IndexMap;
-use indexmap::IndexSet;
 use itertools::chain;
 use itertools::izip;
 use itertools::Itertools;
@@ -31,6 +31,10 @@ use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::runtime_api::*;
+use crate::codegen::cuda::stream::allocate_streams;
+use crate::codegen::cuda::stream::EventId;
+use crate::codegen::cuda::stream::KernelStreamAssignment;
+use crate::codegen::cuda::stream::StreamId;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::options::Options;
@@ -184,30 +188,6 @@ impl<T: ToString> ToLiteral for T {
     }
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
-struct StreamId(usize);
-
-impl StreamId {
-    fn index(&self) -> usize {
-        self.0
-    }
-}
-
-impl std::fmt::Display for StreamId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "stream_{}", self.0)
-    }
-}
-
-#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
-struct EventId(usize);
-
-impl std::fmt::Display for EventId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "event_{}", self.0)
-    }
-}
-
 #[derive(From)]
 enum Statement {
     LaunchKernel(kernel::LaunchKernel),
@@ -235,19 +215,14 @@ pub struct HostCodeGenerator<'sched> {
 
     stmts: Vec<Statement>,
 
-    streams: Streams,
-
-    event2stream: Vec<StreamId>,
+    streams: HashMap<KernelId, KernelStreamAssignment>,
+    to_record_events: HashSet<EventId>,
 
     value2chunk: HashMap<ValueId, ChunkId>,
-    value2event: HashMap<ValueId, EventId>,
     hostmem2identifier: HashMap<ValueId, String>,
     devicemem2identifier: Vec<String>,
 
-    used_event: IndexSet<EventId>,
     to_transfer: HashSet<ValueId>,
-
-    event_slot: IdSlot<EventId, fn(usize) -> EventId>,
 
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
@@ -270,7 +245,7 @@ pub struct HostCode {
 const ARG_INPUT: &str = "input";
 const ARG_OUTPUT: &str = "output";
 const ARG_INITIALIZER: &str = "initializer";
-const MAX_STREAMS: usize = 1; // 16;
+const MAX_STREAMS: usize = 16;
 const DEFAULT_BLOCK_SIZE: usize = 256;
 
 struct CudnnCodeGenerator<'sched> {
@@ -516,74 +491,6 @@ impl CudnnCode {
     }
 }
 
-struct Streams {
-    inner: Vec<StreamId>,
-    head: usize,
-}
-
-impl Streams {
-    fn new() -> Self {
-        Streams {
-            inner: (0..MAX_STREAMS).map(StreamId).collect(),
-            head: 0,
-        }
-    }
-
-    fn pick_head(&mut self) -> StreamId {
-        let res = self.inner[self.head];
-        self.head = (self.head + 1) % MAX_STREAMS;
-        res
-    }
-
-    fn _pick_internal(&mut self, idx: usize) -> StreamId {
-        if idx == self.head {
-            return self.pick_head();
-        }
-
-        let res = self.inner[idx];
-        for i in 0..MAX_STREAMS {
-            let cur = (idx + i) % MAX_STREAMS;
-            let next = (cur + 1) % MAX_STREAMS;
-            if next == self.head {
-                break;
-            }
-            self.inner[cur] = self.inner[next];
-        }
-
-        res
-    }
-
-    fn pick<Pred>(&mut self, pred: Pred) -> StreamId
-    where
-        Pred: Fn(StreamId) -> bool,
-    {
-        for i in (self.head..(self.head + MAX_STREAMS)).rev() {
-            let idx = i % MAX_STREAMS;
-            if pred(self.inner[idx]) {
-                return self._pick_internal(idx);
-            }
-        }
-        self.pick_head()
-    }
-}
-
-struct IdSlot<T, F: Fn(usize) -> T> {
-    slot: usize,
-    factory: F,
-}
-
-impl<T, F: Fn(usize) -> T> IdSlot<T, F> {
-    fn new(factory: F) -> Self {
-        IdSlot { slot: 0, factory }
-    }
-
-    fn issue(&mut self) -> T {
-        let res = (self.factory)(self.slot);
-        self.slot += 1;
-        res
-    }
-}
-
 fn ceil_pow2(mut x: usize) -> usize {
     if x == 0 {
         return 1;
@@ -599,38 +506,31 @@ fn ceil_pow2(mut x: usize) -> usize {
 
 impl<'sched> HostCodeGenerator<'sched> {
     pub fn new(schedule: &'sched Schedule) -> Self {
+        let streams = allocate_streams(schedule, MAX_STREAMS);
+        let to_record_events = streams
+            .values()
+            .flat_map(|s| s.to_wait.iter())
+            .copied()
+            .collect();
         HostCodeGenerator {
             schedule,
             stmts: Vec::new(),
-            streams: Streams::new(),
-            event2stream: Vec::new(),
+            streams,
+            to_record_events,
             value2chunk: HashMap::new(),
-            value2event: HashMap::new(),
             hostmem2identifier: HashMap::new(),
             devicemem2identifier: Vec::new(),
-            used_event: IndexSet::new(),
             to_transfer: schedule
                 .inputs
                 .iter()
                 .chain(schedule.initializers.iter())
                 .copied()
                 .collect(),
-            event_slot: IdSlot::new(EventId),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
             host_memcpy: Vec::new(),
         }
-    }
-
-    fn pick_stream(&mut self, events: &[EventId]) -> StreamId {
-        let depends_on = events
-            .iter()
-            .map(|id| self.event2stream[id.0])
-            .unique()
-            .collect::<Vec<_>>();
-        let pred = |stream_id: StreamId| depends_on.contains(&stream_id);
-        self.streams.pick(pred)
     }
 
     fn move_statements(&mut self) -> Vec<Statement> {
@@ -732,13 +632,13 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
-        for event_id in self.used_event.iter().copied() {
+        for event_id in self.to_record_events.iter().copied() {
             self.stmts
                 .push(Statement::Raw(format!("cudaEvent_t {event_id};")));
             self.stmts.push(EventCreate { event_id }.into());
         }
 
-        for stream_id in self.streams.inner.iter().copied() {
+        for stream_id in self.streams.values().map(|s| s.stream_id).unique() {
             self.stmts
                 .push(Statement::Raw(format!("cudaStream_t {stream_id};")));
             self.stmts.push(StreamCreate { stream_id }.into());
@@ -807,22 +707,6 @@ impl<'sched> HostCodeGenerator<'sched> {
         Ok(self.move_statements())
     }
 
-    fn record_event(&mut self, stream_id: StreamId, values: &[ValueId]) -> EventId {
-        let event_id = self.event_slot.issue();
-        self.event2stream.push(stream_id);
-        self.stmts.push(
-            RecordEvent {
-                event_id,
-                stream_id,
-            }
-            .into(),
-        );
-        for value in values {
-            self.value2event.insert(*value, event_id);
-        }
-        event_id
-    }
-
     fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
         let chunk_id = self
             .value2chunk
@@ -887,13 +771,31 @@ impl<'sched> HostCodeGenerator<'sched> {
             .mem_alloc
             .as_ref()
             .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
-        let (copy, computed): (Vec<_>, Vec<_>) = mem_alloc
+        let copy = mem_alloc
             .iter()
             .cloned()
             .filter(|info| kernel.inputs.contains(&info.value_id))
-            .partition(|info| self.to_transfer.remove(&info.value_id));
+            .filter(|info| self.to_transfer.remove(&info.value_id))
+            .collect::<Vec<_>>();
 
-        let memcpy_stream = self.streams.pick_head();
+        let KernelStreamAssignment {
+            stream_id,
+            event_id,
+            to_wait,
+        } = &self.streams[&kernel_id];
+        let stream_id = *stream_id;
+        let event_id = *event_id;
+
+        for event in to_wait.iter() {
+            self.stmts.push(
+                WaitEvent {
+                    stream_id,
+                    event_id: *event,
+                }
+                .into(),
+            );
+        }
+
         for trans in copy.iter() {
             let value_id = trans.value_id;
             let chunk_id = trans
@@ -909,37 +811,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     src,
                     mem_size,
                     kind: CudaMemcpyKind::HostToDevice,
-                    stream: memcpy_stream,
-                }
-                .into(),
-            );
-        }
-        let memcpy_event = self.record_event(
-            memcpy_stream,
-            copy.iter()
-                .map(|info| info.value_id)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        );
-        let pred_events = computed
-            .iter()
-            .map(|info| self.value2event[&info.value_id])
-            .chain(std::iter::once(memcpy_event))
-            .collect::<Vec<_>>();
-        let kernel_stream = self.pick_stream(&pred_events);
-        let event_to_wait = pred_events
-            .iter()
-            .filter(|event_id| {
-                let stream_id = self.event2stream[event_id.0];
-                stream_id != kernel_stream
-            })
-            .collect::<Vec<_>>();
-        for event in event_to_wait {
-            self.used_event.insert(*event);
-            self.stmts.push(
-                WaitEvent {
-                    stream_id: kernel_stream,
-                    event_id: *event,
+                    stream: stream_id,
                 }
                 .into(),
             );
@@ -953,7 +825,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 grid_size,
                 block_size,
                 shared_mem_bytes: None,
-                stream_id: kernel_stream,
+                stream_id,
             })
         };
 
@@ -1057,9 +929,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
 
                     let cudnn_handler = {
-                        let kernels = self.cudnn_ctxs.entry(kernel_stream).or_default();
+                        let kernels = self.cudnn_ctxs.entry(stream_id).or_default();
                         kernels.push(kernel_id);
-                        CudnnContext::StreamContext(kernel_stream)
+                        CudnnContext::StreamContext(stream_id)
                     };
 
                     let input = self.device_identifier(kernel.inputs[args::CONV_DATA])?;
@@ -1158,8 +1030,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                     };
                     let handler = *self
                         .cublas_handlers
-                        .entry(kernel_stream)
-                        .or_insert_with(|| CublasHandler::new(kernel_stream));
+                        .entry(stream_id)
+                        .or_insert_with(|| CublasHandler::new(stream_id));
 
                     // cuBLAS is column-major!
                     // We have t(A) and t(B), and want t(C).
@@ -1382,7 +1254,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             grid_size,
                             block_size,
                             shared_mem_bytes,
-                            stream_id: kernel_stream,
+                            stream_id,
                         }
                         .into(),
                     );
@@ -1414,7 +1286,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             grid_size: grid_size.to_literal(),
                             block_size: block_size.to_literal(),
                             shared_mem_bytes: None,
-                            stream_id: kernel_stream,
+                            stream_id,
                         }
                         .into(),
                     );
@@ -1491,29 +1363,28 @@ impl<'sched> HostCodeGenerator<'sched> {
                     src,
                     mem_size,
                     kind: CudaMemcpyKind::DeviceToHost,
-                    stream: kernel_stream,
+                    stream: stream_id,
                 }
                 .into(),
             );
         }
-        self.record_event(kernel_stream, &kernel.outputs);
+
+        if self.to_record_events.contains(&event_id) {
+            self.stmts.push(
+                RecordEvent {
+                    event_id,
+                    stream_id,
+                }
+                .into(),
+            );
+        }
 
         Ok(())
     }
 
     pub fn generate(&mut self, opt: &Options) -> Result<HostCode, BuildError> {
         let decl_values = self.gen_decl_values()?;
-        let computes = self
-            .gen_computes()?
-            .into_iter()
-            .filter(|stmt| match stmt {
-                Statement::CudaRuntimeApi(CudaRuntimeApi::RecordEvent(RecordEvent {
-                    event_id,
-                    ..
-                })) => self.used_event.contains(event_id),
-                _ => true,
-            })
-            .collect();
+        let computes = self.gen_computes()?;
         let finalize = self.gen_finalize()?;
 
         // NOTE: This must be called at the very end.
@@ -1568,6 +1439,7 @@ impl HostCode {
             "
 extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
     auto timer_start = std::chrono::high_resolution_clock::now();
+    cudaDeviceSynchronize();
     "
         )?;
         for stmts in &[
