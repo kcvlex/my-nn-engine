@@ -319,8 +319,12 @@ struct GraphvizGraph {
 
 impl TensorType {
     fn to_dot(&self) -> String {
-        let vec = match &self {
-            Self::Resolved(ty) => ty.dims.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
+        match &self {
+            Self::Resolved(ty) => {
+                let dims = ty.dims.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" x ");
+                let strides = ty.strides().iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" x ");
+                format!("[{dims}] / [{strides}]")
+            }
             Self::Unresolved(UnresolvedTensorType {
                 dims: Some(dims), ..
             }) => dims
@@ -330,10 +334,10 @@ impl TensorType {
                     Dimension::Const(x) => x.to_string(),
                     Dimension::Param(x) => x.to_string(),
                 })
-                .collect::<Vec<_>>(),
-            Self::Unresolved(_) => vec!["?".to_string()],
-        };
-        format!("[{}]", vec.join(" x "))
+                .collect::<Vec<_>>()
+                .join(" x "),
+            Self::Unresolved(_) => vec!["?".to_string()].join(" x "),
+        }
     }
 }
 
@@ -387,7 +391,7 @@ impl GraphvizGraph {
                 let shape = input.1.as_ref().map_or(String::from("?"), |x| x.to_dot());
                 res.push_str(&format!(
                     "  {} -> {} [label=\"{}\"];\n",
-                    input.0, node.name, shape
+                    input.0.replace(".", "_"), node.name.replace(".", "_"), shape
                 ));
             }
         }
