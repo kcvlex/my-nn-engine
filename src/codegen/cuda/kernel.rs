@@ -1167,7 +1167,6 @@ impl<'sched> CopyBuilder<'sched> {
         let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
         let in_ = KernelVar::Value(input);
         let out = KernelVar::Value(output);
-        let out_idx = self.ctx.tensor_idx(output, None)?;
         let decl = self.ctx.decl.decl();
 
         Ok(format!(
@@ -1175,7 +1174,7 @@ impl<'sched> CopyBuilder<'sched> {
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
-    {out}[{out_idx}] = {in_}[{gid}];
+    {out}[{gid}] = {in_}[{gid}];
 }}
 "
         ))
