@@ -62,9 +62,12 @@ impl InsertContiguous {
 
             // TODO: Other nodes also should use new_value. Currently simply replacing all uses of
             // *input may cause inconsistent strides computed earlier.
-            modifier.replace_input_value_if_without_typecheck(graph, *input, new_value, |id2, _| {
-                id == id2
-            });
+            modifier.replace_input_value_if_without_typecheck(
+                graph,
+                *input,
+                new_value,
+                |id2, _| id == id2,
+            );
         }
     }
 }

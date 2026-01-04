@@ -1,5 +1,6 @@
 use itertools::izip;
 use itertools::Itertools;
+use num::Zero;
 
 use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
@@ -9,8 +10,6 @@ use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 use crate::tensor::Tensor;
-
-use num::Zero;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
@@ -144,14 +143,8 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 TensorData::Float(_, data) => calc(data, dims),
             };
             let shape = ResolvedTensorDims::from(vec![indices.len(), indices[0].len()]);
-            let indices = indices
-                .into_iter()
-                .flatten()
-                .collect_vec();
-            let tensor = Tensor::new(
-                shape,
-                TensorData::SInt(SIntType::I64, indices),
-            ).ok()?;
+            let indices = indices.into_iter().flatten().collect_vec();
+            let tensor = Tensor::new(shape, TensorData::SInt(SIntType::I64, indices)).ok()?;
             Some(vec![tensor])
         }
         Operator::Shape(Shape { ref start, ref end }) => {

@@ -62,7 +62,9 @@ impl ShapeInference {
 
             if let Some(constants) = fold_constant(graph, id) {
                 // dbg!(id, &constants);
-                for (old_value, tensor, ty) in izip!(outputs.iter(), constants.into_iter(), types.into_iter()) {
+                for (old_value, tensor, ty) in
+                    izip!(outputs.iter(), constants.into_iter(), types.into_iter())
+                {
                     let tensor = tensor.reshape(&ty.dims);
                     let new_value = modifier.register_new_tensor(
                         graph,

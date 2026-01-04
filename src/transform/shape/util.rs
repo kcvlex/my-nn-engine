@@ -1,3 +1,6 @@
+use itertools::izip;
+use num::Zero;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::UnifyMode;
@@ -10,9 +13,6 @@ use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
 use crate::transform::Target;
-
-use itertools::izip;
-use num::Zero;
 
 pub fn infer_node_output(
     graph: &Graph,
@@ -338,10 +338,7 @@ pub fn infer_node_output(
                     ResolvedTensorDims::new(strides),
                 )
             } else {
-                ResolvedTensorType::new(
-                    input.elem_type,
-                    ResolvedTensorDims::new(dims),
-                )
+                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(dims))
             };
             res.push(ty);
         }
@@ -403,10 +400,7 @@ pub fn infer_node_output(
                     ResolvedTensorDims::new(strides),
                 )
             } else {
-                ResolvedTensorType::new(
-                    input.elem_type,
-                    ResolvedTensorDims::new(dims),
-                )
+                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(dims))
             };
             res.push(ty);
         }
@@ -483,7 +477,7 @@ pub fn infer_node_output(
             macro_rules! count_nonzero {
                 ($data: expr) => {{
                     $data.iter().filter(|x| !x.is_zero()).count()
-                }}
+                }};
             }
 
             let count = match input {

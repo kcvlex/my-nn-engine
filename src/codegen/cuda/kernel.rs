@@ -786,7 +786,15 @@ impl<'sched> ConcatBuilder<'sched> {
             .iter()
             .map(|id| {
                 let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
-                Ok(format!("{{{}}}", input_ty.strides().iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")))
+                Ok(format!(
+                    "{{{}}}",
+                    input_ty
+                        .strides()
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
             })
             .collect::<Result<Vec<_>, BuildError>>()?
             .join(", ");
@@ -795,7 +803,15 @@ impl<'sched> ConcatBuilder<'sched> {
             .iter()
             .map(|id| {
                 let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
-                Ok(format!("{{{}}}", input_ty.dims.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")))
+                Ok(format!(
+                    "{{{}}}",
+                    input_ty
+                        .dims
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
             })
             .collect::<Result<Vec<_>, BuildError>>()?
             .join(", ");
