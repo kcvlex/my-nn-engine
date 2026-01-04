@@ -1406,4 +1406,17 @@ mod test {
             },
         )
     }
+
+    #[test]
+    fn non_zero() -> TestResult {
+        with_all_sessions_and_tensors(
+            "non_zero",
+            (1, 1),
+            |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 0.0);
+                Ok(())
+            }
+        )
+    }
 }
