@@ -253,6 +253,8 @@ pub struct HostCodeGenerator<'sched> {
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
     separated_codes: Vec<SeparatedCode>,
+
+    host_memcpy: Vec<(String, String, ValueId)>,
 }
 
 pub struct HostCode {
@@ -617,6 +619,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
+            host_memcpy: Vec::new(),
         }
     }
 
@@ -639,17 +642,26 @@ impl<'sched> HostCodeGenerator<'sched> {
     fn gen_decl_values(&mut self) -> Result<Vec<Statement>, BuildError> {
         use std::collections::hash_map::Entry;
 
-        for (arg_name, value_ids) in &[
-            (ARG_INPUT, &self.schedule.inputs[..]),
-            (ARG_OUTPUT, &self.schedule.outputs[..]),
-            (ARG_INITIALIZER, &self.schedule.initializers[..]),
+        for (arg_name, value_ids, is_output) in &[
+            (ARG_INPUT, &self.schedule.inputs[..], false),
+            (ARG_INITIALIZER, &self.schedule.initializers[..], false),
+            (ARG_OUTPUT, &self.schedule.outputs[..], true),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
                 let ty = self.get_resolved_tensor_type(*value)?.elem_type.to_string();
                 let value_name = format!("h_{}_{}", arg_name, value.index());
                 let stmt = format!("{ty} *{value_name} = ({ty} *)({arg_name}[{idx}]);",);
                 self.stmts.push(Statement::Raw(stmt));
-                self.hostmem2identifier.insert(*value, value_name);
+                match self.hostmem2identifier.entry(*value) {
+                    Entry::Occupied(entry) => {
+                        assert!(is_output);
+                        let old_value_name = entry.get().clone();
+                        self.host_memcpy.push((value_name, old_value_name, *value));
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(value_name);
+                    }
+                }
             }
         }
 
@@ -784,6 +796,13 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
+        for (dst, src, value_id) in self.host_memcpy.iter() {
+            let mem_size = self.single_mem_size(*value_id)?;
+            self.stmts.push(Statement::Raw(format!(
+                "std::memcpy({dst}, {src}, {mem_size});"
+            )));
+        }
+
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
@@ -1516,7 +1535,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
 impl HostCode {
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for h in ["algorithm", "limits", "chrono", "iostream"] {
+        for h in ["algorithm", "limits", "chrono", "iostream", "cstring"] {
             writeln!(writer, "#include <{}>", h)?;
         }
         for h in [
