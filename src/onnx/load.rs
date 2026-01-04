@@ -878,6 +878,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "MatMul" => Ok(Operator::MatMul),
         "MaxPool" => Ok(Operator::MaxPool(Pooling::load(attributes)?)),
         "Mul" => Ok(Operator::Mul),
+        "NonZero" => Ok(Operator::NonZero),
         "OneHot" => Ok(Operator::OneHot(OneHot::load(attributes)?)),
         "Pow" => Ok(Operator::Pow),
         "Reciprocal" => Ok(Operator::Reciprocal),

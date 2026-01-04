@@ -11,6 +11,9 @@ use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
 use crate::transform::Target;
 
+use itertools::izip;
+use num::Zero;
+
 pub fn infer_node_output(
     graph: &Graph,
     node_id: NodeId,
@@ -434,6 +437,32 @@ pub fn infer_node_output(
 
         Operator::Constant(Constant { ref value }) => {
             res.push(value.tensor_type());
+        }
+
+        Operator::NonZero => {
+            let input = &graph
+                .initializer
+                .get(&node.inputs[0])
+                .ok_or(TypeError::UnresolvedInput)?
+                .data;
+
+            macro_rules! count_nonzero {
+                ($data: expr) => {{
+                    $data.iter().filter(|x| !x.is_zero()).count()
+                }}
+            }
+
+            let count = match input {
+                TensorData::SInt(_, ref v) => count_nonzero!(v),
+                TensorData::UInt(_, ref v) => count_nonzero!(v),
+                TensorData::Float(_, ref v) => count_nonzero!(v),
+            };
+            let dims = inputs[0].dims.ndim();
+            let dims = vec![dims, count];
+            res.push(ResolvedTensorType::new(
+                SIntType::I64.into(),
+                ResolvedTensorDims::new(dims),
+            ));
         }
 
         // Custom

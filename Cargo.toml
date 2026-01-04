@@ -15,6 +15,7 @@ inkwell = { version = "0.5.0", features = ["llvm18-0-prefer-static"] }
 itertools = "0.13.0"
 libloading = "0.8.6"
 ndarray = "0.16.0"
+num = "0.4.3"
 num-integer = "0.1.46"
 prost = "0.13.1"
 rand = { version = "0.8.5", features = ["small_rng"] }

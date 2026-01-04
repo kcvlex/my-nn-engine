@@ -10,6 +10,8 @@ use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 use crate::tensor::Tensor;
 
+use num::Zero;
+
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
     let ends = dims[..].iter().map(|x| *x as isize).collect();
@@ -114,6 +116,43 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 .collect::<Option<Vec<_>>>()?;
             let axis = axis.index(tensors[0].dims.ndim());
             Tensor::concat(&tensors, axis).map(|x| vec![x]).ok()
+        }
+        Operator::NonZero => {
+            let input = node.inputs[0];
+            let input = &graph.initializer.get(&input)?;
+            let dims = &input.dims;
+
+            fn calc<T: Zero>(data: &[T], dims: &ResolvedTensorDims) -> Vec<Vec<i64>> {
+                let mut indices: Vec<Vec<i64>> = vec![Vec::new(); dims.ndim()];
+                for (i, val) in data.iter().enumerate() {
+                    if val.is_zero() {
+                        continue;
+                    }
+
+                    let mut cur = i;
+                    for (dim, index) in izip!(dims.iter(), indices.iter_mut()).rev() {
+                        index.push((cur % *dim) as i64);
+                        cur /= *dim;
+                    }
+                }
+                indices
+            }
+
+            let indices = match &input.data {
+                TensorData::SInt(_, data) => calc(data, dims),
+                TensorData::UInt(_, data) => calc(data, dims),
+                TensorData::Float(_, data) => calc(data, dims),
+            };
+            let shape = ResolvedTensorDims::from(vec![indices.len(), indices[0].len()]);
+            let indices = indices
+                .into_iter()
+                .flatten()
+                .collect_vec();
+            let tensor = Tensor::new(
+                shape,
+                TensorData::SInt(SIntType::I64, indices),
+            ).ok()?;
+            Some(vec![tensor])
         }
         Operator::Shape(Shape { ref start, ref end }) => {
             let input = node.inputs[0];
