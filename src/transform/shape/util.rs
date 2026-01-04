@@ -83,7 +83,14 @@ pub fn infer_node_output(
             let perm = transpose
                 .perm(data.dims.ndim())
                 .ok_or(TypeError::InferError("Invalid permutation".to_string()))?;
-            res.push(data.transpose(perm.as_slice()));
+
+            let ty = data.transpose(perm.as_slice());
+            let ty = if matches!(mode, UnifyMode::CheckStrides) {
+                ty
+            } else {
+                ty.contiguous()
+            };
+            res.push(ty);
         }
         Operator::Reshape => {
             let a = &inputs[args::RESHAPE_DATA];
@@ -316,16 +323,27 @@ pub fn infer_node_output(
             };
 
             let mut dims = Vec::new();
-            for (i, d) in input_dims.iter().copied().enumerate() {
+            let mut strides = Vec::new();
+            for (i, (d, s)) in izip!(input_dims.iter(), input.strides().iter()).enumerate() {
                 if !drop[i] {
-                    dims.push(d);
+                    dims.push(*d);
+                    strides.push(*s);
                 }
             }
 
-            res.push(ResolvedTensorType::new(
-                input.elem_type,
-                ResolvedTensorDims::new(dims),
-            ));
+            let ty = if matches!(mode, UnifyMode::CheckStrides) {
+                ResolvedTensorType::with_stride(
+                    input.elem_type,
+                    ResolvedTensorDims::new(dims),
+                    ResolvedTensorDims::new(strides),
+                )
+            } else {
+                ResolvedTensorType::new(
+                    input.elem_type,
+                    ResolvedTensorDims::new(dims),
+                )
+            };
+            res.push(ty);
         }
 
         Operator::Gather(Gather { axis }) => {
@@ -359,22 +377,38 @@ pub fn infer_node_output(
                 insert[axis] = true;
             }
             let mut dims = Vec::with_capacity(expanded_rank);
+            let mut strides = Vec::with_capacity(expanded_rank);
             let mut input_iter = input_dims.iter().copied();
+            let mut stride_iter = input.strides().iter().copied();
             for i in 0..expanded_rank {
                 if insert[i] {
                     dims.push(1);
+                    strides.push(0);
                 } else {
                     dims.push(input_iter.next().ok_or(TypeError::InferError(
                         "Unsqueeze: Not enough dimensions".to_string(),
+                    ))?);
+                    strides.push(stride_iter.next().ok_or(TypeError::InferError(
+                        "Unsqueeze: Not enough strides".to_string(),
                     ))?);
                 }
             }
 
             cond_error!(input_iter.next().is_some());
-            res.push(ResolvedTensorType::new(
-                input.elem_type,
-                ResolvedTensorDims::new(dims),
-            ));
+
+            let ty = if matches!(mode, UnifyMode::CheckStrides) {
+                ResolvedTensorType::with_stride(
+                    input.elem_type,
+                    ResolvedTensorDims::new(dims),
+                    ResolvedTensorDims::new(strides),
+                )
+            } else {
+                ResolvedTensorType::new(
+                    input.elem_type,
+                    ResolvedTensorDims::new(dims),
+                )
+            };
+            res.push(ty);
         }
 
         Operator::ConstantOfShape(ConstantOfShape { value }) => {
