@@ -270,7 +270,7 @@ impl<'sched> MemoryPlanner<'sched> {
 
             if let KernelBody::SingleKernel(SingleKernel { op }) = &kernel.body {
                 match op {
-                    // TODO: correct?
+                    // TODO: Incorrect when the input is not contiguous for CUDA.
                     Operator::Identity => return Some(*input),
                     Operator::Gemm(_) => {
                         if !is_input &&
