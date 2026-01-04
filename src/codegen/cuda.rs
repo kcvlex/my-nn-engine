@@ -1167,7 +1167,6 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                         let ndim = ty.dims.ndim();
                         let row = ty.dims[ndim - 2];
-                        dbg!(&ty, &kernel);
                         assert!(ty.strides()[ndim - 1] == row);
                         assert!(ty.strides()[ndim - 2] == 1);
                         true
