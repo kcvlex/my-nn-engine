@@ -40,7 +40,7 @@ impl SessionCPU {
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
         opt: &Options,
-    ) -> Result<(Self, TempDir), SessionError> {
+    ) -> Result<Self, SessionError> {
         let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let (codegens, mut contexts): (Vec<_>, Vec<_>) = codegen_ctx
             .all_necessary_kernels()
@@ -80,6 +80,11 @@ impl SessionCPU {
             .collect::<Vec<_>>();
 
         dbg!(&tmp_dir);
+        let shared_obj = tmp_dir.path().join("model.so");
+        if opt.save_build_dir {
+            let path = tmp_dir.into_path();
+            info!("Build directory saved at {:?}", path);
+        }
 
         info!("Compiling");
         let objs = codegens
@@ -99,8 +104,6 @@ impl SessionCPU {
             })
             .collect::<Vec<_>>();
         info!("Compiled");
-
-        let shared_obj = tmp_dir.path().join("model.so");
 
         // TODO: args
         // TODO: remove -lm after llvm.tanh.* is available
@@ -129,17 +132,14 @@ impl SessionCPU {
 
         info!("Loaded");
 
-        Ok((
-            Self {
-                input_ty,
-                output_ty,
-                codegen_ctx,
-                lib,
-                func,
-                initializer,
-            },
-            tmp_dir,
-        ))
+        Ok(Self {
+            input_ty,
+            output_ty,
+            codegen_ctx,
+            lib,
+            func,
+            initializer,
+        })
     }
 
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {

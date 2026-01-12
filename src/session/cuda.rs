@@ -37,7 +37,7 @@ impl SessionCUDA {
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
         opt: &Options,
-    ) -> Result<(Self, TempDir), SessionError> {
+    ) -> Result<Self, SessionError> {
         let mut hostcode_gen = HostCodeGenerator::new(&schedule);
         let hostcode = hostcode_gen
             .generate(opt)
@@ -82,6 +82,13 @@ impl SessionCUDA {
                 format!("sm_{}", arch)
             })
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
+        info!("Compiling");
+        dbg!(&tmp_dir);
+        if opt.save_build_dir {
+            let path = tmp_dir.into_path();
+            info!("Build directory saved at {:?}", path);
+        }
 
         let objs = paths
             .par_iter()
@@ -134,16 +141,13 @@ impl SessionCUDA {
 
         info!("Loaded");
 
-        Ok((
-            Self {
-                input_ty,
-                output_ty,
-                lib,
-                func,
-                initializer,
-            },
-            tmp_dir,
-        ))
+        Ok(Self {
+            input_ty,
+            output_ty,
+            lib,
+            func,
+            initializer,
+        })
     }
 
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {

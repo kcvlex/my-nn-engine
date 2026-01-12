@@ -26,6 +26,6 @@ pub struct Options {
     #[builder(default = false)]
     pub profile: bool,
 
-    #[builder(default = false)]
+    #[builder(default = true)]
     pub save_build_dir: bool,
 }

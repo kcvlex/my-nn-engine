@@ -4,7 +4,6 @@ mod cuda;
 use std::path::Path;
 
 use log::info;
-use tempfile::TempDir;
 
 use crate::codegen::CodeGenError;
 use crate::onnx::load::*;
@@ -110,16 +109,9 @@ pub enum SessionError {
 
 unsafe impl Send for SessionError {}
 
-enum InnerSession {
+pub enum Session {
     CPU(SessionCPU),
     CUDA(SessionCUDA),
-}
-
-pub struct Session {
-    inner: InnerSession,
-
-    #[allow(dead_code)]
-    tmp_dir: Option<TempDir>,
 }
 
 fn get_argument_types(
@@ -193,27 +185,19 @@ impl Session {
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
         info!("Scheduled");
 
-        let (inner, tmp_dir) = match options.target {
+        match options.target {
             Target::CPU => SessionCPU::new(inputs_ty, outputs_ty, initializer, schedule, options)
-                .map(|(a, b)| (InnerSession::CPU(a), b)),
+                .map(Session::CPU),
             Target::CUDA => SessionCUDA::new(inputs_ty, outputs_ty, initializer, schedule, options)
-                .map(|(a, b)| (InnerSession::CUDA(a), b)),
-        }?;
-
-        let tmp_dir = if options.save_build_dir {
-            let _ = tmp_dir.into_path();
-            None
-        } else {
-            Some(tmp_dir)
-        };
-        Ok(Session { inner, tmp_dir })
+                .map(Session::CUDA),
+        }
     }
 
     // TODO: Type check
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
-        match &self.inner {
-            InnerSession::CPU(session) => session.run(inputs),
-            InnerSession::CUDA(session) => session.run(inputs),
+        match self {
+            Session::CPU(session) => session.run(inputs),
+            Session::CUDA(session) => session.run(inputs),
         }
     }
 }
