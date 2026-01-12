@@ -8,6 +8,7 @@ use rayon::prelude::*;
 use tempfile::TempDir;
 
 use crate::codegen::cpu::CodeGenContext;
+use crate::options::Options;
 use crate::schedule::Schedule;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
@@ -16,7 +17,6 @@ use crate::tensor::Tensor;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
-const WRITE_LL: bool = true;
 const DEBUG: bool = true;
 
 pub struct SessionCPU {
@@ -29,9 +29,6 @@ pub struct SessionCPU {
     codegen_ctx: CodeGenContext,
 
     #[allow(dead_code)]
-    tmp_dir: Option<TempDir>,
-
-    #[allow(dead_code)]
     lib: libloading::Library,
     func: CodeType,
 }
@@ -42,7 +39,8 @@ impl SessionCPU {
         output_ty: Vec<ResolvedTensorType>,
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
-    ) -> Result<Self, SessionError> {
+        opt: &Options,
+    ) -> Result<(Self, TempDir), SessionError> {
         let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let (codegens, mut contexts): (Vec<_>, Vec<_>) = codegen_ctx
             .all_necessary_kernels()
@@ -92,7 +90,7 @@ impl SessionCPU {
                 if !DEBUG {
                     codegen.run_opt_aggressive().unwrap();
                 }
-                if WRITE_LL {
+                if opt.save_build_dir {
                     let ll_path = path.with_extension("ll");
                     codegen.module().print_to_file(&ll_path).unwrap();
                 }
@@ -131,22 +129,17 @@ impl SessionCPU {
 
         info!("Loaded");
 
-        let tmp_dir = if WRITE_LL {
-            let _ = tmp_dir.into_path();
-            None
-        } else {
-            Some(tmp_dir)
-        };
-
-        Ok(Self {
-            input_ty,
-            output_ty,
-            codegen_ctx,
+        Ok((
+            Self {
+                input_ty,
+                output_ty,
+                codegen_ctx,
+                lib,
+                func,
+                initializer,
+            },
             tmp_dir,
-            lib,
-            func,
-            initializer,
-        })
+        ))
     }
 
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {

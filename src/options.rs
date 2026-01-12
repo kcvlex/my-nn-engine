@@ -25,4 +25,7 @@ pub struct Options {
 
     #[builder(default = false)]
     pub profile: bool,
+
+    #[builder(default = false)]
+    pub save_build_dir: bool,
 }

@@ -19,16 +19,11 @@ use crate::tensor::Tensor;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
-const PERSIST: bool = true;
-
 pub struct SessionCUDA {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer: Vec<StrictTensor>,
-
-    #[allow(dead_code)]
-    tmp_dir: Option<TempDir>,
 
     #[allow(dead_code)]
     lib: libloading::Library,
@@ -42,7 +37,7 @@ impl SessionCUDA {
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
         opt: &Options,
-    ) -> Result<Self, SessionError> {
+    ) -> Result<(Self, TempDir), SessionError> {
         let mut hostcode_gen = HostCodeGenerator::new(&schedule);
         let hostcode = hostcode_gen
             .generate(opt)
@@ -73,14 +68,7 @@ impl SessionCUDA {
         ];
         info!("Generated");
 
-        dbg!(&tmp_dir);
         let shared_lib = tmp_dir.path().join("libmodel.so");
-        let tmp_dir = if PERSIST {
-            let _ = tmp_dir.into_path();
-            None
-        } else {
-            Some(tmp_dir)
-        };
 
         let cuda_arch = Command::new("nvidia-smi")
             .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
@@ -146,14 +134,16 @@ impl SessionCUDA {
 
         info!("Loaded");
 
-        Ok(Self {
-            input_ty,
-            output_ty,
+        Ok((
+            Self {
+                input_ty,
+                output_ty,
+                lib,
+                func,
+                initializer,
+            },
             tmp_dir,
-            lib,
-            func,
-            initializer,
-        })
+        ))
     }
 
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
