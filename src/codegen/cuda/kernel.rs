@@ -4,7 +4,6 @@ use delegate::delegate;
 use derive_more::From;
 use itertools::izip;
 use itertools::Itertools;
-use strum_macros::AsRefStr;
 
 use crate::codegen::cuda::*;
 use crate::onnx::operator;
@@ -15,7 +14,6 @@ use crate::tensor::types::DataType;
 #[derive(From)]
 pub enum CUDAKernel {
     GeneratedKernel(GeneratedKernel),
-    ReduceMatrixKernel(ReduceMatrixKernel),
     SoftmaxKernel(SoftmaxKernel),
 }
 
@@ -40,54 +38,6 @@ macro_rules! cast {
     ($ty:expr, $e:expr) => {
         format!("({} *)({})", $ty, $e)
     };
-}
-
-#[derive(Clone, Copy, AsRefStr)]
-pub enum ReduceType {
-    #[strum(serialize = "ReduceType::Max")]
-    Max,
-
-    #[strum(serialize = "ReduceType::Mean")]
-    Mean,
-}
-
-impl From<ReduceOp> for ReduceType {
-    fn from(op: ReduceOp) -> Self {
-        match op {
-            ReduceOp::Max => ReduceType::Max,
-            ReduceOp::Mean => ReduceType::Mean,
-            _ => unimplemented!(),
-        }
-    }
-}
-
-pub struct ReduceMatrixKernel {
-    pub data_ty: DataType,
-    pub reduce_ty: ReduceType,
-    pub block_size: usize,
-
-    pub out: Expr,
-    pub in_: Expr,
-    pub row: usize,
-    pub col: usize,
-}
-
-impl ReduceMatrixKernel {
-    pub fn fragment(&self) -> (String, Vec<String>) {
-        let id = format!(
-            "reduce2d<{}, {}, {}>",
-            self.data_ty,
-            self.reduce_ty.as_ref(),
-            self.block_size
-        );
-        let args = vec![
-            cast!(self.data_ty, self.out),
-            cast!(self.data_ty, self.in_),
-            self.row.to_string(),
-            self.col.to_string(),
-        ];
-        (id, args)
-    }
 }
 
 pub struct SoftmaxKernel {
@@ -128,7 +78,6 @@ impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
             CUDAKernel::GeneratedKernel(g) => g,
-            CUDAKernel::ReduceMatrixKernel(r) => r,
             CUDAKernel::SoftmaxKernel(s) => s,
         } {
             #[call(fragment)]
@@ -193,8 +142,10 @@ pub enum KernelExpr {
 #[derive(Clone, Copy)]
 pub enum KernelVar {
     Gid,
+    Tid,
     Value(ValueId),
     Local(usize),
+    Shared(usize),
 }
 
 impl From<KernelVar> for KernelExpr {
@@ -227,8 +178,10 @@ impl Display for KernelVar {
             "{}",
             match self {
                 KernelVar::Gid => "gid".to_string(),
+                KernelVar::Tid => "tid".to_string(),
                 KernelVar::Value(value_id) => format!("value_{}", value_id.index()),
                 KernelVar::Local(idx) => format!("local_{}", idx),
+                KernelVar::Shared(idx) => format!("shared_{}", idx),
             }
         )
     }
@@ -1228,6 +1181,176 @@ impl<'sched> MaxPoolBuilder<'sched> {
     }}
 
     {out}[{gid}] = max_val;
+}}
+"
+        ))
+    }
+}
+
+pub struct ReduceMatrixBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+struct ReduceMatrixParam {
+    ty: DataType,
+    op: ReduceOp,
+    col: usize,
+    block_size: usize,
+}
+
+impl ReduceMatrixParam {
+    fn ceil_col(&self) -> usize {
+        self.col.div_ceil(self.block_size) * self.block_size
+    }
+}
+
+trait Reduce {
+    fn init(&self, ty: DataType) -> String;
+    fn op(&self, lhs: &str, rhs: &str) -> String;
+}
+
+impl Reduce for ReduceOp {
+    fn init(&self, ty: DataType) -> String {
+        let ty: TypeSymbol = ty.into();
+        match self {
+            Self::Max => format!("std::numeric_limits<{}>::min()", ty),
+            Self::Mean | Self::Sum => "0".to_string(),
+            Self::Variance => unimplemented!(),
+        }
+    }
+
+    fn op(&self, lhs: &str, rhs: &str) -> String {
+        match self {
+            Self::Max => format!("max({}, {})", lhs, rhs),
+            Self::Mean | Self::Sum => format!("({} + {})", lhs, rhs),
+            Self::Variance => unimplemented!(),
+        }
+    }
+}
+
+impl<'sched> ReduceMatrixBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    fn build_body<F>(
+        &mut self,
+        shared_mem: KernelVar,
+        param: &ReduceMatrixParam,
+        ele: F,
+    ) -> Result<(String, KernelVar), BuildError>
+    where
+        F: Fn(&str) -> String,
+    {
+        let ceil_col = param.ceil_col();
+        let ReduceMatrixParam {
+            ty,
+            op,
+            col,
+            block_size,
+        } = param;
+
+        let tid = KernelVar::Tid;
+        let op0 = op.op("acc_block", &ele("i"));
+        let op1 = op.op("acc_block", "tile32.shfl_down(acc_block, s)");
+        let op2 = op.op(
+            &format!("{shared_mem}[{tid}]"),
+            &format!("{shared_mem}[{tid} + s]"),
+        );
+        let result_var = self.ctx.new_local_var();
+        let result = format!("{shared_mem}[{tid}]");
+        let result = match op {
+            ReduceOp::Mean => format!("({} / {})", result, col),
+            ReduceOp::Sum | ReduceOp::Max => result,
+            ReduceOp::Variance => unimplemented!(),
+        };
+        let init = op.init(*ty);
+        let ty = TypeSymbol::Primitive(*ty);
+
+        let body = format!(
+            "
+    {ty} acc_block = {init};
+    for (int i = {tid}; i < {ceil_col}; i += {block_size}) {{
+        if (i < {col}) {{
+            acc_block = {op0};
+        }}
+    }}
+
+    cg::thread_block cta = cg::this_thread_block();
+    cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+    for (int s = tile32.size() / 2; 0 < s; s >>= 1) {{
+        acc_block = {op1};
+    }}
+
+    {shared_mem}[{tid}] = acc_block;
+    cg::sync(cta);
+
+    for (int s = {block_size} / 2; tile32.size() <= s; s >>= 1) {{
+        if ({tid} < s) {{
+            {shared_mem}[{tid}] = {op2};
+        }}
+        cg::sync(cta);
+    }}
+
+    {ty} {result_var} = {result};
+    "
+        );
+        Ok((body, result_var))
+    }
+
+    pub fn build(&mut self, block_size: usize) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::ReduceMatrix(op),
+        }) = &kernel.body
+        else {
+            panic!("Expected ReduceMatrix operator");
+        };
+
+        // TODO: Slot.
+        let shared_mem = KernelVar::Shared(0);
+        let row_id_var = self.ctx.new_local_var();
+
+        let output = kernel.outputs[0];
+        let input = kernel.inputs[0];
+        let input_ty = self.ctx.get_resolved_tensor_type(input)?;
+        assert!(input_ty.is_contiguous());
+        let &[row, col] = &input_ty.dims[..] else {
+            panic!("Expected 2D tensor for ReduceMatrix");
+        };
+
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let tid = KernelVar::Tid;
+        let ty = input_ty.elem_type;
+        let decl = self.ctx.decl.decl();
+        let (body, result) = self.build_body(
+            shared_mem,
+            &ReduceMatrixParam {
+                ty,
+                op: *op,
+                col,
+                block_size,
+            },
+            |i| format!("{in_}[{row_id_var} * {col} + {i}]"),
+        )?;
+        let ty: TypeSymbol = ty.into();
+        Ok(format!(
+            "
+{decl} {{
+    __shared__ {ty} {shared_mem}[{block_size}];
+    int {tid} = threadIdx.x;
+    int {row_id_var} = blockIdx.x;
+    assert({row_id_var} < {row});
+    assert({tid} < {block_size});
+
+    {body}
+
+    if ({tid} == 0) {{
+        {out}[{row_id_var}] = {result};
+    }}
 }}
 "
         ))
