@@ -183,15 +183,6 @@ impl From<DataType> for TypeSymbol {
     }
 }
 
-enum KernelStmt {
-    DefineVar {
-        ty: TypeSymbol,
-        var: KernelVar,
-        init: KernelExpr,
-    },
-    Return(KernelExpr),
-}
-
 #[derive(Clone)]
 pub enum KernelExpr {
     KernelVar(KernelVar),
@@ -209,23 +200,6 @@ pub enum KernelVar {
 impl From<KernelVar> for KernelExpr {
     fn from(val: KernelVar) -> Self {
         KernelExpr::KernelVar(val)
-    }
-}
-
-impl Display for KernelStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                KernelStmt::DefineVar { ty, var, init } => {
-                    format!("{} {} = {};", ty, var, init)
-                }
-                KernelStmt::Return(expr) => {
-                    format!("return {};", expr)
-                }
-            }
-        )
     }
 }
 
@@ -482,20 +456,18 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                     }
                 }
                 let var = self.ctx.new_local_var();
-                stmts.push(KernelStmt::DefineVar {
-                    ty: TypeSymbol::Primitive(
-                        self.ctx
-                            .get_resolved_tensor_type(kernel.outputs[0])?
-                            .elem_type,
-                    ),
-                    var,
-                    init: self.single_op(op, &inputs),
-                });
+                let ty = TypeSymbol::Primitive(
+                    self.ctx
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .elem_type,
+                );
+                let rhs = self.single_op(op, &inputs);
+                stmts.push(format!("{ty} {var} = {rhs};"));
                 outputs.push(var)
             }
             outputs.pop().unwrap()
         };
-        stmts.push(KernelStmt::Return(output.into()));
+        stmts.push(format!("return {};", output));
 
         let device_decl = {
             let mut res = self.ctx.decl.clone();
