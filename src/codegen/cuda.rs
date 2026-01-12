@@ -1385,15 +1385,17 @@ impl HostCode {
             }
         }
 
-        let profile = if self.profile { "true" } else { "false" };
-        writeln!(
-            writer,
-            "
-extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
+        writeln!(writer, "extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{")?;
+
+        if self.profile {
+            writeln!(
+                writer,
+                "
     auto timer_start = std::chrono::high_resolution_clock::now();
-    cudaDeviceSynchronize();
-    "
-        )?;
+    cudaDeviceSynchronize();"
+            )?;
+        }
+
         for stmts in &[
             self.decl_values.as_slice(),
             self.decl_cuda_objs.as_slice(),
@@ -1404,13 +1406,14 @@ extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INI
                 writeln!(writer, "  {stmt}")?;
             }
         }
-        writeln!(writer, "
+
+        if self.profile {
+            writeln!(writer, "
     auto timer_end = std::chrono::high_resolution_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timer_end - timer_start);
-    if ({profile}) std::cout << \"Elapsed time: \" << elapsed_ms.count() << \" ms\" << std::endl;
-}}
-    "
-)?;
+    std::cout << \"Elapsed time: \" << elapsed_ms.count() << \" ms\" << std::endl;")?;
+        }
+        writeln!(writer, "}}")?;
         Ok(())
     }
 }
