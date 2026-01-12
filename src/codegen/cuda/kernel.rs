@@ -13,7 +13,6 @@ use crate::tensor::types::DataType;
 
 #[derive(From)]
 pub enum CUDAKernel {
-    MaxPoolKernel(MaxPoolKernel),
     GeneratedKernel(GeneratedKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
     SoftmaxKernel(SoftmaxKernel),
@@ -36,53 +35,10 @@ impl GeneratedKernel {
     }
 }
 
-pub struct MaxPoolKernel {
-    pub ty: DataType,
-
-    pub out: Expr,
-    pub in_: Expr,
-    pub nbatch: Expr,
-    pub channels: Expr,
-    pub height: Expr,
-    pub width: Expr,
-    pub o_height: Expr,
-    pub o_width: Expr,
-    pub kernel_h: Expr,
-    pub kernel_w: Expr,
-    pub stride_h: Expr,
-    pub stride_w: Expr,
-    pub pad_h: Expr,
-    pub pad_w: Expr,
-}
-
 macro_rules! cast {
     ($ty:expr, $e:expr) => {
         format!("({} *)({})", $ty, $e)
     };
-}
-
-impl MaxPoolKernel {
-    pub fn fragment(&self) -> (String, Vec<String>) {
-        let id = format!("max_pool_kernel<{}>", self.ty);
-        let args = vec![
-            cast!(self.ty, self.out),
-            cast!(self.ty, self.in_),
-            format!("std::numeric_limits<{}>::min()", self.ty),
-            self.nbatch.to_string(),
-            self.channels.to_string(),
-            self.height.to_string(),
-            self.width.to_string(),
-            self.o_height.to_string(),
-            self.o_width.to_string(),
-            self.kernel_h.to_string(),
-            self.kernel_w.to_string(),
-            self.stride_h.to_string(),
-            self.stride_w.to_string(),
-            self.pad_h.to_string(),
-            self.pad_w.to_string(),
-        ];
-        (id, args)
-    }
 }
 
 #[derive(Clone, Copy, AsRefStr)]
@@ -170,7 +126,6 @@ pub struct LaunchKernel {
 impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
-            CUDAKernel::MaxPoolKernel(m) => m,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::ReduceMatrixKernel(r) => r,
             CUDAKernel::SoftmaxKernel(s) => s,
@@ -1191,6 +1146,100 @@ impl<'sched> CopyBuilder<'sched> {
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
     {out}[{gid}] = {in_}[{gid}];
+}}
+"
+        ))
+    }
+}
+
+pub struct MaxPoolBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> MaxPoolBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::SingleKernel(SingleKernel {
+            op: Operator::MaxPool(pool),
+        }) = &kernel.body
+        else {
+            panic!("Expected MaxPool operator");
+        };
+
+        if pool.kernel_shape.ndim() != 2 {
+            unimplemented!("Only 2D max pooling is supported");
+        }
+
+        let input = kernel.inputs[0];
+        let output = kernel.outputs[0];
+        let input_ty = self.ctx.get_resolved_tensor_type(input)?;
+        let output_ty = self.ctx.get_resolved_tensor_type(output)?;
+        assert!(kernel.inputs.len() == 1);
+        assert!(kernel.outputs.len() == 1);
+        assert!(input_ty.dims.ndim() == 4 && output_ty.dims.ndim() == 4);
+        assert!(input_ty.is_contiguous() && output_ty.is_contiguous());
+        assert!(input_ty.dims[0] == output_ty.dims[0]);
+        assert!(input_ty.dims[1] == output_ty.dims[1]);
+        let nbatch = input_ty.dims[0];
+        let channels = input_ty.dims[1];
+        let height = input_ty.dims[2];
+        let width = input_ty.dims[3];
+        let o_height = output_ty.dims[2];
+        let o_width = output_ty.dims[3];
+        let kernel_h = pool.kernel_shape[0];
+        let kernel_w = pool.kernel_shape[1];
+        let stride_h = pool.strides[0];
+        let stride_w = pool.strides[1];
+        let (pad_h, pad_w) = match pool.pad {
+            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
+            _ => unimplemented!("Padding type not implemented"),
+        };
+
+        let size = nbatch * channels * o_height * o_width;
+        let gid = KernelVar::Gid;
+        let ty = TypeSymbol::Primitive(input_ty.elem_type);
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+
+    int o_w_idx = {gid} % {o_width};
+    int o_h_idx = ({gid} / {o_width}) % {o_height};
+    int o_c_idx = ({gid} / ({o_width} * {o_height})) % {channels};
+    int o_b_idx = {gid} / ({o_width} * {o_height} * {channels});
+
+    int i_w_begin = o_w_idx * {stride_w} - {pad_w};
+    int i_h_begin = o_h_idx * {stride_h} - {pad_h};
+    int i_w_end = i_w_begin + {kernel_w};
+    int i_h_end = i_h_begin + {kernel_h};
+
+    {ty} max_val = std::numeric_limits<{ty}>::min();
+    for (int h = i_h_begin; h < i_h_end; h++) {{
+        for (int w = i_w_begin; w < i_w_end; w++) {{
+            if (0 <= h && h < {height} && 0 <= w && w < {width}) {{
+                int in_idx = o_b_idx * {channels};
+                in_idx += o_c_idx;
+                in_idx *= {height};
+                in_idx += h;
+                in_idx *= {width};
+                in_idx += w;
+                max_val = max(max_val, {in_}[in_idx]);
+            }}
+        }}
+    }}
+
+    {out}[{gid}] = max_val;
 }}
 "
         ))
