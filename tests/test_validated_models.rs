@@ -37,7 +37,10 @@ fn run_test(
     let session = Session::new(
         &model_path,
         Some(&input_types),
-        &Options::builder().target(target).build(),
+        &Options::builder()
+            .target(target)
+            .save_build_dir(true)
+            .build(),
     )?;
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)
