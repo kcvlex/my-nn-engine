@@ -191,7 +191,7 @@ impl ResolvedTensorType {
             }
         };
         assert_eq!(target.ndim(), stride.len());
-        let stride = ResolvedTensorDims::new_direct(stride);
+        let stride = ResolvedTensorDims::new_direct(&stride);
         Self {
             elem_type,
             dims,
@@ -211,7 +211,7 @@ impl ResolvedTensorType {
         Self {
             elem_type: self.elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new_direct(strides),
+            stride: ResolvedTensorDims::new_direct(&strides),
         }
     }
 
@@ -242,8 +242,8 @@ impl ResolvedTensorType {
     }
 
     pub fn drop_head(&mut self) {
-        self.dims = self.dims[1..].to_vec().into();
-        self.stride = self.stride[1..].to_vec().into();
+        self.dims = self.dims[1..].into();
+        self.stride = self.stride[1..].into();
     }
 
     // pub fn reshape(&self, dims: ResolvedTensorDims) -> Self {
@@ -322,7 +322,7 @@ impl ResolvedTensorType {
             assert_eq!(i, new_strides.len());
             buf
         };
-        let stride = ResolvedTensorDims::new_direct(new_strides);
+        let stride = ResolvedTensorDims::new_direct(&new_strides);
         assert!(stride.ndim() == target.ndim());
         Some(Self {
             elem_type: self.elem_type,
@@ -393,7 +393,7 @@ fn calc_stride(dims: &ResolvedTensorDims) -> ResolvedTensorDims {
         stride[i] = if dims[i] == 1 { 0 } else { acc };
         acc *= dims[i];
     }
-    ResolvedTensorDims::new_direct(stride)
+    ResolvedTensorDims::new_direct(&stride)
 }
 
 #[cfg(test)]
@@ -403,12 +403,12 @@ mod test {
     #[test]
     fn test_reshapable0() {
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![2, 3, 4]));
-        let target = ResolvedTensorDims::new(vec![2, 3, 1, 2, 1, 2]);
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[2, 3, 4]));
+        let target = ResolvedTensorDims::new(&[2, 3, 1, 2, 1, 2]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![12, 4, 0, 2, 0, 1]),
+            stride: ResolvedTensorDims::new(&[12, 4, 0, 2, 0, 1]),
         };
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
@@ -416,13 +416,13 @@ mod test {
     #[test]
     fn test_reshapable1() {
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![5, 6, 7]))
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[5, 6, 7]))
             .transpose(&[2, 1, 0]);
-        let target = ResolvedTensorDims::new(vec![7, 2, 3, 5]);
+        let target = ResolvedTensorDims::new(&[7, 2, 3, 5]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![1, 21, 7, 42]),
+            stride: ResolvedTensorDims::new(&[1, 21, 7, 42]),
         };
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
@@ -430,12 +430,12 @@ mod test {
     #[test]
     fn test_reshapable2() {
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![7, 5, 3]));
-        let target = ResolvedTensorDims::new(vec![21, 5]);
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[7, 5, 3]));
+        let target = ResolvedTensorDims::new(&[21, 5]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![5, 1]),
+            stride: ResolvedTensorDims::new(&[5, 1]),
         };
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
@@ -444,27 +444,27 @@ mod test {
     fn test_reshapable3() {
         // 6, 4, 3, 5, 2
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![4, 6, 3, 5, 2]))
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[4, 6, 3, 5, 2]))
             .transpose(&[1, 0, 2, 3, 4]);
-        let target = ResolvedTensorDims::new(vec![6, 2, 2, 30]);
+        let target = ResolvedTensorDims::new(&[6, 2, 2, 30]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![30, 360, 180, 1]),
+            stride: ResolvedTensorDims::new(&[30, 360, 180, 1]),
         };
-        assert_eq!(orig.dims, ResolvedTensorDims::new(vec![6, 4, 3, 5, 2]));
+        assert_eq!(orig.dims, ResolvedTensorDims::new(&[6, 4, 3, 5, 2]));
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
 
     #[test]
     fn test_reshapable4() {
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![6, 4, 3, 5, 2]));
-        let target = ResolvedTensorDims::new(vec![3, 4, 2, 3, 5, 2]);
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[6, 4, 3, 5, 2]));
+        let target = ResolvedTensorDims::new(&[3, 4, 2, 3, 5, 2]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![240, 60, 30, 10, 2, 1]),
+            stride: ResolvedTensorDims::new(&[240, 60, 30, 10, 2, 1]),
         };
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
@@ -473,15 +473,15 @@ mod test {
     fn test_reshapable5() {
         // 6, 5, 3, 4
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![3, 4, 5, 6]))
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[3, 4, 5, 6]))
             .transpose(&[3, 2, 0, 1]);
-        let target = ResolvedTensorDims::new(vec![6, 5, 3, 4]);
+        let target = ResolvedTensorDims::new(&[6, 5, 3, 4]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![1, 6, 120, 30]),
+            stride: ResolvedTensorDims::new(&[1, 6, 120, 30]),
         };
-        assert_eq!(orig.dims, ResolvedTensorDims::new(vec![6, 5, 3, 4]));
+        assert_eq!(orig.dims, ResolvedTensorDims::new(&[6, 5, 3, 4]));
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
 
@@ -489,15 +489,15 @@ mod test {
     fn test_reshapable6() {
         // 7, 5, 6, 3, 4
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![3, 4, 5, 6, 7]))
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[3, 4, 5, 6, 7]))
             .transpose(&[4, 2, 3, 0, 1]);
-        let target = ResolvedTensorDims::new(vec![7, 10, 3, 6, 2]);
+        let target = ResolvedTensorDims::new(&[7, 10, 3, 6, 2]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![1, 21, 7, 420, 210]),
+            stride: ResolvedTensorDims::new(&[1, 21, 7, 420, 210]),
         };
-        assert_eq!(orig.dims, ResolvedTensorDims::new(vec![7, 5, 6, 3, 4]));
+        assert_eq!(orig.dims, ResolvedTensorDims::new(&[7, 5, 6, 3, 4]));
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
 
@@ -505,27 +505,25 @@ mod test {
     fn test_reshapable7() {
         // 7, 5, 6, 3, 4
         let elem_type = FloatType::F32.into();
-        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(vec![3, 4, 5, 6, 7]))
+        let orig = ResolvedTensorType::new(elem_type, ResolvedTensorDims::new(&[3, 4, 5, 6, 7]))
             .transpose(&[4, 2, 3, 0, 1]);
-        let target = ResolvedTensorDims::new(vec![7, 30, 2, 3, 2]);
+        let target = ResolvedTensorDims::new(&[7, 30, 2, 3, 2]);
         let expected = ResolvedTensorType {
             elem_type,
             dims: target.clone(),
-            stride: ResolvedTensorDims::new(vec![1, 7, 1260, 420, 210]),
+            stride: ResolvedTensorDims::new(&[1, 7, 1260, 420, 210]),
         };
-        assert_eq!(orig.dims, ResolvedTensorDims::new(vec![7, 5, 6, 3, 4]));
+        assert_eq!(orig.dims, ResolvedTensorDims::new(&[7, 5, 6, 3, 4]));
         assert_eq!(orig.try_reshape(&target), Some(expected));
     }
 
     #[test]
     fn test_non_reshapable0() {
         // [7, 5, 3]
-        let orig = ResolvedTensorType::new(
-            FloatType::F32.into(),
-            ResolvedTensorDims::new(vec![3, 5, 7]),
-        )
-        .transpose(&[2, 1, 0]);
-        let target = ResolvedTensorDims::new(vec![21, 5]);
+        let orig =
+            ResolvedTensorType::new(FloatType::F32.into(), ResolvedTensorDims::new(&[3, 5, 7]))
+                .transpose(&[2, 1, 0]);
+        let target = ResolvedTensorDims::new(&[21, 5]);
         assert_eq!(orig.dims.size(), target.size());
         assert_eq!(orig.try_reshape(&target), None);
     }
@@ -535,10 +533,10 @@ mod test {
         // 6, 4, 3, 5, 2
         let orig = ResolvedTensorType::new(
             FloatType::F32.into(),
-            ResolvedTensorDims::new(vec![4, 6, 3, 5, 2]),
+            ResolvedTensorDims::new(&[4, 6, 3, 5, 2]),
         )
         .transpose(&[1, 0, 2, 3, 4]);
-        let target = ResolvedTensorDims::new(vec![2, 360]);
+        let target = ResolvedTensorDims::new(&[2, 360]);
         assert_eq!(orig.dims.size(), target.size());
         assert_eq!(orig.try_reshape(&target), None);
     }
@@ -548,10 +546,10 @@ mod test {
         // 6, 4, 3, 5, 2
         let orig = ResolvedTensorType::new(
             FloatType::F32.into(),
-            ResolvedTensorDims::new(vec![4, 6, 3, 5, 2]),
+            ResolvedTensorDims::new(&[4, 6, 3, 5, 2]),
         )
         .transpose(&[1, 0, 2, 3, 4]);
-        let target = ResolvedTensorDims::new(vec![3, 4, 2, 3, 5, 2]);
+        let target = ResolvedTensorDims::new(&[3, 4, 2, 3, 5, 2]);
         assert_eq!(orig.dims.size(), target.size());
         assert_eq!(orig.try_reshape(&target), None);
     }

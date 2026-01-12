@@ -113,7 +113,7 @@ mod test {
         graph
             .resolve_input_types(&[ResolvedTensorType::new(
                 FloatType::F32.into(),
-                ResolvedTensorDims::new(vec![1, 416, 416, 3]),
+                ResolvedTensorDims::new(&[1, 416, 416, 3]),
             )])
             .unwrap();
         let mut modifier = SimpleGraphOp::new(&graph);

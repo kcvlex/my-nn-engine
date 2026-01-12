@@ -44,7 +44,7 @@ impl<T: GraphOp> Pass<T> for EliminateGlobalAvgPool {
 
             let reshaped = ReshapeGenerator::default()
                 .set_input(input)
-                .set_dims(vec![row, col].into())
+                .set_dims(&[row, col])
                 .set_node_name(format!("GlobalAveragePool_Reshaped_{}", input.index()))
                 .set_value_name(format!("GlobalAveragePool_Reshaped_{}", input.index()))
                 .generate(graph, modifier)
@@ -53,7 +53,7 @@ impl<T: GraphOp> Pass<T> for EliminateGlobalAvgPool {
             let pool_output = modifier.register_new_value(
                 graph,
                 format!("GlobalAveragePool_Output_{}", id.index()),
-                ResolvedTensorType::new(elem_ty, ResolvedTensorDims::new(vec![row, 1])),
+                ResolvedTensorType::new(elem_ty, ResolvedTensorDims::new(&[row, 1])),
             );
             modifier.register_new_node(
                 graph,
@@ -78,7 +78,7 @@ impl<T: GraphOp> Pass<T> for EliminateGlobalAvgPool {
             new_dims[1] = channel;
             let new_output = ReshapeGenerator::default()
                 .set_input(pool_output)
-                .set_dims(new_dims.into())
+                .set_dims(&new_dims)
                 .set_node_name(format!(
                     "GlobalAveragePool_Reshaped_{}",
                     pool_output.index()
@@ -163,7 +163,7 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
 
             let reshaped_output = ReshapeGenerator::default()
                 .set_input(input_v)
-                .set_dims(vec![row, col].into())
+                .set_dims(&[row, col])
                 .set_node_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
                 .set_value_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
                 .generate(graph, modifier)
@@ -172,7 +172,7 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
             let reduce_matrix_output = modifier.register_new_value(
                 graph,
                 format!("Reduce2ReduceMatrix_Output_{i}"),
-                ResolvedTensorType::new(input_ty.elem_type, vec![row].into()),
+                ResolvedTensorType::new(input_ty.elem_type, ResolvedTensorDims::new(&[row])),
             );
             modifier.register_new_node(
                 graph,
@@ -187,7 +187,7 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
 
             let reshaped_output = ReshapeGenerator::default()
                 .set_input(reduce_matrix_output)
-                .set_dims(output_ty.dims.clone())
+                .set_dims(&output_ty.dims[..])
                 .set_node_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
                 .set_value_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
                 .generate(graph, modifier)
@@ -272,7 +272,7 @@ impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
                 .clone();
             let reshaped = ReshapeGenerator::default()
                 .set_input(input)
-                .set_dims(output_dims)
+                .set_dims(&output_dims[..])
                 .set_allow_contiguous(false)
                 .set_node_name(format!("Squeeze2Reshape_{node_name}"))
                 .set_value_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))

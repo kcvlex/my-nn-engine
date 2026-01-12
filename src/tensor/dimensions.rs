@@ -2,6 +2,9 @@ use std::iter::FromIterator;
 use std::ops::Index;
 use std::ops::IndexMut;
 
+use smallvec::smallvec;
+use smallvec::SmallVec;
+
 use crate::onnx::operator::Slice;
 use crate::tensor::types;
 use crate::tensor::types::TypeError;
@@ -9,10 +12,10 @@ use crate::tensor::Tensor;
 use crate::tensor::TensorData;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedTensorDims(Vec<usize>);
+pub struct ResolvedTensorDims(SmallVec<[usize; 5]>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnresolvedTensorDims(Vec<Dimension>);
+pub struct UnresolvedTensorDims(SmallVec<[Dimension; 5]>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamKey(String);
@@ -43,8 +46,8 @@ impl Index<usize> for UnresolvedTensorDims {
 }
 
 impl UnresolvedTensorDims {
-    pub fn new(v: Vec<Dimension>) -> Self {
-        Self(v)
+    pub fn new(v: &[Dimension]) -> Self {
+        Self(v.into())
     }
 
     pub fn ndim(&self) -> usize {
@@ -59,10 +62,10 @@ impl UnresolvedTensorDims {
                 Dimension::Param(_) => return None,
             }
         }
-        Some(ResolvedTensorDims::new(resolved))
+        Some(ResolvedTensorDims::new(&resolved))
     }
 
-    pub fn inner(&self) -> &Vec<Dimension> {
+    pub fn inner(&self) -> &[Dimension] {
         &self.0
     }
 }
@@ -99,16 +102,16 @@ pub fn broadcast_shape(
 }
 
 impl ResolvedTensorDims {
-    pub fn new(v: Vec<usize>) -> Self {
+    pub fn new(v: &[usize]) -> Self {
         if v.iter().sum::<usize>() == 0 {
-            Self(vec![])
+            Self(smallvec![])
         } else {
-            Self(v)
+            Self(v.into())
         }
     }
 
-    pub fn new_direct(v: Vec<usize>) -> Self {
-        Self(v)
+    pub fn new_direct(v: &[usize]) -> Self {
+        Self(v.into())
     }
 
     pub fn ndim(&self) -> usize {
@@ -124,11 +127,11 @@ impl ResolvedTensorDims {
     }
 
     pub fn prefix(&self, len: usize) -> Self {
-        Self::new(self.0[..len].to_vec())
+        Self::new(self.0[..len].into())
     }
 
     pub fn suffix(&self, len: usize) -> Self {
-        Self::new(self.0[self.0.len() - len..].to_vec())
+        Self::new(self.0[self.0.len() - len..].into())
     }
 
     pub fn push(&mut self, v: usize) {
@@ -155,7 +158,7 @@ impl ResolvedTensorDims {
         res
     }
 
-    pub fn inner(&self) -> &Vec<usize> {
+    pub fn inner(&self) -> &[usize] {
         &self.0
     }
 
@@ -189,7 +192,7 @@ impl ResolvedTensorDims {
             types::SIntType::I64,
             self.0.iter().map(|x| *x as i64).collect(),
         );
-        let dims = ResolvedTensorDims::new(vec![self.ndim()]);
+        let dims = ResolvedTensorDims::new(&[self.ndim()]);
         Tensor::new(dims, data).unwrap()
     }
 }
@@ -213,9 +216,9 @@ where
     }
 }
 
-impl From<Vec<usize>> for ResolvedTensorDims {
-    fn from(v: Vec<usize>) -> Self {
-        Self(v)
+impl From<&[usize]> for ResolvedTensorDims {
+    fn from(v: &[usize]) -> Self {
+        Self(v.into())
     }
 }
 

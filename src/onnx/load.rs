@@ -29,6 +29,7 @@ use crate::tensor::types::TypeError;
 use crate::tensor::types::UIntType;
 use crate::tensor::types::UnresolvedTensorType;
 use crate::tensor::Tensor;
+
 include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 
 #[derive(Debug)]
@@ -223,7 +224,7 @@ impl GraphLoader {
             )
             .collect();
         let tensor = Tensor::new(
-            ResolvedTensorDims::new(vec![]),
+            ResolvedTensorDims::new(&[]),
             TensorData::Float(FloatType::F32, vec![-42.0]),
         )
         .unwrap();
@@ -337,7 +338,7 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
         let dim = usize::try_from(dim).map_err(|_| ModelLoadError::NegativeDimension(dim))?;
         dims.push(dim);
     }
-    let dims = ResolvedTensorDims::new(dims);
+    let dims = ResolvedTensorDims::new(&dims);
     Tensor::new(dims, data).map_err(ModelLoadError::TypeError)
 }
 
@@ -366,7 +367,7 @@ fn load_tensor_type(tensor: type_proto::Tensor) -> LoadResult<TensorType> {
         }
         let mut ty = TensorType::Unresolved(UnresolvedTensorType {
             elem_type,
-            dims: Some(UnresolvedTensorDims::new(shape)),
+            dims: Some(UnresolvedTensorDims::new(&shape)),
         });
         ty.normalize();
         Ok(ty)
@@ -557,6 +558,7 @@ impl Conv {
                 "TODO: support inference of kernel_shape".to_string(),
             ))?
             .ints()?
+            .as_slice()
             .into();
         let strides = attributes
             .get("strides")
@@ -642,7 +644,11 @@ impl Pooling {
             .map(|x| x.b())
             .transpose()?
             .unwrap_or(false);
-        let kernel_shape = attributes.required("kernel_shape")?.ints()?.into();
+        let kernel_shape = attributes
+            .required("kernel_shape")?
+            .ints()?
+            .as_slice()
+            .into();
         let strides = attributes
             .get("strides")
             .map(|x| x.ints())

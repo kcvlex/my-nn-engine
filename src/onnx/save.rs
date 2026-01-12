@@ -390,11 +390,11 @@ impl TensorType {
         let mut res = type_proto::Tensor::default();
         let (elem_type, shape): (_, TensorShapeProto) = match self {
             TensorType::Unresolved(UnresolvedTensorType { elem_type, dims }) => {
-                (elem_type, dims.as_ref().unwrap().inner().as_slice().into())
+                (elem_type, dims.as_ref().unwrap().inner().into())
             }
             TensorType::Resolved(ResolvedTensorType {
                 elem_type, dims, ..
-            }) => (elem_type, dims.inner().as_slice().into()),
+            }) => (elem_type, dims.inner().into()),
         };
         res.elem_type = (*elem_type).into();
         res.shape = Some(shape);

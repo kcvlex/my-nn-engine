@@ -225,7 +225,7 @@ impl Conv {
             };
             dims.push(dim);
         }
-        ResolvedTensorDims::new(dims)
+        ResolvedTensorDims::new(&dims)
     }
 }
 
@@ -283,7 +283,7 @@ impl Pooling {
             };
             dims.push(dim);
         }
-        ResolvedTensorDims::new(dims)
+        ResolvedTensorDims::new(&dims)
     }
 }
 

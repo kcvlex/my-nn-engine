@@ -3,6 +3,7 @@ pub mod infer;
 pub mod verify;
 
 use itertools::izip;
+use itertools::Itertools;
 use num::Zero;
 
 use crate::onnx::model::Graph;
@@ -131,7 +132,8 @@ pub fn infer_node_output(
                                     x as usize
                                 }
                             })
-                            .collect(),
+                            .collect_vec()
+                            .as_slice(),
                     ))
                 }
                 _ => Err(TypeError::InferError("Invalid shape".to_string())),
@@ -165,12 +167,12 @@ pub fn infer_node_output(
             cond_error!(a.elem_type != b.elem_type);
 
             let (ldim, l_prepended) = if a.dims.ndim() == 1 {
-                (ResolvedTensorDims::new(vec![1, a.dims[0]]), true)
+                (ResolvedTensorDims::new(&[1, a.dims[0]]), true)
             } else {
                 (a.dims.clone(), false)
             };
             let (rdim, r_prepended) = if b.dims.ndim() == 1 {
-                (ResolvedTensorDims::new(vec![b.dims[0], 1]), true)
+                (ResolvedTensorDims::new(&[b.dims[0], 1]), true)
             } else {
                 (b.dims.clone(), false)
             };
@@ -206,7 +208,7 @@ pub fn infer_node_output(
             dims[1] = channel;
             res.push(ResolvedTensorType::new(
                 x.elem_type,
-                ResolvedTensorDims::new(dims),
+                ResolvedTensorDims::new(&dims),
             ));
         }
 
@@ -221,10 +223,9 @@ pub fn infer_node_output(
             // let a_k = a.dims[1 - a_idx];
             // let b_k = b.dims[b_idx];
             // assert!(a_k == b_k);
-            let dims = [m, n];
             res.push(ResolvedTensorType::new(
                 a.elem_type,
-                ResolvedTensorDims::new(dims.to_vec()),
+                ResolvedTensorDims::new(&[m, n]),
             ));
         }
         Operator::ReduceMax(ref reduce) |
@@ -251,7 +252,7 @@ pub fn infer_node_output(
 
             res.push(ResolvedTensorType::new(
                 data.elem_type,
-                ResolvedTensorDims::new(dims),
+                ResolvedTensorDims::new(&dims),
             ));
         }
 
@@ -279,7 +280,7 @@ pub fn infer_node_output(
             let end = end.map(|x| x.index(ndim)).unwrap_or(ndim);
             res.push(ResolvedTensorType::new(
                 SIntType::I64.into(),
-                ResolvedTensorDims::new(vec![end - start]),
+                ResolvedTensorDims::new(&[end - start]),
             ));
         }
 
@@ -342,11 +343,11 @@ pub fn infer_node_output(
             let ty = if matches!(mode, UnifyMode::CheckStrides) {
                 ResolvedTensorType::with_stride(
                     input.elem_type,
-                    ResolvedTensorDims::new(dims),
-                    ResolvedTensorDims::new(strides),
+                    ResolvedTensorDims::new(&dims),
+                    ResolvedTensorDims::new(&strides),
                 )
             } else {
-                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(dims))
+                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(&dims))
             };
             res.push(ty);
         }
@@ -367,7 +368,7 @@ pub fn infer_node_output(
             }
             res.push(ResolvedTensorType::new(
                 inputs[0].elem_type,
-                ResolvedTensorDims::new(dims),
+                ResolvedTensorDims::new(&dims),
             ));
         }
 
@@ -404,11 +405,11 @@ pub fn infer_node_output(
             let ty = if matches!(mode, UnifyMode::CheckStrides) {
                 ResolvedTensorType::with_stride(
                     input.elem_type,
-                    ResolvedTensorDims::new(dims),
-                    ResolvedTensorDims::new(strides),
+                    ResolvedTensorDims::new(&dims),
+                    ResolvedTensorDims::new(&strides),
                 )
             } else {
-                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(dims))
+                ResolvedTensorType::new(input.elem_type, ResolvedTensorDims::new(&dims))
             };
             res.push(ty);
         }
@@ -428,7 +429,7 @@ pub fn infer_node_output(
                             Ok(x as usize)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    ResolvedTensorType::new(value.elem_type(), ResolvedTensorDims::new(dims))
+                    ResolvedTensorType::new(value.elem_type(), ResolvedTensorDims::new(&dims))
                 }
                 _ => {
                     return Err(TypeError::InferError("Invalid shape".to_string()));
@@ -497,7 +498,7 @@ pub fn infer_node_output(
             let dims = vec![dims, count];
             res.push(ResolvedTensorType::new(
                 SIntType::I64.into(),
-                ResolvedTensorDims::new(dims),
+                ResolvedTensorDims::new(&dims),
             ));
         }
 

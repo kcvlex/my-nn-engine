@@ -61,7 +61,7 @@ impl EarlyBroadcast {
                 let strides = {
                     let mut res = vec![0; dims.ndim()];
                     res[1] = 1;
-                    ResolvedTensorDims::new(res)
+                    ResolvedTensorDims::new(&res)
                 };
                 let new_type = ResolvedTensorType::with_stride(elem_type, dims, strides);
                 modifier.replace_tensor_type(graph, param, new_type);

@@ -102,7 +102,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 }
                 _ => None,
             }?;
-            let dims = ResolvedTensorDims::from(dims);
+            let dims = ResolvedTensorDims::from(&dims[..]);
             let data = value.to_tensor_data(dims.size());
             let tensor = Tensor::new(dims, data).ok()?;
             Some(vec![tensor])
@@ -142,7 +142,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 TensorData::UInt(_, data) => calc(data, dims),
                 TensorData::Float(_, data) => calc(data, dims),
             };
-            let shape = ResolvedTensorDims::from(vec![indices.len(), indices[0].len()]);
+            let shape = ResolvedTensorDims::new(&[indices.len(), indices[0].len()]);
             let indices = indices.into_iter().flatten().collect_vec();
             let tensor = Tensor::new(shape, TensorData::SInt(SIntType::I64, indices)).ok()?;
             Some(vec![tensor])

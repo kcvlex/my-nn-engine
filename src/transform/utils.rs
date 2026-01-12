@@ -123,8 +123,8 @@ impl ReshapeGenerator {
         self
     }
 
-    pub fn set_dims(mut self, dims: ResolvedTensorDims) -> Self {
-        self.dims = Some(dims);
+    pub fn set_dims(mut self, dims: &[usize]) -> Self {
+        self.dims = Some(ResolvedTensorDims::new(dims));
         self
     }
 

@@ -3,6 +3,8 @@ mod cuda;
 
 use std::path::Path;
 
+use log::info;
+
 use crate::codegen::CodeGenError;
 use crate::onnx::load::*;
 use crate::onnx::model::Graph;
@@ -22,8 +24,6 @@ use crate::tensor::types::TypeError;
 use crate::tensor::types::UIntType;
 use crate::tensor::Tensor;
 use crate::transform::transform_graph;
-
-use log::info;
 
 enum StrictTensor {
     I32(Vec<i32>),

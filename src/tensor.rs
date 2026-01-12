@@ -77,7 +77,7 @@ impl Tensor {
 
 impl TensorData {
     pub fn into_1d_tensor(self) -> Tensor {
-        let dims = ResolvedTensorDims::new(vec![self.size()]);
+        let dims = ResolvedTensorDims::new(&[self.size()]);
         Tensor::new(dims, self).unwrap()
     }
 }
@@ -215,7 +215,7 @@ macro_rules! define_try_from {
         impl TryFrom<ndarray::Array<$ty, ndarray::IxDyn>> for Tensor {
             type Error = TypeError;
             fn try_from(array: ndarray::Array<$ty, ndarray::IxDyn>) -> Result<Self, Self::Error> {
-                let dim = ResolvedTensorDims::new(array.shape().to_vec());
+                let dim = ResolvedTensorDims::new(&array.shape()[..]);
                 let data: TensorData = array.flatten().to_vec().into();
                 Self::new(dim, data)
             }

@@ -32,7 +32,7 @@ fn gen_im2col_from_conv(
     let one_fm_size = one_fm_shape.size(); // size of one feature_map
     let one_kernel_size = one_kernel_shape.size();
     let im2col_output_shape =
-        ResolvedTensorDims::new(vec![one_fm_size * nbatch, one_kernel_size * channel]);
+        ResolvedTensorDims::new(&[one_fm_size * nbatch, one_kernel_size * channel]);
     let im2col = Im2Col {
         nbatch,
         one_fm_shape,
@@ -59,7 +59,7 @@ fn gen_im2col_from_pooling(
 
     let row = one_fm_shape.size() * channel * nbatch;
     let col = kernel_shape.size();
-    let im2col_output_shape = ResolvedTensorDims::new(vec![row, col]);
+    let im2col_output_shape = ResolvedTensorDims::new(&[row, col]);
     let im2col = Im2Col {
         nbatch,
         one_fm_shape,
@@ -139,16 +139,13 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             // Reshape the kernel
             let reshaped_kernel = ReshapeGenerator::default()
                 .set_input(kernel_value)
-                .set_dims(ResolvedTensorDims::new(vec![
-                    feature_map_count,
-                    kernel_shape.size() / feature_map_count,
-                ]))
+                .set_dims(&[feature_map_count, kernel_shape.size() / feature_map_count])
                 .set_node_name(format!("Im2Col_{index}_ReshapeKernel"))
                 .set_value_name(format!("Im2Col_{index}_ReshapeKernel"))
                 .generate(graph, modifier)
                 .unwrap();
 
-            let dims = ResolvedTensorDims::new(vec![
+            let dims = ResolvedTensorDims::new(&[
                 im2col_output_shape[0],
                 kernel_shape.size() / im2col_output_shape[1],
             ]);
@@ -185,7 +182,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             };
             let reshaped_output = ReshapeGenerator::default()
                 .set_input(gemm_output)
-                .set_dims(ResolvedTensorDims::new(reshaped_output_shape.clone()))
+                .set_dims(&reshaped_output_shape)
                 .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
                 .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
                 .generate(graph, modifier)
@@ -219,7 +216,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 reshaped_bias_shape[0] = bias_dims[0];
                 let reshaped_bias = ReshapeGenerator::default()
                     .set_input(bias)
-                    .set_dims(ResolvedTensorDims::new(reshaped_bias_shape))
+                    .set_dims(&reshaped_bias_shape)
                     .set_node_name(format!("Im2Col_{index}_ReshapeBias"))
                     .set_value_name(format!("Im2Col_{index}_ReshapeBias"))
                     .generate(graph, modifier)
@@ -285,7 +282,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             );
 
             // Reduce
-            let dims = ResolvedTensorDims::new(vec![row]);
+            let dims = ResolvedTensorDims::new(&[row]);
             assert_eq!(dims.size(), output_shape.size());
             let reduced_data = modifier.register_new_value(
                 graph,
@@ -304,7 +301,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             // Reshape
             let reshaped_output = ReshapeGenerator::default()
                 .set_input(reduced_data)
-                .set_dims(output_shape.clone())
+                .set_dims(&output_shape[..])
                 .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
                 .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
                 .generate(graph, modifier)

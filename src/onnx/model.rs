@@ -64,7 +64,7 @@ fn unify_types(
         res.push(*rd);
     }
 
-    Some(res.into())
+    Some(ResolvedTensorDims::new(&res))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,12 +135,9 @@ impl Graph {
 
                 // E.g., Outputs of yolov4
                 if let Some(ref dims) = &ty.dims {
-                    let _ = unify_types(
-                        dims.inner().as_slice(),
-                        &resolved.dims[..],
-                        &mut self.resolved_params,
-                    )
-                    .ok_or(TypeError::InconsistentInput)?;
+                    let _ =
+                        unify_types(dims.inner(), &resolved.dims[..], &mut self.resolved_params)
+                            .ok_or(TypeError::InconsistentInput)?;
                 }
                 self.values[value_id].ty = Some(TensorType::Resolved(resolved.clone()));
                 Ok(())
