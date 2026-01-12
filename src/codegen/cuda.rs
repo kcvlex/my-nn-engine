@@ -21,6 +21,7 @@ use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
+use crate::codegen::cuda::kernel::FuncQualifier;
 use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
@@ -759,7 +760,11 @@ impl<'sched> HostCodeGenerator<'sched> {
             })
             .collect::<Result<Vec<_>, BuildError>>()?;
 
-        let decl = KernelDecl { kernel_id, params };
+        let decl = KernelDecl {
+            kernel_id,
+            params,
+            qualifier: FuncQualifier::Global,
+        };
         self.separated_codes.push(SeparatedCode::Device(DeviceCode {
             body: generator(self.schedule, decl.clone())?,
         }));

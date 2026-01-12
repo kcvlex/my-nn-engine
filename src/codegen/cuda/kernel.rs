@@ -3,6 +3,7 @@ use std::fmt::Display;
 use delegate::delegate;
 use derive_more::From;
 use itertools::izip;
+use itertools::Itertools;
 use strum_macros::AsRefStr;
 
 use crate::codegen::cuda::*;
@@ -188,23 +189,13 @@ enum KernelStmt {
         var: KernelVar,
         init: KernelExpr,
     },
-    Assign {
-        lhs: KernelExpr,
-        rhs: KernelExpr,
-    },
+    Return(KernelExpr),
 }
 
 #[derive(Clone)]
 pub enum KernelExpr {
     KernelVar(KernelVar),
-    ArrayAccess {
-        array: Box<KernelExpr>,
-        index: Box<KernelExpr>,
-    },
-    CallFunction {
-        name: String,
-        args: Vec<KernelExpr>,
-    },
+    CallFunction { name: String, args: Vec<KernelExpr> },
     Raw(String),
 }
 
@@ -230,8 +221,8 @@ impl Display for KernelStmt {
                 KernelStmt::DefineVar { ty, var, init } => {
                     format!("{} {} = {};", ty, var, init)
                 }
-                KernelStmt::Assign { lhs, rhs } => {
-                    format!("{} = {};", lhs, rhs)
+                KernelStmt::Return(expr) => {
+                    format!("return {};", expr)
                 }
             }
         )
@@ -245,9 +236,6 @@ impl Display for KernelExpr {
             "{}",
             match self {
                 KernelExpr::KernelVar(var) => var.to_string(),
-                KernelExpr::ArrayAccess { array, index } => {
-                    format!("{}[{}]", array, index)
-                }
                 KernelExpr::CallFunction { name, args } => {
                     let args_str: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
                     format!("{}({})", name, args_str.join(", "))
@@ -272,28 +260,56 @@ impl Display for KernelVar {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum FuncQualifier {
+    Global,
+    Device(DataType),
+}
+
+impl Display for FuncQualifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                FuncQualifier::Global => "__global__",
+                FuncQualifier::Device(_) => "__device__",
+            }
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct KernelDecl {
     pub kernel_id: KernelId,
     pub params: Vec<(KernelVar, TypeSymbol)>,
+    pub qualifier: FuncQualifier,
 }
 
 impl KernelDecl {
     pub fn name(&self) -> String {
-        format!("kernel_{}", self.kernel_id.index())
+        let suffix = match self.qualifier {
+            FuncQualifier::Global => "global",
+            FuncQualifier::Device(_) => "device",
+        };
+        format!("kernel_{}_{}", self.kernel_id.index(), suffix)
     }
 
     pub fn decl(&self) -> String {
-        let args: Vec<String> = self
+        let args = self
             .params
             .iter()
             .map(|(var, ty)| format!("{} {}", ty, var))
-            .collect();
-        format!(
-            "extern \"C\" __global__ void {}({})",
-            self.name(),
-            args.join(", ")
-        )
+            .collect_vec()
+            .join(", ");
+        let ret_ty = match self.qualifier {
+            FuncQualifier::Global => "void".to_string(),
+            FuncQualifier::Device(dt) => dt.to_string(),
+        };
+        let name = self.name();
+        let qual = self.qualifier.to_string();
+
+        format!("{qual} {ret_ty} {name}({args})")
     }
 }
 
@@ -445,46 +461,22 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         }
     }
 
-    fn build_body(&mut self) -> Result<Vec<KernelStmt>, BuildError> {
+    fn build_body(&mut self) -> Result<(String, KernelDecl), BuildError> {
         let mut stmts = Vec::new();
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-
-        macro_rules! handle_input_value {
-            ($value_id: expr, $target_dims: expr) => {{
-                let idx = self.ctx.tensor_idx($value_id, $target_dims)?;
-                let array = KernelVar::Value($value_id);
-                let var = self.ctx.new_local_var();
-                stmts.push(KernelStmt::DefineVar {
-                    ty: TypeSymbol::Primitive(
-                        self.ctx.get_resolved_tensor_type($value_id)?.elem_type,
-                    ),
-                    var,
-                    init: KernelExpr::ArrayAccess {
-                        array: Box::new(array.into()),
-                        index: Box::new(idx),
-                    },
-                });
-                var
-            }};
-        }
-
-        let output_dims = self
-            .ctx
-            .get_resolved_tensor_type(kernel.outputs[0])?
-            .dims
-            .clone();
         let KernelBody::ElementWises(ElementWises { ops }) = &kernel.body else {
             unreachable!()
         };
-        let output = {
+
+        assert!(kernel.outputs.len() == 1);
+        let output: KernelVar = {
             let mut outputs = Vec::new();
             for (op, args) in ops.iter() {
                 let mut inputs = Vec::with_capacity(args.len());
                 for input in args.iter() {
                     match input {
                         ElementwiseOpArg::Input(i) => {
-                            let var = handle_input_value!(kernel.inputs[*i], Some(&output_dims));
-                            inputs.push(var);
+                            inputs.push(KernelVar::Value(kernel.inputs[*i]))
                         }
                         ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                     }
@@ -501,40 +493,69 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 });
                 outputs.push(var)
             }
-            outputs.pop().unwrap().into()
+            outputs.pop().unwrap()
         };
+        stmts.push(KernelStmt::Return(output.into()));
 
-        assert!(kernel.outputs.len() == 1);
-        let output_array = kernel.outputs[0];
-        stmts.push(KernelStmt::Assign {
-            lhs: KernelExpr::ArrayAccess {
-                array: Box::new(KernelVar::Value(output_array).into()),
-                index: Box::new(self.ctx.tensor_idx(output_array, None)?),
-            },
-            rhs: output,
-        });
-        Ok(stmts)
+        let device_decl = {
+            let mut res = self.ctx.decl.clone();
+            assert!(matches!(res.qualifier, FuncQualifier::Global));
+            res.qualifier = FuncQualifier::Device(
+                self.ctx
+                    .get_resolved_tensor_type(kernel.outputs[0])?
+                    .elem_type,
+            );
+            res.params = res
+                .params
+                .iter()
+                .skip(1)
+                .map(|(var, ty)| {
+                    assert!(matches!(var, KernelVar::Value(_)));
+                    let TypeSymbol::Pointer(ty) = ty else {
+                        panic!();
+                    };
+                    (*var, *ty.clone())
+                })
+                .collect_vec();
+            res
+        };
+        Ok((stmts.iter().map(|x| x.to_string()).join("\n"), device_decl))
     }
 
     pub fn build(&mut self) -> Result<String, BuildError> {
-        let body = self
-            .build_body()?
-            .iter()
-            .map(|stmt| stmt.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let size = {
-            let output = self.ctx.schedule.kernels[self.ctx.decl.kernel_id].outputs[0];
-            self.ctx.get_resolved_tensor_type(output)?.dims.size()
-        };
+        let (body, device_decl) = self.build_body()?;
+        let output = self.ctx.schedule.kernels[self.ctx.decl.kernel_id].outputs[0];
+        let output_ty = self.ctx.get_resolved_tensor_type(output)?;
+        let size = output_ty.dims.size();
         let gid = KernelVar::Gid;
         let decl = self.ctx.decl.decl();
+        let device_decl_name = device_decl.name();
+        let args = device_decl
+            .params
+            .iter()
+            .map(|(var, _)| {
+                let KernelVar::Value(value_id) = var else {
+                    panic!();
+                };
+                let idx = self.ctx.tensor_idx(*value_id, Some(&output_ty.dims))?;
+                Ok(format!("{}[{}]", var, idx))
+            })
+            .collect::<Result<Vec<_>, BuildError>>()?
+            .join(", ");
+        let out = {
+            let idx = self.ctx.tensor_idx(output, None)?;
+            format!("{}[{}]", KernelVar::Value(output), idx)
+        };
+        let device_decl = device_decl.decl();
         Ok(format!(
             "
+{device_decl} {{
+    {body}
+}};
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
-    {body}
+    {out} = {device_decl_name}({args});
 }}
 "
         ))
