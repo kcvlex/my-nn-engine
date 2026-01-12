@@ -711,9 +711,8 @@ impl<'ll> CodeGen<'ll, '_> {
 
         let exit = match &kernel.body {
             KernelBody::SingleKernel(SingleKernel { op }) => match op {
-                operator @ (Operator::Add |
+                Operator::Add |
                 Operator::BatchNormalization(_) |
-                Operator::Contiguous |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
@@ -724,27 +723,13 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sigmoid |
                 Operator::Sqrt |
                 Operator::Sub |
-                Operator::Tanh) => {
-                    let operands: &'static [Option<usize>] = match operator {
-                        Operator::Add | Operator::Mul | Operator::Pow => &[Some(0), Some(1)],
-                        Operator::BatchNormalization(_) => {
-                            &[Some(0), Some(1), Some(2), Some(3), Some(4)]
-                        }
-                        Operator::Exp |
-                        Operator::LeakyReLU(_) |
-                        Operator::Log |
-                        Operator::Reciprocal |
-                        Operator::ReLU |
-                        Operator::Sigmoid |
-                        Operator::Sqrt |
-                        Operator::Tanh |
-                        Operator::Contiguous => &[],
-                        _ => unreachable!(),
-                    };
+                Operator::Tanh => unreachable!(),
+
+                operator @ Operator::Contiguous => {
                     let target_dim = ptrs[0].ty.dims.clone();
                     let nest = target_dim.ndim();
                     let operator =
-                        adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], operands, &target_dim);
+                        adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], &[], &target_dim);
                     let op = Operation {
                         opcode: operator.into(),
                         operands: ptrs.into(),
@@ -792,7 +777,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 }
                 _ => todo!("{:?}", op),
             },
-            KernelBody::FusedElementWises(FusedElementWises { ops }) => {
+            KernelBody::ElementWises(ElementWises { ops }) => {
                 let target_dim = ptrs[0].ty.dims.clone();
                 let nest = target_dim.ndim();
                 let ops: Vec<_> = ops

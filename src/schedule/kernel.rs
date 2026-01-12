@@ -110,11 +110,7 @@ impl KernelsBuilder {
     }
 
     // ids must be sorted.
-    fn build_bundled_ops(
-        &self,
-        ord_ids: &[usize],
-        graph: &Graph,
-    ) -> (FusedElementWises, Vec<ValueId>) {
+    fn build_bundled_ops(&self, ord_ids: &[usize], graph: &Graph) -> (ElementWises, Vec<ValueId>) {
         use std::collections::hash_map::Entry;
 
         assert!(ord_ids.is_sorted());
@@ -154,7 +150,7 @@ impl KernelsBuilder {
             ops.push((node.op.clone(), args));
         }
 
-        (FusedElementWises { ops }, inputs)
+        (ElementWises { ops }, inputs)
     }
 
     fn elementwise_order2order(&self, ord: usize) -> usize {
@@ -203,10 +199,21 @@ impl KernelsBuilder {
                 KernelTag::Ignore => continue,
                 KernelTag::Single => {
                     let node = &graph.nodes[node_id];
-                    let body = SingleKernel {
-                        op: node.op.clone(),
+                    let op = node.op.clone();
+                    let body = if op.is_elementwise() {
+                        let ops = vec![(
+                            op,
+                            (0..node.inputs.len())
+                                .map(ElementwiseOpArg::Input)
+                                .collect(),
+                        )];
+                        KernelBody::ElementWises(ElementWises { ops })
+                    } else {
+                        let body = SingleKernel {
+                            op: node.op.clone(),
+                        };
+                        KernelBody::SingleKernel(body)
                     };
-                    let body = KernelBody::SingleKernel(body);
                     Kernel {
                         inputs: graph.nodes[node_id].inputs.clone(),
                         outputs: graph.nodes[node_id].outputs.clone(),
@@ -221,8 +228,8 @@ impl KernelsBuilder {
                     let last_node = &graph.nodes[node_id];
                     let outputs = last_node.outputs.clone();
                     let (body, inputs) = self.build_bundled_ops(group, graph);
-                    let body = KernelBody::FusedElementWises(body);
-                    let name = format!("Fused_Elementwise_{}", last_node.name);
+                    let body = KernelBody::ElementWises(body);
+                    let name = format!("Elementwises_{}", last_node.name);
                     Kernel {
                         inputs,
                         outputs,

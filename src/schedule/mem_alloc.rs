@@ -324,7 +324,7 @@ impl<'sched> MemoryPlanner<'sched> {
                     .is_some(),
                 _ => op.is_elementwise(),
             },
-            KernelBody::FusedElementWises(_) => true,
+            KernelBody::ElementWises(_) => true,
         }
     }
 }

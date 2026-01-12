@@ -859,6 +859,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                         );
                     }
                 }
+
                 Operator::Add |
                 Operator::Div |
                 Operator::BatchNormalization(_) |
@@ -873,22 +874,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Sigmoid |
                 Operator::Sqrt |
                 Operator::Sub |
-                Operator::Tanh => {
-                    let output_size = self
-                        .get_resolved_tensor_type(kernel.outputs[0])?
-                        .dims
-                        .size();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        ElementwiseKernelBuilder::new(sched, decl).build()
-                    })?;
-                    self.stmts.push(
-                        create_launch_kernel(
-                            kernel::CUDAKernel::GeneratedKernel(generated),
-                            output_size,
-                        )?
-                        .into(),
-                    );
-                }
+                Operator::Tanh => unreachable!(),
 
                 Operator::Concat(_) => {
                     let output_size = self
@@ -1281,7 +1267,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     unimplemented!("Kernel body not implemented: {:?}", op)
                 }
             },
-            KernelBody::FusedElementWises(_) => {
+            KernelBody::ElementWises(_) => {
                 let output_size = self
                     .get_resolved_tensor_type(kernel.outputs[0])?
                     .dims

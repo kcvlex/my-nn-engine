@@ -16,7 +16,7 @@ impl InnermostOMP {
                             return None;
                         }
                     }
-                    KernelBody::FusedElementWises(FusedElementWises { ops }) => {
+                    KernelBody::ElementWises(ElementWises { ops }) => {
                         for (_, args) in ops.iter() {
                             for arg in args {
                                 match arg {

@@ -54,7 +54,7 @@ pub struct Kernel {
 #[derive(Debug, Clone)]
 pub enum KernelBody {
     SingleKernel(SingleKernel),
-    FusedElementWises(FusedElementWises),
+    ElementWises(ElementWises),
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +69,7 @@ pub enum ElementwiseOpArg {
 }
 
 #[derive(Debug, Clone)]
-pub struct FusedElementWises {
+pub struct ElementWises {
     pub ops: Vec<(Operator, Vec<ElementwiseOpArg>)>,
 }
 
@@ -220,7 +220,7 @@ macro_rules! matches_single_kernel {
     ($kernel:expr, $pat:pat) => {{
         match &$kernel.body {
             KernelBody::SingleKernel(SingleKernel { op }) => matches!(op, $pat),
-            KernelBody::FusedElementWises(_) => false,
+            KernelBody::ElementWises(_) => false,
         }
     }};
 }

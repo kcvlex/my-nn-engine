@@ -699,6 +699,7 @@ impl Operator {
             self,
             Operator::Add |
                 Operator::BatchNormalization(_) |
+                Operator::Cast(_) |
                 Operator::Div |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |

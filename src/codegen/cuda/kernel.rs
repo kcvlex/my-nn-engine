@@ -473,43 +473,35 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             .get_resolved_tensor_type(kernel.outputs[0])?
             .dims
             .clone();
-        let output = match &kernel.body {
-            KernelBody::SingleKernel(SingleKernel { op }) => {
-                let mut inputs = Vec::with_capacity(kernel.inputs.len());
-                for input in kernel.inputs.iter() {
-                    let var = handle_input_value!(*input, Some(&output_dims));
-                    inputs.push(var);
-                }
-                self.single_op(op, &inputs)
-            }
-            KernelBody::FusedElementWises(FusedElementWises { ops }) => {
-                let mut outputs = Vec::new();
-                for (op, args) in ops.iter() {
-                    let mut inputs = Vec::with_capacity(args.len());
-                    for input in args.iter() {
-                        match input {
-                            ElementwiseOpArg::Input(i) => {
-                                let var =
-                                    handle_input_value!(kernel.inputs[*i], Some(&output_dims));
-                                inputs.push(var);
-                            }
-                            ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
+        let KernelBody::ElementWises(ElementWises { ops }) = &kernel.body else {
+            unreachable!()
+        };
+        let output = {
+            let mut outputs = Vec::new();
+            for (op, args) in ops.iter() {
+                let mut inputs = Vec::with_capacity(args.len());
+                for input in args.iter() {
+                    match input {
+                        ElementwiseOpArg::Input(i) => {
+                            let var = handle_input_value!(kernel.inputs[*i], Some(&output_dims));
+                            inputs.push(var);
                         }
+                        ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                     }
-                    let var = self.ctx.new_local_var();
-                    stmts.push(KernelStmt::DefineVar {
-                        ty: TypeSymbol::Primitive(
-                            self.ctx
-                                .get_resolved_tensor_type(kernel.outputs[0])?
-                                .elem_type,
-                        ),
-                        var,
-                        init: self.single_op(op, &inputs),
-                    });
-                    outputs.push(var)
                 }
-                outputs.pop().unwrap().into()
+                let var = self.ctx.new_local_var();
+                stmts.push(KernelStmt::DefineVar {
+                    ty: TypeSymbol::Primitive(
+                        self.ctx
+                            .get_resolved_tensor_type(kernel.outputs[0])?
+                            .elem_type,
+                    ),
+                    var,
+                    init: self.single_op(op, &inputs),
+                });
+                outputs.push(var)
             }
+            outputs.pop().unwrap().into()
         };
 
         assert!(kernel.outputs.len() == 1);
