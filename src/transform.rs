@@ -8,6 +8,7 @@ mod utils;
 
 pub use epilog::create_epilog_passes;
 pub use layout::create_layout_passes;
+use log::info;
 pub use lower::create_lower_passes;
 use modify::GraphOp;
 use modify::NodeDelete;
@@ -49,9 +50,9 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        println!("SimplePassManager: {}", self.name());
+        info!("SimplePassManager: {}", self.name());
         for opt in self.passes.iter() {
-            println!("-- Running pass: {}", opt.summary());
+            info!("-- Running pass: {}", opt.summary());
             opt.run(graph, modifier);
             modifier.update_deleted_nodes(graph);
 

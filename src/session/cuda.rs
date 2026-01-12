@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use itertools::zip_eq;
+use log::info;
 use rayon::prelude::*;
 use tempfile::TempDir;
 
@@ -70,7 +71,7 @@ impl SessionCUDA {
                 tmp_dir.path().join("common.o"),
             ),
         ];
-        println!("Generated");
+        info!("Generated");
 
         dbg!(&tmp_dir);
         let shared_lib = tmp_dir.path().join("libmodel.so");
@@ -135,7 +136,7 @@ impl SessionCUDA {
             .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
-        println!("Compiled");
+        info!("Compiled");
 
         let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -143,7 +144,7 @@ impl SessionCUDA {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let func = *func;
 
-        println!("Loaded");
+        info!("Loaded");
 
         Ok(Self {
             input_ty,

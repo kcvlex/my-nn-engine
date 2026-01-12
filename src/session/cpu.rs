@@ -3,6 +3,7 @@ use std::process::Command;
 use inkwell::context::Context;
 use inkwell::targets::FileType;
 use itertools::zip_eq;
+use log::info;
 use rayon::prelude::*;
 use tempfile::TempDir;
 
@@ -82,7 +83,7 @@ impl SessionCPU {
 
         dbg!(&tmp_dir);
 
-        println!("Compiling");
+        info!("Compiling");
         let objs = codegens
             .into_par_iter()
             //.into_iter()
@@ -99,7 +100,7 @@ impl SessionCPU {
                 path
             })
             .collect::<Vec<_>>();
-        println!("Compiled");
+        info!("Compiled");
 
         let shared_obj = tmp_dir.path().join("model.so");
 
@@ -120,7 +121,7 @@ impl SessionCPU {
             .status()
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
-        println!("Generated");
+        info!("Generated");
 
         let lib = unsafe { libloading::Library::new(shared_obj.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
@@ -128,7 +129,7 @@ impl SessionCPU {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let func = *func;
 
-        println!("Loaded");
+        info!("Loaded");
 
         let tmp_dir = if WRITE_LL {
             let _ = tmp_dir.into_path();

@@ -23,6 +23,8 @@ use crate::tensor::types::UIntType;
 use crate::tensor::Tensor;
 use crate::transform::transform_graph;
 
+use log::info;
+
 enum StrictTensor {
     I32(Vec<i32>),
     I64(Vec<i64>),
@@ -129,10 +131,10 @@ impl Session {
         input_ty: Option<&[ResolvedTensorType]>,
         options: &Options,
     ) -> Result<Self, SessionError> {
-        println!("Session starting");
+        info!("Session starting");
 
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
-        println!("Model loaded");
+        info!("Model loaded");
 
         if let Some(input_ty) = input_ty {
             model
@@ -142,7 +144,7 @@ impl Session {
         }
 
         transform_graph(&mut model.graph, options);
-        println!("Transformed");
+        info!("Transformed");
 
         // {
         //     use std::path::PathBuf;
@@ -181,7 +183,7 @@ impl Session {
         let mut schedule = Schedule::new(model.graph, options.clone());
         schedule.assign_mem();
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
-        println!("Scheduled");
+        info!("Scheduled");
 
         match options.target {
             Target::CPU => {
