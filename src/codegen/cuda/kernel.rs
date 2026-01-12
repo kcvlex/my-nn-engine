@@ -320,6 +320,7 @@ impl<'sched> BuilderContext<'sched> {
     fn tensor_idx(
         &self,
         value_id: ValueId,
+        offset: KernelVar,
         target_dims: Option<&ResolvedTensorDims>,
     ) -> Result<KernelExpr, BuildError> {
         let ty = self.get_resolved_tensor_type(value_id)?;
@@ -342,7 +343,7 @@ impl<'sched> BuilderContext<'sched> {
             }
             d @ (2..=5) => {
                 let name = format!("to_tensor_idx{}d", d);
-                let mut args = vec![KernelVar::Gid.into()];
+                let mut args = vec![offset.into()];
                 for cnst in ty.dims[1..].iter().chain(ty.strides().iter()) {
                     args.push(KernelExpr::Raw(cnst.to_string()));
                 }
@@ -509,13 +510,15 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 let KernelVar::Value(value_id) = var else {
                     panic!();
                 };
-                let idx = self.ctx.tensor_idx(*value_id, Some(&output_ty.dims))?;
+                let idx = self
+                    .ctx
+                    .tensor_idx(*value_id, KernelVar::Gid, Some(&output_ty.dims))?;
                 Ok(format!("{}[{}]", var, idx))
             })
             .collect::<Result<Vec<_>, BuildError>>()?
             .join(", ");
         let out = {
-            let idx = self.ctx.tensor_idx(output, None)?;
+            let idx = self.ctx.tensor_idx(output, KernelVar::Gid, None)?;
             format!("{}[{}]", KernelVar::Value(output), idx)
         };
         let device_decl = device_decl.decl();
@@ -837,7 +840,7 @@ impl<'sched> ContiguousBuilder<'sched> {
         let input = kernel.inputs[0];
         let output = kernel.outputs[0];
         let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
-        let input_idx = self.ctx.tensor_idx(input, None)?;
+        let input_idx = self.ctx.tensor_idx(input, KernelVar::Gid, None)?;
         let in_ = KernelVar::Value(input);
         let out = KernelVar::Value(output);
         let decl = self.ctx.decl.decl();
