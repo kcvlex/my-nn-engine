@@ -48,6 +48,7 @@ pub enum Operator {
     Gemm(Gemm),
     GlobalAveragePool,
     Identity,
+    LayerNormalization(LayerNormalization),
     LeakyReLU(LeakyReLU),
     Log,
     MatMul,
@@ -232,6 +233,12 @@ impl Conv {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gather {
     pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerNormalization {
+    pub axis: TensorIndex,
+    pub epsilon: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -654,6 +661,7 @@ impl Operator {
             Operator::Gemm(_) => "Gemm",
             Operator::GlobalAveragePool => "GlobalAveragePool",
             Operator::Identity => "Identity",
+            Operator::LayerNormalization(_) => "LayerNormalization",
             Operator::LeakyReLU(_) => "LeakyReLU",
             Operator::Log => "Log",
             Operator::MatMul => "MatMul",
@@ -738,6 +746,10 @@ pub mod args {
     pub const CONV_DATA: usize = 0;
     pub const CONV_WEIGHT: usize = 1;
     pub const CONV_BIAS: usize = 2;
+
+    pub const LAYER_NORM_DATA: usize = 0;
+    pub const LAYER_NORM_SCALE: usize = 1;
+    pub const LAYER_NORM_BIAS: usize = 2;
 
     pub const RELU_DATA: usize = 0;
 

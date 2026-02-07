@@ -620,6 +620,23 @@ impl Gemm {
     }
 }
 
+impl LayerNormalization {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|x| x.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(-1));
+        let epsilon = attributes
+            .get("epsilon")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(1e-5)
+            .into();
+        Ok(LayerNormalization { axis, epsilon })
+    }
+}
+
 impl LeakyReLU {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let alpha = attributes
@@ -878,6 +895,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
         "Gemm" => Ok(Operator::Gemm(Gemm::load(attributes)?)),
         "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
+        "LayerNormalization" => Ok(Operator::LayerNormalization(LayerNormalization::load(
+            attributes,
+        )?)),
         "LeakyRelu" => Ok(Operator::LeakyReLU(LeakyReLU::load(attributes)?)),
         "Log" => Ok(Operator::Log),
         "Identity" => Ok(Operator::Identity),
