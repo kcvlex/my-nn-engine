@@ -14,6 +14,7 @@ use crate::tensor::types::DataType;
 #[derive(From)]
 pub enum CUDAKernel {
     GeneratedKernel(GeneratedKernel),
+    LayerNormKernel(LayerNormKernel),
     SoftmaxKernel(SoftmaxKernel),
 }
 
@@ -38,6 +39,37 @@ macro_rules! cast {
     ($ty:expr, $e:expr) => {
         format!("({} *)({})", $ty, $e)
     };
+}
+
+pub struct LayerNormKernel {
+    pub data_ty: DataType,
+    pub block_size: usize,
+    pub axis_dim: usize,
+
+    pub out: Expr,
+    pub in_: Expr,
+    pub scale: Expr,
+    pub bias: Expr,
+    pub size: Expr,
+    pub epsilon: f64,
+}
+
+impl LayerNormKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "layer_norm<{}, {}, {}>",
+            self.data_ty, self.block_size, self.axis_dim
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            cast!(self.data_ty, self.scale),
+            cast!(self.data_ty, self.bias),
+            self.epsilon.to_string(),
+            self.size.to_string(),
+        ];
+        (id, args)
+    }
 }
 
 pub struct SoftmaxKernel {
@@ -78,6 +110,7 @@ impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
             CUDAKernel::GeneratedKernel(g) => g,
+            CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::SoftmaxKernel(s) => s,
         } {
             #[call(fragment)]

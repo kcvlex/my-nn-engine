@@ -38,6 +38,7 @@ use crate::codegen::cuda::stream::EventId;
 use crate::codegen::cuda::stream::KernelStreamAssignment;
 use crate::codegen::cuda::stream::StreamId;
 use crate::onnx::model::ValueId;
+use crate::onnx::operator;
 use crate::onnx::operator::*;
 use crate::options::Options;
 use crate::schedule::*;
@@ -1143,6 +1144,52 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
 
+                Operator::LayerNormalization(LayerNormalization { axis, epsilon }) => {
+                    let input_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[operator::args::LAYER_NORM_DATA])?;
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ =
+                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_DATA])?;
+                    let scale =
+                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_SCALE])?;
+                    let bias =
+                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_BIAS])?;
+                    let axis = axis.index(input_ty.dims.ndim());
+                    let epsilon = *epsilon;
+                    if input_ty.strides().last() != Some(&1) || axis != input_ty.dims.ndim() - 1 {
+                        unimplemented!(
+                            "LayerNormalization currently supports only last-axis normalization"
+                        );
+                    }
+                    let axis_dim = input_ty.dims[axis];
+                    let size = input_ty.dims.size();
+                    let block_size = min(DEFAULT_BLOCK_SIZE, ceil_pow2(axis_dim));
+                    let grid_size = size / axis_dim;
+                    let data_ty = input_ty.elem_type;
+                    let cuda_kernel =
+                        kernel::CUDAKernel::LayerNormKernel(kernel::LayerNormKernel {
+                            data_ty,
+                            block_size,
+                            axis_dim,
+                            out,
+                            in_,
+                            scale,
+                            bias,
+                            size: size.to_literal(),
+                            epsilon,
+                        });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: grid_size.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::MaxPool(_) => {
                     let size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
@@ -1347,6 +1394,7 @@ impl HostCode {
             "cuda.h",
             "cublas_v2.h",
             "cudnn.h",
+            "layer_norm.cuh",
             "softmax.cuh",
             "cudnn_setting.h",
         ] {
