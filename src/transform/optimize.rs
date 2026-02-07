@@ -3,6 +3,7 @@ pub mod const_prop;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
 pub mod im2col;
+pub mod elim_identity;
 
 use crate::options::*;
 use crate::transform::modify::SimpleGraphOp;
@@ -16,6 +17,7 @@ pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp
     if matches!(opt.target, Target::CPU) {
         pass_manager.add_pass(Box::new(im2col::InsertIm2Col::default()));
     }
+    pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(
         gemm_transpose_fusion::GemmTransposeFusion::default(),
     ));
