@@ -6,7 +6,7 @@ pub enum Target {
     CUDA,
 }
 
-#[derive(Clone, TypedBuilder)]
+#[derive(Clone, Debug, TypedBuilder)]
 pub struct Options {
     #[builder(default = 100)]
     pub omp_threshold: usize,
