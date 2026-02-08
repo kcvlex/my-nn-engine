@@ -255,6 +255,6 @@ pub async fn list_models(
 
 /// GET / - Serve the main UI
 pub async fn serve_ui() -> impl IntoResponse {
-    let html = include_str!("../static/index.html");
+    let html = include_str!("../dist/index.html");
     (StatusCode::OK, [("Content-Type", "text/html")], html)
 }

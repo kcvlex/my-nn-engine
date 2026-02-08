@@ -1,6 +1,6 @@
 # ONNX Web Server
 
-A web-based frontend for the my-onnx inference engine. Upload ONNX models through a browser interface and run inference via REST API.
+A modern web-based frontend for the my-onnx inference engine. Upload ONNX models through a Vue.js interface and run inference via REST API.
 
 ## Features
 
@@ -8,28 +8,57 @@ A web-based frontend for the my-onnx inference engine. Upload ONNX models throug
 - ⚡ **Session Caching**: Compiles models once, reuses compiled code
 - 🖥️ **CPU & CUDA Support**: Choose between CPU or GPU execution
 - 🌐 **REST API**: Simple HTTP API for integration
-- 📊 **Web UI**: Clean interface for model management and inference
+- 📊 **Modern Web UI**: Vue.js + TypeScript frontend with clean interface
+- 🎨 **Responsive Design**: Works on desktop and mobile
 
 ## Prerequisites
 
-### For CPU Backend
+### For Backend (Required)
 ```bash
 sudo apt install clang libopenblas-dev
 ```
 
-### For CUDA Backend (additional)
+### For CUDA Backend (Optional)
 ```bash
 # Install NVIDIA CUDA Toolkit (includes nvcc)
 # Install cuDNN and cuBLAS libraries
 # Ensure nvidia-smi is available
 ```
 
+### For Frontend Development (Optional)
+```bash
+# Node.js 18+ and npm
+# Only needed if you want to modify the frontend
+```
+
 ## Building
 
-Build the web server with the `web-server` feature:
+The frontend is **automatically built** during the Cargo build process!
+
+Simply build the web server:
 
 ```bash
-cargo build --release --example web_server --features web-server
+cargo build -p my-onnx-web --release --bin web-server
+```
+
+Or from the workspace root:
+
+```bash
+cargo build -p my-onnx-web --release --bin web-server
+```
+
+The build script will:
+1. Check if Node.js/npm is installed
+2. Run `npm install` if `node_modules` doesn't exist
+3. Run `npm run build` to create optimized production files in `dist/`
+4. Build the Rust web server
+
+**Note:** If npm is not found, the build will continue with a warning, but you'll need to build the frontend manually:
+
+```bash
+cd frontend
+npm install
+npm run build
 ```
 
 ## Running
@@ -37,23 +66,46 @@ cargo build --release --example web_server --features web-server
 Start the server:
 
 ```bash
-cargo run --release --example web_server --features web-server
-```
-
-Or run the compiled binary:
-
-```bash
-./target/release/examples/web_server
+cargo run -p my-onnx-web --release --bin web-server
 ```
 
 The server will start on `http://localhost:3000`
 
+## Development
+
+### Frontend Development
+
+To work on the frontend with hot reload:
+
+```bash
+cd frontend
+npm run dev
+```
+
+This starts a Vite dev server at http://localhost:5173 that proxies API calls to the backend.
+
+Make sure the backend server is also running:
+
+```bash
+cargo run -p my-onnx-web --bin web-server
+```
+
 ## Directory Structure
 
 ```
-./
-├── cache/      - Compiled model cache (auto-created)
-└── uploads/    - Uploaded ONNX files (auto-created)
+crates/my-onnx-web/
+├── frontend/           - Vue.js + TypeScript frontend
+│   ├── src/
+│   │   ├── components/ - Vue components
+│   │   ├── api/        - API client
+│   │   └── types/      - TypeScript types
+│   └── dist/           - Built frontend (generated)
+├── src/                - Rust backend
+│   ├── main.rs         - Web server binary
+│   ├── api.rs          - API handlers
+│   └── cache.rs        - Session cache
+├── cache/              - Compiled model cache (auto-created)
+└── uploads/            - Uploaded ONNX files (auto-created)
 ```
 
 ## Usage

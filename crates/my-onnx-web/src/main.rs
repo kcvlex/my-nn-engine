@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use axum::{routing::{get, post}, Router};
-use tower_http::cors::CorsLayer;
+use tower_http::{cors::CorsLayer, services::ServeDir};
 
 use my_onnx_web::{
     api::{self, AppState},
@@ -33,6 +33,7 @@ async fn main() {
         .route("/models/upload", post(api::upload_model))
         .route("/models/:id/infer", post(api::run_inference))
         .route("/models", get(api::list_models))
+        .nest_service("/assets", ServeDir::new("crates/my-onnx-web/dist/assets"))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
