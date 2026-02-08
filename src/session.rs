@@ -146,31 +146,6 @@ impl Session {
         transform_graph(&mut model.graph, options);
         info!("Transformed");
 
-        // {
-        //     use std::path::PathBuf;
-        //     use std::io::Write;
-        //     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("graph.dot");
-        //     let mut writer = std::fs::File::create(&path)
-        //         .map_err(|e| SessionError::OtherError(format!("Failed to create file: {:?}", e)))?;
-        //     let model = model.graph.to_dot();
-        //     writer.write_all(model.as_bytes()).map_err(|e| {
-        //         SessionError::OtherError(format!("Failed to write dot file: {:?}", e))
-        //     })?;
-        //     writer.flush().map_err(|e| {
-        //         SessionError::OtherError(format!("Failed to flush dot file: {:?}", e))
-        //     })?;
-        //     // panic!("a");
-        // }
-        // TODO: remove
-        // Self::_write_model(&model.graph, "model.dot");
-        // panic!("a");
-
-        if false {
-            model
-                .save_to_path("model.onnx")
-                .map_err(|e| SessionError::OtherError(format!("Failed to save model: {:?}", e)))?;
-        }
-
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let initializer: Vec<_> = model
