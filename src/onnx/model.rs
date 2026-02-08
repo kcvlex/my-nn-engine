@@ -8,9 +8,9 @@ use id_arena::Id;
 use itertools::zip_eq;
 
 use crate::onnx::operator::Operator;
-use crate::tensor::dimensions::Dimension;
-use crate::tensor::dimensions::ParamKey;
-use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::Dimension;
+use crate::tensor::types::ParamKey;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;

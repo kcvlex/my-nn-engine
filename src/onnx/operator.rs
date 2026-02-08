@@ -7,8 +7,8 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::ValueId;
 use crate::tensor::data::ScalarData;
-use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 

@@ -4,7 +4,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::UnifyMode;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
-use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::TypeError;
 use crate::transform::shape::infer_node_output;

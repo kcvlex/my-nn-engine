@@ -18,15 +18,15 @@ use crate::onnx::model::Values;
 use crate::onnx::operator::*;
 use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
-use crate::tensor::dimensions::Dimension;
-use crate::tensor::dimensions::ResolvedTensorDims;
-use crate::tensor::dimensions::UnresolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::types::Dimension;
 use crate::tensor::types::FloatType;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
 use crate::tensor::types::UIntType;
+use crate::tensor::types::UnresolvedTensorDims;
 use crate::tensor::types::UnresolvedTensorType;
 use crate::tensor::Tensor;
 

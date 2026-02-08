@@ -32,9 +32,9 @@ use crate::codegen::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
-use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::UIntType;
 

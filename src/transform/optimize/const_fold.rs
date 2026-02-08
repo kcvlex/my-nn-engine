@@ -6,8 +6,8 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::operator::*;
 use crate::tensor::data::TensorData;
-use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::SIntType;
 use crate::tensor::Tensor;
 

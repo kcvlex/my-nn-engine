@@ -1,6 +1,6 @@
 use itertools::zip_eq;
 
-use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::*;
 
 // TODO: Complex

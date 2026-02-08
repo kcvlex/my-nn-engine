@@ -3,7 +3,7 @@ use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
-use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
 use crate::transform::utils::*;

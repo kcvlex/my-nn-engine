@@ -7,7 +7,7 @@ use crate::onnx::model::NodeMeta;
 use crate::onnx::model::ValueId;
 use crate::onnx::model::ValueInfo;
 use crate::onnx::operator::*;
-use crate::tensor::dimensions::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 

@@ -9,8 +9,8 @@ use crate::codegen::cpu::translator::FunctionTranslator;
 use crate::onnx::operator::BatchNormalization;
 use crate::onnx::operator::LeakyReLU;
 use crate::schedule::ElementwiseOpArg;
-use crate::tensor::dimensions::ResolvedTensorDims;
 use crate::tensor::types::DataType;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 
 // TODO: Change `ty` to reference

@@ -1,14 +1,13 @@
 pub mod data;
-pub mod dimensions;
 mod ops;
 pub mod types;
 
 use data::CompPolicy;
 use data::TensorData;
-use dimensions::ResolvedTensorDims;
 use ops::*;
 use types::DataType;
 use types::FloatType;
+use types::ResolvedTensorDims;
 use types::ResolvedTensorType;
 use types::SIntType;
 use types::TypeError;
