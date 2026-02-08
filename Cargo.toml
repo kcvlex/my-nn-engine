@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    "crates/my-onnx-web",
+]
+resolver = "2"
+
 [package]
 name = "my-onnx"
 version = "0.1.0"
@@ -28,20 +34,6 @@ strum = "0.26.3"
 strum_macros = "0.26.4"
 tempfile = "3.15.0"
 typed-builder = "0.21.0"
-
-# Web server dependencies (optional, for web frontend)
-axum = { version = "0.7", features = ["multipart"], optional = true }
-tokio = { version = "1.0", features = ["full"], optional = true }
-serde_json = { version = "1.0", optional = true }
-tower-http = { version = "0.5", features = ["fs", "cors"], optional = true }
-sha2 = { version = "0.10", optional = true }
-tower = { version = "0.4", optional = true }
-uuid = { version = "1.0", features = ["v4"], optional = true }
-env_logger = { version = "0.11", optional = true }
-
-[features]
-default = []
-web-server = ["axum", "tokio", "serde_json", "tower-http", "sha2", "tower", "uuid", "env_logger"]
 
 [build-dependencies]
 prost-build = "0.13.1"

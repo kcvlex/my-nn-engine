@@ -6,6 +6,3 @@ pub mod session;
 pub mod tensor;
 pub mod transform;
 mod utils;
-
-#[cfg(feature = "web-server")]
-pub mod web;

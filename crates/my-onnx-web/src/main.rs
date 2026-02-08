@@ -2,7 +2,7 @@ use std::sync::Arc;
 use axum::{routing::{get, post}, Router};
 use tower_http::cors::CorsLayer;
 
-use my_onnx::web::{
+use my_onnx_web::{
     api::{self, AppState},
     SessionCache,
 };

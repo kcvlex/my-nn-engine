@@ -1104,12 +1104,10 @@ checksum = "defc4c55412d89136f966bbb339008b474350e5e6e78d2714439c386b3137a03"
 name = "my-onnx"
 version = "0.1.0"
 dependencies = [
- "axum",
  "bitvec",
  "bytes",
  "delegate",
  "derive_more",
- "env_logger",
  "id-arena",
  "image",
  "indexmap",
@@ -1127,16 +1125,29 @@ dependencies = [
  "rayon",
  "serde",
  "serde_derive",
- "serde_json",
- "sha2",
  "smallvec",
  "strum",
  "strum_macros",
  "tempfile",
+ "typed-builder",
+]
+
+[[package]]
+name = "my-onnx-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "env_logger",
+ "log",
+ "my-onnx",
+ "ndarray",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2",
  "tokio",
  "tower 0.4.13",
  "tower-http",
- "typed-builder",
  "uuid",
 ]
 

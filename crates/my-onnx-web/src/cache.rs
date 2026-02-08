@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use sha2::{Sha256, Digest};
 
-use crate::options::Options;
-use crate::session::{Session, SessionError};
+use my_onnx::options::Options;
+use my_onnx::session::{Session, SessionError};
 
 /// A unique identifier for a cached model session
 pub type ModelId = String;

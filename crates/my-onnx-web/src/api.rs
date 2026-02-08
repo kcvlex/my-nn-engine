@@ -8,9 +8,9 @@ use axum::{
 use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::options::{Options, Target};
-use crate::tensor::Tensor;
-use crate::web::cache::SessionCache;
+use my_onnx::options::{Options, Target};
+use my_onnx::tensor::Tensor;
+use crate::cache::SessionCache;
 
 /// Shared application state
 #[derive(Clone)]
@@ -43,8 +43,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-impl From<crate::session::SessionError> for ApiError {
-    fn from(err: crate::session::SessionError) -> Self {
+impl From<my_onnx::session::SessionError> for ApiError {
+    fn from(err: my_onnx::session::SessionError) -> Self {
         ApiError::InternalError(format!("{:?}", err))
     }
 }
@@ -105,9 +105,9 @@ impl TensorData {
 
         // Extract data as f64 vector
         let data = match &tensor.data {
-            crate::tensor::data::TensorData::Float(_, v) => v.clone(),
-            crate::tensor::data::TensorData::SInt(_, v) => v.iter().map(|&x| x as f64).collect(),
-            crate::tensor::data::TensorData::UInt(_, v) => v.iter().map(|&x| x as f64).collect(),
+            my_onnx::tensor::data::TensorData::Float(_, v) => v.clone(),
+            my_onnx::tensor::data::TensorData::SInt(_, v) => v.iter().map(|&x| x as f64).collect(),
+            my_onnx::tensor::data::TensorData::UInt(_, v) => v.iter().map(|&x| x as f64).collect(),
         };
 
         let dtype = format!("{:?}", tensor.data.elem_type());
@@ -255,6 +255,6 @@ pub async fn list_models(
 
 /// GET / - Serve the main UI
 pub async fn serve_ui() -> impl IntoResponse {
-    let html = include_str!("../../static/index.html");
+    let html = include_str!("../static/index.html");
     (StatusCode::OK, [("Content-Type", "text/html")], html)
 }
