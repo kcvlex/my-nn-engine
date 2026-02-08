@@ -21,52 +21,54 @@ fn main() {
 
     let actual_node_modules = actual_frontend_dir.join("node_modules");
 
-    // Check if node/npm is available
-    let npm_check = Command::new("npm")
+    // Check if pnpm is available
+    let pnpm_check = Command::new("pnpm")
         .arg("--version")
         .output();
 
-    if npm_check.is_err() {
-        eprintln!("Warning: npm not found. Skipping frontend build.");
-        eprintln!("The frontend will not be built. Install Node.js/npm to build the frontend.");
+    if pnpm_check.is_err() {
+        eprintln!("Warning: pnpm not found. Skipping frontend build.");
+        eprintln!("The frontend will not be built. Install pnpm to build the frontend:");
+        eprintln!("  npm install -g pnpm");
+        eprintln!("  or: curl -fsSL https://get.pnpm.io/install.sh | sh -");
         return;
     }
 
-    println!("cargo:warning=Building frontend...");
+    println!("cargo:warning=Building frontend with pnpm...");
 
     // Install dependencies if node_modules doesn't exist
     if !actual_node_modules.exists() {
-        println!("cargo:warning=Installing npm dependencies...");
-        let npm_install = Command::new("npm")
+        println!("cargo:warning=Installing dependencies with pnpm...");
+        let pnpm_install = Command::new("pnpm")
             .arg("install")
             .current_dir(&actual_frontend_dir)
             .status();
 
-        match npm_install {
+        match pnpm_install {
             Ok(status) if status.success() => {
-                println!("cargo:warning=npm install completed");
+                println!("cargo:warning=pnpm install completed");
             }
             Ok(status) => {
-                eprintln!("Warning: npm install failed with status: {}", status);
-                eprintln!("You may need to run 'npm install' manually in {:?}", actual_frontend_dir);
+                eprintln!("Warning: pnpm install failed with status: {}", status);
+                eprintln!("You may need to run 'pnpm install' manually in {:?}", actual_frontend_dir);
                 return;
             }
             Err(e) => {
-                eprintln!("Warning: Failed to run npm install: {}", e);
+                eprintln!("Warning: Failed to run pnpm install: {}", e);
                 return;
             }
         }
     }
 
     // Build the frontend
-    println!("cargo:warning=Running npm run build...");
-    let npm_build = Command::new("npm")
+    println!("cargo:warning=Running pnpm run build...");
+    let pnpm_build = Command::new("pnpm")
         .arg("run")
         .arg("build")
         .current_dir(&actual_frontend_dir)
         .status();
 
-    match npm_build {
+    match pnpm_build {
         Ok(status) if status.success() => {
             println!("cargo:warning=Frontend build completed successfully");
 
@@ -84,11 +86,11 @@ fn main() {
             }
         }
         Ok(status) => {
-            eprintln!("Warning: npm run build failed with status: {}", status);
-            eprintln!("You may need to run 'npm run build' manually in {:?}", actual_frontend_dir);
+            eprintln!("Warning: pnpm run build failed with status: {}", status);
+            eprintln!("You may need to run 'pnpm run build' manually in {:?}", actual_frontend_dir);
         }
         Err(e) => {
-            eprintln!("Warning: Failed to run npm run build: {}", e);
+            eprintln!("Warning: Failed to run pnpm run build: {}", e);
         }
     }
 }

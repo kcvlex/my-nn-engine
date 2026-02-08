@@ -27,8 +27,10 @@ sudo apt install clang libopenblas-dev
 
 ### For Frontend Development (Optional)
 ```bash
-# Node.js 18+ and npm
+# Node.js 18+ and pnpm
 # Only needed if you want to modify the frontend
+npm install -g pnpm
+# or: curl -fsSL https://get.pnpm.io/install.sh | sh -
 ```
 
 ## Building
@@ -48,17 +50,17 @@ cargo build -p my-onnx-web --release --bin web-server
 ```
 
 The build script will:
-1. Check if Node.js/npm is installed
-2. Run `npm install` if `node_modules` doesn't exist
-3. Run `npm run build` to create optimized production files in `dist/`
+1. Check if pnpm is installed
+2. Run `pnpm install` if `node_modules` doesn't exist
+3. Run `pnpm run build` to create optimized production files in `dist/`
 4. Build the Rust web server
 
-**Note:** If npm is not found, the build will continue with a warning, but you'll need to build the frontend manually:
+**Note:** If pnpm is not found, the build will continue with a warning, but you'll need to build the frontend manually:
 
 ```bash
 cd frontend
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 ## Running
@@ -79,7 +81,8 @@ To work on the frontend with hot reload:
 
 ```bash
 cd frontend
-npm run dev
+pnpm install  # First time only
+pnpm run dev
 ```
 
 This starts a Vite dev server at http://localhost:5173 that proxies API calls to the backend.
