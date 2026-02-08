@@ -5,6 +5,7 @@ import type {
   ModelListItem,
   Target,
 } from '../types/api';
+import { encodeTensors, decodeTensors, type TensorProto } from './protobuf';
 
 class ApiClient {
   private baseUrl = '';
@@ -61,6 +62,34 @@ class ApiClient {
     }
 
     return response.json();
+  }
+
+  async runInferenceProto(
+    modelId: string,
+    inputs: TensorProto[]
+  ): Promise<TensorProto[]> {
+    const requestBytes = encodeTensors(inputs);
+
+    const response = await fetch(`${this.baseUrl}/models/${modelId}/infer/proto`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+      },
+      body: requestBytes,
+    });
+
+    if (!response.ok) {
+      // Try to parse JSON error if available
+      const contentType = response.headers.get('content-type');
+      if (contentType?.includes('application/json')) {
+        const error = await response.json();
+        throw new Error(error.error || 'Inference failed');
+      }
+      throw new Error(`Inference failed: ${response.statusText}`);
+    }
+
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    return decodeTensors(responseBytes);
   }
 }
 

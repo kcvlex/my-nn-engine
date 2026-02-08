@@ -32,6 +32,7 @@ async fn main() {
         .route("/", get(api::serve_ui))
         .route("/models/upload", post(api::upload_model))
         .route("/models/:id/infer", post(api::run_inference))
+        .route("/models/:id/infer/proto", post(api::run_inference_proto))
         .route("/models", get(api::list_models))
         .nest_service("/assets", ServeDir::new("crates/my-onnx-web/dist/assets"))
         .layer(CorsLayer::permissive())

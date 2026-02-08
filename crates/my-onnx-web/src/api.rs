@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use axum::{
+    body::Bytes,
     extract::{Path, State, Multipart},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     Json,
 };
@@ -10,6 +11,7 @@ use serde_json::json;
 
 use my_onnx::options::{Options, Target};
 use my_onnx::tensor::Tensor;
+use my_onnx::onnx::load::ModelLoadError;
 use crate::cache::SessionCache;
 
 /// Shared application state
@@ -46,6 +48,12 @@ impl IntoResponse for ApiError {
 impl From<my_onnx::session::SessionError> for ApiError {
     fn from(err: my_onnx::session::SessionError) -> Self {
         ApiError::InternalError(format!("{:?}", err))
+    }
+}
+
+impl From<ModelLoadError> for ApiError {
+    fn from(err: ModelLoadError) -> Self {
+        ApiError::BadRequest(format!("Tensor decode error: {:?}", err))
     }
 }
 
@@ -198,7 +206,7 @@ pub async fn upload_model(
     }))
 }
 
-/// POST /models/:id/infer - Run inference on a model
+/// POST /models/:id/infer - Run inference on a model (JSON)
 pub async fn run_inference(
     State(state): State<AppState>,
     Path(model_id): Path<String>,
@@ -233,6 +241,61 @@ pub async fn run_inference(
         outputs: output_data,
         inference_time_ms,
     }))
+}
+
+/// POST /models/:id/infer/proto - Run inference on a model (Protobuf)
+/// Accepts: application/octet-stream (concatenated TensorProto bytes)
+/// Returns: application/octet-stream (concatenated TensorProto bytes)
+pub async fn run_inference_proto(
+    State(state): State<AppState>,
+    Path(model_id): Path<String>,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    // Get cached session
+    let session = state
+        .cache
+        .get(&model_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Model not found: {}", model_id)))?;
+
+    // Decode input tensors from protobuf
+    // Format: [4 bytes length][tensor proto bytes][4 bytes length][tensor proto bytes]...
+    let mut inputs = Vec::new();
+    let mut offset = 0;
+    while offset < body.len() {
+        if offset + 4 > body.len() {
+            return Err(ApiError::BadRequest("Invalid protobuf format".into()));
+        }
+
+        let len = u32::from_le_bytes([body[offset], body[offset+1], body[offset+2], body[offset+3]]) as usize;
+        offset += 4;
+
+        if offset + len > body.len() {
+            return Err(ApiError::BadRequest("Invalid protobuf format".into()));
+        }
+
+        let tensor_bytes = &body[offset..offset+len];
+        let tensor = Tensor::from_proto_bytes(tensor_bytes)?;
+        inputs.push(tensor);
+        offset += len;
+    }
+
+    // Run inference
+    let outputs = session.run(&inputs)?;
+
+    // Encode output tensors to protobuf
+    let mut response_bytes = Vec::new();
+    for tensor in outputs.iter() {
+        let proto_bytes = tensor.to_proto_bytes();
+        let len = proto_bytes.len() as u32;
+        response_bytes.extend_from_slice(&len.to_le_bytes());
+        response_bytes.extend_from_slice(&proto_bytes);
+    }
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        response_bytes,
+    ))
 }
 
 /// GET /models - List all cached models

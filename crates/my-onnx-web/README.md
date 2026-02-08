@@ -146,7 +146,7 @@ Response:
 }
 ```
 
-#### Run Inference
+#### Run Inference (JSON)
 ```bash
 curl -X POST http://localhost:3000/models/{model_id}/infer \
   -H "Content-Type: application/json" \
@@ -176,6 +176,29 @@ Response:
   "inference_time_ms": 42.5
 }
 ```
+
+#### Run Inference (Protobuf - Recommended)
+
+**More efficient**: Uses ONNX's native protobuf format for tensor serialization.
+
+```bash
+# Using binary protobuf tensors
+curl -X POST http://localhost:3000/models/{model_id}/infer/proto \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @input_tensors.pb \
+  -o output_tensors.pb
+```
+
+**Format**: Request and response are binary data with concatenated ONNX TensorProto messages:
+- `[4 bytes length (LE)][TensorProto bytes][4 bytes length][TensorProto bytes]...`
+
+**Advantages**:
+- **Efficient**: Native binary format, no JSON parsing overhead
+- **Standard**: Uses official ONNX TensorProto format
+- **Type-safe**: Preserves exact data types (int32, int64, float32, float64, etc.)
+- **Interoperable**: Compatible with ONNX ecosystem tools
+
+The frontend automatically uses this endpoint when available for better performance.
 
 #### List Models
 ```bash

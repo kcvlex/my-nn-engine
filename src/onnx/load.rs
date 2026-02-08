@@ -74,6 +74,20 @@ impl LoadProto for Tensor {
     }
 }
 
+impl Tensor {
+    /// Convert Tensor to ONNX TensorProto bytes
+    pub fn to_proto_bytes(&self) -> Vec<u8> {
+        let proto = tensor_to_proto(self);
+        proto.encode_to_vec()
+    }
+
+    /// Create Tensor from ONNX TensorProto bytes
+    pub fn from_proto_bytes(bytes: &[u8]) -> LoadResult<Self> {
+        let proto = TensorProto::decode(bytes).map_err(ModelLoadError::Decode)?;
+        load_tensor(proto)
+    }
+}
+
 #[derive(Default)]
 struct GraphLoader {
     entries: HashMap<String, ValueId>,
@@ -340,6 +354,37 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     }
     let dims = ResolvedTensorDims::new(&dims);
     Tensor::new(dims, data).map_err(ModelLoadError::TypeError)
+}
+
+fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
+    let data_type = match tensor.data.elem_type() {
+        DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
+        DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
+        DataType::UInt(UIntType::U64) => tensor_proto::DataType::Uint64 as i32,
+        DataType::Float(FloatType::F32) => tensor_proto::DataType::Float as i32,
+        DataType::Float(FloatType::F64) => tensor_proto::DataType::Double as i32,
+    };
+
+    let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
+
+    let (float_data, double_data, int32_data, int64_data, uint64_data) = match &tensor.data {
+        TensorData::Float(FloatType::F32, v) => (v.iter().map(|&x| x as f32).collect(), vec![], vec![], vec![], vec![]),
+        TensorData::Float(FloatType::F64, v) => (vec![], v.clone(), vec![], vec![], vec![]),
+        TensorData::SInt(SIntType::I32, v) => (vec![], vec![], v.iter().map(|&x| x as i32).collect(), vec![], vec![]),
+        TensorData::SInt(SIntType::I64, v) => (vec![], vec![], vec![], v.clone(), vec![]),
+        TensorData::UInt(UIntType::U64, v) => (vec![], vec![], vec![], vec![], v.clone()),
+    };
+
+    TensorProto {
+        dims,
+        data_type,
+        float_data,
+        double_data,
+        int32_data,
+        int64_data,
+        uint64_data,
+        ..Default::default()
+    }
 }
 
 fn load_type(ty: TypeProto) -> LoadResult<TensorType> {
