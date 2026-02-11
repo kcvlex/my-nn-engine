@@ -3,6 +3,7 @@ pub mod layout;
 pub mod lower;
 pub mod modify;
 pub mod optimize;
+mod pattern;
 pub mod shape;
 mod utils;
 
