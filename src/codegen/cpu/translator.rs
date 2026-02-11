@@ -1629,9 +1629,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .const_int(acc.try_into().unwrap(), false),
                 "dst.offset",
             )?;
-            let mut new_ty = dst.ty.clone();
+            let mut new_ty = (*dst.ty).clone();
             new_ty.dims[axis] = src.ty.dims[axis];
-            let dst = dst.with_offset(offset).with_type(new_ty);
+            let dst = dst.with_offset(offset).with_type(std::rc::Rc::new(new_ty));
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
                 operands: smallvec![dst, src.clone()],

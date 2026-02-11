@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use inkwell::builder::BuilderError;
 use inkwell::context::Context;
 use inkwell::types::*;
@@ -13,11 +15,10 @@ use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 
-// TODO: Change `ty` to reference
 #[derive(Debug, Clone)]
 pub struct TensorPtr<'ctx> {
     pub ptr: PointerValue<'ctx>,
-    pub ty: ResolvedTensorType,
+    pub ty: Rc<ResolvedTensorType>,
     pub offset: IntValue<'ctx>,
     pub name: String,
 }
@@ -26,7 +27,7 @@ impl<'ctx> TensorPtr<'ctx> {
     /// Create a new TensorPtr
     pub fn new(
         ptr: PointerValue<'ctx>,
-        ty: ResolvedTensorType,
+        ty: Rc<ResolvedTensorType>,
         offset: IntValue<'ctx>,
         name: String,
     ) -> Self {
@@ -41,7 +42,7 @@ impl<'ctx> TensorPtr<'ctx> {
     /// Create a TensorPtr with a formatted name using index
     pub fn new_with_index(
         ptr: PointerValue<'ctx>,
-        ty: ResolvedTensorType,
+        ty: Rc<ResolvedTensorType>,
         offset: IntValue<'ctx>,
         prefix: &str,
         index: usize,
@@ -53,14 +54,14 @@ impl<'ctx> TensorPtr<'ctx> {
     pub fn with_offset(&self, offset: IntValue<'ctx>) -> Self {
         Self {
             ptr: self.ptr,
-            ty: self.ty.clone(),
+            ty: Rc::clone(&self.ty),
             offset,
             name: self.name.clone(),
         }
     }
 
     /// Create a new TensorPtr with modified type (useful for broadcasting)
-    pub fn with_type(&self, ty: ResolvedTensorType) -> Self {
+    pub fn with_type(&self, ty: Rc<ResolvedTensorType>) -> Self {
         Self {
             ptr: self.ptr,
             ty,
@@ -73,7 +74,7 @@ impl<'ctx> TensorPtr<'ctx> {
     pub fn with_offset_and_name(&self, offset: IntValue<'ctx>, name_suffix: &str) -> Self {
         Self {
             ptr: self.ptr,
-            ty: self.ty.clone(),
+            ty: Rc::clone(&self.ty),
             offset,
             name: format!("{}.{}", self.name, name_suffix),
         }
@@ -114,7 +115,7 @@ impl<'ctx> TensorPtr<'ctx> {
             .build_load(i64_type, offset, "")?
             .into_int_value();
 
-        Ok(Self::new(ptr, self.ty.clone(), offset, self.name.clone()))
+        Ok(Self::new(ptr, Rc::clone(&self.ty), offset, self.name.clone()))
     }
 }
 

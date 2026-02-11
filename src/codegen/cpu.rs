@@ -604,10 +604,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     .gen_ctx
                     .schedule
                     .get_resolved_tensor_type(*id)
-                    .unwrap()
-                    .clone();
+                    .unwrap();
                 let offset = self.ll_ctx.i64_type().const_int(0, false);
-                TensorPtr::new_with_index(ptr, ty, offset, "ptr", i)
+                TensorPtr::new_with_index(ptr, std::rc::Rc::new(ty.clone()), offset, "ptr", i)
             })
             .collect::<Vec<_>>();
 
@@ -662,7 +661,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     assert!(operands.len() == 2);
                     for i in operands.iter().filter_map(|x| *x) {
                         let broadcasted_ty = ptrs[i].ty.broadcast(target_dim);
-                        ptrs[i] = ptrs[i].with_type(broadcasted_ty);
+                        ptrs[i] = ptrs[i].with_type(std::rc::Rc::new(broadcasted_ty));
                     }
                 }
 
