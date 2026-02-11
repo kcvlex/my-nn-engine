@@ -30,6 +30,103 @@ pub struct FunctionTranslator<'a, 'ctx> {
     pub debug_stuff: &'a DebugStuff<'ctx>,
 }
 
+/// Helper for building loops with multiple phi nodes (index + offsets)
+struct OffsetLoopBuilder<'a, 'ctx> {
+    translator: &'a FunctionTranslator<'a, 'ctx>,
+    preheader: BasicBlock<'ctx>,
+    header: BasicBlock<'ctx>,
+    exiting: BasicBlock<'ctx>,
+    exit: BasicBlock<'ctx>,
+}
+
+impl<'a, 'ctx> OffsetLoopBuilder<'a, 'ctx> {
+    fn new(
+        translator: &'a FunctionTranslator<'a, 'ctx>,
+        preheader: BasicBlock<'ctx>,
+        name_prefix: &str,
+    ) -> Result<Self, BuilderError> {
+        let header = translator
+            .context
+            .append_basic_block(*translator.func, &format!("{}.header", name_prefix));
+        let exiting = translator
+            .context
+            .append_basic_block(*translator.func, &format!("{}.exiting", name_prefix));
+        let exit = translator
+            .context
+            .append_basic_block(*translator.func, &format!("{}.exit", name_prefix));
+
+        translator.builder.position_at_end(preheader);
+        translator.builder.build_unconditional_branch(header)?;
+
+        Ok(Self {
+            translator,
+            preheader,
+            header,
+            exiting,
+            exit,
+        })
+    }
+
+    /// Build index phi and setup loop termination
+    fn build_loop_index(
+        &self,
+        init_val: IntValue<'ctx>,
+        bound: IntValue<'ctx>,
+        name: &str,
+    ) -> Result<PhiValue<'ctx>, BuilderError> {
+        self.translator.builder.position_at_end(self.header);
+        let ind = self
+            .translator
+            .builder
+            .build_phi(self.translator.context.i64_type(), name)?;
+
+        self.translator.builder.position_at_end(self.exiting);
+        let ind_next = self.translator.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.translator.context.i64_type().const_int(1, false),
+            &format!("{}.next", name),
+        )?;
+        let cond = self.translator.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind_next,
+            bound,
+            "cond",
+        )?;
+        self.translator
+            .builder
+            .build_conditional_branch(cond, self.header, self.exit)?;
+
+        ind.add_incoming(&[(&init_val, self.preheader), (&ind_next, self.exiting)]);
+
+        Ok(ind)
+    }
+
+    /// Build an offset phi that gets incremented by stride each iteration
+    fn build_offset_phi(
+        &self,
+        init_val: IntValue<'ctx>,
+        stride: IntValue<'ctx>,
+        name: &str,
+    ) -> Result<PhiValue<'ctx>, BuilderError> {
+        self.translator.builder.position_at_end(self.header);
+        let offset = self
+            .translator
+            .builder
+            .build_phi(self.translator.context.i64_type(), name)?;
+
+        self.translator.builder.position_at_end(self.exiting);
+        let offset_next = self.translator.builder.build_int_add(
+            offset.as_basic_value().into_int_value(),
+            stride,
+            &format!("{}.next", name),
+        )?;
+
+        offset.add_incoming(&[(&init_val, self.preheader), (&offset_next, self.exiting)]);
+
+        Ok(offset)
+    }
+}
+
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
         unsafe {
@@ -1274,12 +1371,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             self.builder.build_unconditional_branch(loop_bb.exit)?;
             return Ok(());
         }
-        let ind = self
-            .builder
-            .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
-        let exiting_bb = self
-            .context
-            .append_basic_block(*self.func, format!("exit.{}", nest).as_str());
+
+        // Build a standard loop with offset tracking
         let bound = match loop_range {
             Some((_, ub)) => ub,
             None => {
@@ -1287,40 +1380,37 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.context.i64_type().const_int(bound, false)
             }
         };
+        let ind_init = match loop_range {
+            Some((lb, _)) => lb,
+            None => self.context.i64_type().const_zero(),
+        };
 
-        // Update op
+        let next_bb = self
+            .context
+            .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
+        let exiting_bb = self
+            .context
+            .append_basic_block(*self.func, format!("exit.{}", nest).as_str());
+
+        self.builder.position_at_end(loop_bb.header);
+        let ind = self
+            .builder
+            .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
+
+        // Build offset phis for each operand
         let mut next_op_ctx = op_ctx;
-        let phis = next_op_ctx
-            .operation
-            .operands
-            .iter()
-            .map(|op| {
-                self.builder.build_phi(
-                    op.offset.get_type(),
-                    format!("offset.{}.{}", op.name, nest).as_str(),
-                )
-            })
-            .collect::<Result<Vec<_>, BuilderError>>()?;
-        for (op, offset_phi) in next_op_ctx.operation.operands.iter_mut().zip(phis) {
-            let offset_int = offset_phi.as_basic_value().into_int_value();
-            self.builder.position_at_end(exiting_bb);
-            let stride = self
-                .context
-                .i64_type()
-                .const_int(op.stride(nest).try_into().unwrap(), false);
-            let offset_next = self.builder.build_int_add(
-                offset_int,
-                stride,
-                format!("offset.{}.{}.next", op.name, nest).as_str(),
+        let mut offset_phis = Vec::new();
+        for op in next_op_ctx.operation.operands.iter() {
+            let offset_phi = self.builder.build_phi(
+                op.offset.get_type(),
+                format!("offset.{}.{}", op.name, nest).as_str(),
             )?;
-            self.builder.position_at_end(loop_bb.header);
-            offset_phi.add_incoming(&[
-                (
-                    &self.context.i64_type().const_int(0, false),
-                    loop_bb.preheader,
-                ),
-                (&offset_next, exiting_bb),
-            ]);
+            offset_phis.push(offset_phi);
+        }
+
+        // Update operand offsets in header block
+        for (op, offset_phi) in next_op_ctx.operation.operands.iter_mut().zip(&offset_phis) {
+            let offset_int = offset_phi.as_basic_value().into_int_value();
             op.offset = self.builder.build_int_add(
                 op.offset,
                 offset_int,
@@ -1328,17 +1418,32 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             )?;
         }
 
-        // Comp and branch
-        let next_bb = self
-            .context
-            .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
         self.builder.build_unconditional_branch(next_bb)?;
+
+        // Build loop increment logic in exiting block
         self.builder.position_at_end(exiting_bb);
         let ind_next = self.builder.build_int_add(
             ind.as_basic_value().into_int_value(),
             self.context.i64_type().const_int(1, false),
             format!("ind.{}.next", nest).as_str(),
         )?;
+
+        // Build offset increments for each operand
+        let mut offset_nexts = Vec::new();
+        for (op, offset_phi) in next_op_ctx.operation.operands.iter().zip(&offset_phis) {
+            let stride = self
+                .context
+                .i64_type()
+                .const_int(op.stride(nest).try_into().unwrap(), false);
+            let offset_int = offset_phi.as_basic_value().into_int_value();
+            let offset_next = self.builder.build_int_add(
+                offset_int,
+                stride,
+                format!("offset.{}.{}.next", op.name, nest).as_str(),
+            )?;
+            offset_nexts.push(offset_next);
+        }
+
         let cond = self.builder.build_int_compare(
             inkwell::IntPredicate::SLT,
             ind_next,
@@ -1348,11 +1453,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder
             .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
 
-        let ind_init = match loop_range {
-            Some((lb, _)) => lb,
-            None => self.context.i64_type().const_zero(),
-        };
+        // Wire up phi nodes
         ind.add_incoming(&[(&ind_init, loop_bb.preheader), (&ind_next, exiting_bb)]);
+        for (offset_phi, offset_next) in offset_phis.iter().zip(&offset_nexts) {
+            offset_phi.add_incoming(&[
+                (
+                    &self.context.i64_type().const_int(0, false),
+                    loop_bb.preheader,
+                ),
+                (offset_next, exiting_bb),
+            ]);
+        }
+
+        // Recurse
         self.builder.position_at_end(next_bb);
         let next_loop_bb = LoopBB {
             preheader: loop_bb.header,
@@ -1401,11 +1514,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             return Ok(());
         }
 
-        let next_preheader = loop_bb.header;
         let next_header = self.context.append_basic_block(*self.func, "header");
         let next_exit = self.context.append_basic_block(*self.func, "exit");
 
         let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+
+        // Update dst offset
         let dst_offset_add = self.builder.build_int_mul(
             ind.as_basic_value().into_int_value(),
             self.context
@@ -1417,6 +1531,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .builder
             .build_int_add(dst.offset, dst_offset_add, "dst.offset")?;
 
+        // Compute source index (either scaled or direct)
         let nth_resize = axes.iter().position(|&x| x == dim);
         let x_original = match nth_resize {
             Some(n) => {
@@ -1486,6 +1601,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     self.context.i64_type(),
                     "x_original",
                 )?;
+                // Clamp to [0, src.dims[dim] - 1]
                 let x_original = self
                     .build_tail_call(
                         self.intrinsics.smin_i64,
@@ -1502,23 +1618,23 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .left()
                     .unwrap()
                     .into_int_value();
-                let x_original = self
-                    .build_tail_call(
-                        self.intrinsics.smax_i64,
-                        &[
-                            x_original.into(),
-                            self.context.i64_type().const_zero().into(),
-                        ],
-                        "x_original",
-                    )?
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_int_value();
-                x_original
+                self.build_tail_call(
+                    self.intrinsics.smax_i64,
+                    &[
+                        x_original.into(),
+                        self.context.i64_type().const_zero().into(),
+                    ],
+                    "x_original",
+                )?
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value()
             }
             None => ind.as_basic_value().into_int_value(),
         };
+
+        // Update src offset
         let src_offset_add = self.builder.build_int_mul(
             x_original,
             self.context
@@ -1531,6 +1647,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(src.offset, src_offset_add, "src.offset")?;
         self.builder.build_unconditional_branch(next_header)?;
 
+        // Loop increment and termination
         self.builder.position_at_end(next_exit);
         let ind_next = self.builder.build_int_add(
             ind.as_basic_value().into_int_value(),
@@ -1552,22 +1669,23 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             (&ind_next, next_exit),
         ]);
 
-        let loop_bb = LoopBB {
-            preheader: next_preheader,
+        // Recurse to next dimension
+        let next_loop_bb = LoopBB {
+            preheader: loop_bb.header,
             header: next_header,
             exit: next_exit,
         };
 
-        let param = ResizeParam {
+        let next_param = ResizeParam {
             dst,
             src,
             axes,
-            loop_bb,
+            loop_bb: next_loop_bb,
             dim: dim + 1,
             resize,
         };
 
-        self.build_resize_rec(param)
+        self.build_resize_rec(next_param)
     }
 
     pub fn build_resize(
