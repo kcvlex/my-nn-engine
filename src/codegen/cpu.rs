@@ -661,7 +661,8 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub => {
                     assert!(operands.len() == 2);
                     for i in operands.iter().filter_map(|x| *x) {
-                        ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
+                        let broadcasted_ty = ptrs[i].ty.broadcast(target_dim);
+                        ptrs[i] = ptrs[i].with_type(broadcasted_ty);
                     }
                 }
 

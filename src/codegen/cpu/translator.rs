@@ -1203,7 +1203,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 i64_type.const_int(op.stride(nest).try_into().unwrap(), false),
                 "add",
             )?;
-            op.offset = self.builder.build_int_add(op.offset, add, "offset")?;
+            let new_offset = self.builder.build_int_add(op.offset, add, "offset")?;
+            *op = op.with_offset(new_offset);
         }
         self.builder.build_unconditional_branch(new_header)?;
 
@@ -1317,11 +1318,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 ),
                 (&offset_next, exiting_bb),
             ]);
-            op.offset = self.builder.build_int_add(
+            let new_offset = self.builder.build_int_add(
                 op.offset,
                 offset_int,
                 format!("offset.sum.{}.{}", op.name, nest).as_str(),
             )?;
+            *op = op.with_offset(new_offset);
         }
 
         // Comp and branch
@@ -1409,9 +1411,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(dst.ty.stride(dim).try_into().unwrap(), false),
             "dst.offset",
         )?;
-        dst.offset = self
+        let new_dst_offset = self
             .builder
             .build_int_add(dst.offset, dst_offset_add, "dst.offset")?;
+        dst = dst.with_offset(new_dst_offset);
 
         let nth_resize = axes.iter().position(|&x| x == dim);
         let x_original = match nth_resize {
@@ -1522,9 +1525,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(src.ty.stride(dim).try_into().unwrap(), false),
             "src.offset",
         )?;
-        src.offset = self
+        let new_src_offset = self
             .builder
             .build_int_add(src.offset, src_offset_add, "src.offset")?;
+        src = src.with_offset(new_src_offset);
         self.builder.build_unconditional_branch(next_header)?;
 
         self.builder.position_at_end(next_exit);
