@@ -49,6 +49,36 @@ impl<'ctx> TensorPtr<'ctx> {
         Self::new(ptr, ty, offset, format!("{}.{}", prefix, index))
     }
 
+    /// Create a new TensorPtr with modified offset
+    pub fn with_offset(&self, offset: IntValue<'ctx>) -> Self {
+        Self {
+            ptr: self.ptr,
+            ty: self.ty.clone(),
+            offset,
+            name: self.name.clone(),
+        }
+    }
+
+    /// Create a new TensorPtr with modified type (useful for broadcasting)
+    pub fn with_type(&self, ty: ResolvedTensorType) -> Self {
+        Self {
+            ptr: self.ptr,
+            ty,
+            offset: self.offset,
+            name: self.name.clone(),
+        }
+    }
+
+    /// Create a new TensorPtr with modified offset and appended name suffix
+    pub fn with_offset_and_name(&self, offset: IntValue<'ctx>, name_suffix: &str) -> Self {
+        Self {
+            ptr: self.ptr,
+            ty: self.ty.clone(),
+            offset,
+            name: format!("{}.{}", self.name, name_suffix),
+        }
+    }
+
     // TODO: Remove
     pub fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)

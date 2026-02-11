@@ -220,12 +220,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let src_offset =
             self.builder
                 .build_int_add(inner_loops.src_ptr.offset, src_offset, "src.offset")?;
-        let src_ptr = TensorPtr {
-            ptr: inner_loops.src_ptr.ptr,
-            ty: inner_loops.src_ptr.ty.clone(),
-            offset: src_offset,
-            name: format!("src.{}", nest),
-        };
+        let src_ptr = inner_loops
+            .src_ptr
+            .with_offset_and_name(src_offset, &format!("src.{}", nest));
         let next_inner_loops = Im2ColsInnerLoop {
             preheader: head,
             exit,
@@ -464,12 +461,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             self.builder
                 .build_int_add(offset_src_nbatch, offset_src_channel, "offset.src")?;
 
-        let mut src = src.clone();
-        src.offset = offset_src;
+        let src = src.with_offset(offset_src);
 
         self.build_im2col_by_channel_outer(
             (dst.ptr, offset_dst),
-            src.clone(),
+            src,
             vec![],
             0,
             (header_channel, exiting_channel),
@@ -1622,15 +1618,16 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let mut entry = entry;
         let stride = dst.ty.stride(axis);
         for src in srcs {
-            let mut dst = dst.clone();
-            dst.offset = self.builder.build_int_add(
+            let offset = self.builder.build_int_add(
                 dst.offset,
                 self.context
                     .i64_type()
                     .const_int(acc.try_into().unwrap(), false),
                 "dst.offset",
             )?;
-            dst.ty.dims[axis] = src.ty.dims[axis];
+            let mut new_ty = dst.ty.clone();
+            new_ty.dims[axis] = src.ty.dims[axis];
+            let dst = dst.with_offset(offset).with_type(new_ty);
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
                 operands: smallvec![dst, src.clone()],
