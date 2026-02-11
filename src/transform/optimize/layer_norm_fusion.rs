@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
@@ -94,18 +96,28 @@ fn match_pattern<T: GraphOp>(
     };
 
     let just_one_consumer = |id: NodeId| {
-        let users = modifier.used_node(graph.nodes[id].outputs[0])?;
+        let users = modifier
+            .used_node(graph.nodes[id].outputs[0])?
+            .iter()
+            .map(|(node_id, _)| *node_id)
+            .unique()
+            .collect::<Vec<_>>();
         if users.len() == 1 {
-            Some(users[0].0)
+            Some(users[0])
         } else {
             None
         }
     };
 
     let just_two_consumers = |id: NodeId| {
-        let users = modifier.used_node(graph.nodes[id].outputs[0])?;
+        let users = modifier
+            .used_node(graph.nodes[id].outputs[0])?
+            .iter()
+            .map(|(node_id, _)| *node_id)
+            .unique()
+            .collect::<Vec<_>>();
         if users.len() == 2 {
-            Some((users[0].0, users[1].0))
+            Some((users[0], users[1]))
         } else {
             None
         }

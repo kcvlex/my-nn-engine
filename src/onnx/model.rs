@@ -199,6 +199,18 @@ impl Graph {
             _ => false,
         })
     }
+
+    pub fn empty_graph(name: String) -> Self {
+        Self {
+            nodes: Nodes::default(),
+            name,
+            inputs: vec![],
+            outputs: vec![],
+            values: Values::default(),
+            initializer: BTreeMap::new(),
+            resolved_params: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -219,6 +231,21 @@ pub struct Node {
 impl Node {
     pub fn is_dummy(&self) -> bool {
         matches!(self.op, Operator::Input(_) | Operator::Output(_))
+    }
+
+    pub fn create_node(
+        inputs: Vec<ValueId>,
+        outputs: Vec<ValueId>,
+        name: String,
+        op: Operator,
+    ) -> Self {
+        Self {
+            inputs,
+            outputs,
+            name,
+            op,
+            meta: NodeMeta::default(),
+        }
     }
 }
 
