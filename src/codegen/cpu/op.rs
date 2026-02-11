@@ -23,6 +23,32 @@ pub struct TensorPtr<'ctx> {
 }
 
 impl<'ctx> TensorPtr<'ctx> {
+    /// Create a new TensorPtr
+    pub fn new(
+        ptr: PointerValue<'ctx>,
+        ty: ResolvedTensorType,
+        offset: IntValue<'ctx>,
+        name: String,
+    ) -> Self {
+        Self {
+            ptr,
+            ty,
+            offset,
+            name,
+        }
+    }
+
+    /// Create a TensorPtr with a formatted name using index
+    pub fn new_with_index(
+        ptr: PointerValue<'ctx>,
+        ty: ResolvedTensorType,
+        offset: IntValue<'ctx>,
+        prefix: &str,
+        index: usize,
+    ) -> Self {
+        Self::new(ptr, ty, offset, format!("{}.{}", prefix, index))
+    }
+
     // TODO: Remove
     pub fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)
@@ -56,14 +82,8 @@ impl<'ctx> TensorPtr<'ctx> {
             .builder
             .build_load(i64_type, offset, "")?
             .into_int_value();
-        let ty = self.ty.clone();
-        let name = self.name.clone();
-        Ok(Self {
-            ptr,
-            ty,
-            offset,
-            name,
-        })
+
+        Ok(Self::new(ptr, self.ty.clone(), offset, self.name.clone()))
     }
 }
 
