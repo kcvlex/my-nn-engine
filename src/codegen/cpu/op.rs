@@ -79,7 +79,8 @@ impl<'ctx> TensorPtr<'ctx> {
         }
     }
 
-    // TODO: Remove
+    /// Get the stride at dimension i (convenience wrapper for ty.stride(i))
+    #[inline]
     pub fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)
     }
