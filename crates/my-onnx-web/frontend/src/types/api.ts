@@ -1,32 +1,30 @@
 export interface TensorData {
   name: string;
-  data: number[];
   dims: number[];
   dtype: string;
+  data: number[];
 }
 
-export interface UploadResponse {
-  model_id: string;
-  message: string;
+export enum ModelId {
+  MNIST = 0,
+  RESNET = 1,
+  YOLO = 2,
+  BERT = 3,
+  GPT2 = 4,
+}
+
+export enum Backend {
+  CPU = 0,
+  CUDA = 1,
 }
 
 export interface InferenceRequest {
-  inputs: TensorData[];
+  model_id: ModelId;
+  input_data: TensorData;
+  backend: Backend;
 }
 
 export interface InferenceResponse {
-  outputs: TensorData[];
+  output_data: TensorData;
   inference_time_ms: number;
 }
-
-export interface ModelListItem {
-  model_id: string;
-  uploaded_at: string;
-  status: string;
-}
-
-export interface ErrorResponse {
-  error: string;
-}
-
-export type Target = 'CPU' | 'CUDA';

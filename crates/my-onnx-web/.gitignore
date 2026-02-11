@@ -1,6 +1,17 @@
+# Generated code from protobuf/gRPC build scripts
+src/generated/
+
+# Frontend node_modules (in case it exists here)
+node_modules/
+
 # Frontend build output
 dist/
+frontend/dist/
 
 # Runtime directories
 cache/
 uploads/
+models/
+
+# Logs
+*.log

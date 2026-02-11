@@ -1,12 +1,52 @@
-# Added by cargo
-#
-# already existing elements were commented out
-
+# Rust / Cargo
 /target
+Cargo.lock
+
+# ONNX models and generated files
 *.png
 *.dot
 *.ll
 *.so
 models/*.onnx
 download
-venv
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated code from build scripts
+**/generated/
+**/src/generated/
+
+# Build outputs
+crates/my-onnx-web/dist/
+crates/my-onnx-web/frontend/dist/
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+pnpm-lock.yaml
+.pnpm-store/
+
+# Runtime directories
+cache/
+uploads/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local

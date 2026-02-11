@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package onnx_service;
+
+// Tensor data for inference
+message TensorData {
+  // Tensor name
+  string name = 1;
+
+  // Tensor dimensions
+  repeated int64 dims = 2;
+
+  // Data type string (e.g., "float32", "int64")
+  string dtype = 3;
+
+  // Tensor data as doubles (converted from any type)
+  repeated double data = 4;
+}
+
+// Supported model IDs
+enum ModelId {
+  MNIST = 0;
+  RESNET = 1;
+  YOLO = 2;
+  BERT = 3;
+  GPT2 = 4;
+}
+
+// Target backend for execution
+enum Backend {
+  CPU = 0;
+  CUDA = 1;
+}
+
+// Inference request
+message InferenceRequest {
+  // Pre-defined model to use
+  ModelId model_id = 1;
+
+  // Input tensor data
+  TensorData input_data = 2;
+
+  // Execution backend
+  Backend backend = 3;
+}
+
+// Inference response
+message InferenceResponse {
+  // Output tensor data
+  TensorData output_data = 1;
+
+  // Inference time in milliseconds
+  double inference_time_ms = 2;
+}
+
+// ONNX Model Inference Service
+service OnnxInferenceService {
+  // Run inference on a pre-defined model
+  rpc RunInference(InferenceRequest) returns (InferenceResponse);
+}
