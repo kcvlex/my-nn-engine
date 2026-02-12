@@ -110,19 +110,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-<<<<<<< HEAD
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-=======
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
->>>>>>> 46c23ec (fix)
         with:
           components: rustfmt
 
       - name: Check formatting
-<<<<<<< HEAD
-        run: cargo fmt -- --check
-=======
         run: cargo +nightly fmt -- --check
->>>>>>> 46c23ec (fix)
