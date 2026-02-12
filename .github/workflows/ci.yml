@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test and Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache git submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            .git/modules
+            third-party
+          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
+          restore-keys: |
+            ${{ runner.os }}-submodules-
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        run: |
+          # Install Protocol Buffers compiler and OpenBLAS
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libopenblas-dev
+
+          # Install LLVM 18
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+
+      - name: Download validated models
+        working-directory: models/validated
+        run: |
+          # Define model URLs
+          HASH=bec48b6a70e5e9042c0badbaafefe4454e072d08
+          REPO=https://github.com/onnx/models
+          CLASSIFICATION="$REPO/raw/$HASH/validated/vision/classification"
+          OBJECT_DETECTION="$REPO/raw/$HASH/validated/vision/object_detection_segmentation"
+          TEXT="$REPO/raw/$HASH/validated/text/machine_comprehension"
+
+          # Function to download, verify checksum, and extract if not exists
+          download_model() {
+            local name=$1
+            local url=$2
+            local expected_sha256=$3
+            if [ ! -d "$name" ]; then
+              echo "Downloading $name..."
+              wget -q -O "${name}.tar.gz" "$url"
+              
+              echo "Verifying checksum for $name..."
+              echo "${expected_sha256}  ${name}.tar.gz" | sha256sum -c - || {
+                echo "Checksum verification failed for $name"
+                rm "${name}.tar.gz"
+                exit 1
+              }
+              
+              tar -xzf "${name}.tar.gz"
+              rm "${name}.tar.gz"
+            else
+              echo "$name already exists, skipping..."
+            fi
+          }
+
+          # Download all models from Makefile. The Makefile lists 6 models total:
+          # - mnist-12, resnet18-v2-7, resnet152-v2-7, yolov4 (have CPU + CUDA tests)
+          # - bertsquad-12, gpt2-10 (currently CUDA-only, may support CPU in the future)
+          # SHA256 checksums are pre-calculated from files at commit HASH for verification
+          download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz" \
+            "a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9"
+          download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz" \
+            "a64c111fac5d4e8bebf9246507ec7a92ea1c1596de09fca73bb7f94e9750e316"
+          download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz" \
+            "78b507483050a427870a264c398d121f44b92d69c8ca0c53217eb5137b6b51e3"
+          download_model "bertsquad-12" "$TEXT/bert-squad/model/bertsquad-12.tar.gz" \
+            "4cd041010ab4ad11c23c0eb7f056c4e4286a894b6d712ef09445b955763fb1b1"
+          download_model "yolov4" "$OBJECT_DETECTION/yolov4/model/yolov4.tar.gz" \
+            "7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2"
+          download_model "gpt2-10" "$TEXT/gpt-2/model/gpt2-10.tar.gz" \
+            "0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53"
+
+      - name: Cache validated models
+        uses: actions/cache@v4
+        with:
+          path: models/validated
+          key: ${{ runner.os }}-validated-models-v1
+          restore-keys: |
+            ${{ runner.os }}-validated-models-
+
+      - name: Build (CPU-only)
+        run: cargo build --no-default-features --verbose
+
+      - name: Run tests (CPU-only)
+        run: cargo test --no-default-features --verbose
+
+      - name: Run tests (all features)
+        run: cargo test --all-features --verbose
+      - name: Build with all features
+        run: cargo build --all-features --verbose
+
+      - name: Check that CUDA feature compiles
+        run: cargo check --features cuda --verbose
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo +nightly fmt -- --check
