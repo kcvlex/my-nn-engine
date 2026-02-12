@@ -78,6 +78,7 @@ jobs:
           }
 
           # Download only CPU models (skip CUDA-only models to save time)
+          # SHA256 checksums are pre-calculated from files at commit HASH for verification
           download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz" \
             "a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9"
           download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz" \

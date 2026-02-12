@@ -5,7 +5,7 @@ CLASSIFICATION = $(REPO)/raw/$(HASH)/validated/vision/classification
 OBJECT_DETECTION_SEGMENTATION = $(REPO)/raw/$(HASH)/validated/vision/object_detection_segmentation
 TEXT = $(REPO)/raw/$(HASH)/validated/text/machine_comprehension
 
-# SHA256 checksums for model files
+# SHA256 checksums for model files (pre-calculated from files at commit HASH)
 MNIST_12_SHA256 = a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
 RESNET18_V2_7_SHA256 = a64c111fac5d4e8bebf9246507ec7a92ea1c1596de09fca73bb7f94e9750e316
 RESNET152_V2_7_SHA256 = 78b507483050a427870a264c398d121f44b92d69c8ca0c53217eb5137b6b51e3
