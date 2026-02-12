@@ -18,6 +18,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache git submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            .git/modules
+            third-party
+          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
+          restore-keys: |
+            ${{ runner.os }}-submodules-
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -35,14 +48,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
           echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
-
-      - name: Cache validated models
-        uses: actions/cache@v4
-        with:
-          path: models/validated
-          key: ${{ runner.os }}-validated-models-v1
-          restore-keys: |
-            ${{ runner.os }}-validated-models-
 
       - name: Download validated models
         working-directory: models/validated
@@ -73,6 +78,14 @@ jobs:
           download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz"
           download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz"
           download_model "yolov4" "$OBJECT_DETECTION/yolov4/model/yolov4.tar.gz"
+
+      - name: Cache validated models
+        uses: actions/cache@v4
+        with:
+          path: models/validated
+          key: ${{ runner.os }}-validated-models-v1
+          restore-keys: |
+            ${{ runner.os }}-validated-models-
 
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose
