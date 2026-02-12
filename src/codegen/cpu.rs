@@ -606,14 +606,8 @@ impl<'ll> CodeGen<'ll, '_> {
                     .get_resolved_tensor_type(*id)
                     .unwrap()
                     .clone();
-                let name = format!("ptr.{}", i);
                 let offset = self.ll_ctx.i64_type().const_int(0, false);
-                TensorPtr {
-                    ptr,
-                    ty,
-                    offset,
-                    name,
-                }
+                TensorPtr::new_with_index(ptr, ty, offset, "ptr", i)
             })
             .collect::<Vec<_>>();
 
