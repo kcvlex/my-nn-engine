@@ -3,6 +3,10 @@ name = "my-onnx"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["cuda"]
+cuda = []
+
 [dependencies]
 bitvec = "1.0.1"
 bytes = "1.7.1"

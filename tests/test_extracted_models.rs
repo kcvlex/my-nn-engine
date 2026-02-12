@@ -72,18 +72,21 @@ fn run_test(model: &str, epsilon: f64, target: Target, nums: (usize, usize)) -> 
 
 #[ignore]
 #[test]
+#[cfg(feature = "cuda")]
 fn test_resnet18_until() -> Result {
     run_test("resnet18-v2-7/until_pool1_fwd", 1e-2, Target::CUDA, (1, 1))
 }
 
 #[ignore]
 #[test]
+#[cfg(feature = "cuda")]
 fn test_yolov4_until() -> Result {
     run_test("yolov4/until_lambda_5_add", 5e-1, Target::CUDA, (1, 1))
 }
 
 #[ignore]
 #[test]
+#[cfg(feature = "cuda")]
 fn test_bert_until() -> Result {
     run_test(
         "bertsquad-12/until_embeddings_batchnorm_add_1",
@@ -95,6 +98,7 @@ fn test_bert_until() -> Result {
 
 #[ignore]
 #[test]
+#[cfg(feature = "cuda")]
 fn test_gpt_until() -> Result {
     run_test("GPT2/until_output2_277", 1e-2, Target::CUDA, (1, 2))
 }

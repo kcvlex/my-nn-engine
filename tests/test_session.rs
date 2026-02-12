@@ -166,7 +166,11 @@ where
     P: AsRef<std::path::Path>,
     F: Fn(Session) -> TestResult,
 {
-    with_session(p, &[Target::CPU, Target::CUDA], f)
+    #[cfg(feature = "cuda")]
+    let targets = &[Target::CPU, Target::CUDA];
+    #[cfg(not(feature = "cuda"))]
+    let targets = &[Target::CPU];
+    with_session(p, targets, f)
 }
 
 fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
@@ -174,7 +178,11 @@ where
     P: AsRef<std::path::Path>,
     F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
 {
-    with_session_and_tensors(p, &[Target::CPU, Target::CUDA], nums, f)
+    #[cfg(feature = "cuda")]
+    let targets = &[Target::CPU, Target::CUDA];
+    #[cfg(not(feature = "cuda"))]
+    let targets = &[Target::CPU];
+    with_session_and_tensors(p, targets, nums, f)
 }
 
 type TestResult = Result<(), SessionError>;
@@ -1138,6 +1146,7 @@ fn constantofshape_float_ones() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn softmax() -> TestResult {
     with_session_and_tensors(
         "softmax",
@@ -1152,6 +1161,7 @@ fn softmax() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn softmax_axis() -> TestResult {
     with_session_and_tensors(
         "softmax_axis",
@@ -1166,6 +1176,7 @@ fn softmax_axis() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn one_hot() -> TestResult {
     with_session_and_tensors(
         "one_hot",
@@ -1180,6 +1191,7 @@ fn one_hot() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn batched_gemm() -> TestResult {
     with_session_and_tensors(
         "batched_gemm",
@@ -1194,6 +1206,7 @@ fn batched_gemm() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn gather_default_axis() -> TestResult {
     with_session_and_tensors(
         "gather_default_axis",
@@ -1217,6 +1230,7 @@ fn non_zero() -> TestResult {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn layer_norm() -> TestResult {
     with_session_and_tensors(
         "layer_norm",
