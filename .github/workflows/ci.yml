@@ -45,8 +45,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build-target-
 
-      - name: Install LLVM 18
+      - name: Install dependencies
         run: |
+          # Install Protocol Buffers compiler
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+          # Install LLVM 18
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
           sudo apt-get update
