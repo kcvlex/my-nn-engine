@@ -23,7 +23,6 @@ pub struct TensorPtr<'ctx> {
 }
 
 impl<'ctx> TensorPtr<'ctx> {
-    /// Create a new TensorPtr
     pub fn new(
         ptr: PointerValue<'ctx>,
         ty: ResolvedTensorType,
@@ -46,6 +45,21 @@ impl<'ctx> TensorPtr<'ctx> {
         index: usize,
     ) -> Self {
         Self::new(ptr, ty, offset, format!("{}.{}", prefix, index))
+    }
+
+    pub fn with_offset(mut self, offset: IntValue<'ctx>) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn with_type(mut self, ty: ResolvedTensorType) -> Self {
+        self.ty = ty;
+        self
+    }
+
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
     }
 
     // TODO: Remove
