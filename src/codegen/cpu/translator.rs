@@ -30,103 +30,6 @@ pub struct FunctionTranslator<'a, 'ctx> {
     pub debug_stuff: &'a DebugStuff<'ctx>,
 }
 
-/// Helper for building loops with multiple phi nodes (index + offsets)
-struct OffsetLoopBuilder<'a, 'ctx> {
-    translator: &'a FunctionTranslator<'a, 'ctx>,
-    preheader: BasicBlock<'ctx>,
-    header: BasicBlock<'ctx>,
-    exiting: BasicBlock<'ctx>,
-    exit: BasicBlock<'ctx>,
-}
-
-impl<'a, 'ctx> OffsetLoopBuilder<'a, 'ctx> {
-    fn new(
-        translator: &'a FunctionTranslator<'a, 'ctx>,
-        preheader: BasicBlock<'ctx>,
-        name_prefix: &str,
-    ) -> Result<Self, BuilderError> {
-        let header = translator
-            .context
-            .append_basic_block(*translator.func, &format!("{}.header", name_prefix));
-        let exiting = translator
-            .context
-            .append_basic_block(*translator.func, &format!("{}.exiting", name_prefix));
-        let exit = translator
-            .context
-            .append_basic_block(*translator.func, &format!("{}.exit", name_prefix));
-
-        translator.builder.position_at_end(preheader);
-        translator.builder.build_unconditional_branch(header)?;
-
-        Ok(Self {
-            translator,
-            preheader,
-            header,
-            exiting,
-            exit,
-        })
-    }
-
-    /// Build index phi and setup loop termination
-    fn build_loop_index(
-        &self,
-        init_val: IntValue<'ctx>,
-        bound: IntValue<'ctx>,
-        name: &str,
-    ) -> Result<PhiValue<'ctx>, BuilderError> {
-        self.translator.builder.position_at_end(self.header);
-        let ind = self
-            .translator
-            .builder
-            .build_phi(self.translator.context.i64_type(), name)?;
-
-        self.translator.builder.position_at_end(self.exiting);
-        let ind_next = self.translator.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.translator.context.i64_type().const_int(1, false),
-            &format!("{}.next", name),
-        )?;
-        let cond = self.translator.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            ind_next,
-            bound,
-            "cond",
-        )?;
-        self.translator
-            .builder
-            .build_conditional_branch(cond, self.header, self.exit)?;
-
-        ind.add_incoming(&[(&init_val, self.preheader), (&ind_next, self.exiting)]);
-
-        Ok(ind)
-    }
-
-    /// Build an offset phi that gets incremented by stride each iteration
-    fn build_offset_phi(
-        &self,
-        init_val: IntValue<'ctx>,
-        stride: IntValue<'ctx>,
-        name: &str,
-    ) -> Result<PhiValue<'ctx>, BuilderError> {
-        self.translator.builder.position_at_end(self.header);
-        let offset = self
-            .translator
-            .builder
-            .build_phi(self.translator.context.i64_type(), name)?;
-
-        self.translator.builder.position_at_end(self.exiting);
-        let offset_next = self.translator.builder.build_int_add(
-            offset.as_basic_value().into_int_value(),
-            stride,
-            &format!("{}.next", name),
-        )?;
-
-        offset.add_incoming(&[(&init_val, self.preheader), (&offset_next, self.exiting)]);
-
-        Ok(offset)
-    }
-}
-
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
         unsafe {
@@ -187,6 +90,59 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let call = self.builder.build_call(function, args, name)?;
         //call.set_tail_call(true);
         Ok(call)
+    }
+
+    /// Helper for building a simple 1D reduction loop (e.g., for max/sum along an axis)
+    /// Returns the accumulator phi value that you can use in the loop body
+    fn build_reduction_loop<F>(
+        &self,
+        header: BasicBlock<'ctx>,
+        body: BasicBlock<'ctx>,
+        exiting: BasicBlock<'ctx>,
+        exit: BasicBlock<'ctx>,
+        bound: IntValue<'ctx>,
+        init_val: BasicValueEnum<'ctx>,
+        body_fn: F,
+    ) -> Result<BasicValueEnum<'ctx>, BuilderError>
+    where
+        F: FnOnce(IntValue<'ctx>, PhiValue<'ctx>) -> Result<BasicValueEnum<'ctx>, BuilderError>,
+    {
+        // Build loop structure
+        self.builder.position_at_end(header);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let acc = self.builder.build_phi(init_val.get_type(), "acc")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        // Execute body
+        self.builder.position_at_end(body);
+        let result = body_fn(ind.as_basic_value().into_int_value(), acc)?;
+        self.builder.build_unconditional_branch(exiting)?;
+
+        // Build loop increment and condition
+        self.builder.position_at_end(exiting);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind_next,
+            bound,
+            "cond",
+        )?;
+        self.builder
+            .build_conditional_branch(cond, header, exit)?;
+
+        // Wire up phis
+        ind.add_incoming(&[
+            (&self.context.i64_type().const_zero(), header),
+            (&ind_next, exiting),
+        ]);
+        acc.add_incoming(&[(&init_val, header), (&result, exiting)]);
+
+        self.builder.position_at_end(exit);
+        Ok(acc.as_basic_value())
     }
 
     fn build_im2col_by_channel_inner(
