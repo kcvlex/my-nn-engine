@@ -49,6 +49,14 @@ jobs:
           sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
           echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
 
+      - name: Cache validated models
+        uses: actions/cache@v4
+        with:
+          path: models/validated
+          key: ${{ runner.os }}-validated-models-v1
+          restore-keys: |
+            ${{ runner.os }}-validated-models-
+
       - name: Download validated models
         working-directory: models/validated
         run: |
@@ -98,14 +106,6 @@ jobs:
             "7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2"
           download_model "gpt2-10" "$TEXT/gpt-2/model/gpt2-10.tar.gz" \
             "0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53"
-
-      - name: Cache validated models
-        uses: actions/cache@v4
-        with:
-          path: models/validated
-          key: ${{ runner.os }}-validated-models-v1
-          restore-keys: |
-            ${{ runner.os }}-validated-models-
 
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose
