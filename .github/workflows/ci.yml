@@ -49,15 +49,15 @@ jobs:
           sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
           echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
 
-      - name: Cache validated models
+      - name: Cache validated model archives
         uses: actions/cache@v4
         with:
-          path: models/validated
-          key: ${{ runner.os }}-validated-models-v1
+          path: models/validated/*.tar.gz
+          key: ${{ runner.os }}-validated-model-archives-v1
           restore-keys: |
-            ${{ runner.os }}-validated-models-
+            ${{ runner.os }}-validated-model-archives-
 
-      - name: Download validated models
+      - name: Download and extract validated models
         working-directory: models/validated
         run: |
           # Define model URLs
@@ -67,26 +67,33 @@ jobs:
           OBJECT_DETECTION="$REPO/raw/$HASH/validated/vision/object_detection_segmentation"
           TEXT="$REPO/raw/$HASH/validated/text/machine_comprehension"
 
-          # Function to download, verify checksum, and extract if not exists
+          # Function to download (if not cached), verify checksum, and extract
           download_model() {
             local name=$1
             local url=$2
             local expected_sha256=$3
-            if [ ! -d "$name" ]; then
+
+            # Download if tar.gz doesn't exist (not in cache)
+            if [ ! -f "${name}.tar.gz" ]; then
               echo "Downloading $name..."
               wget -q -O "${name}.tar.gz" "$url"
-              
+
               echo "Verifying checksum for $name..."
               echo "${expected_sha256}  ${name}.tar.gz" | sha256sum -c - || {
                 echo "Checksum verification failed for $name"
                 rm "${name}.tar.gz"
                 exit 1
               }
-              
-              tar -xzf "${name}.tar.gz"
-              rm "${name}.tar.gz"
             else
-              echo "$name already exists, skipping..."
+              echo "$name.tar.gz found in cache, skipping download..."
+            fi
+
+            # Extract if directory doesn't exist
+            if [ ! -d "$name" ]; then
+              echo "Extracting $name..."
+              tar -xzf "${name}.tar.gz"
+            else
+              echo "$name directory already exists, skipping extraction..."
             fi
           }
 
