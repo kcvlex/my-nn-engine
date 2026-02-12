@@ -222,8 +222,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .build_int_add(inner_loops.src_ptr.offset, src_offset, "src.offset")?;
         let src_ptr = inner_loops
             .src_ptr
-            .with_offset(src_offset)
-            .with_name(format!("src.{}", nest));
+            .set_offset(src_offset)
+            .set_name(format!("src.{}", nest));
         let next_inner_loops = Im2ColsInnerLoop {
             preheader: head,
             exit,
@@ -462,7 +462,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             self.builder
                 .build_int_add(offset_src_nbatch, offset_src_channel, "offset.src")?;
 
-        let src = src.clone().with_offset(offset_src);
+        let src = src.clone().set_offset(offset_src);
 
         self.build_im2col_by_channel_outer(
             (dst.ptr, offset_dst),
@@ -1381,8 +1381,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_resize_rec(&self, param: ResizeParam<'_, 'ctx>) -> Result<(), BuilderError> {
         let ResizeParam {
-            mut dst,
-            mut src,
+            dst,
+            src,
             axes,
             loop_bb,
             dim,
@@ -1410,9 +1410,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(dst.ty.stride(dim).try_into().unwrap(), false),
             "dst.offset",
         )?;
-        dst.offset = self
+        let dst_offset = self
             .builder
             .build_int_add(dst.offset, dst_offset_add, "dst.offset")?;
+        let dst = dst.set_offset(dst_offset);
 
         let nth_resize = axes.iter().position(|&x| x == dim);
         let x_original = match nth_resize {
@@ -1523,9 +1524,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_int(src.ty.stride(dim).try_into().unwrap(), false),
             "src.offset",
         )?;
-        src.offset = self
+        let src_offset = self
             .builder
             .build_int_add(src.offset, src_offset_add, "src.offset")?;
+        let src = src.set_offset(src_offset);
         self.builder.build_unconditional_branch(next_header)?;
 
         self.builder.position_at_end(next_exit);
@@ -1629,7 +1631,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let dst = {
                 let mut new_ty = dst.ty.clone();
                 new_ty.dims[axis] = src.ty.dims[axis];
-                dst.clone().with_offset(offset).with_type(new_ty)
+                dst.clone().set_offset(offset).set_type(new_ty)
             };
             let op = Operation {
                 opcode: SingleOpcode::Transfer.into(),
