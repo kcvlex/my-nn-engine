@@ -65,6 +65,7 @@ fn test_transpose_conv2d_cuda() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_add_same_tensor_cpu() -> Result {
     run_test(
         "add_same_tensor",
