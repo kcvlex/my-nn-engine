@@ -38,7 +38,6 @@ impl<'ctx> TensorPtr<'ctx> {
         }
     }
 
-    /// Create a TensorPtr with a formatted name using index
     pub fn new_with_index(
         ptr: PointerValue<'ctx>,
         ty: ResolvedTensorType,
