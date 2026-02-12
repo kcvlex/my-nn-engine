@@ -47,17 +47,17 @@ impl<'ctx> TensorPtr<'ctx> {
         Self::new(ptr, ty, offset, format!("{}.{}", prefix, index))
     }
 
-    pub fn with_offset(mut self, offset: IntValue<'ctx>) -> Self {
+    pub fn set_offset(mut self, offset: IntValue<'ctx>) -> Self {
         self.offset = offset;
         self
     }
 
-    pub fn with_type(mut self, ty: ResolvedTensorType) -> Self {
+    pub fn set_type(mut self, ty: ResolvedTensorType) -> Self {
         self.ty = ty;
         self
     }
 
-    pub fn with_name(mut self, name: String) -> Self {
+    pub fn set_name(mut self, name: String) -> Self {
         self.name = name;
         self
     }
