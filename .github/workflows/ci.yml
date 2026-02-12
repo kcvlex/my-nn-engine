@@ -87,7 +87,7 @@ jobs:
 
           # Download all models from Makefile. The Makefile lists 6 models total:
           # - mnist-12, resnet18-v2-7, resnet152-v2-7, yolov4 (have CPU + CUDA tests)
-          # - bertsquad-12, gpt2-10 (currently CUDA-only, will be used when CUDA support is added)
+          # - bertsquad-12, gpt2-10 (currently CUDA-only, may support CPU in the future)
           download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz"
           download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz"
           download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz"
