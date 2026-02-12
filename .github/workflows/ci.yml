@@ -85,14 +85,15 @@ jobs:
             fi
           }
 
-          # Download only CPU-testable models. The Makefile lists 6 models total:
-          # - mnist-12, resnet18-v2-7, resnet152-v2-7, yolov4 (CPU + CUDA tests)
-          # - bertsquad-12, gpt2-10 (CUDA-only tests in test_validated_models.rs)
-          # Since CI runs CPU-only tests, bertsquad-12 and gpt2-10 are not needed.
+          # Download all models from Makefile. The Makefile lists 6 models total:
+          # - mnist-12, resnet18-v2-7, resnet152-v2-7, yolov4 (have CPU + CUDA tests)
+          # - bertsquad-12, gpt2-10 (currently CUDA-only, will be used when CUDA support is added)
           download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz"
           download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz"
           download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz"
+          download_model "bertsquad-12" "$TEXT/bert-squad/model/bertsquad-12.tar.gz"
           download_model "yolov4" "$OBJECT_DETECTION/yolov4/model/yolov4.tar.gz"
+          download_model "gpt2-10" "$TEXT/gpt-2/model/gpt2-10.tar.gz"
 
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose
