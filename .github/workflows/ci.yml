@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test and Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-target-
+
+      - name: Install LLVM 18
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+
+      - name: Cache validated models
+        uses: actions/cache@v4
+        with:
+          path: models/validated
+          key: ${{ runner.os }}-validated-models-v1
+          restore-keys: |
+            ${{ runner.os }}-validated-models-
+
+      - name: Download validated models
+        working-directory: models/validated
+        run: |
+          # Define model URLs
+          HASH=bec48b6a70e5e9042c0badbaafefe4454e072d08
+          REPO=https://github.com/onnx/models
+          CLASSIFICATION="$REPO/raw/$HASH/validated/vision/classification"
+          OBJECT_DETECTION="$REPO/raw/$HASH/validated/vision/object_detection_segmentation"
+          TEXT="$REPO/raw/$HASH/validated/text/machine_comprehension"
+
+          # Function to download and extract if not exists
+          download_model() {
+            local name=$1
+            local url=$2
+            if [ ! -d "$name" ]; then
+              echo "Downloading $name..."
+              wget -q -O "${name}.tar.gz" "$url"
+              tar -xzf "${name}.tar.gz"
+              rm "${name}.tar.gz"
+            else
+              echo "$name already exists, skipping..."
+            fi
+          }
+
+          # Download only CPU models (skip CUDA-only models to save time)
+          download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz"
+          download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz"
+          download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz"
+          download_model "yolov4" "$OBJECT_DETECTION/yolov4/model/yolov4.tar.gz"
+
+      - name: Build (CPU-only)
+        run: cargo build --no-default-features --verbose
+
+      - name: Run tests (CPU-only)
+        run: cargo test --no-default-features --verbose
+
+      - name: Build with all features
+        run: cargo build --all-features --verbose
+
+      - name: Check that CUDA feature compiles
+        run: cargo check --features cuda --verbose
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
