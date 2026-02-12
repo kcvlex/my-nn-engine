@@ -49,6 +49,14 @@ jobs:
           sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
           echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
 
+      - name: Cache validated models
+        uses: actions/cache@v4
+        with:
+          path: models/validated
+          key: ${{ runner.os }}-validated-models-v1
+          restore-keys: |
+            ${{ runner.os }}-validated-models-
+
       - name: Download validated models
         working-directory: models/validated
         run: |
@@ -99,24 +107,17 @@ jobs:
           download_model "gpt2-10" "$TEXT/gpt-2/model/gpt2-10.tar.gz" \
             "0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53"
 
-      - name: Cache validated models
-        uses: actions/cache@v4
-        with:
-          path: models/validated
-          key: ${{ runner.os }}-validated-models-v1
-          restore-keys: |
-            ${{ runner.os }}-validated-models-
-
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose
 
       - name: Run tests (CPU-only)
         run: cargo test --no-default-features --verbose
 
-      - name: Run tests (all features)
-        run: cargo test --all-features --verbose
       - name: Build with all features
         run: cargo build --all-features --verbose
+
+      - name: Run tests (all features)
+        run: cargo test --all-features --verbose
 
       - name: Check that CUDA feature compiles
         run: cargo check --features cuda --verbose
