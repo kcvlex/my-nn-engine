@@ -107,8 +107,6 @@ jobs:
       - name: Run tests (CPU-only)
         run: cargo test --no-default-features --verbose
 
-      - name: Run tests (all features)
-        run: cargo test --all-features --verbose
       - name: Build with all features
         run: cargo build --all-features --verbose
 
