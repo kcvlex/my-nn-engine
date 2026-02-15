@@ -753,7 +753,9 @@ impl<'ll> CodeGen<'ll, '_> {
                 //     );
                 //     translator.build_nested_loop(gemm, entry, nest)
                 // }
-                Operator::MatMul => todo!(),
+                Operator::MatMul => {
+                    translator.build_matmul(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry)
+                }
                 Operator::Gemm(ref gemm) => {
                     translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
                 }
