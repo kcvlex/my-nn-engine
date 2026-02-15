@@ -16,6 +16,8 @@ use crate::schedule::ElementwiseOpArg;
 use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
+use crate::tensor::types::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::UIntType;
 
@@ -890,6 +892,131 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.blas
             .call_gemm(dst.ty.elem_type.float_type().unwrap(), &gemm, self.builder)?;
         Ok(entry)
+    }
+
+    pub fn build_matmul(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        a: &TensorPtr<'ctx>,
+        b: &TensorPtr<'ctx>,
+        c: Option<&TensorPtr<'ctx>>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(3 <= a.ty.dims.ndim());
+        let (m, k) = (
+            a.ty.dims[a.ty.dims.ndim() - 2],
+            a.ty.dims[a.ty.dims.ndim() - 1],
+        );
+        let n = b.ty.dims.last().copied().unwrap();
+        assert!(b.ty.dims[b.ty.dims.ndim() - 2] == k);
+        assert!(dst.ty.dims[dst.ty.dims.ndim() - 2] == m);
+        assert!(dst.ty.dims[dst.ty.dims.ndim() - 1] == n);
+        assert!(a.ty.is_contiguous());
+        assert!(b.ty.is_contiguous());
+        let alpha = 1.0;
+        let beta = if c.is_some() { 1.0 } else { 0.0 };
+
+        let bound = a.ty.dims.size() / (m * k);
+        let gemm = operator::Gemm {
+            trans_a: false,
+            trans_b: false,
+            alpha,
+            beta,
+        };
+
+        let header = self.context.append_basic_block(*self.func, "matmul.header");
+        let latch = self.context.append_basic_block(*self.func, "matmul.latch");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let a = {
+            let offset = self.builder.build_int_mul(
+                ind.as_basic_value().into_int_value(),
+                self.context.i64_type().const_int((m * k) as u64, false),
+                "offset.a",
+            )?;
+            let a = a.clone().set_offset(offset);
+            let ptr = self.build_gep(&a)?;
+            TensorPtr {
+                ptr,
+                ty: ResolvedTensorType::new(a.ty.elem_type, ResolvedTensorDims::new(&[m, k])),
+                offset,
+                name: a.name.clone(),
+            }
+        };
+        let b = {
+            let offset = self.builder.build_int_mul(
+                ind.as_basic_value().into_int_value(),
+                self.context.i64_type().const_int((k * n) as u64, false),
+                "offset.b",
+            )?;
+            let b = b.clone().set_offset(offset);
+            let ptr = self.build_gep(&b)?;
+            TensorPtr {
+                ptr,
+                ty: ResolvedTensorType::new(b.ty.elem_type, ResolvedTensorDims::new(&[k, n])),
+                offset,
+                name: b.name.clone(),
+            }
+        };
+        let c = if let Some(c) = c {
+            let offset = self.builder.build_int_mul(
+                ind.as_basic_value().into_int_value(),
+                self.context.i64_type().const_int((m * n) as u64, false),
+                "offset.c",
+            )?;
+            let c = c.clone().set_offset(offset);
+            let ptr = self.build_gep(&c)?;
+            Some(TensorPtr {
+                ptr,
+                ty: ResolvedTensorType::new(c.ty.elem_type, ResolvedTensorDims::new(&[m, n])),
+                offset,
+                name: c.name.clone(),
+            })
+        } else {
+            None
+        };
+        let dst = {
+            let offset = self.builder.build_int_mul(
+                ind.as_basic_value().into_int_value(),
+                self.context.i64_type().const_int((m * n) as u64, false),
+                "offset.dst",
+            )?;
+            let dst = dst.clone().set_offset(offset);
+            let ptr = self.build_gep(&dst)?;
+            TensorPtr {
+                ptr,
+                ty: ResolvedTensorType::new(dst.ty.elem_type, ResolvedTensorDims::new(&[m, n])),
+                offset,
+                name: dst.name.clone(),
+            }
+        };
+        self.build_gemm(&dst, &a, &b, c.as_ref(), header, &gemm)?;
+        self.builder.build_unconditional_branch(latch)?;
+
+        self.builder.position_at_end(latch);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            self.context.i64_type().const_int(bound as u64, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, header)?;
+        ind.add_incoming(&[
+            (&ind_next, latch),
+            (&self.context.i64_type().const_zero(), entry),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
     }
 
     pub fn build_matrix_reduce(

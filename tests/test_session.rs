@@ -1173,18 +1173,12 @@ fn one_hot() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn batched_gemm() -> TestResult {
-    with_session_and_tensors(
-        "batched_gemm",
-        &[Target::CUDA],
-        (2, 1),
-        |session, (inputs, expected)| {
-            let outputs = session.run(inputs)?;
-            assert_eq_epsilon!(outputs[0], expected[0], 1.0);
-            Ok(())
-        },
-    )
+    with_all_sessions_and_tensors("batched_gemm", (2, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1.0);
+        Ok(())
+    })
 }
 
 #[test]
