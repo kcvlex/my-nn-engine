@@ -760,6 +760,9 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Im2Col(ref im2col) => {
                     translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
                 }
+                Operator::OneHot(ref one_hot) => {
+                    translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
+                }
                 Operator::ReduceMatrix(op) => {
                     let m = ptrs[1].ty.dims[0] as u64;
                     let n = ptrs[1].ty.dims[1] as u64;

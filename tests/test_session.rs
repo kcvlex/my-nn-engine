@@ -1176,18 +1176,12 @@ fn softmax_axis() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn one_hot() -> TestResult {
-    with_session_and_tensors(
-        "one_hot",
-        &[Target::CUDA],
-        (1, 1),
-        |session, (inputs, expected)| {
-            let outputs = session.run(inputs)?;
-            assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
-            Ok(())
-        },
-    )
+    with_all_sessions_and_tensors("one_hot", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
 }
 
 #[test]

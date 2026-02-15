@@ -13,8 +13,11 @@ use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::onnx::operator;
 use crate::schedule::ElementwiseOpArg;
+use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
+use crate::tensor::types::SIntType;
+use crate::tensor::types::UIntType;
 
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {
@@ -1647,6 +1650,149 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             acc += src.ty.dims[axis] * stride;
         }
         Ok(entry)
+    }
+
+    fn scalar_to_llvm_value(
+        &self,
+        value: &ScalarData,
+    ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
+        let res = match value {
+            ScalarData::SInt(ty, v) => {
+                let ty = match ty {
+                    SIntType::I32 => self.context.i32_type(),
+                    SIntType::I64 => self.context.i64_type(),
+                };
+                ty.const_int(*v as u64, true).into()
+            }
+            ScalarData::UInt(ty, v) => {
+                let ty = match ty {
+                    UIntType::U64 => self.context.i64_type(),
+                };
+                ty.const_int(*v, false).into()
+            }
+            ScalarData::Float(ty, v) => {
+                let ty = match ty {
+                    FloatType::F32 => self.context.f32_type(),
+                    FloatType::F64 => self.context.f64_type(),
+                };
+                ty.const_float(*v).into()
+            }
+        };
+        Ok(res)
+    }
+
+    pub fn build_one_hot(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        one_hot: &operator::OneHot,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(one_hot.axis == -1 || one_hot.axis == (src.ty.dims.ndim() as isize - 1));
+        assert!(src.ty.is_contiguous() && dst.ty.is_contiguous());
+        let Some(depth) = one_hot.depth else {
+            unimplemented!();
+        };
+        let Some(on_value) = one_hot.on_value else {
+            unimplemented!();
+        };
+        let Some(off_value) = one_hot.off_value else {
+            unimplemented!();
+        };
+        let on_value = self.scalar_to_llvm_value(&on_value)?;
+        let off_value = self.scalar_to_llvm_value(&off_value)?;
+        let depth = self.context.i64_type().const_int(depth as u64, false);
+
+        let outer_header = self.context.append_basic_block(*self.func, "outer.header");
+        let inner = self.context.append_basic_block(*self.func, "inner");
+        let outer_latch = self.context.append_basic_block(*self.func, "outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(outer_header)?;
+
+        self.builder.position_at_end(outer_header);
+        let outer_i = self.builder.build_phi(self.context.i64_type(), "i.outer")?;
+        let src = src.set_offset(outer_i.as_basic_value().into_int_value());
+        let index = self.build_load(&src)?.into_int_value();
+        let index = {
+            let add = self.builder.build_int_add(index, depth, "index.add")?;
+            let is_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                index,
+                self.context.i64_type().const_zero(),
+                "is_neg",
+            )?;
+            self.builder
+                .build_select(is_neg, add, index, "index")?
+                .into_int_value()
+        };
+        self.builder.build_unconditional_branch(inner)?;
+
+        self.builder.position_at_end(inner);
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let is_on = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i.as_basic_value().into_int_value(),
+            index,
+            "is_on",
+        )?;
+        let val = self
+            .builder
+            .build_select(is_on, on_value, off_value, "val")?;
+        let offset = self.builder.build_int_mul(
+            outer_i.as_basic_value().into_int_value(),
+            depth,
+            "offset",
+        )?;
+        let offset = self.builder.build_int_add(
+            offset,
+            inner_i.as_basic_value().into_int_value(),
+            "offset",
+        )?;
+        let dst = dst.set_offset(offset);
+        self.build_store(&dst, val)?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            depth,
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, outer_latch, inner)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), outer_header),
+            (&inner_i_next, inner),
+        ]);
+
+        self.builder.position_at_end(outer_latch);
+        let outer_i_next = self.builder.build_int_add(
+            outer_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "outer.i.next",
+        )?;
+        let outer_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            outer_i_next,
+            self.context
+                .i64_type()
+                .const_int(src.ty.dims.size() as u64, false),
+            "ec.outer",
+        )?;
+        self.builder
+            .build_conditional_branch(outer_ec, exit, outer_header)?;
+        outer_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), entry),
+            (&outer_i_next, outer_latch),
+        ]);
+        self.builder.position_at_end(exit);
+
+        Ok(exit)
     }
 }
 
