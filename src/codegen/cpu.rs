@@ -772,6 +772,9 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Resize(ref resize) => {
                     translator.build_resize(ptrs[0].clone(), ptrs[1].clone(), entry, resize)
                 }
+                Operator::Softmax(ref softmax) => {
+                    translator.build_softmax(ptrs[0].clone(), ptrs[1].clone(), entry, softmax)
+                }
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {

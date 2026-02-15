@@ -1794,6 +1794,234 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         Ok(exit)
     }
+
+    pub fn build_softmax(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        softmax: &operator::Softmax,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(src.ty.is_contiguous() && dst.ty.is_contiguous());
+
+        let axis = softmax.axis.index(src.ty.dims.ndim());
+        let val_ty = match src.ty.elem_type {
+            DataType::Float(t) => t,
+            _ => unimplemented!(),
+        };
+        let fmax = self.intrinsics.fmax.get(val_ty);
+        let fmax_id = match val_ty {
+            FloatType::F32 => f32::MIN as f64,
+            FloatType::F64 => f64::MIN,
+        };
+        let fexp = self.intrinsics.exp.get(val_ty);
+        let val_ty = val_ty.llvm_type(self.context);
+        let outer_bound = {
+            let mut acc = 1;
+            for d in src.ty.dims.iter().take(axis) {
+                acc *= *d as u64;
+            }
+            acc
+        };
+        let middle_bound = src.ty.dims[axis] as u64;
+        let inner_bound = src.ty.dims.size() as u64 / (outer_bound * middle_bound);
+
+        let outer_header = self.context.append_basic_block(*self.func, "outer.header");
+        let middle_header = self.context.append_basic_block(*self.func, "middle.header");
+        let max_inner = self.context.append_basic_block(*self.func, "max.inner");
+        let sum_inner = self.context.append_basic_block(*self.func, "sum.inner");
+        let div_inner = self.context.append_basic_block(*self.func, "div.inner");
+        let middle_latch = self.context.append_basic_block(*self.func, "middle.latch");
+        let outer_latch = self.context.append_basic_block(*self.func, "outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(outer_header)?;
+
+        self.builder.position_at_end(outer_header);
+        let outer_i = self.builder.build_phi(self.context.i64_type(), "i.outer")?;
+        let outer_offset = self.builder.build_int_mul(
+            outer_i.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(middle_bound * inner_bound, false),
+            "outer.offset",
+        )?;
+        self.builder.build_unconditional_branch(middle_header)?;
+
+        self.builder.position_at_end(middle_header);
+        let middle_i = self
+            .builder
+            .build_phi(self.context.i64_type(), "i.middle")?;
+        let middle_offset = self.builder.build_int_mul(
+            middle_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(inner_bound, false),
+            "middle.offset",
+        )?;
+        self.builder.build_unconditional_branch(max_inner)?;
+
+        macro_rules! get_offset {
+            ($inner_i: expr) => {{
+                let offset = self
+                    .builder
+                    .build_int_add(outer_offset, middle_offset, "offset")?;
+                let offset = self.builder.build_int_add(
+                    offset,
+                    $inner_i.as_basic_value().into_int_value(),
+                    "offset",
+                )?;
+                offset
+            }};
+        }
+
+        self.builder.position_at_end(max_inner);
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let max_val = self.builder.build_phi(val_ty, "max.val")?;
+        let offset = get_offset!(inner_i);
+        let src = src.set_offset(offset);
+        let src_val = self.build_load(&src)?.into_float_value();
+        let max_val_next = self
+            .build_tail_call(
+                fmax,
+                &[max_val.as_basic_value().into(), src_val.into()],
+                "max.val",
+            )?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, sum_inner, max_inner)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), middle_header),
+            (&inner_i_next, max_inner),
+        ]);
+        max_val.add_incoming(&[
+            (&val_ty.const_float(fmax_id), middle_header),
+            (&max_val_next, max_inner),
+        ]);
+
+        self.builder.position_at_end(sum_inner);
+        let max_val = max_val_next;
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let sum_val = self.builder.build_phi(val_ty, "sum.val")?;
+        let offset = get_offset!(inner_i);
+        let src = src.set_offset(offset);
+        let src_val = self.build_load(&src)?.into_float_value();
+        let src_val = self.builder.build_float_sub(src_val, max_val, "src.sub")?;
+        let exp_src = self
+            .build_tail_call(fexp, &[src_val.into()], "exp.src")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let sum_val_next = self.builder.build_float_add(
+            sum_val.as_basic_value().into_float_value(),
+            exp_src,
+            "sum.val",
+        )?;
+        let dst = dst.set_offset(offset);
+        self.build_store(&dst, exp_src.as_basic_value_enum())?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, div_inner, sum_inner)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), max_inner),
+            (&inner_i_next, sum_inner),
+        ]);
+        sum_val.add_incoming(&[
+            (&val_ty.const_float(0.0), max_inner),
+            (&sum_val_next, sum_inner),
+        ]);
+
+        self.builder.position_at_end(div_inner);
+        let sum_val = sum_val_next;
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let offset = get_offset!(inner_i);
+        let dst = dst.set_offset(offset);
+        let dst_val = self.build_load(&dst)?.into_float_value();
+        let dst_val = self.builder.build_float_div(dst_val, sum_val, "dst.val")?;
+        self.build_store(&dst, dst_val.as_basic_value_enum())?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, middle_latch, div_inner)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), sum_inner),
+            (&inner_i_next, div_inner),
+        ]);
+
+        self.builder.position_at_end(middle_latch);
+        let middle_i_next = self.builder.build_int_add(
+            middle_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "middle.i.next",
+        )?;
+        let middle_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            middle_i_next,
+            self.context.i64_type().const_int(middle_bound, false),
+            "ec.middle",
+        )?;
+        self.builder
+            .build_conditional_branch(middle_ec, outer_latch, middle_header)?;
+        middle_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), outer_header),
+            (&middle_i_next, middle_latch),
+        ]);
+
+        self.builder.position_at_end(outer_latch);
+        let outer_i_next = self.builder.build_int_add(
+            outer_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "outer.i.next",
+        )?;
+        let outer_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            outer_i_next,
+            self.context.i64_type().const_int(outer_bound, false),
+            "ec.outer",
+        )?;
+        self.builder
+            .build_conditional_branch(outer_ec, exit, outer_header)?;
+        outer_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), entry),
+            (&outer_i_next, outer_latch),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
 }
 
 #[derive(Debug)]
