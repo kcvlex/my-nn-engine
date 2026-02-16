@@ -1,10 +1,13 @@
 use itertools::izip;
 use my_onnx::onnx::load::*;
-use my_onnx::options::*;
+use my_onnx::options::Options;
+use my_onnx::options::Target;
 use my_onnx::session::Session;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
+
+pub type TestResult = Result<(), SessionError>;
 
 macro_rules! make_tensor {
     ($ty: ty, $($expr: expr,)*) => {{
@@ -173,7 +176,7 @@ where
     with_session(p, targets, f)
 }
 
-fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
+pub fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
     F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
@@ -184,8 +187,6 @@ where
     let targets = &[Target::CPU];
     with_session_and_tensors(p, targets, nums, f)
 }
-
-type TestResult = Result<(), SessionError>;
 
 trait Sigmoid {
     fn sigmoid(self) -> Self;
