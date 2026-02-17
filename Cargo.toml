@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/extract-model"]
+
 [package]
 name = "my-onnx"
 version = "0.1.0"

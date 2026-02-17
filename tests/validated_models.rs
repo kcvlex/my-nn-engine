@@ -77,6 +77,11 @@ fn test_yolov4_cpu() -> Result {
 }
 
 #[test]
+fn test_bertsquad12_cpu() -> Result {
+    run_test("bertsquad-12", 1e-2, Target::CPU, (4, 3), None)
+}
+
+#[test]
 #[cfg(feature = "cuda")]
 fn test_mnist12_cuda() -> Result {
     run_test("mnist-12", 1e-2, Target::CUDA, (1, 1), None)
