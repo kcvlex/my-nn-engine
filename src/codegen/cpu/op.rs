@@ -109,6 +109,7 @@ pub struct Operation<'ctx> {
 pub enum SingleOpcode {
     Add,
     BatchNorm(BatchNormalization),
+    Cast(DataType, DataType),
     Exp,
     LeakyReLU(LeakyReLU),
     Log,

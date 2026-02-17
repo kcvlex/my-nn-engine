@@ -636,6 +636,93 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap()
             }
 
+            SingleOpcode::Cast(from, to) => {
+                let src = unary_op!(operands);
+
+                // Cast from source type to target type
+                match (from, to) {
+                    // Same type, no conversion needed
+                    (DataType::SInt(sfrom), DataType::SInt(sto)) if sfrom == sto => src,
+                    (DataType::UInt(ufrom), DataType::UInt(uto)) if ufrom == uto => src,
+                    (DataType::Float(ffrom), DataType::Float(fto)) if ffrom == fto => src,
+
+                    // Integer to integer casts
+                    (DataType::SInt(_), DataType::SInt(sto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), sto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+                    (DataType::UInt(_), DataType::UInt(uto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), uto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+                    (DataType::SInt(_), DataType::UInt(uto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), uto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+                    (DataType::UInt(_), DataType::SInt(sto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), sto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+
+                    // Float to float casts
+                    (DataType::Float(ffrom), DataType::Float(fto)) => {
+                        if ffrom.bit_width() < fto.bit_width() {
+                            self.builder
+                                .build_float_cast(
+                                    src.into_float_value(),
+                                    fto.llvm_type(self.context),
+                                    "cast",
+                                )?
+                                .as_basic_value_enum()
+                        } else {
+                            self.builder
+                                .build_float_trunc(
+                                    src.into_float_value(),
+                                    fto.llvm_type(self.context),
+                                    "cast",
+                                )?
+                                .as_basic_value_enum()
+                        }
+                    }
+
+                    // Integer to float casts
+                    (DataType::SInt(_), DataType::Float(fto)) => self
+                        .builder
+                        .build_signed_int_to_float(
+                            src.into_int_value(),
+                            fto.llvm_type(self.context),
+                            "cast",
+                        )?
+                        .as_basic_value_enum(),
+                    (DataType::UInt(_), DataType::Float(fto)) => self
+                        .builder
+                        .build_unsigned_int_to_float(
+                            src.into_int_value(),
+                            fto.llvm_type(self.context),
+                            "cast",
+                        )?
+                        .as_basic_value_enum(),
+
+                    // Float to integer casts
+                    (DataType::Float(_), DataType::SInt(sto)) => self
+                        .builder
+                        .build_float_to_signed_int(
+                            src.into_float_value(),
+                            sto.llvm_type(self.context),
+                            "cast",
+                        )?
+                        .as_basic_value_enum(),
+                    (DataType::Float(_), DataType::UInt(uto)) => self
+                        .builder
+                        .build_float_to_unsigned_int(
+                            src.into_float_value(),
+                            uto.llvm_type(self.context),
+                            "cast",
+                        )?
+                        .as_basic_value_enum(),
+                }
+            }
+
             opcode @ (SingleOpcode::Exp | SingleOpcode::Log | SingleOpcode::Sqrt) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();
