@@ -667,6 +667,7 @@ impl<'ll> CodeGen<'ll, '_> {
 
                 Operator::Contiguous |
                 Operator::BatchNormalization(_) |
+                Operator::Cast(_) |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
@@ -682,6 +683,11 @@ impl<'ll> CodeGen<'ll, '_> {
             match op {
                 Operator::Add => SingleOpcode::Add,
                 Operator::BatchNormalization(bn) => SingleOpcode::BatchNorm(*bn),
+                Operator::Cast(cast) => {
+                    assert!(operands.len() == 1);
+                    let src = operands[0].0;
+                    SingleOpcode::Cast(src, cast.to)
+                }
                 Operator::Contiguous => SingleOpcode::Transfer,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
