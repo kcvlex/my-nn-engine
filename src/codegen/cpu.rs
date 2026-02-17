@@ -654,13 +654,13 @@ impl<'ll> CodeGen<'ll, '_> {
         // TODO: When same Input is used in multiple nodes
         let adjust_ptrs_and_convert_op = |op: &Operator,
                                           ptrs: &mut [TensorPtr<'_>],
-                                          operands: &[Option<usize>],
+                                          operands: &[(DataType, Option<usize>)],
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
                 Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub => {
                     assert!(operands.len() == 2);
-                    for i in operands.iter().filter_map(|x| *x) {
+                    for (_, i) in operands.iter().filter_map(|(dt, idx)| idx.map(|i| (dt, i))) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
                     }
                 }
@@ -689,8 +689,8 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Mul => SingleOpcode::Mul,
                 Operator::Pow => {
                     assert!(operands.len() == 2);
-                    let lhs = ptrs[operands[0].unwrap()].ty.elem_type;
-                    let rhs = ptrs[operands[1].unwrap()].ty.elem_type;
+                    let lhs = operands[0].0;
+                    let rhs = operands[1].0;
                     SingleOpcode::Pow(lhs, rhs)
                 }
                 Operator::Reciprocal => SingleOpcode::Reciprocal,
@@ -795,8 +795,15 @@ impl<'ll> CodeGen<'ll, '_> {
                         let operands = args
                             .iter()
                             .map(|arg| match arg {
-                                ElementwiseOpArg::Input(i) => Some(*i),
-                                ElementwiseOpArg::NthResult(_) => None,
+                                ElementwiseOpArg::Input(i) => {
+                                    let dtype = ptrs[1 + *i].ty.elem_type;
+                                    (dtype, Some(*i))
+                                }
+                                ElementwiseOpArg::NthResult(_) => {
+                                    // Use output type for NthResult as a stop-gap.
+                                    // TODO: correct?
+                                    (ptrs[0].ty.elem_type, None)
+                                }
                             })
                             .collect::<Vec<_>>();
                         let operator =
