@@ -756,6 +756,13 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::MatMul => {
                     translator.build_matmul(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry)
                 }
+                Operator::Gather(ref gather) => translator.build_gather(
+                    ptrs[0].clone(),
+                    ptrs[1].clone(),
+                    ptrs[2].clone(),
+                    entry,
+                    gather,
+                ),
                 Operator::Gemm(ref gemm) => {
                     translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
                 }

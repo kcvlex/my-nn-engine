@@ -2149,6 +2149,279 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(exit);
         Ok(exit)
     }
+
+    pub fn build_gather(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        indicies: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        gather: &operator::Gather,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let axis = gather.axis.index(src.ty.dims.ndim());
+        let exit = self.context.append_basic_block(*self.func, "gather.exit");
+        let param = Gather {
+            dst,
+            src,
+            indicies,
+            entry,
+            exit,
+            axis,
+            depth: 0,
+        };
+        self.build_gather_outer(param)?;
+        Ok(exit)
+    }
+
+    fn build_gather_outer(&self, param: Gather<'ctx>) -> Result<(), BuilderError> {
+        if param.axis as u64 == param.depth {
+            return self.build_gather_middle(param);
+        }
+
+        let Gather {
+            dst,
+            src,
+            indicies,
+            entry,
+            exit,
+            axis,
+            depth,
+        } = param;
+        let header = self.context.append_basic_block(*self.func, "header");
+        let latch = self.context.append_basic_block(*self.func, "latch");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let bound = src.ty.dims[depth as usize] as u64;
+        let src_offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(src.ty.stride(depth as usize).try_into().unwrap(), false),
+            "src.offset",
+        )?;
+        let src_offset = self
+            .builder
+            .build_int_add(src.offset, src_offset, "src.offset")?;
+        let src = src.set_offset(src_offset);
+        let dst_offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
+            "dst.offset",
+        )?;
+        let dst_offset = self
+            .builder
+            .build_int_add(dst.offset, dst_offset, "dst.offset")?;
+        let dst = dst.set_offset(dst_offset);
+
+        self.builder.position_at_end(latch);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            self.context.i64_type().const_int(bound, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, header)?;
+        ind.add_incoming(&[
+            (&ind_next, latch),
+            (&self.context.i64_type().const_zero(), entry),
+        ]);
+
+        self.build_gather_outer(Gather {
+            dst,
+            src,
+            indicies,
+            entry: header,
+            exit: latch,
+            axis,
+            depth: depth + 1,
+        })
+    }
+
+    fn build_gather_middle(&self, param: Gather<'ctx>) -> Result<(), BuilderError> {
+        self.builder.position_at_end(param.entry);
+        if param.axis + param.indicies.ty.dims.ndim() == param.depth as usize {
+            let pred = self.context.append_basic_block(*self.func, "pred");
+            self.builder.build_unconditional_branch(pred)?;
+
+            self.builder.position_at_end(pred);
+            let ind = self.build_load(&param.indicies)?.into_int_value();
+            let offset = self.builder.build_int_mul(
+                ind,
+                self.context
+                    .i64_type()
+                    .const_int(param.src.ty.stride(param.axis).try_into().unwrap(), false),
+                "ind.offset",
+            )?;
+            let offset = self
+                .builder
+                .build_int_add(param.src.offset, offset, "ind.offset")?;
+            let mut param = param;
+            param.entry = pred;
+            param.src = param.src.set_offset(offset);
+            return self.build_gather_inner(param);
+        }
+
+        let Gather {
+            dst,
+            src,
+            indicies,
+            entry,
+            exit,
+            axis,
+            depth,
+        } = param;
+        let header = self.context.append_basic_block(*self.func, "header");
+        let latch = self.context.append_basic_block(*self.func, "latch");
+        let indices_idx = depth as usize - axis;
+        let bound = indicies.ty.dims[indices_idx] as u64;
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(indicies.ty.stride(indices_idx).try_into().unwrap(), false),
+            "ind.offset",
+        )?;
+        let offset = self
+            .builder
+            .build_int_add(indicies.offset, offset, "ind.offset")?;
+        let indicies = indicies.set_offset(offset);
+        let dst_offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
+            "dst.offset",
+        )?;
+        let dst_offset = self
+            .builder
+            .build_int_add(dst.offset, dst_offset, "dst.offset")?;
+        let dst = dst.set_offset(dst_offset);
+
+        self.builder.position_at_end(latch);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            self.context.i64_type().const_int(bound, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, header)?;
+        ind.add_incoming(&[
+            (&ind_next, latch),
+            (&self.context.i64_type().const_zero(), entry),
+        ]);
+
+        self.build_gather_middle(Gather {
+            dst,
+            src,
+            indicies,
+            entry: header,
+            exit: latch,
+            axis,
+            depth: depth + 1,
+        })
+    }
+
+    fn build_gather_inner(&self, param: Gather<'ctx>) -> Result<(), BuilderError> {
+        let Gather {
+            dst,
+            src,
+            indicies,
+            entry,
+            exit,
+            depth,
+            ..
+        } = param;
+
+        self.builder.position_at_end(entry);
+        if dst.ty.dims.ndim() == depth as usize {
+            let val = self.build_load(&src)?;
+            self.build_store(&dst, val)?;
+            self.builder.build_unconditional_branch(exit)?;
+            return Ok(());
+        }
+
+        let header = self.context.append_basic_block(*self.func, "header");
+        let latch = self.context.append_basic_block(*self.func, "latch");
+        let src_idx = depth as usize - indicies.ty.dims.ndim() + 1;
+        let bound = dst.ty.dims[depth as usize];
+        assert!(src.ty.dims[src_idx] == bound);
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let src_offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(src.ty.stride(src_idx).try_into().unwrap(), false),
+            "src.offset",
+        )?;
+        let src_offset = self
+            .builder
+            .build_int_add(src.offset, src_offset, "src.offset")?;
+        let src = src.set_offset(src_offset);
+        let dst_offset = self.builder.build_int_mul(
+            ind.as_basic_value().into_int_value(),
+            self.context
+                .i64_type()
+                .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
+            "dst.offset",
+        )?;
+        let dst_offset = self
+            .builder
+            .build_int_add(dst.offset, dst_offset, "dst.offset")?;
+        let dst = dst.set_offset(dst_offset);
+
+        self.builder.position_at_end(latch);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            self.context.i64_type().const_int(bound as u64, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, header)?;
+        ind.add_incoming(&[
+            (&ind_next, latch),
+            (&self.context.i64_type().const_zero(), entry),
+        ]);
+
+        self.build_gather_inner(Gather {
+            dst,
+            src,
+            indicies,
+            entry: header,
+            exit: latch,
+            axis: param.axis,
+            depth: depth + 1,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -2182,4 +2455,14 @@ struct ResizeParam<'a, 'ctx> {
     loop_bb: LoopBB<'ctx>,
     dim: usize,
     resize: &'a operator::Resize,
+}
+
+struct Gather<'ctx> {
+    dst: TensorPtr<'ctx>,
+    src: TensorPtr<'ctx>,
+    indicies: TensorPtr<'ctx>,
+    entry: BasicBlock<'ctx>,
+    exit: BasicBlock<'ctx>,
+    axis: usize,
+    depth: u64,
 }
