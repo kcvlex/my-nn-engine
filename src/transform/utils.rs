@@ -161,7 +161,9 @@ impl ReshapeGenerator {
             .unwrap_or_else(|| format!("Reshape_{}", input.index()));
 
         let input_ty = graph.get_resolved_tensor_type(input).unwrap().clone();
-        if input_ty.dims.size() != dims.size() {
+        if input_ty.dims.size() != dims.size() &&
+            !(input_ty.dims.compatible_with_scalar() && dims.compatible_with_scalar())
+        {
             return Err(Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "dims size must be equal to input size",

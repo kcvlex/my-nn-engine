@@ -41,12 +41,13 @@ macro_rules! cast_vec {
 
 impl StrictTensor {
     fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
+        let sz = dims.size().max(1);
         match ty {
-            DataType::SInt(SIntType::I32) => StrictTensor::I32(vec![0; dims.size()]),
-            DataType::SInt(SIntType::I64) => StrictTensor::I64(vec![0; dims.size()]),
-            DataType::UInt(UIntType::U64) => StrictTensor::U64(vec![0; dims.size()]),
-            DataType::Float(FloatType::F32) => StrictTensor::F32(vec![0.0; dims.size()]),
-            DataType::Float(FloatType::F64) => StrictTensor::F64(vec![0.0; dims.size()]),
+            DataType::SInt(SIntType::I32) => StrictTensor::I32(vec![0; sz]),
+            DataType::SInt(SIntType::I64) => StrictTensor::I64(vec![0; sz]),
+            DataType::UInt(UIntType::U64) => StrictTensor::U64(vec![0; sz]),
+            DataType::Float(FloatType::F32) => StrictTensor::F32(vec![0.0; sz]),
+            DataType::Float(FloatType::F64) => StrictTensor::F64(vec![0.0; sz]),
         }
     }
 

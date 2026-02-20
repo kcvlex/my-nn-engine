@@ -140,7 +140,10 @@ pub fn infer_node_output(
                 _ => Err(TypeError::InferError("Invalid shape".to_string())),
             }?;
 
-            cond_error!(a.dims.size() != shape.size());
+            cond_error!(
+                a.dims.size() != shape.size() &&
+                    (!a.dims.compatible_with_scalar() || !shape.compatible_with_scalar())
+            );
             let reshaped = if matches!(mode, UnifyMode::CheckStrides) {
                 a.try_reshape(&shape)
                     .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?
