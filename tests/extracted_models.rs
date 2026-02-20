@@ -9,6 +9,76 @@ use my_onnx::tensor::Tensor;
 
 type Result = std::result::Result<(), SessionError>;
 
+/// Run a test on an extracted model from an absolute directory path.
+/// This is useful for testing models extracted by the binary search tool.
+///
+/// # Arguments
+/// * `extract_dir` - Absolute path to directory containing model.onnx and test data
+/// * `epsilon` - Maximum allowed difference between outputs
+/// * `target` - Target device (CPU or CUDA)
+///
+/// # Example
+/// ```ignore
+/// run_test_from_dir("/tmp/bertsquad_debug/node_416", 1e-2, Target::CPU)?;
+/// ```
+fn run_test_from_dir(extract_dir: &str, epsilon: f64, target: Target) -> Result {
+    let root_dir = PathBuf::from(extract_dir);
+    let model_path = root_dir.join("model.onnx");
+
+    // Auto-detect number of inputs and outputs
+    let mut num_inputs = 0;
+    while root_dir.join(format!("input_{}.pb", num_inputs)).exists() {
+        num_inputs += 1;
+    }
+
+    let mut num_outputs = 0;
+    while root_dir.join(format!("output_{}.pb", num_outputs)).exists() {
+        num_outputs += 1;
+    }
+
+    if num_inputs == 0 {
+        panic!("No input files found in {}", extract_dir);
+    }
+    if num_outputs == 0 {
+        panic!("No output files found in {}", extract_dir);
+    }
+
+    let inputs = (0..num_inputs)
+        .map(|i| {
+            Tensor::load_from_path(root_dir.join(format!("input_{}.pb", i)))
+                .map_err(SessionError::ModelLoadError)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let input_types = inputs
+        .iter()
+        .map(|input| input.tensor_type())
+        .collect::<Vec<_>>();
+    let session = Session::new(
+        &model_path,
+        Some(&input_types),
+        &Options::builder().target(target).build(),
+    )?;
+    let outputs = session.run(&inputs)?;
+    let expected = (0..num_outputs)
+        .map(|i| {
+            Tensor::load_from_path(root_dir.join(format!("output_{}.pb", i)))
+                .map_err(SessionError::ModelLoadError)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(outputs.len(), expected.len());
+    for (i, (output, expected)) in outputs.iter().zip(expected.iter()).enumerate() {
+        if !output.eq_with_epsilon(expected, epsilon, CompPolicy::Either) {
+            eprintln!("Output {} mismatch", i);
+            eprintln!("Expected shape: {:?}", expected.dims);
+            eprintln!("Got shape: {:?}", output.dims);
+            // For pretty printing
+            assert_eq!(output, expected);
+        }
+    }
+    Ok(())
+}
+
 fn run_test(model: &str, epsilon: f64, target: Target, nums: (usize, usize)) -> Result {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/extracted")
@@ -112,6 +182,13 @@ fn test_bert_reshape_3_cpu() -> Result {
         Target::CPU,
         (4, 1),
     )
+}
+
+#[test]
+fn test_bert_node_416_softmax_cpu() -> Result {
+    // Node 416: First failing node found by binary search
+    // bert/encoder/layer_0/attention/self/Softmax
+    run_test("bertsquad-12/node_416_softmax", 1e-2, Target::CPU, (4, 1))
 }
 
 #[ignore]
