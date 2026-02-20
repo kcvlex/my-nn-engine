@@ -1196,6 +1196,40 @@ fn gather_default_axis() -> TestResult {
 }
 
 #[test]
+fn gather_dim1() -> TestResult {
+    // Reproducer for zero-stride bug: indices shape [1, N] causes stride[0]=0
+    // Expected: [[3,4,5], [6,7,8], [0,1,2], [9,10,11]]
+    // Bug: All zeros or garbage due to always reading from same offset
+    // CPU-only test (CUDA has separate i32 type handling issues)
+    with_session_and_tensors(
+        "gather_dim1",
+        &[Target::CPU],
+        (2, 1),
+        |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq_epsilon!(outputs[0], expected[0], 0.0);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn gather_negative_indices() -> TestResult {
+    // Reproducer for BERT crash: negative indices like -8, -2, -25
+    // In ONNX/NumPy, negative indices mean "from end": -1 is last, -2 is second-to-last
+    with_session_and_tensors(
+        "gather_negative_indices",
+        &[Target::CPU],
+        (2, 1),
+        |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq_epsilon!(outputs[0], expected[0], 1e-5);
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn non_zero() -> TestResult {
     with_all_sessions_and_tensors("non_zero", (1, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;

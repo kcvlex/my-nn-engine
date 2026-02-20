@@ -2343,6 +2343,32 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
             self.builder.position_at_end(pred);
             let ind = self.build_load(&param.indicies)?.into_int_value();
+            let ind = self.builder.build_int_s_extend_or_bit_cast(
+                ind,
+                self.context.i64_type(),
+                "ind.i64",
+            )?;
+            let is_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ind,
+                self.context.i64_type().const_zero(),
+                "is_neg",
+            )?;
+            let ind = self
+                .builder
+                .build_select(
+                    is_neg,
+                    self.builder.build_int_add(
+                        ind,
+                        self.context
+                            .i64_type()
+                            .const_int(param.src.ty.dims[param.axis] as u64, false),
+                        "ind.add",
+                    )?,
+                    ind,
+                    "ind",
+                )?
+                .into_int_value();
             let offset = self.builder.build_int_mul(
                 ind,
                 self.context
