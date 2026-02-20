@@ -1016,6 +1016,19 @@ fn squeeze_opt() -> TestResult {
 }
 
 #[test]
+fn squeeze_scalar() -> TestResult {
+    // Minimal reproducer for Squeeze bug found in bertsquad-12 node 1148
+    // Input shape: (1, 1, 1), Squeeze all dims -> Output: () (scalar)
+    // Bug: Implementation crashes with SIGSEGV when producing scalar output
+    // This tests that Squeeze handles zero-dimensional tensors correctly
+    with_all_sessions_and_tensors("squeeze_scalar", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
 fn unsqueeze() -> TestResult {
     with_all_sessions("unsqueeze.onnx", |session| {
         let (input, orig) = make_range_tensor!(f32, 2, 3, 4)?;

@@ -188,6 +188,10 @@ impl ResolvedTensorDims {
         self.0.is_empty()
     }
 
+    pub fn compatible_with_scalar(&self) -> bool {
+        self.is_scalar() || self.size() == 1
+    }
+
     pub fn to_tensor(&self) -> Tensor {
         let data = TensorData::SInt(SIntType::I64, self.0.iter().map(|x| *x as i64).collect());
         let dims = ResolvedTensorDims::new(&[self.ndim()]);
@@ -478,6 +482,10 @@ impl ResolvedTensorType {
     }
 
     pub fn try_reshape(&self, target: &ResolvedTensorDims) -> Option<Self> {
+        if self.dims.compatible_with_scalar() && target.compatible_with_scalar() {
+            return Some(Self::new(self.elem_type, target.clone()));
+        }
+
         if self.dims.size() != target.size() {
             return None;
         }
