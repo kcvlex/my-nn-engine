@@ -2037,8 +2037,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             acc
         };
-        let middle_bound = src.ty.dims[axis] as u64;
-        let inner_bound = src.ty.dims.size() as u64 / (outer_bound * middle_bound);
+        let inner_bound = src.ty.dims[axis] as u64;
+        let middle_bound = src.ty.dims.size() as u64 / (outer_bound * inner_bound);
 
         let outer_header = self.context.append_basic_block(*self.func, "outer.header");
         let middle_header = self.context.append_basic_block(*self.func, "middle.header");
@@ -2067,18 +2067,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let middle_i = self
             .builder
             .build_phi(self.context.i64_type(), "i.middle")?;
-        let middle_offset = self.builder.build_int_mul(
-            middle_i.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(inner_bound, false),
-            "middle.offset",
-        )?;
         self.builder.build_unconditional_branch(max_inner)?;
 
         macro_rules! get_offset {
             ($inner_i: expr) => {{
-                let offset = self
-                    .builder
-                    .build_int_add(outer_offset, middle_offset, "offset")?;
+                let offset = self.builder.build_int_add(
+                    outer_offset,
+                    middle_i.as_basic_value().into_int_value(),
+                    "offset",
+                )?;
                 let offset = self.builder.build_int_add(
                     offset,
                     $inner_i.as_basic_value().into_int_value(),
