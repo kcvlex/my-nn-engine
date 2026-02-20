@@ -84,6 +84,36 @@ fn test_yolov4_until() -> Result {
     run_test("yolov4/until_lambda_5_add", 5e-1, Target::CUDA, (1, 1))
 }
 
+#[test]
+fn test_bert_gather_cpu() -> Result {
+    run_test(
+        "bertsquad-12/until_embeddings_gatherv2",
+        1e-2,
+        Target::CPU,
+        (4, 1),
+    )
+}
+
+#[test]
+fn test_bert_add_0_cpu() -> Result {
+    run_test(
+        "bertsquad-12/until_embeddings_add_0",
+        1e-2,
+        Target::CPU,
+        (4, 1),
+    )
+}
+
+#[test]
+fn test_bert_reshape_3_cpu() -> Result {
+    run_test(
+        "bertsquad-12/until_embeddings_reshape_3",
+        1e-2,
+        Target::CPU,
+        (4, 1),
+    )
+}
+
 #[ignore]
 #[test]
 #[cfg(feature = "cuda")]
