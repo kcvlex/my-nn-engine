@@ -115,9 +115,6 @@ impl CodeGenContext {
         // if node.is_dummy() {
         //     return false;
         // }
-        if matches_single_kernel!(kernel, Operator::Split(_)) {
-            return false;
-        }
         if matches_single_kernel!(kernel, Operator::Identity) {
             let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
             let chunk_out = self
@@ -493,62 +490,29 @@ impl<'ll> CodeGen<'ll, '_> {
 
             builder.position_at_end(self.unit.entry);
 
-            if let KernelBody::SingleKernel(SingleKernel {
-                op: Operator::Split(ref split),
-            }) = kernel.body
-            {
-                let src_ty = self
-                    .gen_ctx
-                    .schedule
-                    .get_resolved_tensor_type(kernel.inputs[0])
-                    .unwrap();
-                let src = *ptr_values.get(&kernel.inputs[0]).unwrap();
-                let axis = split.axis.index(src_ty.dims.ndim());
-                let mut acc = 0;
-                let elem_ty = src_ty.elem_type.llvm_type(self.ll_ctx);
-                for output in kernel.outputs.iter() {
-                    let ptr = unsafe {
-                        builder.build_in_bounds_gep(
-                            elem_ty,
-                            src,
-                            &[self.ll_ctx.i64_type().const_int(acc, false)],
-                            format!("split.{}", output.index()).as_str(),
-                        )
-                    }?;
-                    ptr_values.insert(*output, ptr);
-                    let len = self
-                        .gen_ctx
-                        .schedule
-                        .get_resolved_tensor_type(*output)
-                        .unwrap()
-                        .dims[axis];
-                    acc += (src_ty.stride(axis) * len) as u64;
-                }
-            } else {
-                for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
-                    let dst_ptr = match alloc.ty {
-                        AllocateType::Chunk(chunk) => {
-                            if alloc.is_first_use {
-                                // TODO: type
-                                let ptr = builder.build_array_malloc(
-                                    self.ll_ctx.i128_type(),
-                                    self.ll_ctx
-                                        .i64_type()
-                                        .const_int(self.gen_ctx.mem_size[chunk], false),
-                                    format!("chunk.{}", chunk).as_str(),
-                                )?;
-                                chunk2ptr.insert(chunk, ptr);
-                                ptr
-                            } else {
-                                *chunk2ptr.get(&chunk).unwrap()
-                            }
+            for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
+                let dst_ptr = match alloc.ty {
+                    AllocateType::Chunk(chunk) => {
+                        if alloc.is_first_use {
+                            // TODO: type
+                            let ptr = builder.build_array_malloc(
+                                self.ll_ctx.i128_type(),
+                                self.ll_ctx
+                                    .i64_type()
+                                    .const_int(self.gen_ctx.mem_size[chunk], false),
+                                format!("chunk.{}", chunk).as_str(),
+                            )?;
+                            chunk2ptr.insert(chunk, ptr);
+                            ptr
+                        } else {
+                            *chunk2ptr.get(&chunk).unwrap()
                         }
-                        AllocateType::Input(v) | AllocateType::Output(v) => {
-                            *ptr_values.get(&v).unwrap()
-                        }
-                    };
-                    ptr_values.insert(alloc.value_id, dst_ptr);
-                }
+                    }
+                    AllocateType::Input(v) | AllocateType::Output(v) => {
+                        *ptr_values.get(&v).unwrap()
+                    }
+                };
+                ptr_values.insert(alloc.value_id, dst_ptr);
             }
 
             if let Some(function) = function {
@@ -790,6 +754,12 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Softmax(ref softmax) => {
                     translator.build_softmax(ptrs[0].clone(), ptrs[1].clone(), entry, softmax)
                 }
+                Operator::Split(ref split) => translator.build_split(
+                    &ptrs[..ptrs.len() - 1],
+                    ptrs.last().unwrap().clone(),
+                    entry,
+                    split,
+                ),
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
