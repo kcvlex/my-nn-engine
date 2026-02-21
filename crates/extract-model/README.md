@@ -12,9 +12,9 @@ When debugging large ONNX models, it's helpful to extract smaller subgraphs to i
 
 ## Prerequisites
 
-### Option 1: Using Rust Binary with Docker (Recommended)
+### Option 1: Using Rust Binary with Podman (Recommended)
 - Rust toolchain (to build the tool)
-- Docker (no Python environment setup needed on the host!)
+- Podman (rootless container runtime - no Python environment setup needed on the host!)
 
 Build the tool once:
 ```bash
@@ -22,14 +22,14 @@ cargo build -p extract-model --release
 ```
 
 ### Option 2: Using Python Directly
-If you prefer not to use Docker:
+If you prefer not to use Podman:
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-### Using Rust Binary with Docker (Recommended)
+### Using Rust Binary with Podman (Recommended)
 
 ```bash
 # Build once (or use cargo run -p extract-model -- to skip building)
@@ -147,7 +147,7 @@ Where `(1, 1)` is `(num_inputs, num_outputs)`.
 - `--output-dir DIR`: Directory to save extracted model and test data
 - `--input-names NAME...`: Override input node names (if needed)
 - `--no-check`: Skip ONNX model validation (use if extraction fails with check errors)
-- `--rebuild`: Rebuild the Docker image before running
+- `--rebuild`: Rebuild the Podman image before running
 
 ## Troubleshooting
 
@@ -176,22 +176,131 @@ If ONNX model validation fails but you know the extraction should work, use `--n
   --output-dir ...
 ```
 
-### Docker permission issues
+### Podman permission issues
 
-The `extract.sh` script automatically detects if Docker requires sudo and uses it when needed. If you prefer to avoid sudo, add your user to the docker group:
+Podman runs rootless by default, so no special permissions are needed. The tool automatically detects if Podman requires sudo and uses it when needed.
+
+If you encounter permission issues, ensure Podman is properly set up for rootless operation:
 
 ```bash
-sudo usermod -aG docker $USER
-# Log out and log back in for changes to take effect
+# Verify rootless setup
+podman info
+```
+
+## Binary Search Mode (NEW!)
+
+When you have a failing model test but don't know which node is causing the problem,
+use binary search mode to automatically find it.
+
+### Quick Start
+
+```bash
+# Step 1: Build the test helper (one time)
+cargo build -p extract-model --bin test-extracted --release
+
+# Step 2: Run binary search (using venv)
+cd /path/to/my-onnx  # Project root
+./crates/extract-model/binary_search_host.sh \
+  --model models/validated/bertsquad-12/bertsquad-12.onnx \
+  --inputs models/validated/bertsquad-12/test_data_set_0/input_*.pb \
+  --test-command ./target/release/test-extracted "{extract_dir}" 0.01
+```
+
+### How It Works
+
+1. Automatically performs binary search on all nodes in the model
+2. For each test point:
+   - Extracts a subgraph up to that node
+   - Runs ONNX Runtime to generate expected outputs
+   - Runs your test command to check if your implementation matches
+3. Finds the exact node where the error is introduced
+
+### Test Command Placeholders
+
+The `--test-command` can use these placeholders:
+- `{extract_dir}` - Path to the extracted model directory
+- `{num_inputs}` - Number of input tensors
+- `{num_outputs}` - Number of output tensors
+
+### Complete Example for bertsquad-12
+
+```bash
+# Build the test helper
+cargo build -p extract-model --bin test-extracted --release
+
+# Run binary search
+./crates/extract-model/binary_search_host.sh \
+  --model models/validated/bertsquad-12/bertsquad-12.onnx \
+  --inputs models/validated/bertsquad-12/test_data_set_0/input_*.pb \
+  --test-command ./target/release/test-extracted "{extract_dir}" 0.01 \
+  --temp-dir /tmp/bertsquad_debug
+```
+
+This will output something like:
+```
+Model: models/validated/bertsquad-12/bertsquad-12.onnx
+Total nodes: 1167
+...
+Testing node [583/1166] MatMul (bert/encoder/layer_5/...)
+  ✓ PASS
+
+Testing node [875/1166] Add (bert/encoder/layer_8/...)
+  ✗ FAIL
+
+...
+
+================================================================================
+FOUND: First failing node
+================================================================================
+Index:   742
+OpType:  Gather
+Name:    bert/embeddings/Gather
+Outputs: ['bert/embeddings/Gather:0']
+
+Extracted model saved in:
+  /tmp/bertsquad_debug/node_742/
+```
+
+### Using Custom Test Commands
+
+You can use any test command that:
+- Takes the extract directory as an argument
+- Returns exit code 0 for pass, non-zero for fail
+
+Examples:
+```bash
+# Using the built-in test-extracted binary
+--test-command ./target/release/test-extracted "{extract_dir}" 0.01
+
+# Using a custom script
+--test-command ./my_custom_test.sh "{extract_dir}"
+
+# Using Python
+--test-command python3 test_model.py "{extract_dir}"
 ```
 
 ## Workflow for Debugging Large Models
+
+### Option 1: Automatic Binary Search (Recommended)
+
+1. **Run the full model test** and see it fail
+2. **Use binary search mode** to automatically find the problematic node:
+   ```bash
+   cargo run -p extract-model -- --binary-search \
+     --model models/validated/MODEL/MODEL.onnx \
+     --inputs models/validated/MODEL/test_data_set_0/input_*.pb \
+     --test-command cargo test --test extracted_models -- --nocapture
+   ```
+3. **Examine the failing node** and fix the implementation
+4. **Test again** to verify the fix
+
+### Option 2: Manual Binary Search
 
 1. **Run the full model test** and note which operation fails
 2. **Find a node just before the failure** using Netron or by examining the model
 3. **Extract up to that node**:
    ```bash
-   ./extract.sh \
+   cargo run -p extract-model -- \
      --model models/validated/MODEL/MODEL.onnx \
      --inputs models/validated/MODEL/test_data_set_0/input_*.pb \
      --outputs "node_before_failure" \
@@ -206,7 +315,7 @@ sudo usermod -aG docker $USER
 To modify the extraction script:
 
 1. Edit `extract_model.py`
-2. Rebuild the Docker image: `./extract.sh --rebuild --help`
+2. Rebuild the Podman image: `cargo run -p extract-model -- --rebuild --help`
 3. Test your changes
 
 ## Technical Details
@@ -214,4 +323,5 @@ To modify the extraction script:
 - Uses `onnx.utils.extract_model` to extract subgraphs
 - Uses ONNX Runtime to run the extracted model and generate expected outputs
 - All paths are relative to the project root for consistency
-- Docker ensures consistent Python/ONNX/ONNXRuntime versions regardless of host environment
+- Podman ensures consistent Python/ONNX/ONNXRuntime versions regardless of host environment
+- Runs in a rootless container with user namespace mapping (`--userns=keep-id`) for security and proper file ownership

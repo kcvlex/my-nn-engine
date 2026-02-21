@@ -315,6 +315,9 @@ dependencies = [
 [[package]]
 name = "extract-model"
 version = "0.1.0"
+dependencies = [
+ "my-onnx",
+]
 
 [[package]]
 name = "fastrand"

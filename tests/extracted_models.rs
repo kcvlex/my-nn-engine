@@ -191,6 +191,28 @@ fn test_bert_node_416_softmax_cpu() -> Result {
     run_test("bertsquad-12/node_416_softmax", 1e-2, Target::CPU, (4, 1))
 }
 
+#[test]
+fn test_bert_node_1148_squeeze_cpu() -> Result {
+    // Node 1148: Second failing node found by binary search (after Softmax fix)
+    // strided_slice_1__476 - Squeeze operation
+    // Output shape: () - scalar
+    run_test("bertsquad-12/node_1148_squeeze", 1e-2, Target::CPU, (4, 1))
+}
+
+#[test]
+fn test_bert_node_1163_squeeze_unstack_cpu() -> Result {
+    // Node 1163: Third failing node (after Softmax and Squeeze scalar fixes)
+    // unstack__490 - Squeeze operation in unstack context
+    // Output shape: (1, 256)
+    // Bug: Produces incorrect values (-5.05 vs expected -6.10)
+    run_test(
+        "bertsquad-12/node_1163_squeeze_unstack",
+        1e-2,
+        Target::CPU,
+        (4, 1),
+    )
+}
+
 #[ignore]
 #[test]
 #[cfg(feature = "cuda")]

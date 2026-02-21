@@ -6,3 +6,10 @@ edition = "2021"
 [[bin]]
 name = "extract-model"
 path = "src/main.rs"
+
+[[bin]]
+name = "test-extracted"
+path = "src/test_extracted.rs"
+
+[dependencies]
+my-onnx = { path = "../.." }
