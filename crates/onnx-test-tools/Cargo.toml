@@ -1,0 +1,11 @@
+[package]
+name = "onnx-test-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "onnx-test-tools"
+path = "src/main.rs"
+
+[dependencies]
+my-onnx = { path = "../.." }
