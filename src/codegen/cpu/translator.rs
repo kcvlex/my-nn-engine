@@ -5,6 +5,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
+use itertools::izip;
 use smallvec::smallvec;
 
 use crate::codegen::cpu::blas::*;
@@ -2531,6 +2532,140 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             axis: param.axis,
             depth: depth + 1,
         })
+    }
+
+    pub fn build_split(
+        &self,
+        dsts: &[TensorPtr<'ctx>],
+        src: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        split: &operator::Split,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(dsts.iter().all(|dst| dst.ty.is_contiguous()));
+
+        let axis = split.axis.index(src.ty.dims.ndim());
+        let dst_dims_acc = dsts
+            .iter()
+            .map(|dst| dst.ty.dims[axis])
+            .scan(0, |acc, d| {
+                let res = *acc;
+                *acc += d;
+                Some(res)
+            })
+            .skip(1)
+            .collect::<Vec<_>>();
+
+        let bb = self.context.append_basic_block(*self.func, "loop");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(bb)?;
+
+        self.builder.position_at_end(bb);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let indexes = izip!(src.ty.dims.iter(), src.ty.strides().iter())
+            .map(|(d, s)| {
+                let i = self.builder.build_int_unsigned_div(
+                    ind.as_basic_value().into_int_value(),
+                    self.context.i64_type().const_int(*s as u64, false),
+                    "index",
+                )?;
+                self.builder.build_int_unsigned_rem(
+                    i,
+                    self.context.i64_type().const_int(*d as u64, false),
+                    "index",
+                )
+            })
+            .collect::<Result<Vec<_>, BuilderError>>()?;
+        let dim = indexes[axis];
+        let mut dst_ptr = dsts[0].ptr;
+        let mut dst_axis_dim = self
+            .context
+            .i64_type()
+            .const_int(dsts[0].ty.dims[axis] as u64, false);
+        let mut dst_axis_idx = dim;
+        for i in 1..dsts.len() {
+            let bound = dst_dims_acc[i - 1];
+            let exceed = self.builder.build_int_compare(
+                inkwell::IntPredicate::ULE,
+                self.context.i64_type().const_int(bound as u64, false),
+                dim,
+                "exceed",
+            )?;
+            dst_ptr = self
+                .builder
+                .build_select(exceed, dsts[i].ptr, dst_ptr, "dst_ptr")?
+                .into_pointer_value();
+            dst_axis_dim = self
+                .builder
+                .build_select(
+                    exceed,
+                    self.context
+                        .i64_type()
+                        .const_int(dsts[i].ty.dims[axis] as u64, false),
+                    dst_axis_dim,
+                    "dst_axis_dim",
+                )?
+                .into_int_value();
+            dst_axis_idx = self
+                .builder
+                .build_select(
+                    exceed,
+                    self.builder.build_int_sub(
+                        dim,
+                        self.context.i64_type().const_int(bound as u64, false),
+                        "dst_axis_idx",
+                    )?,
+                    dst_axis_idx,
+                    "dst_axis_idx",
+                )?
+                .into_int_value();
+        }
+        let offset = indexes.iter().enumerate().try_fold(
+            self.context.i64_type().const_zero(),
+            |acc, (i, idx)| {
+                let dim = if i == axis {
+                    dst_axis_dim
+                } else {
+                    self.context
+                        .i64_type()
+                        .const_int(src.ty.dims[i] as u64, false)
+                };
+                let res = self.builder.build_int_mul(acc, dim, "offset")?;
+
+                let add = if i == axis { dst_axis_idx } else { *idx };
+                self.builder.build_int_add(res, add, "offset")
+            },
+        )?;
+        let src = src.set_offset(ind.as_basic_value().into_int_value());
+        let src_val = self.build_load(&src)?;
+        self.build_raw_store(
+            src.ty.elem_type.llvm_type(self.context),
+            dst_ptr,
+            offset,
+            src_val,
+        )?;
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            self.context
+                .i64_type()
+                .const_int(src.ty.dims.size() as u64, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, bb)?;
+        ind.add_incoming(&[
+            (&self.context.i64_type().const_zero(), entry),
+            (&ind_next, bb),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
     }
 }
 
