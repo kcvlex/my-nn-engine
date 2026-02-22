@@ -1,4 +1,5 @@
 use std::env;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -84,6 +85,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Mode::BinarySearch => {
             let work_dir = tempfile::TempDir::new_in(&project_root)?;
+            std::fs::set_permissions(work_dir.path(), std::fs::Permissions::from_mode(0o777))?;
             let config = BinarySearch {
                 project_root,
                 test_command: args
