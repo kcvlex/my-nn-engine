@@ -98,21 +98,13 @@ def extract_and_test(
         output_tensor = onnx.numpy_helper.from_array(output_array)
         onnx.save_tensor(output_tensor, output_tensor_path)
 
-    # Run the test command
-    # Replace placeholders in test command
-    test_cmd = []
-    for arg in test_command:
-        if arg == "{extract_dir}":
-            test_cmd.append(extract_dir)
-        elif arg == "{num_inputs}":
-            test_cmd.append(str(len(input_names)))
-        elif arg == "{num_outputs}":
-            test_cmd.append(str(len(result)))
-        else:
-            test_cmd.append(arg)
+    # Run the test command with EXTRACTED_MODEL_DIR set
+    env = os.environ.copy()
+    env["EXTRACTED_MODEL_DIR"] = extract_dir
 
-    print(f"  Running: {' '.join(test_cmd)}")
-    result = subprocess.run(test_cmd, capture_output=True)
+    print(f"  Running: {' '.join(test_command)}")
+    print(f"  EXTRACTED_MODEL_DIR={extract_dir}")
+    result = subprocess.run(test_command, capture_output=True, env=env)
     passes = result.returncode == 0
 
     if not passes and result.stdout:
@@ -181,13 +173,9 @@ Example:
   %(prog)s \\
     --model models/validated/bertsquad-12/bertsquad-12.onnx \\
     --inputs models/validated/bertsquad-12/test_data_set_0/input_*.pb \\
-    --test-command "cargo" "test" "--test" "extracted_models" \\
-                   "test_extracted_{extract_dir}" "--" "--nocapture"
+    --test-command cargo test --test extracted_models -- --ignored --nocapture
 
-The test command can use these placeholders:
-  {extract_dir}   - Path to the extracted model directory
-  {num_inputs}    - Number of inputs
-  {num_outputs}   - Number of outputs
+The test command is run with EXTRACTED_MODEL_DIR set to the extracted model directory.
         """
     )
 
@@ -208,7 +196,7 @@ The test command can use these placeholders:
         "--test-command",
         nargs="+",
         required=True,
-        help="Command to run tests (can use {extract_dir}, {num_inputs}, {num_outputs})"
+        help="Command to run tests (EXTRACTED_MODEL_DIR env var is set to the extracted directory)"
     )
 
     parser.add_argument(

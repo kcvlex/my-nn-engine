@@ -1,7 +1,6 @@
 use std::env;
 use std::path::PathBuf;
 
-
 use my_onnx::options::*;
 use my_onnx::session::Session;
 use my_onnx::tensor::data::CompPolicy;
