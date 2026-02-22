@@ -719,6 +719,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(EventDestroy(event_id).into());
         }
 
+        for (_, handler) in self.cublas_handlers.iter() {
+            self.stmts.push(CublasApi::Destroy(*handler).into());
+        }
+
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
