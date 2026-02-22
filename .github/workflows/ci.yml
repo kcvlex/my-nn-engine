@@ -57,6 +57,11 @@ jobs:
       - name: Build onnx-test-tools
         run: cargo build -p onnx-test-tools --no-default-features --bins --examples
 
+      - name: Configure podman user namespace
+        run: |
+          echo "$(whoami):100000:65536" | sudo tee /etc/subuid /etc/subgid
+          podman system migrate
+
       - name: Build container image
         run: podman build -t onnx-test-tools crates/onnx-test-tools/
 
