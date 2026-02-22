@@ -622,7 +622,7 @@ impl<'ll> CodeGen<'ll, '_> {
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
-                Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub => {
+                Operator::Add | Operator::Div | Operator::Mul | Operator::Pow | Operator::Sub => {
                     assert!(operands.len() == 2);
                     for (_, i) in operands.iter().filter_map(|(dt, idx)| idx.map(|i| (dt, i))) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
@@ -653,6 +653,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     SingleOpcode::Cast(src, cast.to)
                 }
                 Operator::Contiguous => SingleOpcode::Transfer,
+                Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
