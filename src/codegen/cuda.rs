@@ -706,6 +706,11 @@ impl<'sched> HostCodeGenerator<'sched> {
             )));
         }
 
+        for chunk_id in 0..self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0) {
+            let name = &self.devicemem2identifier[chunk_id];
+            self.stmts.push(Free(Expr::Identifier(name.clone())).into());
+        }
+
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
