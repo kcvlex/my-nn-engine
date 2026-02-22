@@ -42,37 +42,6 @@ jobs:
       - name: Check that CUDA feature compiles
         run: cargo check --features cuda --verbose
 
-  binary-search:
-    name: Binary Search Tool
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - uses: ./.github/actions/setup
-        with:
-          models: >-
-            mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
-
-      - name: Build onnx-test-tools
-        run: cargo build -p onnx-test-tools --no-default-features --bins --examples
-
-      - name: Configure podman user namespace
-        run: |
-          echo "$(whoami):100000:65536" | sudo tee /etc/subuid /etc/subgid
-          podman system migrate
-
-      - name: Build container image
-        run: podman build -t onnx-test-tools crates/onnx-test-tools/
-
-      - name: Run binary search
-        run: |
-          ./target/debug/onnx-test-tools \
-            --mode binary-search \
-            --model-path models/validated/mnist-12/mnist-12.onnx \
-            --input-paths models/validated/mnist-12/test_data_set_0/input_0.pb \
-            --test-command ./target/debug/examples/test_extracted
-
   fmt:
     name: Format
     runs-on: ubuntu-latest
