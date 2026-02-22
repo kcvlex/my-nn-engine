@@ -711,6 +711,14 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(Free(Expr::Identifier(name.clone())).into());
         }
 
+        for stream_id in self.streams.values().map(|s| s.stream_id).unique() {
+            self.stmts.push(StreamDestroy(stream_id).into());
+        }
+
+        for event_id in self.to_record_events.iter().copied() {
+            self.stmts.push(EventDestroy(event_id).into());
+        }
+
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
