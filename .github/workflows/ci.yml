@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  ONNX_MODELS_HASH: bec48b6a70e5e9042c0badbaafefe4454e072d08
+  ONNX_MODELS_REPO: https://github.com/onnx/models
 
 jobs:
   test:
@@ -18,101 +20,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Cache git submodules
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup
         with:
-          path: |
-            .git/modules
-            third-party
-          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
-          restore-keys: |
-            ${{ runner.os }}-submodules-
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-      - name: Install dependencies
-        run: |
-          # Install Protocol Buffers compiler and OpenBLAS
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libopenblas-dev
-
-          # Install LLVM 18
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev llvm-18-runtime clang-18 clang-tools-18 lld-18 libpolly-18-dev libomp-18-dev
-          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
-
-      - name: Cache validated model archives
-        uses: actions/cache@v4
-        with:
-          path: models/validated/*.tar.gz
-          key: ${{ runner.os }}-validated-model-archives-v1
-          restore-keys: |
-            ${{ runner.os }}-validated-model-archives-
-
-      - name: Download and extract validated models
-        working-directory: models/validated
-        run: |
-          # Define model URLs
-          HASH=bec48b6a70e5e9042c0badbaafefe4454e072d08
-          REPO=https://github.com/onnx/models
-          CLASSIFICATION="$REPO/raw/$HASH/validated/vision/classification"
-          OBJECT_DETECTION="$REPO/raw/$HASH/validated/vision/object_detection_segmentation"
-          TEXT="$REPO/raw/$HASH/validated/text/machine_comprehension"
-
-          # Function to download (if not cached), verify checksum, and extract
-          download_model() {
-            local name=$1
-            local url=$2
-            local expected_sha256=$3
-
-            # Download if tar.gz doesn't exist (not in cache)
-            if [ ! -f "${name}.tar.gz" ]; then
-              echo "Downloading $name..."
-              wget -q -O "${name}.tar.gz" "$url"
-
-              echo "Verifying checksum for $name..."
-              echo "${expected_sha256}  ${name}.tar.gz" | sha256sum -c - || {
-                echo "Checksum verification failed for $name"
-                rm "${name}.tar.gz"
-                exit 1
-              }
-            else
-              echo "$name.tar.gz found in cache, skipping download..."
-            fi
-
-            # Extract if directory doesn't exist
-            if [ ! -d "$name" ]; then
-              echo "Extracting $name..."
-              tar -xzf "${name}.tar.gz"
-            else
-              echo "$name directory already exists, skipping extraction..."
-            fi
-          }
-
-          # Download all models from Makefile. The Makefile lists 6 models total:
-          # - mnist-12, resnet18-v2-7, resnet152-v2-7, yolov4 (have CPU + CUDA tests)
-          # - bertsquad-12, gpt2-10 (currently CUDA-only, may support CPU in the future)
-          # SHA256 checksums are pre-calculated from files at commit HASH for verification
-          download_model "mnist-12" "$CLASSIFICATION/mnist/model/mnist-12.tar.gz" \
-            "a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9"
-          download_model "resnet18-v2-7" "$CLASSIFICATION/resnet/model/resnet18-v2-7.tar.gz" \
-            "a64c111fac5d4e8bebf9246507ec7a92ea1c1596de09fca73bb7f94e9750e316"
-          download_model "resnet152-v2-7" "$CLASSIFICATION/resnet/model/resnet152-v2-7.tar.gz" \
-            "78b507483050a427870a264c398d121f44b92d69c8ca0c53217eb5137b6b51e3"
-          download_model "bertsquad-12" "$TEXT/bert-squad/model/bertsquad-12.tar.gz" \
-            "4cd041010ab4ad11c23c0eb7f056c4e4286a894b6d712ef09445b955763fb1b1"
-          download_model "yolov4" "$OBJECT_DETECTION/yolov4/model/yolov4.tar.gz" \
-            "7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2"
-          download_model "gpt2-10" "$TEXT/gpt-2/model/gpt2-10.tar.gz" \
-            "0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53"
+          models: >-
+            mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
+            resnet18-v2-7|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/resnet/model/resnet18-v2-7.tar.gz|a64c111fac5d4e8bebf9246507ec7a92ea1c1596de09fca73bb7f94e9750e316
+            resnet152-v2-7|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/resnet/model/resnet152-v2-7.tar.gz|78b507483050a427870a264c398d121f44b92d69c8ca0c53217eb5137b6b51e3
+            bertsquad-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/text/machine_comprehension/bert-squad/model/bertsquad-12.tar.gz|4cd041010ab4ad11c23c0eb7f056c4e4286a894b6d712ef09445b955763fb1b1
+            yolov4|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/object_detection_segmentation/yolov4/model/yolov4.tar.gz|7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2
+            gpt2-10|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/text/machine_comprehension/gpt-2/model/gpt2-10.tar.gz|0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53
 
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose
