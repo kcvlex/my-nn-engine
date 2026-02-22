@@ -82,7 +82,8 @@ runs:
           fi
         }
 
-        for spec in ${{ inputs.models }}; do
+        MODELS="${{ inputs.models }}"
+        for spec in $MODELS; do
           IFS='|' read -r name url sha256 <<< "$spec"
           download_model "$name" "$url" "$sha256"
         done
