@@ -142,28 +142,20 @@ fn run_extraction(config: Extract) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Error>> {
-    info("Running binary search to find problematic node...");
+/// Run a container command and capture its stdout.
+fn container_output(
+    project_root: &PathBuf,
+    script: &str,
+    args: &[String],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let volume = format!(
+        "{}:/workspace",
+        project_root
+            .to_str()
+            .ok_or("Invalid project root path")?
+    );
 
-    let mut container_args = vec![
-        "/usr/local/bin/binary_search.py".to_string(),
-        "--model".to_string(),
-        config.model_path.to_string_lossy().to_string(),
-        "--temp-dir".to_string(),
-        config.output_dir.to_string_lossy().to_string(),
-    ];
-
-    container_args.push("--inputs".to_string());
-    for input in &config.input_paths {
-        container_args.push(input.to_string_lossy().to_string());
-    }
-
-    container_args.push("--test-command".to_string());
-    for cmd in &config.test_command {
-        container_args.push(cmd.clone());
-    }
-
-    let status = Command::new("podman")
+    let output = Command::new("podman")
         .args([
             "run",
             "--rm",
@@ -171,22 +163,142 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             "--entrypoint",
             "python",
             "-v",
-            &format!(
-                "{}:/workspace",
-                config
-                    .project_root
-                    .to_str()
-                    .ok_or("Invalid project root path")?
-            ),
+            &volume,
             "-w",
             "/workspace",
             IMAGE_NAME,
+            script,
         ])
-        .args(&container_args)
-        .status()?;
+        .args(args)
+        .output()?;
 
-    if !status.success() {
-        return Err("Binary search failed or found a problematic node".into());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Container command failed: {}", stderr).into());
+    }
+
+    let stdout = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(stdout)
+}
+
+fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Error>> {
+    info("Running binary search to find problematic node...");
+
+    // Step 1: Get total node count from container
+    let total_nodes: usize = {
+        let args = vec![
+            "list-nodes".to_string(),
+            "--model".to_string(),
+            config.model_path.to_string_lossy().to_string(),
+        ];
+        let out = container_output(
+            &config.project_root,
+            "/usr/local/bin/binary_search.py",
+            &args,
+        )?;
+        out.parse::<usize>()
+            .map_err(|e| format!("Failed to parse node count '{}': {}", out, e))?
+    };
+
+    eprintln!("Model: {}", config.model_path.display());
+    eprintln!("Total nodes: {}", total_nodes);
+    eprintln!();
+
+    if total_nodes == 0 {
+        info("Model has no nodes.");
+        return Ok(());
+    }
+
+    // Step 2: Binary search loop
+    let mut left: usize = 0;
+    let mut right: usize = total_nodes - 1;
+    let mut first_fail: Option<(usize, String)> = None;
+
+    while left <= right {
+        let mid = (left + right) / 2;
+
+        // 2b. Call container: extract-node
+        let node_dir = config.output_dir.join(format!("node_{}", mid));
+        let mut extract_args = vec![
+            "extract-node".to_string(),
+            "--model".to_string(),
+            config.model_path.to_string_lossy().to_string(),
+            "--node-index".to_string(),
+            mid.to_string(),
+            "--output-dir".to_string(),
+            node_dir.to_string_lossy().to_string(),
+        ];
+        extract_args.push("--inputs".to_string());
+        for input in &config.input_paths {
+            extract_args.push(input.to_string_lossy().to_string());
+        }
+
+        eprint!(
+            "Testing node [{}/{}] ",
+            mid,
+            total_nodes - 1,
+        );
+
+        let node_info = match container_output(
+            &config.project_root,
+            "/usr/local/bin/binary_search.py",
+            &extract_args,
+        ) {
+            Ok(info) => {
+                eprintln!("{}", info);
+                info
+            }
+            Err(e) => {
+                eprintln!("extraction failed: {}", e);
+                // Treat extraction failure as a test failure
+                first_fail = Some((mid, format!("node_{} (extraction failed)", mid)));
+                let Some(new_right) = mid.checked_sub(1) else {
+                    break;
+                };
+                right = new_right;
+                continue;
+            }
+        };
+
+        // 2c. Run test command on the host
+        let extracted_model_dir = config.project_root.join(&node_dir);
+        let status = Command::new(&config.test_command[0])
+            .args(&config.test_command[1..])
+            .env("EXTRACTED_MODEL_DIR", &extracted_model_dir)
+            .status()?;
+
+        if status.success() {
+            eprintln!("  PASS");
+            left = mid + 1;
+        } else {
+            eprintln!("  FAIL");
+            first_fail = Some((mid, node_info));
+            let Some(new_right) = mid.checked_sub(1) else {
+                break;
+            };
+            right = new_right;
+        }
+
+        eprintln!();
+    }
+
+    // Step 3: Print results
+    eprintln!();
+    if let Some((index, node_info)) = first_fail {
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("FOUND: First failing node");
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("Index:    {}", index);
+        eprintln!("Node:     {}", node_info);
+        eprintln!(
+            "Extracted: {}",
+            config.output_dir.join(format!("node_{}", index)).display()
+        );
+        return Err("Binary search found a failing node".into());
+    } else {
+        eprintln!("{}", "=".repeat(80));
+        eprintln!("All nodes pass! No failing node found.");
+        eprintln!("{}", "=".repeat(80));
     }
 
     Ok(())
