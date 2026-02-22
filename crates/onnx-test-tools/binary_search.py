@@ -70,7 +70,7 @@ def extract_and_test(
             check_model=False
         )
     except Exception as e:
-        print(f"  ❌ Failed to extract: {e}")
+        print(f"  Failed to extract: {e}")
         return False, node_info
 
     # Load and run with ONNX Runtime to get expected output
@@ -89,7 +89,7 @@ def extract_and_test(
         sess = rt.InferenceSession(output_model_path)
         result = sess.run(None, input_data)
     except Exception as e:
-        print(f"  ❌ Failed to prepare inputs or run ONNX Runtime: {e}")
+        print(f"  Failed to prepare inputs or run ONNX Runtime: {e}")
         return False, node_info
 
     # Save expected outputs
@@ -142,7 +142,7 @@ def binary_search_nodes(
     print(f"Total nodes: {total_nodes}")
     print(f"Inputs: {[inp.name for inp in model.graph.input]}")
     print(f"Outputs: {[out.name for out in model.graph.output]}")
-    print(f"\nStarting binary search...\n")
+    print("\nStarting binary search...\n")
 
     left, right = 0, total_nodes - 1
     first_fail = None
@@ -162,10 +162,10 @@ def binary_search_nodes(
         )
 
         if passes:
-            print(f"  ✓ PASS\n")
+            print("  PASS\n")
             left = mid + 1
         else:
-            print(f"  ✗ FAIL\n")
+            print("  FAIL\n")
             first_fail = node_info
             right = mid - 1
 

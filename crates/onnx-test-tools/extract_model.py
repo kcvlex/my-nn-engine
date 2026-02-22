@@ -14,7 +14,6 @@ import sys
 import onnx
 from onnx.utils import extract_model
 import onnxruntime as rt
-import numpy as np
 
 
 def extract_and_run(
@@ -81,7 +80,7 @@ def extract_and_run(
         print(f"    Saved to {output_tensor_path}")
 
     # Run the extracted model with onnxruntime to get expected outputs
-    print(f"\nRunning extracted model with onnxruntime...")
+    print("\nRunning extracted model with onnxruntime...")
     sess = rt.InferenceSession(output_model_path)
     result = sess.run(None, input_data)
 
@@ -94,8 +93,8 @@ def extract_and_run(
         print(f"  Output {i}: shape={output_array.shape}, dtype={output_array.dtype}")
         print(f"    Saved to {output_tensor_path}")
 
-    print(f"\n✓ Extraction complete! Test files saved to {output_dir}")
-    print(f"  - model.onnx")
+    print(f"\nExtraction complete! Test files saved to {output_dir}")
+    print("  - model.onnx")
     print(f"  - input_*.pb (x{len(input_tensor_paths)})")
     print(f"  - output_*.pb (x{len(result)})")
 
