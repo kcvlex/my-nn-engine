@@ -528,6 +528,11 @@ impl<'ll> CodeGen<'ll, '_> {
             }
         }
         builder.position_at_end(self.unit.entry);
+
+        for ptr in chunk2ptr.values() {
+            builder.build_free(*ptr)?;
+        }
+
         builder.build_return(None)?;
         Ok(())
     }
