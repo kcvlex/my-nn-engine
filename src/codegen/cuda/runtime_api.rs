@@ -9,10 +9,13 @@ pub enum CudaRuntimeApi {
     StreamCreate(StreamCreate),
     RecordEvent(RecordEvent),
     Malloc(Malloc),
-    Free(Free),
     Memcpy(Memcpy),
     WaitEvent(WaitEvent),
     DeviceSynchronize,
+
+    Free(Free),
+    EventDestroy(EventDestroy),
+    StreamDestroy(StreamDestroy),
 }
 
 impl std::fmt::Display for CudaRuntimeApi {
@@ -23,10 +26,12 @@ impl std::fmt::Display for CudaRuntimeApi {
             CudaRuntimeApi::StreamCreate(stream_create) => write!(f, "{}", stream_create),
             CudaRuntimeApi::RecordEvent(event) => write!(f, "{}", event),
             CudaRuntimeApi::Malloc(malloc) => write!(f, "{}", malloc),
-            CudaRuntimeApi::Free(free) => write!(f, "{}", free),
             CudaRuntimeApi::Memcpy(memcpy) => write!(f, "{}", memcpy),
             CudaRuntimeApi::WaitEvent(wait_event) => write!(f, "{}", wait_event),
             CudaRuntimeApi::DeviceSynchronize => write!(f, "cudaDeviceSynchronize()"),
+            CudaRuntimeApi::Free(free) => write!(f, "{}", free),
+            CudaRuntimeApi::EventDestroy(event_destroy) => write!(f, "{}", event_destroy),
+            CudaRuntimeApi::StreamDestroy(stream_destroy) => write!(f, "{}", stream_destroy),
         }
     }
 }
@@ -142,6 +147,22 @@ impl std::fmt::Display for WaitEvent {
     }
 }
 
+pub struct EventDestroy(pub EventId);
+
+impl std::fmt::Display for EventDestroy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaEventDestroy({})", self.0)
+    }
+}
+
+pub struct StreamDestroy(pub StreamId);
+
+impl std::fmt::Display for StreamDestroy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaStreamDestroy({})", self.0)
+    }
+}
+
 macro_rules! impl_into_stmt {
     ($name:ident) => {
         impl From<$name> for Statement {
@@ -157,6 +178,8 @@ impl_into_stmt!(EventSynchronize);
 impl_into_stmt!(StreamCreate);
 impl_into_stmt!(RecordEvent);
 impl_into_stmt!(Malloc);
-impl_into_stmt!(Free);
 impl_into_stmt!(Memcpy);
 impl_into_stmt!(WaitEvent);
+impl_into_stmt!(Free);
+impl_into_stmt!(EventDestroy);
+impl_into_stmt!(StreamDestroy);
