@@ -10,14 +10,10 @@ import argparse
 import os
 import sys
 import subprocess
-import tempfile
-from pathlib import Path
 
 import onnx
-import onnx.helper as oh
 from onnx.utils import extract_model
 import onnxruntime as rt
-import numpy as np
 
 
 def get_node_info(model_path: str, node_index: int):
@@ -78,19 +74,23 @@ def extract_and_test(
         return False, node_info
 
     # Load and run with ONNX Runtime to get expected output
-    input_data = {}
-    for i, (name, tensor_path) in enumerate(zip(input_names, input_tensor_paths)):
-        tensor = onnx.load_tensor(tensor_path)
-        array = onnx.numpy_helper.to_array(tensor)
-        input_data[name] = array
+    try:
+        input_data = {}
+        for i, (name, tensor_path) in enumerate(zip(input_names, input_tensor_paths)):
+            tensor = onnx.load_tensor(tensor_path)
+            array = onnx.numpy_helper.to_array(tensor)
+            input_data[name] = array
 
-        # Save input tensor
-        output_tensor_path = os.path.join(extract_dir, f"input_{i}.pb")
-        onnx.save_tensor(tensor, output_tensor_path)
+            # Save input tensor
+            output_tensor_path = os.path.join(extract_dir, f"input_{i}.pb")
+            onnx.save_tensor(tensor, output_tensor_path)
 
-    # Run with ONNX Runtime
-    sess = rt.InferenceSession(output_model_path)
-    result = sess.run(None, input_data)
+        # Run with ONNX Runtime
+        sess = rt.InferenceSession(output_model_path)
+        result = sess.run(None, input_data)
+    except Exception as e:
+        print(f"  ❌ Failed to prepare inputs or run ONNX Runtime: {e}")
+        return False, node_info
 
     # Save expected outputs
     for i, output_array in enumerate(result):
@@ -128,7 +128,7 @@ def binary_search_nodes(
     input_tensor_paths: list[str],
     test_command: list[str],
     temp_dir: str,
-) -> dict:
+) -> dict | None:
     """
     Perform binary search to find the first failing node.
 

@@ -23,7 +23,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Determine project root
     let project_root = get_project_root()?;
-    let dockerfile_dir = project_root.join("crates").join("extract-model");
+    let dockerfile_dir = project_root.join("crates").join("onnx-test-tools");
 
     // Check for --binary-search flag
     let binary_search = args.contains(&"--binary-search".to_string());

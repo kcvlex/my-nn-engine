@@ -10,10 +10,8 @@ everything in the format expected by the test suite.
 import argparse
 import os
 import sys
-from pathlib import Path
 
 import onnx
-import onnx.helper as oh
 from onnx.utils import extract_model
 import onnxruntime as rt
 import numpy as np
