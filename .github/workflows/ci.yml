@@ -55,7 +55,7 @@ jobs:
             mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
 
       - name: Build onnx-test-tools
-        run: cargo build -p onnx-test-tools --no-default-features --examples
+        run: cargo build -p onnx-test-tools --no-default-features --bins --examples
 
       - name: Build container image
         run: podman build -t onnx-test-tools crates/onnx-test-tools/
