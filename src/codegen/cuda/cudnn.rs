@@ -201,6 +201,12 @@ pub enum CudnnOps {
     CreateConvolutionDescriptor(CudnnSettingName),
     CreateActivationDescriptor(CudnnSettingName),
 
+    Destroy(CudnnContext),
+    DestroyTensorDescriptor(TensorDescriptor),
+    DestroyFilterDescriptor(CudnnSettingName),
+    DestroyConvolutionDescriptor(CudnnSettingName),
+    DestroyActivationDescriptor(CudnnSettingName),
+
     SetTensor4dDescriptor {
         desc: TensorDescriptor,
         data_type: DataType,
@@ -270,6 +276,30 @@ impl std::fmt::Display for CudnnOps {
             Self::CreateActivationDescriptor(id) => write!(
                 f,
                 "cudnnCreateActivationDescriptor(&{})",
+                id.activation_descriptor()
+            ),
+
+            Self::Destroy(handler) => {
+                write!(f, "cudnnDestroy({})", handler.handler())
+            }
+            Self::DestroyTensorDescriptor(desc) => {
+                write!(f, "cudnnDestroyTensorDescriptor({})", desc)
+            }
+            Self::DestroyFilterDescriptor(id) => {
+                write!(
+                    f,
+                    "cudnnDestroyFilterDescriptor({})",
+                    id.filter_descriptor()
+                )
+            }
+            Self::DestroyConvolutionDescriptor(id) => write!(
+                f,
+                "cudnnDestroyConvolutionDescriptor({})",
+                id.convolution_descriptor()
+            ),
+            Self::DestroyActivationDescriptor(id) => write!(
+                f,
+                "cudnnDestroyActivationDescriptor({})",
                 id.activation_descriptor()
             ),
 
