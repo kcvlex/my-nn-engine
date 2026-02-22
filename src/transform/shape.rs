@@ -23,11 +23,12 @@ use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 use crate::transform::Target;
 
+// TODO: Remove _target.
 pub fn infer_node_output(
     graph: &Graph,
     node_id: NodeId,
     mode: UnifyMode,
-    target: Target,
+    _target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
     macro_rules! cond_error {
         ($cond: expr) => {{
@@ -140,7 +141,10 @@ pub fn infer_node_output(
                 _ => Err(TypeError::InferError("Invalid shape".to_string())),
             }?;
 
-            cond_error!(a.dims.size() != shape.size());
+            cond_error!(
+                a.dims.size() != shape.size() &&
+                    (!a.dims.compatible_with_scalar() || !shape.compatible_with_scalar())
+            );
             let reshaped = if matches!(mode, UnifyMode::CheckStrides) {
                 a.try_reshape(&shape)
                     .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?
@@ -298,20 +302,10 @@ pub fn infer_node_output(
                 .split(&input.dims)
                 .ok_or(TypeError::InferError("Invalid split dims".to_string()))?
                 .into_iter()
-                .for_each(|x| match target {
-                    // TODO: Stop target-dependent behavior.
-                    Target::CPU => {
-                        // Use the same strides as the input tensor
-                        let mut ty = input.clone();
-                        ty.dims[axis] = x;
-                        ty.normalize_strides();
-                        res.push(ty);
-                    }
-                    Target::CUDA => {
-                        let mut dims = input.dims.clone();
-                        dims[axis] = x;
-                        res.push(ResolvedTensorType::new(input.elem_type, dims))
-                    }
+                .for_each(|x| {
+                    let mut dims = input.dims.clone();
+                    dims[axis] = x;
+                    res.push(ResolvedTensorType::new(input.elem_type, dims))
                 });
         }
 

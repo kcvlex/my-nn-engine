@@ -1,13 +1,11 @@
-use itertools::Itertools;
-
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
-use crate::onnx::model::NodeMeta;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::tensor::data::ScalarData;
 use crate::transform::modify::GraphOp;
+use crate::transform::pattern::PatternMatcher;
 use crate::transform::Pass;
 
 #[derive(Default)]
@@ -19,23 +17,23 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let ids = graph
+        let mean_nodes: Vec<NodeId> = graph
             .nodes
             .iter()
             .filter_map(|(id, node)| {
-                if let Operator::ReduceMean(_) = &node.op {
-                    Some(id)
-                } else {
-                    None
-                }
+                matches!(
+                    &node.op,
+                    Operator::ReduceMean(Reduce { axes, keepdims, .. })
+                    if axes.len() == 1 && axes[0] == -1 && *keepdims
+                )
+                .then_some(id)
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        for id in ids {
-            let Some(pattern) = match_pattern(graph, modifier, id) else {
+        for mean_node in mean_nodes {
+            let Some(pattern) = match_layer_norm_pattern(graph, modifier, mean_node) else {
                 continue;
             };
-
             let mut inputs = [pattern.input; 3];
             inputs[args::LAYER_NORM_SCALE] = pattern.scale;
             inputs[args::LAYER_NORM_BIAS] = pattern.bias;
@@ -46,19 +44,20 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
                 format!("LayerNormFusion_Output_{:?}", pattern.last_node),
                 graph.get_resolved_tensor_type(old_output).unwrap().clone(),
             );
+
             modifier.register_new_node(
                 graph,
-                Node {
-                    inputs: inputs.to_vec(),
-                    outputs: vec![new_output],
-                    name: format!("LayerNormFusion_{:?}", pattern.last_node),
-                    op: Operator::LayerNormalization(LayerNormalization {
+                Node::create_node(
+                    inputs.to_vec(),
+                    vec![new_output],
+                    format!("LayerNormFusion_{:?}", pattern.last_node),
+                    Operator::LayerNormalization(LayerNormalization {
                         axis: TensorIndex::new(-1),
                         epsilon: pattern.epsilon,
                     }),
-                    meta: NodeMeta::default(),
-                },
+                ),
             );
+
             modifier.replace_input_value(graph, old_output, new_output);
         }
     }
@@ -81,175 +80,96 @@ struct LayerNormPattern {
 //   Var = ReduceMean<axes=normalized_axes>(DD)
 //   VarEps = Add(Var, epsilon)
 //   StdDev = Sqrt(VarEps)
-//   InvStdDev = Reciprocal(StdDev)
-//   Normalized = Mul(D, InvStdDev)
+//   Normalized = Div(D, StdDev)
 //   NormalizedScaled = Mul(Normalized, Scale)
 //   Y = Add(NormalizedScaled, B)
-fn match_pattern<T: GraphOp>(
+fn match_layer_norm_pattern<T: GraphOp>(
     graph: &Graph,
     modifier: &T,
     mean_node: NodeId,
 ) -> Option<LayerNormPattern> {
-    let const_scalar = |id: ValueId| {
-        let data = graph.initializer.get(&id)?.data.to_scalar_data()?;
-        Some(data)
-    };
+    let matcher = PatternMatcher::new(graph, modifier, (mean_node, 0));
 
-    let just_one_consumer = |id: NodeId| {
-        let users = modifier
-            .used_node(graph.nodes[id].outputs[0])?
-            .iter()
-            .map(|(node_id, _)| *node_id)
-            .unique()
-            .collect::<Vec<_>>();
-        if users.len() == 1 {
-            Some(users[0])
-        } else {
-            None
-        }
-    };
-
-    let just_two_consumers = |id: NodeId| {
-        let users = modifier
-            .used_node(graph.nodes[id].outputs[0])?
-            .iter()
-            .map(|(node_id, _)| *node_id)
-            .unique()
-            .collect::<Vec<_>>();
-        if users.len() == 2 {
-            Some((users[0], users[1]))
-        } else {
-            None
-        }
-    };
-
-    let another_input_of_binop = |node: NodeId, input: ValueId| {
-        let n = &graph.nodes[node];
-        if n.inputs[0] == input {
-            Some(n.inputs[1])
-        } else if n.inputs[1] == input {
-            Some(n.inputs[0])
-        } else {
-            None
-        }
-    };
-
-    let check_reduce_mean = |node: NodeId| {
-        // TODO: Should use TensorIndex?
-        match &graph.nodes[node].op {
-            Operator::ReduceMean(Reduce { axes, .. }) => axes.len() == 1 && axes[0] == -1,
-            _ => false,
-        }
-    };
-
-    macro_rules! match_op {
-        ($node_id: expr, $op_variant: pat) => {
-            matches!(graph.nodes[$node_id].op, $op_variant)
-        };
-    }
-
+    // Get input X from the mean node
     let x = graph.nodes[mean_node].inputs[0];
-    let mean = graph.nodes[mean_node].outputs[0];
-    if !check_reduce_mean(mean_node) {
-        return None;
-    }
 
-    let d_node = just_one_consumer(mean_node)?;
-    if !match_op!(d_node, Operator::Sub) {
-        return None;
-    }
-    let d_node_output = graph.nodes[d_node].outputs[0];
+    let mut d: Option<ValueId> = None;
+    let mut var: Option<ValueId> = None;
+    let mut normalized: Option<ValueId> = None;
+    let mut normalized_scale: Option<ValueId> = None;
 
-    let d_node_lhs = graph.nodes[d_node].inputs[0];
-    let d_node_rhs = graph.nodes[d_node].inputs[1];
-    if (d_node_lhs, d_node_rhs) != (x, mean) {
-        return None;
-    }
+    let mut var_eps_node: Option<NodeId> = None;
+    let mut normalized_scale_node: Option<NodeId> = None;
 
-    let (dd_node, normalized_node) = just_two_consumers(d_node)?;
-    let (dd_node, normalized_node) =
-        match (&graph.nodes[dd_node].op, &graph.nodes[normalized_node].op) {
-            (_, Operator::Div) => (dd_node, normalized_node),
-            (Operator::Div, _) => (normalized_node, dd_node),
-            _ => return None,
-        };
-
-    {
-        let dd_node = &graph.nodes[dd_node];
-        match dd_node.op {
+    let last_node = matcher
+        .then(|(node, mean)| {
+            matches!(&node.op, Operator::Sub) && node.inputs[0] == x && node.inputs[1] == mean
+        })?
+        .capture_value(&mut d)
+        .then(|(node, d)| match &node.op {
             Operator::Mul => {
-                let dd_node_lhs = dd_node.inputs[0];
-                let dd_node_rhs = dd_node.inputs[1];
-                if (dd_node_lhs, dd_node_rhs) != (d_node_output, d_node_output) {
-                    return None;
-                }
+                let lhs = node.inputs[0];
+                let rhs = node.inputs[1];
+                lhs == d && rhs == d
             }
             Operator::Pow => {
-                let dd_node_lhs = dd_node.inputs[0];
-                let dd_node_rhs = dd_node.inputs[1];
-                if dd_node_lhs != d_node_output {
-                    return None;
+                let base = node.inputs[0];
+                let exponent = node.inputs[1];
+
+                if base != d {
+                    return false;
                 }
-                let dd_node_rhs = const_scalar(dd_node_rhs)?;
-                match dd_node_rhs {
-                    ScalarData::SInt(_, 2) | ScalarData::UInt(_, 2) | ScalarData::Float(_, 2.0) => {
-                        ()
-                    }
-                    _ => return None,
-                }
+
+                let Some(tensor) = graph.initializer.get(&exponent) else {
+                    return false;
+                };
+                let Some(scalar) = tensor.data.to_scalar_data() else {
+                    return false;
+                };
+
+                matches!(
+                    scalar,
+                    ScalarData::SInt(_, 2) | ScalarData::UInt(_, 2) | ScalarData::Float(_, 2.0)
+                )
             }
-            _ => return None,
-        }
-    }
-
-    let var_node = just_one_consumer(dd_node)?;
-    if !check_reduce_mean(var_node) {
-        return None;
-    }
-
-    let var_eps_node = just_one_consumer(var_node)?;
-    let epsilon = match &graph.nodes[var_eps_node].op {
-        Operator::Add => {
-            let var = graph.nodes[var_node].outputs[0];
-            let eps = another_input_of_binop(var_eps_node, var)?;
-            let eps = const_scalar(eps)?;
-            match eps {
-                ScalarData::Float(_, v) => v,
-                _ => return None,
+            _ => false,
+        })?
+        .then(|(node, dd)| match &node.op {
+            Operator::ReduceMean(Reduce { axes, .. }) => {
+                axes.len() == 1 && axes[0] == -1 && node.inputs[0] == dd
             }
-        }
-        _ => return None,
-    };
+            _ => false,
+        })?
+        .capture_value(&mut var)
+        .then(|(node, _)| matches!(&node.op, Operator::Add))?
+        .capture_node(&mut var_eps_node)
+        .then(|(node, _)| matches!(&node.op, Operator::Sqrt))?
+        .then(|(node, stddev)| {
+            let d = d.unwrap();
+            matches!(&node.op, Operator::Div) && node.inputs[0] == d && node.inputs[1] == stddev
+        })?
+        .capture_value(&mut normalized)
+        .then(|(node, _)| matches!(&node.op, Operator::Mul))?
+        .capture_value(&mut normalized_scale)
+        .capture_node(&mut normalized_scale_node)
+        .then(|(node, _)| matches!(&node.op, Operator::Add))?
+        .last_node();
 
-    let std_dev_node = just_one_consumer(var_eps_node)?;
-    if !match_op!(std_dev_node, Operator::Sqrt) {
+    let var = var.unwrap();
+    let var_eps_node = &graph.nodes[var_eps_node.unwrap()];
+    let epsilon = extract_other_binary_input(var_eps_node, var)?;
+    let epsilon = graph.initializer.get(&epsilon)?.data.to_scalar_data()?;
+    let ScalarData::Float(_, epsilon) = epsilon else {
         return None;
-    }
-
-    assert!(match_op!(normalized_node, Operator::Div));
-    let normalized_lhs = graph.nodes[normalized_node].inputs[0];
-    let normalized_rhs = graph.nodes[normalized_node].inputs[1];
-    if (normalized_lhs, normalized_rhs) != (d_node_output, graph.nodes[std_dev_node].outputs[0]) {
-        return None;
-    }
-
-    let normalized_scaled_node = just_one_consumer(normalized_node)?;
-    let scale = match &graph.nodes[normalized_scaled_node].op {
-        Operator::Mul => {
-            let normalized = graph.nodes[normalized_node].outputs[0];
-            another_input_of_binop(normalized_scaled_node, normalized)?
-        }
-        _ => return None,
     };
 
-    let last_node = just_one_consumer(normalized_scaled_node)?;
-    let bias = match &graph.nodes[last_node].op {
-        Operator::Add => {
-            let normalized_scaled = graph.nodes[normalized_scaled_node].outputs[0];
-            another_input_of_binop(last_node, normalized_scaled)?
-        }
-        _ => return None,
-    };
+    let normalized = normalized.unwrap();
+    let normalized_scale_node = &graph.nodes[normalized_scale_node.unwrap()];
+    let scale = extract_other_binary_input(normalized_scale_node, normalized)?;
+
+    let normalized_scale = normalized_scale.unwrap();
+    let y_node = &graph.nodes[last_node];
+    let bias = extract_other_binary_input(y_node, normalized_scale)?;
 
     Some(LayerNormPattern {
         last_node,
@@ -258,4 +178,18 @@ fn match_pattern<T: GraphOp>(
         bias,
         epsilon,
     })
+}
+
+fn extract_other_binary_input(node: &Node, known_input: ValueId) -> Option<ValueId> {
+    if node.inputs.len() != 2 {
+        return None;
+    }
+
+    if node.inputs[0] == known_input {
+        Some(node.inputs[1])
+    } else if node.inputs[1] == known_input {
+        Some(node.inputs[0])
+    } else {
+        None
+    }
 }

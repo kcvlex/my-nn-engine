@@ -115,9 +115,6 @@ impl CodeGenContext {
         // if node.is_dummy() {
         //     return false;
         // }
-        if matches_single_kernel!(kernel, Operator::Split(_)) {
-            return false;
-        }
         if matches_single_kernel!(kernel, Operator::Identity) {
             let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
             let chunk_out = self
@@ -493,62 +490,29 @@ impl<'ll> CodeGen<'ll, '_> {
 
             builder.position_at_end(self.unit.entry);
 
-            if let KernelBody::SingleKernel(SingleKernel {
-                op: Operator::Split(ref split),
-            }) = kernel.body
-            {
-                let src_ty = self
-                    .gen_ctx
-                    .schedule
-                    .get_resolved_tensor_type(kernel.inputs[0])
-                    .unwrap();
-                let src = *ptr_values.get(&kernel.inputs[0]).unwrap();
-                let axis = split.axis.index(src_ty.dims.ndim());
-                let mut acc = 0;
-                let elem_ty = src_ty.elem_type.llvm_type(self.ll_ctx);
-                for output in kernel.outputs.iter() {
-                    let ptr = unsafe {
-                        builder.build_in_bounds_gep(
-                            elem_ty,
-                            src,
-                            &[self.ll_ctx.i64_type().const_int(acc, false)],
-                            format!("split.{}", output.index()).as_str(),
-                        )
-                    }?;
-                    ptr_values.insert(*output, ptr);
-                    let len = self
-                        .gen_ctx
-                        .schedule
-                        .get_resolved_tensor_type(*output)
-                        .unwrap()
-                        .dims[axis];
-                    acc += (src_ty.stride(axis) * len) as u64;
-                }
-            } else {
-                for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
-                    let dst_ptr = match alloc.ty {
-                        AllocateType::Chunk(chunk) => {
-                            if alloc.is_first_use {
-                                // TODO: type
-                                let ptr = builder.build_array_malloc(
-                                    self.ll_ctx.i128_type(),
-                                    self.ll_ctx
-                                        .i64_type()
-                                        .const_int(self.gen_ctx.mem_size[chunk], false),
-                                    format!("chunk.{}", chunk).as_str(),
-                                )?;
-                                chunk2ptr.insert(chunk, ptr);
-                                ptr
-                            } else {
-                                *chunk2ptr.get(&chunk).unwrap()
-                            }
+            for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
+                let dst_ptr = match alloc.ty {
+                    AllocateType::Chunk(chunk) => {
+                        if alloc.is_first_use {
+                            // TODO: type
+                            let ptr = builder.build_array_malloc(
+                                self.ll_ctx.i128_type(),
+                                self.ll_ctx
+                                    .i64_type()
+                                    .const_int(self.gen_ctx.mem_size[chunk], false),
+                                format!("chunk.{}", chunk).as_str(),
+                            )?;
+                            chunk2ptr.insert(chunk, ptr);
+                            ptr
+                        } else {
+                            *chunk2ptr.get(&chunk).unwrap()
                         }
-                        AllocateType::Input(v) | AllocateType::Output(v) => {
-                            *ptr_values.get(&v).unwrap()
-                        }
-                    };
-                    ptr_values.insert(alloc.value_id, dst_ptr);
-                }
+                    }
+                    AllocateType::Input(v) | AllocateType::Output(v) => {
+                        *ptr_values.get(&v).unwrap()
+                    }
+                };
+                ptr_values.insert(alloc.value_id, dst_ptr);
             }
 
             if let Some(function) = function {
@@ -606,14 +570,8 @@ impl<'ll> CodeGen<'ll, '_> {
                     .get_resolved_tensor_type(*id)
                     .unwrap()
                     .clone();
-                let name = format!("ptr.{}", i);
                 let offset = self.ll_ctx.i64_type().const_int(0, false);
-                TensorPtr {
-                    ptr,
-                    ty,
-                    offset,
-                    name,
-                }
+                TensorPtr::new_with_index(ptr, ty, offset, "ptr", i)
             })
             .collect::<Vec<_>>();
 
@@ -660,19 +618,20 @@ impl<'ll> CodeGen<'ll, '_> {
         // TODO: When same Input is used in multiple nodes
         let adjust_ptrs_and_convert_op = |op: &Operator,
                                           ptrs: &mut [TensorPtr<'_>],
-                                          operands: &[Option<usize>],
+                                          operands: &[(DataType, Option<usize>)],
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
-                Operator::Add | Operator::Mul | Operator::Pow | Operator::Sub => {
+                Operator::Add | Operator::Div | Operator::Mul | Operator::Pow | Operator::Sub => {
                     assert!(operands.len() == 2);
-                    for i in operands.iter().filter_map(|x| *x) {
+                    for (_, i) in operands.iter().filter_map(|(dt, idx)| idx.map(|i| (dt, i))) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
                     }
                 }
 
                 Operator::Contiguous |
                 Operator::BatchNormalization(_) |
+                Operator::Cast(_) |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
@@ -688,15 +647,21 @@ impl<'ll> CodeGen<'ll, '_> {
             match op {
                 Operator::Add => SingleOpcode::Add,
                 Operator::BatchNormalization(bn) => SingleOpcode::BatchNorm(*bn),
+                Operator::Cast(cast) => {
+                    assert!(operands.len() == 1);
+                    let src = operands[0].0;
+                    SingleOpcode::Cast(src, cast.to)
+                }
                 Operator::Contiguous => SingleOpcode::Transfer,
+                Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,
                 Operator::Pow => {
                     assert!(operands.len() == 2);
-                    let lhs = ptrs[operands[0].unwrap()].ty.elem_type;
-                    let rhs = ptrs[operands[1].unwrap()].ty.elem_type;
+                    let lhs = operands[0].0;
+                    let rhs = operands[1].0;
                     SingleOpcode::Pow(lhs, rhs)
                 }
                 Operator::Reciprocal => SingleOpcode::Reciprocal,
@@ -759,12 +724,24 @@ impl<'ll> CodeGen<'ll, '_> {
                 //     );
                 //     translator.build_nested_loop(gemm, entry, nest)
                 // }
-                Operator::MatMul => todo!(),
+                Operator::MatMul => {
+                    translator.build_matmul(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry)
+                }
+                Operator::Gather(ref gather) => translator.build_gather(
+                    ptrs[0].clone(),
+                    ptrs[1].clone(),
+                    ptrs[2].clone(),
+                    entry,
+                    gather,
+                ),
                 Operator::Gemm(ref gemm) => {
                     translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
                 }
                 Operator::Im2Col(ref im2col) => {
                     translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
+                }
+                Operator::OneHot(ref one_hot) => {
+                    translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
                 }
                 Operator::ReduceMatrix(op) => {
                     let m = ptrs[1].ty.dims[0] as u64;
@@ -775,6 +752,15 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Resize(ref resize) => {
                     translator.build_resize(ptrs[0].clone(), ptrs[1].clone(), entry, resize)
                 }
+                Operator::Softmax(ref softmax) => {
+                    translator.build_softmax(ptrs[0].clone(), ptrs[1].clone(), entry, softmax)
+                }
+                Operator::Split(ref split) => translator.build_split(
+                    &ptrs[..ptrs.len() - 1],
+                    ptrs.last().unwrap().clone(),
+                    entry,
+                    split,
+                ),
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
@@ -786,8 +772,15 @@ impl<'ll> CodeGen<'ll, '_> {
                         let operands = args
                             .iter()
                             .map(|arg| match arg {
-                                ElementwiseOpArg::Input(i) => Some(*i),
-                                ElementwiseOpArg::NthResult(_) => None,
+                                ElementwiseOpArg::Input(i) => {
+                                    let dtype = ptrs[1 + *i].ty.elem_type;
+                                    (dtype, Some(*i))
+                                }
+                                ElementwiseOpArg::NthResult(_) => {
+                                    // Use output type for NthResult as a stop-gap.
+                                    // TODO: correct?
+                                    (ptrs[0].ty.elem_type, None)
+                                }
                             })
                             .collect::<Vec<_>>();
                         let operator =

@@ -3,6 +3,7 @@ pub mod layout;
 pub mod lower;
 pub mod modify;
 pub mod optimize;
+mod pattern;
 pub mod shape;
 mod utils;
 
@@ -78,7 +79,7 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options),
-        create_optimize_passes0(),
+        create_optimize_passes0(options),
         create_lower_passes(),
         create_optimize_passes1(options),
         create_layout_passes(options),

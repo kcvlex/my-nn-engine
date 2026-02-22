@@ -54,6 +54,7 @@ fn test_transpose_conv2d_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_transpose_conv2d_cuda() -> Result {
     run_test(
         "transpose_conv2d",
@@ -64,6 +65,7 @@ fn test_transpose_conv2d_cuda() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_add_same_tensor_cpu() -> Result {
     run_test(
         "add_same_tensor",
@@ -74,6 +76,7 @@ fn test_add_same_tensor_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_add_same_tensor_cuda() -> Result {
     run_test(
         "add_same_tensor",
@@ -92,6 +95,7 @@ fn test_elementwise_chain_single_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_elementwise_chain_single_cuda() -> Result {
     run_test(
         "elementwise_chain_single",
@@ -112,6 +116,7 @@ fn test_elementwise_chain_branch_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_elementwise_chain_branch_cuda() -> Result {
     run_test(
         "elementwise_chain_branch",
@@ -127,6 +132,7 @@ fn test_elementwise_complex_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_elementwise_complex_cuda() -> Result {
     run_test(
         "elementwise_complex",
@@ -142,6 +148,7 @@ fn test_transpose_split_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_transpose_split_cuda() -> Result {
     run_test(
         "transpose_split",
@@ -157,6 +164,7 @@ fn test_transpose_concat_cpu() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_transpose_concat_cuda() -> Result {
     run_test(
         "transpose_concat",
@@ -167,6 +175,7 @@ fn test_transpose_concat_cuda() -> Result {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_transpose_matmul_and_someone_cuda() -> Result {
     run_test(
         "transpose_matmul_and_someone",

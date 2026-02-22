@@ -1,13 +1,15 @@
 [workspace]
-members = [
-    "crates/my-onnx-web",
-]
 resolver = "2"
+members = [".", "crates/onnx-test-tools", "crates/my-onnx-web"]
 
 [package]
 name = "my-onnx"
 version = "0.1.0"
 edition = "2021"
+
+[features]
+default = ["cuda"]
+cuda = []
 
 [dependencies]
 bitvec = "1.0.1"

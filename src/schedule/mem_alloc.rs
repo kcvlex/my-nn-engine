@@ -198,25 +198,12 @@ impl<'sched> MemoryPlanner<'sched> {
         }
 
         for output in kernel.outputs.iter() {
-            let chunk = match kernel.body {
-                // Split is a special case.
-                // TODO: When the input is `Input` or initializer.
-                KernelBody::SingleKernel(SingleKernel {
-                    op: Operator::Split(_),
-                }) if self.schedule.options.target == Target::CPU => {
-                    let res = *self.allocations.get(&kernel.inputs[0]).unwrap();
-                    // assert!(matches!(res, AllocateType::Chunk(_)));
-                    res
-                }
-                _ => {
-                    if self.deps.outputs_set.contains(output) {
-                        AllocateType::Output(*output)
-                    } else {
-                        match self.try_in_place(*output) {
-                            Some(prev) => *self.allocations.get(&prev).unwrap(),
-                            None => AllocateType::Chunk(self.chunks.reuse_or_new()),
-                        }
-                    }
+            let chunk = if self.deps.outputs_set.contains(output) {
+                AllocateType::Output(*output)
+            } else {
+                match self.try_in_place(*output) {
+                    Some(prev) => *self.allocations.get(&prev).unwrap(),
+                    None => AllocateType::Chunk(self.chunks.reuse_or_new()),
                 }
             };
             res.push((*output, chunk));

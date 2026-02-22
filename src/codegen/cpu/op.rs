@@ -23,6 +23,45 @@ pub struct TensorPtr<'ctx> {
 }
 
 impl<'ctx> TensorPtr<'ctx> {
+    pub fn new(
+        ptr: PointerValue<'ctx>,
+        ty: ResolvedTensorType,
+        offset: IntValue<'ctx>,
+        name: String,
+    ) -> Self {
+        Self {
+            ptr,
+            ty,
+            offset,
+            name,
+        }
+    }
+
+    pub fn new_with_index(
+        ptr: PointerValue<'ctx>,
+        ty: ResolvedTensorType,
+        offset: IntValue<'ctx>,
+        prefix: &str,
+        index: usize,
+    ) -> Self {
+        Self::new(ptr, ty, offset, format!("{}.{}", prefix, index))
+    }
+
+    pub fn set_offset(mut self, offset: IntValue<'ctx>) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn set_type(mut self, ty: ResolvedTensorType) -> Self {
+        self.ty = ty;
+        self
+    }
+
+    pub fn set_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
+    }
+
     // TODO: Remove
     pub fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)
@@ -56,14 +95,8 @@ impl<'ctx> TensorPtr<'ctx> {
             .builder
             .build_load(i64_type, offset, "")?
             .into_int_value();
-        let ty = self.ty.clone();
-        let name = self.name.clone();
-        Ok(Self {
-            ptr,
-            ty,
-            offset,
-            name,
-        })
+
+        Ok(Self::new(ptr, self.ty.clone(), offset, self.name.clone()))
     }
 }
 
@@ -76,6 +109,8 @@ pub struct Operation<'ctx> {
 pub enum SingleOpcode {
     Add,
     BatchNorm(BatchNormalization),
+    Cast(DataType, DataType),
+    Div,
     Exp,
     LeakyReLU(LeakyReLU),
     Log,

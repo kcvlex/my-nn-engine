@@ -77,31 +77,47 @@ fn test_yolov4_cpu() -> Result {
 }
 
 #[test]
+fn test_bertsquad12_cpu() -> Result {
+    run_test("bertsquad-12", 1e-2, Target::CPU, (4, 3), None)
+}
+
+#[test]
+fn test_gpt2_cpu() -> Result {
+    run_test("GPT2", 1e-2, Target::CPU, (1, 13), Some("model.onnx"))
+}
+
+#[test]
+#[cfg(feature = "cuda")]
 fn test_mnist12_cuda() -> Result {
     run_test("mnist-12", 1e-2, Target::CUDA, (1, 1), None)
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_resnet18_cuda() -> Result {
     run_test("resnet18-v2-7", 1e-2, Target::CUDA, (1, 1), None)
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_resnet152_cuda() -> Result {
     run_test("resnet152-v2-7", 1e-1, Target::CUDA, (1, 1), None)
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_yolov4_cuda() -> Result {
     run_test("yolov4", 1.0, Target::CUDA, (1, 1), None)
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_bertsquad12_cuda() -> Result {
     run_test("bertsquad-12", 1e-2, Target::CUDA, (4, 3), None)
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn test_gpt2_cuda() -> Result {
     run_test("GPT2", 1e-2, Target::CUDA, (1, 13), Some("model.onnx"))
 }
