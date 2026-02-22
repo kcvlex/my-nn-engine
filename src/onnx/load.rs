@@ -368,9 +368,21 @@ fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
     let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
 
     let (float_data, double_data, int32_data, int64_data, uint64_data) = match &tensor.data {
-        TensorData::Float(FloatType::F32, v) => (v.iter().map(|&x| x as f32).collect(), vec![], vec![], vec![], vec![]),
+        TensorData::Float(FloatType::F32, v) => (
+            v.iter().map(|&x| x as f32).collect(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
         TensorData::Float(FloatType::F64, v) => (vec![], v.clone(), vec![], vec![], vec![]),
-        TensorData::SInt(SIntType::I32, v) => (vec![], vec![], v.iter().map(|&x| x as i32).collect(), vec![], vec![]),
+        TensorData::SInt(SIntType::I32, v) => (
+            vec![],
+            vec![],
+            v.iter().map(|&x| x as i32).collect(),
+            vec![],
+            vec![],
+        ),
         TensorData::SInt(SIntType::I64, v) => (vec![], vec![], vec![], v.clone(), vec![]),
         TensorData::UInt(UIntType::U64, v) => (vec![], vec![], vec![], vec![], v.clone()),
     };

@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Generated assets (see Makefile)
+public/synset.txt
+public/coco.names
+public/bert-vocab.txt
+public/gpt2-encoder.json
+public/gpt2-merges.txt
+public/gpt2-wte-f16.bin
+
 # pnpm
 pnpm-lock.yaml
 

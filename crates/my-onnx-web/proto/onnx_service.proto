@@ -2,20 +2,9 @@ syntax = "proto3";
 
 package onnx_service;
 
-// Tensor data for inference
-message TensorData {
-  // Tensor name
-  string name = 1;
+option optimize_for = LITE_RUNTIME;
 
-  // Tensor dimensions
-  repeated int64 dims = 2;
-
-  // Data type string (e.g., "float32", "int64")
-  string dtype = 3;
-
-  // Tensor data as doubles (converted from any type)
-  repeated double data = 4;
-}
+import "onnx.proto3";
 
 // Supported model IDs
 enum ModelId {
@@ -37,8 +26,8 @@ message InferenceRequest {
   // Pre-defined model to use
   ModelId model_id = 1;
 
-  // Input tensor data
-  TensorData input_data = 2;
+  // Input tensors
+  repeated onnx.TensorProto inputs = 2;
 
   // Execution backend
   Backend backend = 3;
@@ -46,8 +35,8 @@ message InferenceRequest {
 
 // Inference response
 message InferenceResponse {
-  // Output tensor data
-  TensorData output_data = 1;
+  // Output tensors
+  repeated onnx.TensorProto outputs = 1;
 
   // Inference time in milliseconds
   double inference_time_ms = 2;

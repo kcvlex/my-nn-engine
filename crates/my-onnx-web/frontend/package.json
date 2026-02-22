@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "make -q || make",
     "dev": "vite",
+    "prebuild": "make",
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
-    "generate": "buf generate"
+    "generate": "protoc --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts --proto_path=../proto --proto_path=../../../third-party/onnx/onnx ../proto/onnx_service.proto ../../../third-party/onnx/onnx/onnx.proto3"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
@@ -15,7 +17,6 @@
     "vue": "^3.4.21"
   },
   "devDependencies": {
-    "@bufbuild/buf": "^1.65.0",
     "@bufbuild/protoc-gen-es": "^2.11.0",
     "@vitejs/plugin-vue": "^5.0.4",
     "typescript": "^5.4.2",

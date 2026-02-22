@@ -4,55 +4,15 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { TensorProto } from "./onnx.proto3_pb";
+import { file_onnx_proto3 } from "./onnx.proto3_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file onnx_service.proto.
  */
 export const file_onnx_service: GenFile = /*@__PURE__*/
-  fileDesc("ChJvbm54X3NlcnZpY2UucHJvdG8SDG9ubnhfc2VydmljZSJFCgpUZW5zb3JEYXRhEgwKBG5hbWUYASABKAkSDAoEZGltcxgCIAMoAxINCgVkdHlwZRgDIAEoCRIMCgRkYXRhGAQgAygBIpEBChBJbmZlcmVuY2VSZXF1ZXN0EicKCG1vZGVsX2lkGAEgASgOMhUub25ueF9zZXJ2aWNlLk1vZGVsSWQSLAoKaW5wdXRfZGF0YRgCIAEoCzIYLm9ubnhfc2VydmljZS5UZW5zb3JEYXRhEiYKB2JhY2tlbmQYAyABKA4yFS5vbm54X3NlcnZpY2UuQmFja2VuZCJdChFJbmZlcmVuY2VSZXNwb25zZRItCgtvdXRwdXRfZGF0YRgBIAEoCzIYLm9ubnhfc2VydmljZS5UZW5zb3JEYXRhEhkKEWluZmVyZW5jZV90aW1lX21zGAIgASgBKj4KB01vZGVsSWQSCQoFTU5JU1QQABIKCgZSRVNORVQQARIICgRZT0xPEAISCAoEQkVSVBADEggKBEdQVDIQBCocCgdCYWNrZW5kEgcKA0NQVRAAEggKBENVREEQATJnChRPbm54SW5mZXJlbmNlU2VydmljZRJPCgxSdW5JbmZlcmVuY2USHi5vbm54X3NlcnZpY2UuSW5mZXJlbmNlUmVxdWVzdBofLm9ubnhfc2VydmljZS5JbmZlcmVuY2VSZXNwb25zZWIGcHJvdG8z");
-
-/**
- * Tensor data for inference
- *
- * @generated from message onnx_service.TensorData
- */
-export type TensorData = Message<"onnx_service.TensorData"> & {
-  /**
-   * Tensor name
-   *
-   * @generated from field: string name = 1;
-   */
-  name: string;
-
-  /**
-   * Tensor dimensions
-   *
-   * @generated from field: repeated int64 dims = 2;
-   */
-  dims: bigint[];
-
-  /**
-   * Data type string (e.g., "float32", "int64")
-   *
-   * @generated from field: string dtype = 3;
-   */
-  dtype: string;
-
-  /**
-   * Tensor data as doubles (converted from any type)
-   *
-   * @generated from field: repeated double data = 4;
-   */
-  data: number[];
-};
-
-/**
- * Describes the message onnx_service.TensorData.
- * Use `create(TensorDataSchema)` to create a new message.
- */
-export const TensorDataSchema: GenMessage<TensorData> = /*@__PURE__*/
-  messageDesc(file_onnx_service, 0);
+  fileDesc("ChJvbm54X3NlcnZpY2UucHJvdG8SDG9ubnhfc2VydmljZSKGAQoQSW5mZXJlbmNlUmVxdWVzdBInCghtb2RlbF9pZBgBIAEoDjIVLm9ubnhfc2VydmljZS5Nb2RlbElkEiEKBmlucHV0cxgCIAMoCzIRLm9ubnguVGVuc29yUHJvdG8SJgoHYmFja2VuZBgDIAEoDjIVLm9ubnhfc2VydmljZS5CYWNrZW5kIlIKEUluZmVyZW5jZVJlc3BvbnNlEiIKB291dHB1dHMYASADKAsyES5vbm54LlRlbnNvclByb3RvEhkKEWluZmVyZW5jZV90aW1lX21zGAIgASgBKj4KB01vZGVsSWQSCQoFTU5JU1QQABIKCgZSRVNORVQQARIICgRZT0xPEAISCAoEQkVSVBADEggKBEdQVDIQBCocCgdCYWNrZW5kEgcKA0NQVRAAEggKBENVREEQATJnChRPbm54SW5mZXJlbmNlU2VydmljZRJPCgxSdW5JbmZlcmVuY2USHi5vbm54X3NlcnZpY2UuSW5mZXJlbmNlUmVxdWVzdBofLm9ubnhfc2VydmljZS5JbmZlcmVuY2VSZXNwb25zZUICSANiBnByb3RvMw", [file_onnx_proto3]);
 
 /**
  * Inference request
@@ -68,11 +28,11 @@ export type InferenceRequest = Message<"onnx_service.InferenceRequest"> & {
   modelId: ModelId;
 
   /**
-   * Input tensor data
+   * Input tensors
    *
-   * @generated from field: onnx_service.TensorData input_data = 2;
+   * @generated from field: repeated onnx.TensorProto inputs = 2;
    */
-  inputData?: TensorData;
+  inputs: TensorProto[];
 
   /**
    * Execution backend
@@ -87,7 +47,7 @@ export type InferenceRequest = Message<"onnx_service.InferenceRequest"> & {
  * Use `create(InferenceRequestSchema)` to create a new message.
  */
 export const InferenceRequestSchema: GenMessage<InferenceRequest> = /*@__PURE__*/
-  messageDesc(file_onnx_service, 1);
+  messageDesc(file_onnx_service, 0);
 
 /**
  * Inference response
@@ -96,11 +56,11 @@ export const InferenceRequestSchema: GenMessage<InferenceRequest> = /*@__PURE__*
  */
 export type InferenceResponse = Message<"onnx_service.InferenceResponse"> & {
   /**
-   * Output tensor data
+   * Output tensors
    *
-   * @generated from field: onnx_service.TensorData output_data = 1;
+   * @generated from field: repeated onnx.TensorProto outputs = 1;
    */
-  outputData?: TensorData;
+  outputs: TensorProto[];
 
   /**
    * Inference time in milliseconds
@@ -115,7 +75,7 @@ export type InferenceResponse = Message<"onnx_service.InferenceResponse"> & {
  * Use `create(InferenceResponseSchema)` to create a new message.
  */
 export const InferenceResponseSchema: GenMessage<InferenceResponse> = /*@__PURE__*/
-  messageDesc(file_onnx_service, 2);
+  messageDesc(file_onnx_service, 1);
 
 /**
  * Supported model IDs

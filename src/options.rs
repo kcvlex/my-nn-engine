@@ -1,6 +1,6 @@
 use typed_builder::TypedBuilder;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     CPU,
     CUDA,

@@ -22,19 +22,57 @@
         </div>
       </div>
 
-      <div class="form-group">
-        <label for="input-tensor">Input Tensor (JSON)</label>
-        <textarea
-          id="input-tensor"
-          v-model="inputJson"
-          :placeholder="placeholder"
-          rows="8"
-        ></textarea>
-      </div>
+      <!-- MNIST: image upload input -->
+      <MNIST
+        v-if="modelId === ModelId.MNIST"
+        ref="mnistRef"
+        :backend="backend"
+      />
 
-      <button type="submit" :disabled="loading || !inputJson">
-        {{ loading ? 'Running...' : 'Run Inference' }}
-      </button>
+      <!-- ResNet: image classification -->
+      <ResNet
+        v-else-if="modelId === ModelId.RESNET"
+        ref="resnetRef"
+        :backend="backend"
+      />
+
+      <!-- YOLO: object detection -->
+      <YOLO
+        v-else-if="modelId === ModelId.YOLO"
+        ref="yoloRef"
+        :backend="backend"
+      />
+
+      <!-- BERT: question answering -->
+      <BERT
+        v-else-if="modelId === ModelId.BERT"
+        ref="bertRef"
+        :backend="backend"
+      />
+
+      <!-- GPT-2: text generation -->
+      <GPT2
+        v-else-if="modelId === ModelId.GPT2"
+        ref="gpt2Ref"
+        :backend="backend"
+      />
+
+      <!-- Other models: raw JSON input -->
+      <template v-else>
+        <div class="form-group">
+          <label for="input-tensor">Input Tensors (JSON array)</label>
+          <textarea
+            id="input-tensor"
+            v-model="inputJson"
+            :placeholder="placeholder"
+            rows="8"
+          ></textarea>
+        </div>
+
+        <button type="submit" :disabled="loading || !inputJson">
+          {{ loading ? 'Running...' : 'Run Inference' }}
+        </button>
+      </template>
     </form>
 
     <div v-if="result" :class="['result', result.type]">
@@ -58,6 +96,11 @@
 import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
+import MNIST from './MNIST.vue';
+import ResNet from './ResNet.vue';
+import YOLO from './YOLO.vue';
+import BERT from './BERT.vue';
+import GPT2 from './GPT2.vue';
 
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
@@ -70,40 +113,75 @@ const result = ref<{
   output?: string;
 } | null>(null);
 
-const placeholder = `{
-  "name": "input",
-  "data": [0.0, 0.1, 0.2, ...],
-  "dims": [1, 1, 28, 28],
-  "dtype": "float32"
-}`;
+const mnistRef = ref<InstanceType<typeof MNIST>>();
+const resnetRef = ref<InstanceType<typeof ResNet>>();
+const yoloRef = ref<InstanceType<typeof YOLO>>();
+const bertRef = ref<InstanceType<typeof BERT>>();
+const gpt2Ref = ref<InstanceType<typeof GPT2>>();
+
+const placeholder = `[
+  {
+    "name": "input",
+    "floatData": [0.0, 0.1, 0.2, ...],
+    "dims": [1, 1, 28, 28],
+    "dataType": 1
+  }
+]`;
 
 const handleSubmit = async () => {
+  if (modelId.value === ModelId.MNIST) {
+    mnistRef.value?.runInference(backend.value);
+    return;
+  }
+  if (modelId.value === ModelId.RESNET) {
+    resnetRef.value?.runInference(backend.value);
+    return;
+  }
+  if (modelId.value === ModelId.YOLO) {
+    yoloRef.value?.runInference(backend.value);
+    return;
+  }
+  if (modelId.value === ModelId.BERT) {
+    bertRef.value?.runInference(backend.value);
+    return;
+  }
+  if (modelId.value === ModelId.GPT2) {
+    gpt2Ref.value?.runInference(backend.value);
+    return;
+  }
+
   loading.value = true;
   result.value = null;
 
   try {
-    const parsed = JSON.parse(inputJson.value);
+    const parsed: any[] = JSON.parse(inputJson.value);
+    const inputs = parsed.map(t => ({
+      name: t.name ?? '',
+      dims: (t.dims ?? []).map((d: number) => BigInt(d)),
+      dataType: t.dataType ?? 0,
+      floatData: t.floatData ?? [],
+      doubleData: t.doubleData ?? [],
+      int32Data: t.int32Data ?? [],
+      int64Data: (t.int64Data ?? []).map((d: number) => BigInt(d)),
+    }));
     const response = await grpcClient.runInference({
       modelId: modelId.value,
-      inputData: {
-        name: parsed.name ?? '',
-        dims: (parsed.dims ?? []).map((d: number) => BigInt(d)),
-        dtype: parsed.dtype ?? '',
-        data: parsed.data ?? [],
-      },
+      inputs,
       backend: backend.value,
     });
 
-    const output = response.outputData;
     result.value = {
       type: 'success',
       inferenceTime: response.inferenceTimeMs,
-      output: output ? JSON.stringify({
-        name: output.name,
-        dims: output.dims.map(Number),
-        dtype: output.dtype,
-        data: output.data,
-      }, null, 2) : '(no output)',
+      output: JSON.stringify(response.outputs.map(t => ({
+        name: t.name,
+        dims: t.dims.map(Number),
+        dataType: t.dataType,
+        floatData: t.floatData,
+        doubleData: t.doubleData,
+        int32Data: t.int32Data,
+        int64Data: t.int64Data.map(Number),
+      })), null, 2),
     };
   } catch (error) {
     result.value = {
@@ -232,4 +310,5 @@ summary {
   font-size: 0.9rem;
   margin: 0;
 }
+
 </style>
