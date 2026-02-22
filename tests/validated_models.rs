@@ -82,6 +82,11 @@ fn test_bertsquad12_cpu() -> Result {
 }
 
 #[test]
+fn test_gpt2_cpu() -> Result {
+    run_test("GPT2", 1e-2, Target::CPU, (1, 13), Some("model.onnx"))
+}
+
+#[test]
 #[cfg(feature = "cuda")]
 fn test_mnist12_cuda() -> Result {
     run_test("mnist-12", 1e-2, Target::CUDA, (1, 1), None)
