@@ -150,9 +150,7 @@ fn container_output(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let volume = format!(
         "{}:/workspace",
-        project_root
-            .to_str()
-            .ok_or("Invalid project root path")?
+        project_root.to_str().ok_or("Invalid project root path")?
     );
 
     let output = Command::new("podman")
@@ -233,11 +231,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             extract_args.push(input.to_string_lossy().to_string());
         }
 
-        eprint!(
-            "Testing node [{}/{}] ",
-            mid,
-            total_nodes - 1,
-        );
+        eprint!("Testing node [{}/{}] ", mid, total_nodes - 1,);
 
         let node_info = match container_output(
             &config.project_root,
