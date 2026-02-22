@@ -295,7 +295,11 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
         eprintln!("Node:     {}", node_info);
         eprintln!(
             "Extracted: {}",
-            config.work_dir.path().join(format!("node_{}", index)).display()
+            config
+                .work_dir
+                .path()
+                .join(format!("node_{}", index))
+                .display()
         );
         return Err("Binary search found a failing node".into());
     } else {
