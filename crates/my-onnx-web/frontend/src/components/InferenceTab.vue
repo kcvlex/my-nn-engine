@@ -1,96 +1,117 @@
 <template>
   <div class="tab-content">
-    <h2>Run Inference</h2>
-
     <form @submit.prevent="handleSubmit" class="form">
-      <div class="form-group">
-        <label for="model-id">Model ID</label>
-        <input
-          id="model-id"
-          type="text"
-          v-model="modelId"
-          placeholder="Paste model ID from upload"
-          required
-        />
+      <div class="form-row">
+        <div class="form-group">
+          <label for="model-id">Model</label>
+          <select id="model-id" v-model.number="modelId">
+            <option :value="ModelId.MNIST">MNIST</option>
+            <option :value="ModelId.RESNET">ResNet</option>
+            <option :value="ModelId.YOLO">YOLO</option>
+            <option :value="ModelId.BERT">BERT</option>
+            <option :value="ModelId.GPT2">GPT-2</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="backend">Backend</label>
+          <select id="backend" v-model.number="backend">
+            <option :value="Backend.CPU">CPU</option>
+            <option :value="Backend.CUDA">CUDA (GPU)</option>
+          </select>
+        </div>
       </div>
 
       <div class="form-group">
-        <label for="input-tensors">Input Tensors (JSON)</label>
+        <label for="input-tensor">Input Tensor (JSON)</label>
         <textarea
-          id="input-tensors"
+          id="input-tensor"
           v-model="inputJson"
-          placeholder='[
-  {
-    "name": "input",
-    "data": [0.1, 0.2, 0.3, ...],
-    "dims": [1, 3, 224, 224],
-    "dtype": "Float(F32)"
-  }
-]'
-          rows="10"
+          :placeholder="placeholder"
+          rows="8"
         ></textarea>
-        <small class="hint">Enter input tensors as JSON array. Data should be flattened.</small>
       </div>
 
-      <button type="submit" :disabled="loading || !modelId || !inputJson">
+      <button type="submit" :disabled="loading || !inputJson">
         {{ loading ? 'Running...' : 'Run Inference' }}
       </button>
     </form>
 
     <div v-if="result" :class="['result', result.type]">
       <template v-if="result.type === 'success'">
-        <h3>✓ Inference Complete</h3>
+        <h3>Inference Complete</h3>
         <p><strong>Time:</strong> {{ result.inferenceTime?.toFixed(2) }} ms</p>
-        <h4>Outputs:</h4>
-        <pre class="output-json">{{ result.outputs }}</pre>
+        <details>
+          <summary>Output Tensor</summary>
+          <pre class="output-json">{{ result.output }}</pre>
+        </details>
       </template>
-      <p v-else>
-        <strong>Error:</strong> {{ result.message }}
-      </p>
+      <template v-else>
+        <h3>Error</h3>
+        <p>{{ result.message }}</p>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { apiClient } from '../api/client';
+import { grpcClient } from '../api/grpc_client';
+import { ModelId, Backend } from '../gen/onnx_service_pb';
 
-const modelId = ref('');
+const modelId = ref<ModelId>(ModelId.MNIST);
+const backend = ref<Backend>(Backend.CPU);
 const inputJson = ref('');
 const loading = ref(false);
 const result = ref<{
   type: 'success' | 'error';
   message?: string;
   inferenceTime?: number;
-  outputs?: string;
+  output?: string;
 } | null>(null);
+
+const placeholder = `{
+  "name": "input",
+  "data": [0.0, 0.1, 0.2, ...],
+  "dims": [1, 1, 28, 28],
+  "dtype": "float32"
+}`;
 
 const handleSubmit = async () => {
   loading.value = true;
   result.value = null;
 
   try {
-    const inputs = JSON.parse(inputJson.value);
+    const parsed = JSON.parse(inputJson.value);
+    const response = await grpcClient.runInference({
+      modelId: modelId.value,
+      inputData: {
+        name: parsed.name ?? '',
+        dims: (parsed.dims ?? []).map((d: number) => BigInt(d)),
+        dtype: parsed.dtype ?? '',
+        data: parsed.data ?? [],
+      },
+      backend: backend.value,
+    });
 
-    const response = await apiClient.runInference(modelId.value, { inputs });
-
+    const output = response.outputData;
     result.value = {
       type: 'success',
-      inferenceTime: response.inference_time_ms,
-      outputs: JSON.stringify(response.outputs, null, 2),
+      inferenceTime: response.inferenceTimeMs,
+      output: output ? JSON.stringify({
+        name: output.name,
+        dims: output.dims.map(Number),
+        dtype: output.dtype,
+        data: output.data,
+      }, null, 2) : '(no output)',
     };
   } catch (error) {
-    if (error instanceof SyntaxError) {
-      result.value = {
-        type: 'error',
-        message: 'Invalid JSON format',
-      };
-    } else {
-      result.value = {
-        type: 'error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      };
-    }
+    result.value = {
+      type: 'error',
+      message: error instanceof SyntaxError
+        ? 'Invalid JSON format'
+        : error instanceof Error ? error.message : 'Unknown error',
+    };
   } finally {
     loading.value = false;
   }
@@ -102,13 +123,17 @@ const handleSubmit = async () => {
   padding: 30px;
 }
 
-h2 {
-  margin-bottom: 20px;
-  color: #333;
-}
-
 .form {
   max-width: 800px;
+}
+
+.form-row {
+  display: flex;
+  gap: 20px;
+}
+
+.form-row .form-group {
+  flex: 1;
 }
 
 .form-group {
@@ -122,7 +147,7 @@ label {
   color: #333;
 }
 
-input[type="text"],
+select,
 textarea {
   width: 100%;
   padding: 12px;
@@ -138,15 +163,10 @@ textarea {
   resize: vertical;
 }
 
-input:focus,
+select:focus,
 textarea:focus {
   outline: none;
   border-color: #667eea;
-}
-
-.hint {
-  color: #666;
-  font-size: 0.9rem;
 }
 
 button {
@@ -175,25 +195,32 @@ button:disabled {
   margin-top: 20px;
   padding: 15px;
   border-radius: 6px;
-  border-left: 4px solid #667eea;
 }
 
 .result.success {
   background: #efe;
-  border-left-color: #4a4;
+  border-left: 4px solid #4a4;
   color: #060;
 }
 
 .result.error {
   background: #fee;
-  border-left-color: #f44;
+  border-left: 4px solid #f44;
   color: #c00;
 }
 
-h4 {
-  margin-top: 15px;
+h3 {
   margin-bottom: 10px;
-  color: #333;
+}
+
+details {
+  margin-top: 10px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 8px;
 }
 
 .output-json {

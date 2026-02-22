@@ -1,5 +1,0 @@
-{
-	"dependencies": {
-		"grpc-web": "^2.0.2"
-	}
-}
