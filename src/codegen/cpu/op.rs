@@ -110,6 +110,7 @@ pub enum SingleOpcode {
     Add,
     BatchNorm(BatchNormalization),
     Cast(DataType, DataType),
+    Div,
     Exp,
     LeakyReLU(LeakyReLU),
     Log,
