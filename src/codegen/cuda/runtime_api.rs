@@ -9,6 +9,7 @@ pub enum CudaRuntimeApi {
     StreamCreate(StreamCreate),
     RecordEvent(RecordEvent),
     Malloc(Malloc),
+    Free(Free),
     Memcpy(Memcpy),
     WaitEvent(WaitEvent),
     DeviceSynchronize,
@@ -22,6 +23,7 @@ impl std::fmt::Display for CudaRuntimeApi {
             CudaRuntimeApi::StreamCreate(stream_create) => write!(f, "{}", stream_create),
             CudaRuntimeApi::RecordEvent(event) => write!(f, "{}", event),
             CudaRuntimeApi::Malloc(malloc) => write!(f, "{}", malloc),
+            CudaRuntimeApi::Free(free) => write!(f, "{}", free),
             CudaRuntimeApi::Memcpy(memcpy) => write!(f, "{}", memcpy),
             CudaRuntimeApi::WaitEvent(wait_event) => write!(f, "{}", wait_event),
             CudaRuntimeApi::DeviceSynchronize => write!(f, "cudaDeviceSynchronize()"),
@@ -78,6 +80,14 @@ pub struct Malloc {
 impl std::fmt::Display for Malloc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cudaMalloc(&{}, {})", self.dst, self.mem_size)
+    }
+}
+
+pub struct Free(pub Expr);
+
+impl std::fmt::Display for Free {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cudaFree({})", self.0)
     }
 }
 
@@ -147,5 +157,6 @@ impl_into_stmt!(EventSynchronize);
 impl_into_stmt!(StreamCreate);
 impl_into_stmt!(RecordEvent);
 impl_into_stmt!(Malloc);
+impl_into_stmt!(Free);
 impl_into_stmt!(Memcpy);
 impl_into_stmt!(WaitEvent);
