@@ -1,0 +1,13 @@
+[package]
+name = "onnx-test-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "onnx-test-tools"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.60", features = ["derive"] }
+my-onnx = { path = "../.." }
+tempfile = "3"

@@ -9,13 +9,18 @@ use my_onnx::tensor::Tensor;
 
 type Result = std::result::Result<(), SessionError>;
 
-fn run_test(model: &str, epsilon: f64, target: Target, nums: (usize, usize)) -> Result {
-    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models/extracted")
-        .join(model);
+fn count_pb_files(dir: &PathBuf, prefix: &str) -> usize {
+    (0..)
+        .take_while(|i| dir.join(format!("{}_{}.pb", prefix, i)).exists())
+        .count()
+}
+
+fn run_test(root_dir: &PathBuf, epsilon: f64, target: Target) -> Result {
     let model_path = root_dir.join("model.onnx");
 
-    let (num_inputs, num_outputs) = nums;
+    let num_inputs = count_pb_files(root_dir, "input");
+    let num_outputs = count_pb_files(root_dir, "output");
+
     let inputs = (0..num_inputs)
         .map(|i| {
             Tensor::load_from_path(root_dir.join(format!("input_{}.pb", i)))
@@ -42,63 +47,30 @@ fn run_test(model: &str, epsilon: f64, target: Target, nums: (usize, usize)) -> 
     assert_eq!(outputs.len(), expected.len());
     for (output, expected) in outputs.iter().zip(expected.iter()) {
         if !output.eq_with_epsilon(expected, epsilon, CompPolicy::Either) {
-            // For pretty printing
             assert_eq!(output, expected);
         }
     }
     Ok(())
-    // if !output[0].eq_with_epsilon(&expected, epsilon, CompPolicy::Either) {
-    //     if true {
-    //         assert_eq!(output[0], expected);
-    //     } else {
-    //         let left = output[0]
-    //             .clone()
-    //             .data
-    //             .into_1d_tensor()
-    //             .to_1d_floats()
-    //             .unwrap();
-    //         let right = expected
-    //             .clone()
-    //             .data
-    //             .into_1d_tensor()
-    //             .to_1d_floats()
-    //             .unwrap();
-    //         // For pretty printing
-    //         assert_eq!(&left[..10], &right[..10]);
-    //     }
-    // }
-    // Ok(())
 }
 
+/// Run via: EXTRACTED_MODEL_DIR=path/to/dir cargo test --test extracted_models -- --ignored
+///
+/// Optional env vars:
+///   EPSILON  - comparison tolerance (default: 1e-2)
+///   TARGET   - "cpu" or "cuda" (default: "cpu")
 #[ignore]
 #[test]
-#[cfg(feature = "cuda")]
-fn test_resnet18_until() -> Result {
-    run_test("resnet18-v2-7/until_pool1_fwd", 1e-2, Target::CUDA, (1, 1))
-}
-
-#[ignore]
-#[test]
-#[cfg(feature = "cuda")]
-fn test_yolov4_until() -> Result {
-    run_test("yolov4/until_lambda_5_add", 5e-1, Target::CUDA, (1, 1))
-}
-
-#[ignore]
-#[test]
-#[cfg(feature = "cuda")]
-fn test_bert_until() -> Result {
-    run_test(
-        "bertsquad-12/until_embeddings_batchnorm_add_1",
-        1e-2,
-        Target::CUDA,
-        (4, 1),
-    )
-}
-
-#[ignore]
-#[test]
-#[cfg(feature = "cuda")]
-fn test_gpt_until() -> Result {
-    run_test("GPT2/until_output2_277", 1e-2, Target::CUDA, (1, 2))
+fn test_extracted_model() -> Result {
+    let dir = PathBuf::from(
+        std::env::var("EXTRACTED_MODEL_DIR").expect("EXTRACTED_MODEL_DIR must be set"),
+    );
+    let epsilon: f64 = std::env::var("EPSILON")
+        .unwrap_or_else(|_| "1e-2".to_string())
+        .parse()
+        .expect("invalid EPSILON value");
+    let target = match std::env::var("TARGET").as_deref() {
+        Ok("cuda") => Target::CUDA,
+        _ => Target::CPU,
+    };
+    run_test(&dir, epsilon, target)
 }
