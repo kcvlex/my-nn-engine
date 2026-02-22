@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file onnx_service.proto.
  */
 export const file_onnx_service: GenFile = /*@__PURE__*/
-  fileDesc("ChJvbm54X3NlcnZpY2UucHJvdG8SDG9ubnhfc2VydmljZSKGAQoQSW5mZXJlbmNlUmVxdWVzdBInCghtb2RlbF9pZBgBIAEoDjIVLm9ubnhfc2VydmljZS5Nb2RlbElkEiEKBmlucHV0cxgCIAMoCzIRLm9ubnguVGVuc29yUHJvdG8SJgoHYmFja2VuZBgDIAEoDjIVLm9ubnhfc2VydmljZS5CYWNrZW5kIlIKEUluZmVyZW5jZVJlc3BvbnNlEiIKB291dHB1dHMYASADKAsyES5vbm54LlRlbnNvclByb3RvEhkKEWluZmVyZW5jZV90aW1lX21zGAIgASgBKj4KB01vZGVsSWQSCQoFTU5JU1QQABIKCgZSRVNORVQQARIICgRZT0xPEAISCAoEQkVSVBADEggKBEdQVDIQBCocCgdCYWNrZW5kEgcKA0NQVRAAEggKBENVREEQATJnChRPbm54SW5mZXJlbmNlU2VydmljZRJPCgxSdW5JbmZlcmVuY2USHi5vbm54X3NlcnZpY2UuSW5mZXJlbmNlUmVxdWVzdBofLm9ubnhfc2VydmljZS5JbmZlcmVuY2VSZXNwb25zZUICSANiBnByb3RvMw", [file_onnx_proto3]);
+  fileDesc("ChJvbm54X3NlcnZpY2UucHJvdG8SDG9ubnhfc2VydmljZSKGAQoQSW5mZXJlbmNlUmVxdWVzdBInCghtb2RlbF9pZBgBIAEoDjIVLm9ubnhfc2VydmljZS5Nb2RlbElkEiEKBmlucHV0cxgCIAMoCzIRLm9ubnguVGVuc29yUHJvdG8SJgoHYmFja2VuZBgDIAEoDjIVLm9ubnhfc2VydmljZS5CYWNrZW5kIlIKEUluZmVyZW5jZVJlc3BvbnNlEiIKB291dHB1dHMYASADKAsyES5vbm54LlRlbnNvclByb3RvEhkKEWluZmVyZW5jZV90aW1lX21zGAIgASgBIk4KFUdldEluaXRpYWxpemVyUmVxdWVzdBInCghtb2RlbF9pZBgBIAEoDjIVLm9ubnhfc2VydmljZS5Nb2RlbElkEgwKBG5hbWUYAiABKAkiOwoWR2V0SW5pdGlhbGl6ZXJSZXNwb25zZRIhCgZ0ZW5zb3IYASABKAsyES5vbm54LlRlbnNvclByb3RvKj4KB01vZGVsSWQSCQoFTU5JU1QQABIKCgZSRVNORVQQARIICgRZT0xPEAISCAoEQkVSVBADEggKBEdQVDIQBCocCgdCYWNrZW5kEgcKA0NQVRAAEggKBENVREEQATLEAQoUT25ueEluZmVyZW5jZVNlcnZpY2USTwoMUnVuSW5mZXJlbmNlEh4ub25ueF9zZXJ2aWNlLkluZmVyZW5jZVJlcXVlc3QaHy5vbm54X3NlcnZpY2UuSW5mZXJlbmNlUmVzcG9uc2USWwoOR2V0SW5pdGlhbGl6ZXISIy5vbm54X3NlcnZpY2UuR2V0SW5pdGlhbGl6ZXJSZXF1ZXN0GiQub25ueF9zZXJ2aWNlLkdldEluaXRpYWxpemVyUmVzcG9uc2VCAkgDYgZwcm90bzM", [file_onnx_proto3]);
 
 /**
  * Inference request
@@ -76,6 +76,49 @@ export type InferenceResponse = Message<"onnx_service.InferenceResponse"> & {
  */
 export const InferenceResponseSchema: GenMessage<InferenceResponse> = /*@__PURE__*/
   messageDesc(file_onnx_service, 1);
+
+/**
+ * Request to fetch a named initializer (weight tensor) from a model
+ *
+ * @generated from message onnx_service.GetInitializerRequest
+ */
+export type GetInitializerRequest = Message<"onnx_service.GetInitializerRequest"> & {
+  /**
+   * @generated from field: onnx_service.ModelId model_id = 1;
+   */
+  modelId: ModelId;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message onnx_service.GetInitializerRequest.
+ * Use `create(GetInitializerRequestSchema)` to create a new message.
+ */
+export const GetInitializerRequestSchema: GenMessage<GetInitializerRequest> = /*@__PURE__*/
+  messageDesc(file_onnx_service, 2);
+
+/**
+ * Response containing the initializer tensor
+ *
+ * @generated from message onnx_service.GetInitializerResponse
+ */
+export type GetInitializerResponse = Message<"onnx_service.GetInitializerResponse"> & {
+  /**
+   * @generated from field: onnx.TensorProto tensor = 1;
+   */
+  tensor?: TensorProto;
+};
+
+/**
+ * Describes the message onnx_service.GetInitializerResponse.
+ * Use `create(GetInitializerResponseSchema)` to create a new message.
+ */
+export const GetInitializerResponseSchema: GenMessage<GetInitializerResponse> = /*@__PURE__*/
+  messageDesc(file_onnx_service, 3);
 
 /**
  * Supported model IDs
@@ -153,6 +196,16 @@ export const OnnxInferenceService: GenService<{
     methodKind: "unary";
     input: typeof InferenceRequestSchema;
     output: typeof InferenceResponseSchema;
+  },
+  /**
+   * Fetch a named initializer (weight tensor) from a model
+   *
+   * @generated from rpc onnx_service.OnnxInferenceService.GetInitializer
+   */
+  getInitializer: {
+    methodKind: "unary";
+    input: typeof GetInitializerRequestSchema;
+    output: typeof GetInitializerResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_onnx_service, 0);

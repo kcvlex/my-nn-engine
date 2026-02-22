@@ -52,6 +52,10 @@ impl ModelRegistry {
         }
     }
 
+    pub fn model_path(&self, model_id: ModelId) -> PathBuf {
+        self.models_dir.join(model_id.model_path())
+    }
+
     pub fn get_or_load(
         &mut self,
         model_id: ModelId,

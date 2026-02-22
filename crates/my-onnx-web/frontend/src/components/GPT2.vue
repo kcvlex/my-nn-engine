@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // GPT-2 text generation model
 // Tokenizer files: https://huggingface.co/openai-community/gpt2
-// wte.weight extracted from the ONNX model as float16 for LM head projection
+// wte.weight (LM head) fetched via GetInitializer RPC from the ONNX model
 import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
@@ -172,37 +172,26 @@ async function loadTokenizer(): Promise<void> {
   }
 }
 
-// --- LM Head (wte.weight) ---
+// --- LM Head (wte.weight via GetInitializer RPC) ---
 
 let wteWeight: Float32Array | null = null;
 
 async function loadWteWeight(): Promise<void> {
   if (wteWeight) return;
-  const resp = await fetch('/gpt2-wte-f16.bin');
-  const buf = await resp.arrayBuffer();
-  const f16 = new Uint16Array(buf);
-  // Convert float16 to float32
-  wteWeight = new Float32Array(f16.length);
-  for (let i = 0; i < f16.length; i++) {
-    wteWeight[i] = float16ToFloat32(f16[i]);
+  const resp = await grpcClient.getInitializer({
+    modelId: ModelId.GPT2,
+    name: 'wte.weight',
+  });
+  const tensor = resp.tensor!;
+  if (tensor.floatData.length > 0) {
+    wteWeight = new Float32Array(tensor.floatData);
+  } else if (tensor.rawData.length > 0) {
+    // raw_data is little-endian float32; copy to ensure 4-byte alignment
+    const aligned = new Uint8Array(tensor.rawData).buffer;
+    wteWeight = new Float32Array(aligned);
+  } else {
+    throw new Error('wte.weight has no float data');
   }
-}
-
-function float16ToFloat32(h: number): number {
-  const sign = (h >> 15) & 1;
-  const exp = (h >> 10) & 0x1f;
-  const frac = h & 0x3ff;
-  if (exp === 0) {
-    if (frac === 0) return sign ? -0 : 0;
-    // subnormal
-    const val = frac / 1024 * Math.pow(2, -14);
-    return sign ? -val : val;
-  }
-  if (exp === 31) {
-    return frac === 0 ? (sign ? -Infinity : Infinity) : NaN;
-  }
-  const val = Math.pow(2, exp - 15) * (1 + frac / 1024);
-  return sign ? -val : val;
 }
 
 function projectToLogits(hiddenState: number[]): number[] {

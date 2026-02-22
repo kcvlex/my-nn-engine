@@ -42,8 +42,22 @@ message InferenceResponse {
   double inference_time_ms = 2;
 }
 
+// Request to fetch a named initializer (weight tensor) from a model
+message GetInitializerRequest {
+  ModelId model_id = 1;
+  string name = 2;
+}
+
+// Response containing the initializer tensor
+message GetInitializerResponse {
+  onnx.TensorProto tensor = 1;
+}
+
 // ONNX Model Inference Service
 service OnnxInferenceService {
   // Run inference on a pre-defined model
   rpc RunInference(InferenceRequest) returns (InferenceResponse);
+
+  // Fetch a named initializer (weight tensor) from a model
+  rpc GetInitializer(GetInitializerRequest) returns (GetInitializerResponse);
 }

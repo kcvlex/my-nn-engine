@@ -22,6 +22,8 @@ pub mod onnx {
 
 use onnx_service::onnx_inference_service_server::OnnxInferenceService;
 use onnx_service::Backend as ProtoBackend;
+use onnx_service::GetInitializerRequest;
+use onnx_service::GetInitializerResponse;
 use onnx_service::InferenceRequest;
 use onnx_service::InferenceResponse;
 use onnx_service::ModelId as ProtoModelId;
@@ -109,6 +111,41 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         Ok(Response::new(InferenceResponse {
             outputs: output_protos,
             inference_time_ms,
+        }))
+    }
+
+    async fn get_initializer(
+        &self,
+        request: Request<GetInitializerRequest>,
+    ) -> Result<Response<GetInitializerResponse>, Status> {
+        let req = request.into_inner();
+        let model_id = Self::proto_model_id_to_model_id(req.model_id)?;
+
+        let registry = self.registry.read().await;
+        let model_path = registry.model_path(model_id);
+
+        let model_bytes = std::fs::read(&model_path)
+            .map_err(|e| Status::not_found(format!("Failed to read model file: {}", e)))?;
+        let model_proto = onnx::ModelProto::decode(model_bytes.as_slice())
+            .map_err(|e| Status::internal(format!("Failed to decode model: {}", e)))?;
+        let graph = model_proto
+            .graph
+            .ok_or_else(|| Status::internal("Model has no graph"))?;
+
+        let tensor = graph
+            .initializer
+            .into_iter()
+            .find(|t| t.name == req.name)
+            .ok_or_else(|| {
+                Status::not_found(format!(
+                    "Initializer '{}' not found in model {}",
+                    req.name,
+                    model_id.display_name()
+                ))
+            })?;
+
+        Ok(Response::new(GetInitializerResponse {
+            tensor: Some(tensor),
         }))
     }
 }
