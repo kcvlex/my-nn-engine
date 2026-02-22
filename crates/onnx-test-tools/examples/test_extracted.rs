@@ -1,6 +1,6 @@
-use std::env;
 use std::path::PathBuf;
 
+use my_onnx::onnx::load::*;
 use my_onnx::options::*;
 use my_onnx::session::Session;
 use my_onnx::tensor::data::CompPolicy;
@@ -14,19 +14,14 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <extract_dir> [epsilon]", args[0]);
-        eprintln!(
-            "  extract_dir: Directory containing model.onnx and input_*.pb/output_*.pb files"
-        );
-        eprintln!("  epsilon: Maximum allowed difference (default: 0.01)");
-        std::process::exit(1);
-    }
-
-    let extract_dir = PathBuf::from(&args[1]);
-    let epsilon: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.01);
+    let extract_dir = PathBuf::from(
+        std::env::var("EXTRACTED_MODEL_DIR")
+            .map_err(|_| "EXTRACTED_MODEL_DIR env var must be set")?,
+    );
+    let epsilon: f64 = std::env::var("EPSILON")
+        .unwrap_or_else(|_| "0.01".to_string())
+        .parse()
+        .map_err(|_| "invalid EPSILON value")?;
 
     let model_path = extract_dir.join("model.onnx");
     if !model_path.exists() {
@@ -35,8 +30,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Count and load inputs
     let mut inputs = Vec::new();
-    let mut i = 0;
-    loop {
+    for i in 0.. {
         let input_path = extract_dir.join(format!("input_{}.pb", i));
         if !input_path.exists() {
             break;
@@ -45,7 +39,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Tensor::load_from_path(&input_path)
                 .map_err(|e| format!("Failed to load {}: {:?}", input_path.display(), e))?,
         );
-        i += 1;
     }
 
     if inputs.is_empty() {
@@ -54,12 +47,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Count expected outputs
     let mut num_outputs = 0;
-    loop {
-        let output_path = extract_dir.join(format!("output_{}.pb", num_outputs));
+    for i in 0.. {
+        let output_path = extract_dir.join(format!("output_{}.pb", i));
         if !output_path.exists() {
             break;
         }
-        num_outputs += 1;
+        num_outputs = i + 1;
     }
 
     if num_outputs == 0 {
@@ -97,11 +90,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Failed to load {}: {:?}", expected_path.display(), e))?;
 
         if !output.eq_with_epsilon(&expected, epsilon, CompPolicy::Either) {
-            eprintln!("\n✗ Output {} mismatch!", i);
+            eprintln!("\nFAIL: Output {} mismatch!", i);
             eprintln!("  Expected shape: {:?}", expected.dims);
             eprintln!("  Got shape: {:?}", output.dims);
 
-            // Try to print some sample values for debugging
             return Err(format!(
                 "Output {} does not match expected within epsilon {}",
                 i, epsilon
@@ -109,9 +101,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
 
-        eprintln!("  ✓ Output {} matches (shape: {:?})", i, output.dims);
+        eprintln!("  OK: Output {} matches (shape: {:?})", i, output.dims);
     }
 
-    eprintln!("\n✓ All outputs match within epsilon {}", epsilon);
+    eprintln!("\nOK: All outputs match within epsilon {}", epsilon);
     Ok(())
 }
