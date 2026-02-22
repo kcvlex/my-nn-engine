@@ -66,8 +66,7 @@ jobs:
             --mode binary-search \
             --model-path models/validated/mnist-12/mnist-12.onnx \
             --input-paths models/validated/mnist-12/test_data_set_0/input_0.pb \
-            --test-command ./target/debug/examples/test_extracted \
-            --output-dir tmp/binary_search_test
+            --test-command ./target/debug/examples/test_extracted
 
   fmt:
     name: Format

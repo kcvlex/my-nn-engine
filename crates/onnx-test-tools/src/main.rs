@@ -22,7 +22,7 @@ struct Args {
     output_node_name: Option<String>,
 
     #[arg(long)]
-    output_dir: PathBuf,
+    output_dir: Option<PathBuf>,
 
     #[arg(long, num_args(1..))]
     test_command: Option<Vec<String>>,
@@ -47,7 +47,7 @@ struct BinarySearch {
     model_path: PathBuf,
     input_paths: Vec<PathBuf>,
     test_command: Vec<String>,
-    output_dir: PathBuf,
+    work_dir: tempfile::TempDir,
 }
 
 fn main() {
@@ -76,11 +76,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("--output-node-name is required for extract mode")?,
                 model_path: args.model_path,
                 input_paths: args.input_paths,
-                output_dir: args.output_dir,
+                output_dir: args
+                    .output_dir
+                    .ok_or("--output-dir is required for extract mode")?,
             };
             run_extraction(config)?;
         }
         Mode::BinarySearch => {
+            let work_dir = tempfile::TempDir::new_in(&project_root)?;
             let config = BinarySearch {
                 project_root,
                 test_command: args
@@ -88,7 +91,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("--test-command is required for binary-search mode")?,
                 model_path: args.model_path,
                 input_paths: args.input_paths,
-                output_dir: args.output_dir,
+                work_dir,
             };
             run_binary_search(config)?;
         }
@@ -182,6 +185,12 @@ fn container_output(
 fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Error>> {
     info("Running binary search to find problematic node...");
 
+    let work_dir_rel = config
+        .work_dir
+        .path()
+        .strip_prefix(&config.project_root)?
+        .to_path_buf();
+
     // Step 1: Get total node count from container
     let total_nodes: usize = {
         let args = vec![
@@ -216,7 +225,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
         let mid = (left + right) / 2;
 
         // 2b. Call container: extract-node
-        let node_dir = config.output_dir.join(format!("node_{}", mid));
+        let node_dir_rel = work_dir_rel.join(format!("node_{}", mid));
         let mut extract_args = vec![
             "extract-node".to_string(),
             "--model".to_string(),
@@ -224,7 +233,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             "--node-index".to_string(),
             mid.to_string(),
             "--output-dir".to_string(),
-            node_dir.to_string_lossy().to_string(),
+            node_dir_rel.to_string_lossy().to_string(),
         ];
         extract_args.push("--inputs".to_string());
         for input in &config.input_paths {
@@ -255,7 +264,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
         };
 
         // 2c. Run test command on the host
-        let extracted_model_dir = config.project_root.join(&node_dir);
+        let extracted_model_dir = config.project_root.join(&node_dir_rel);
         let status = Command::new(&config.test_command[0])
             .args(&config.test_command[1..])
             .env("EXTRACTED_MODEL_DIR", &extracted_model_dir)
@@ -286,7 +295,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
         eprintln!("Node:     {}", node_info);
         eprintln!(
             "Extracted: {}",
-            config.output_dir.join(format!("node_{}", index)).display()
+            config.work_dir.path().join(format!("node_{}", index)).display()
         );
         return Err("Binary search found a failing node".into());
     } else {
