@@ -73,6 +73,7 @@ pub enum CublasApi {
     SetStream(CublasHandler),
     Gemm(GemmArgs),
     BatchedGemm(BatchedGemmArgs),
+    Destroy(CublasHandler),
 }
 
 impl Display for CublasApi {
@@ -83,6 +84,9 @@ impl Display for CublasApi {
             }
             Self::SetStream(handler) => {
                 write!(f, "cublasSetStream({}, {})", handler, handler.0)
+            }
+            Self::Destroy(handler) => {
+                write!(f, "cublasDestroy({})", handler)
             }
             Self::Gemm(GemmArgs {
                 handler,

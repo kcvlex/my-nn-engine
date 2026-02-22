@@ -711,6 +711,62 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(Free(Expr::Identifier(name.clone())).into());
         }
 
+        for stream_id in self.streams.values().map(|s| s.stream_id).unique() {
+            self.stmts.push(StreamDestroy(stream_id).into());
+        }
+
+        for event_id in self.to_record_events.iter().copied() {
+            self.stmts.push(EventDestroy(event_id).into());
+        }
+
+        for (_, handler) in self.cublas_handlers.iter() {
+            self.stmts.push(CublasApi::Destroy(*handler).into());
+        }
+
+        for (stream_id, kernels) in self.cudnn_ctxs.iter() {
+            for kernel_id in kernels.iter().copied() {
+                let setting = CudnnSettingName::KernelId(kernel_id);
+                self.stmts.push(
+                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                        id: setting,
+                        role: TensorRole::Input,
+                    })
+                    .into(),
+                );
+                self.stmts.push(
+                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                        id: setting,
+                        role: TensorRole::Output,
+                    })
+                    .into(),
+                );
+                if self.schedule.kernels[kernel_id]
+                    .inputs
+                    .get(args::CONV_BIAS)
+                    .is_some()
+                {
+                    self.stmts.push(
+                        CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                            id: setting,
+                            role: TensorRole::Bias,
+                        })
+                        .into(),
+                    );
+                }
+                self.stmts
+                    .push(CudnnOps::DestroyFilterDescriptor(setting).into());
+                self.stmts
+                    .push(CudnnOps::DestroyConvolutionDescriptor(setting).into());
+                self.stmts
+                    .push(CudnnOps::DestroyActivationDescriptor(setting).into());
+            }
+
+            let ctx = CudnnContext::StreamContext(*stream_id);
+            self.stmts
+                .push(Free(Expr::Identifier(ctx.workspace_ptr())).into());
+            self.stmts.push(CudnnOps::Destroy(ctx).into());
+        }
+
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
