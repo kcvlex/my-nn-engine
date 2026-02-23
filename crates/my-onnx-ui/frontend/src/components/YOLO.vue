@@ -1,20 +1,37 @@
 <script setup lang="ts">
 // COCO labels from: https://github.com/hunglc007/tensorflow-yolov4-tflite/blob/master/data/classes/coco.names
 import { ref } from 'vue';
-import { grpcClient } from '../api/grpc_client';
+import {
+  useInference,
+  type BaseInferenceResult,
+} from '../composables/useInference';
+import { useImageCanvas } from '../composables/useImageCanvas';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ImageUpload from './ImageUpload.vue';
 import ResultBox from './ResultBox.vue';
 import { loadLabels } from '../utils/labels';
+import { serializeOutputs } from '../utils/tensor';
 
 const INPUT_SIZE = 416;
 
 // YOLOv4 anchors (from hunglc007/tensorflow-yolov4-tflite)
 const ANCHORS = [
-  [[12, 16], [19, 36], [40, 28]],     // stride 8  (52x52)
-  [[36, 75], [76, 55], [72, 146]],     // stride 16 (26x26)
-  [[142, 110], [192, 243], [459, 401]], // stride 32 (13x13)
+  [
+    [12, 16],
+    [19, 36],
+    [40, 28],
+  ], // stride 8  (52x52)
+  [
+    [36, 75],
+    [76, 55],
+    [72, 146],
+  ], // stride 16 (26x26)
+  [
+    [142, 110],
+    [192, 243],
+    [459, 401],
+  ], // stride 32 (13x13)
 ];
 const STRIDES = [8, 16, 32];
 
@@ -25,49 +42,43 @@ const props = defineProps<{
   backend: Backend;
 }>();
 
-const processedCanvas = ref<HTMLCanvasElement>();
+// NHWC layout: [1, 416, 416, 3], normalized to [0, 1]
+const {
+  canvas: processedCanvas,
+  processImage,
+  getTensorData,
+} = useImageCanvas(INPUT_SIZE, INPUT_SIZE, (pixels) => {
+  const data: number[] = [];
+  for (let i = 0; i < pixels.length; i += 4) {
+    data.push(pixels[i] / 255.0);
+    data.push(pixels[i + 1] / 255.0);
+    data.push(pixels[i + 2] / 255.0);
+  }
+  return data;
+});
+
 const resultCanvas = ref<HTMLCanvasElement>();
-const loading = ref(false);
-const result = ref<{
-  type: 'success' | 'error';
-  message?: string;
-  inferenceTime?: number;
-  detections?: Detection[];
-  rawOutput?: string;
-} | null>(null);
+const { loading, result, run } = useInference<
+  BaseInferenceResult & {
+    detections?: Detection[];
+  }
+>();
 
 interface Detection {
-  x1: number; y1: number; x2: number; y2: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
   score: number;
   classId: number;
   label: string;
 }
 
-let tensorData: number[] = [];
 let originalImg: HTMLImageElement | null = null;
 
 function onImageLoaded(img: HTMLImageElement) {
   originalImg = img;
   processImage(img);
-}
-
-function processImage(img: HTMLImageElement) {
-  const canvas = processedCanvas.value;
-  if (!canvas) return;
-
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(img, 0, 0, INPUT_SIZE, INPUT_SIZE);
-
-  const imageData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
-  const pixels = imageData.data;
-
-  // NHWC layout: [1, 416, 416, 3], normalized to [0, 1]
-  tensorData = [];
-  for (let i = 0; i < pixels.length; i += 4) {
-    tensorData.push(pixels[i] / 255.0);
-    tensorData.push(pixels[i + 1] / 255.0);
-    tensorData.push(pixels[i + 2] / 255.0);
-  }
 }
 
 function sigmoid(x: number): number {
@@ -81,9 +92,10 @@ function decodeDetections(
 
   for (let scaleIdx = 0; scaleIdx < 3; scaleIdx++) {
     const output = outputs[scaleIdx];
-    const data = output.floatData.length > 0
-      ? Array.from(output.floatData)
-      : Array.from(output.doubleData);
+    const data =
+      output.floatData.length > 0
+        ? Array.from(output.floatData)
+        : Array.from(output.doubleData);
     const stride = STRIDES[scaleIdx];
     const gridSize = INPUT_SIZE / stride;
     const anchors = ANCHORS[scaleIdx];
@@ -209,27 +221,26 @@ function getCocoLabels(): Promise<string[]> {
 }
 
 async function runInference(backend?: Backend) {
-  if (tensorData.length === 0) return;
+  if (getTensorData().length === 0) return;
 
-  loading.value = true;
-  result.value = null;
-
-  try {
+  await run(async (client) => {
     const [labels, response] = await Promise.all([
       getCocoLabels(),
-      grpcClient.runInference({
+      client.runInference({
         modelId: ModelId.YOLO,
-        inputs: [{
-          name: 'input_1:0',
-          dims: [1n, BigInt(INPUT_SIZE), BigInt(INPUT_SIZE), 3n],
-          dataType: TensorProto_DataType.FLOAT,
-          floatData: tensorData,
-        }],
+        inputs: [
+          {
+            name: 'input_1:0',
+            dims: [1n, BigInt(INPUT_SIZE), BigInt(INPUT_SIZE), 3n],
+            dataType: TensorProto_DataType.FLOAT,
+            floatData: getTensorData(),
+          },
+        ],
         backend: backend ?? props.backend,
       }),
     ]);
 
-    const outputs = response.outputs.map(t => ({
+    const outputs = response.outputs.map((t) => ({
       floatData: Array.from(t.floatData),
       doubleData: Array.from(t.doubleData),
     }));
@@ -241,26 +252,13 @@ async function runInference(backend?: Backend) {
 
     drawDetections(detections);
 
-    result.value = {
-      type: 'success',
+    return {
+      type: 'success' as const,
       inferenceTime: response.inferenceTimeMs,
       detections,
-      rawOutput: JSON.stringify(response.outputs.map(t => ({
-        name: t.name,
-        dims: t.dims.map(Number),
-        dataType: t.dataType,
-        floatDataLength: t.floatData.length,
-        doubleDataLength: t.doubleData.length,
-      })), null, 2),
+      rawOutput: serializeOutputs(response.outputs, { summarize: true }),
     };
-  } catch (e) {
-    result.value = {
-      type: 'error',
-      message: e instanceof Error ? e.message : 'Unknown error',
-    };
-  } finally {
-    loading.value = false;
-  }
+  });
 }
 
 defineExpose({ runInference });
@@ -277,7 +275,12 @@ defineExpose({ runInference });
       <template #canvas>
         <div class="image-box">
           <label>416x416 RGB</label>
-          <canvas ref="processedCanvas" :width="INPUT_SIZE" :height="INPUT_SIZE" class="processed-canvas"></canvas>
+          <canvas
+            ref="processedCanvas"
+            :width="INPUT_SIZE"
+            :height="INPUT_SIZE"
+            class="processed-canvas"
+          ></canvas>
         </div>
       </template>
     </ImageUpload>
@@ -293,7 +296,10 @@ defineExpose({ runInference });
 
       <canvas ref="resultCanvas" class="result-canvas"></canvas>
 
-      <ul v-if="result?.detections && result.detections.length > 0" class="detection-list">
+      <ul
+        v-if="result?.detections && result.detections.length > 0"
+        class="detection-list"
+      >
         <li v-for="(det, i) in result.detections" :key="i">
           <span class="det-label">{{ det.label }}</span>
           <span class="det-score">{{ (det.score * 100).toFixed(1) }}%</span>

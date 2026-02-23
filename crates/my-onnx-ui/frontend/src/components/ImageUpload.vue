@@ -38,11 +38,11 @@ function handleFileChange(event: Event) {
 <template>
   <div class="upload-area">
     <input
+      ref="fileInput"
       type="file"
       accept="image/*"
-      @change="handleFileChange"
-      ref="fileInput"
       hidden
+      @change="handleFileChange"
     />
     <button type="button" class="upload-btn" @click="fileInput?.click()">
       Choose Image
@@ -59,7 +59,12 @@ function handleFileChange(event: Event) {
       <slot name="canvas" />
     </div>
 
-    <button type="button" class="run-btn" @click="$emit('run')" :disabled="loading">
+    <button
+      type="button"
+      class="run-btn"
+      :disabled="loading"
+      @click="$emit('run')"
+    >
       {{ loading ? 'Running...' : runLabel }}
     </button>
   </div>

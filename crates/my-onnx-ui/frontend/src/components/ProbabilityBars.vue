@@ -1,17 +1,24 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
-  items: { label: string; probability: number; highlight: boolean }[];
-  labelWidth?: string;
-  truncateLabel?: boolean;
-}>(), {
-  labelWidth: '20px',
-  truncateLabel: false,
-});
+withDefaults(
+  defineProps<{
+    items: { label: string; probability: number; highlight: boolean }[];
+    labelWidth?: string;
+    truncateLabel?: boolean;
+  }>(),
+  {
+    labelWidth: '20px',
+    truncateLabel: false,
+  },
+);
 </script>
 
 <template>
   <ul class="probabilities">
-    <li v-for="(item, i) in items" :key="i" :class="{ highlight: item.highlight }">
+    <li
+      v-for="(item, i) in items"
+      :key="i"
+      :class="{ highlight: item.highlight }"
+    >
       <span
         class="prob-label"
         :style="{
@@ -20,9 +27,13 @@ withDefaults(defineProps<{
           textOverflow: truncateLabel ? 'ellipsis' : undefined,
           whiteSpace: truncateLabel ? 'nowrap' : undefined,
         }"
-      >{{ item.label }}</span>
+        >{{ item.label }}</span
+      >
       <div class="prob-bar-bg">
-        <div class="prob-bar" :style="{ width: (item.probability * 100) + '%' }"></div>
+        <div
+          class="prob-bar"
+          :style="{ width: item.probability * 100 + '%' }"
+        ></div>
       </div>
       <span class="prob-value">{{ (item.probability * 100).toFixed(1) }}%</span>
     </li>

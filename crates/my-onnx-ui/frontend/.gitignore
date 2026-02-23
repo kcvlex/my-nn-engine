@@ -16,8 +16,6 @@ dist-ssr
 public/synset.txt
 public/coco.names
 public/bert-vocab.txt
-public/gpt2-encoder.json
-public/gpt2-merges.txt
 
 # pnpm
 pnpm-lock.yaml

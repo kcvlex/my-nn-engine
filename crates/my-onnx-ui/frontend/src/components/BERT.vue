@@ -3,10 +3,14 @@
 // Vocab: https://huggingface.co/google-bert/bert-base-uncased/resolve/main/vocab.txt
 // Model info: https://github.com/onnx/models/blob/main/validated/text/machine_comprehension/bert-squad/README.md
 import { ref } from 'vue';
-import { grpcClient } from '../api/grpc_client';
+import {
+  useInference,
+  type BaseInferenceResult,
+} from '../composables/useInference';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ResultBox from './ResultBox.vue';
+import { serializeOutputs } from '../utils/tensor';
 
 const MAX_SEQ_LENGTH = 256;
 const MAX_QUERY_LENGTH = 64;
@@ -15,17 +19,16 @@ const props = defineProps<{
   backend: Backend;
 }>();
 
-const context = ref('Super Bowl 50 was an American football game to determine the champion of the National Football League (NFL) for the 2015 season. The American Football Conference (AFC) champion Denver Broncos defeated the National Football Conference (NFC) champion Carolina Panthers 24\u201310 to earn their third Super Bowl title.');
+const context = ref(
+  'Super Bowl 50 was an American football game to determine the champion of the National Football League (NFL) for the 2015 season. The American Football Conference (AFC) champion Denver Broncos defeated the National Football Conference (NFC) champion Carolina Panthers 24\u201310 to earn their third Super Bowl title.',
+);
 const question = ref('Which NFL team won Super Bowl 50?');
-const loading = ref(false);
-const result = ref<{
-  type: 'success' | 'error';
-  message?: string;
-  inferenceTime?: number;
-  answer?: string;
-  score?: number;
-  rawOutput?: string;
-} | null>(null);
+const { loading, result, run } = useInference<
+  BaseInferenceResult & {
+    answer?: string;
+    score?: number;
+  }
+>();
 
 // WordPiece tokenizer
 let vocab: Map<string, number> | null = null;
@@ -67,8 +70,12 @@ function basicTokenize(text: string): string[] {
 
 function isPunctuation(ch: string): boolean {
   const code = ch.charCodeAt(0);
-  return (code >= 33 && code <= 47) || (code >= 58 && code <= 64) ||
-    (code >= 91 && code <= 96) || (code >= 123 && code <= 126);
+  return (
+    (code >= 33 && code <= 47) ||
+    (code >= 58 && code <= 64) ||
+    (code >= 91 && code <= 96) ||
+    (code >= 123 && code <= 126)
+  );
 }
 
 function isWhitespace(ch: string): boolean {
@@ -83,7 +90,8 @@ function wordpieceTokenize(token: string): string[] {
     let end = token.length;
     let found = false;
     while (start < end) {
-      const substr = start === 0 ? token.slice(start, end) : '##' + token.slice(start, end);
+      const substr =
+        start === 0 ? token.slice(start, end) : '##' + token.slice(start, end);
       if (vocab.has(substr)) {
         subTokens.push(substr);
         found = true;
@@ -111,16 +119,13 @@ function tokenize(text: string): string[] {
 
 function tokensToIds(tokens: string[]): number[] {
   if (!vocab) return [];
-  return tokens.map(t => vocab!.get(t) ?? vocab!.get('[UNK]')!);
+  return tokens.map((t) => vocab!.get(t) ?? vocab!.get('[UNK]')!);
 }
 
 async function runInference(backend?: Backend) {
   if (!context.value.trim() || !question.value.trim()) return;
 
-  loading.value = true;
-  result.value = null;
-
-  try {
+  await run(async (client) => {
     await loadVocab();
 
     // Tokenize question and context
@@ -151,7 +156,7 @@ async function runInference(backend?: Backend) {
       if (i >= contextStart) segmentIds[i] = 1;
     }
 
-    const response = await grpcClient.runInference({
+    const response = await client.runInference({
       modelId: ModelId.BERT,
       inputs: [
         {
@@ -187,7 +192,10 @@ async function runInference(backend?: Backend) {
     let startLogits: number[] = [];
     let endLogits: number[] = [];
     for (const t of response.outputs) {
-      const data = t.floatData.length > 0 ? Array.from(t.floatData) : Array.from(t.doubleData);
+      const data =
+        t.floatData.length > 0
+          ? Array.from(t.floatData)
+          : Array.from(t.doubleData);
       if (t.name === 'unstack:0') startLogits = data;
       else if (t.name === 'unstack:1') endLogits = data;
     }
@@ -213,28 +221,14 @@ async function runInference(backend?: Backend) {
     const answerTokens = paddedTokens.slice(bestStart, bestEnd + 1);
     const answer = detokenize(answerTokens);
 
-    result.value = {
-      type: 'success',
+    return {
+      type: 'success' as const,
       inferenceTime: response.inferenceTimeMs,
       answer,
       score: bestScore,
-      rawOutput: JSON.stringify(response.outputs.map(t => ({
-        name: t.name,
-        dims: t.dims.map(Number),
-        dataType: t.dataType,
-        floatDataLength: t.floatData.length,
-        doubleDataLength: t.doubleData.length,
-        int64Data: t.int64Data.map(Number),
-      })), null, 2),
+      rawOutput: serializeOutputs(response.outputs, { summarize: true }),
     };
-  } catch (e) {
-    result.value = {
-      type: 'error',
-      message: e instanceof Error ? e.message : 'Unknown error',
-    };
-  } finally {
-    loading.value = false;
-  }
+  });
 }
 
 function detokenize(tokens: string[]): string {
@@ -269,13 +263,18 @@ defineExpose({ runInference });
       <label for="bert-question">Question</label>
       <input
         id="bert-question"
-        type="text"
         v-model="question"
+        type="text"
         placeholder="Ask a question about the context..."
       />
     </div>
 
-    <button type="button" class="run-btn" @click="runInference()" :disabled="loading || !context || !question">
+    <button
+      type="button"
+      class="run-btn"
+      :disabled="loading || !context || !question"
+      @click="runInference()"
+    >
       {{ loading ? 'Running...' : 'Ask' }}
     </button>
 

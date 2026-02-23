@@ -21,8 +21,8 @@ __pycache__/
 **/src/generated/
 
 # Build outputs
-crates/my-onnx-web/dist/
-crates/my-onnx-web/frontend/dist/
+crates/my-onnx-ui/dist/
+crates/my-onnx-ui/frontend/dist/
 
 # Node.js / Frontend
 node_modules/

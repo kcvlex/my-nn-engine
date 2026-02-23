@@ -56,3 +56,34 @@ jobs:
 
       - name: Check formatting
         run: cargo +nightly fmt -- --check
+
+  frontend-lint:
+    name: Frontend Lint & Format
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/my-onnx-ui/frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: crates/my-onnx-ui/frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint

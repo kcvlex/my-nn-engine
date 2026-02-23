@@ -3,7 +3,7 @@ const cache = new Map<string, string[]>();
 export async function loadLabels(
   url: string,
   fallbackCount: number,
-  parseLine: (line: string) => string = s => s.trim(),
+  parseLine: (line: string) => string = (s) => s.trim(),
 ): Promise<string[]> {
   const cached = cache.get(url);
   if (cached) return cached;

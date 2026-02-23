@@ -1,6 +1,6 @@
 <template>
   <div class="tab-content">
-    <form @submit.prevent="handleSubmit" class="form">
+    <form class="form" @submit.prevent="handleSubmit">
       <div class="form-row">
         <div class="form-group">
           <label for="model-id">Model</label>
@@ -94,7 +94,6 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import MNIST from './MNIST.vue';
 import ResNet from './ResNet.vue';
@@ -129,69 +128,22 @@ const placeholder = `[
 ]`;
 
 const handleSubmit = async () => {
-  if (modelId.value === ModelId.MNIST) {
-    mnistRef.value?.runInference(backend.value);
-    return;
-  }
-  if (modelId.value === ModelId.RESNET) {
-    resnetRef.value?.runInference(backend.value);
-    return;
-  }
-  if (modelId.value === ModelId.YOLO) {
-    yoloRef.value?.runInference(backend.value);
-    return;
-  }
-  if (modelId.value === ModelId.BERT) {
-    bertRef.value?.runInference(backend.value);
-    return;
-  }
-  if (modelId.value === ModelId.GPT2) {
-    gpt2Ref.value?.runInference(backend.value);
-    return;
-  }
-
-  loading.value = true;
-  result.value = null;
-
-  try {
-    const parsed: any[] = JSON.parse(inputJson.value);
-    const inputs = parsed.map(t => ({
-      name: t.name ?? '',
-      dims: (t.dims ?? []).map((d: number) => BigInt(d)),
-      dataType: t.dataType ?? 0,
-      floatData: t.floatData ?? [],
-      doubleData: t.doubleData ?? [],
-      int32Data: t.int32Data ?? [],
-      int64Data: (t.int64Data ?? []).map((d: number) => BigInt(d)),
-    }));
-    const response = await grpcClient.runInference({
-      modelId: modelId.value,
-      inputs,
-      backend: backend.value,
-    });
-
-    result.value = {
-      type: 'success',
-      inferenceTime: response.inferenceTimeMs,
-      output: JSON.stringify(response.outputs.map(t => ({
-        name: t.name,
-        dims: t.dims.map(Number),
-        dataType: t.dataType,
-        floatData: t.floatData,
-        doubleData: t.doubleData,
-        int32Data: t.int32Data,
-        int64Data: t.int64Data.map(Number),
-      })), null, 2),
-    };
-  } catch (error) {
-    result.value = {
-      type: 'error',
-      message: error instanceof SyntaxError
-        ? 'Invalid JSON format'
-        : error instanceof Error ? error.message : 'Unknown error',
-    };
-  } finally {
-    loading.value = false;
+  switch (modelId.value) {
+    case ModelId.MNIST:
+      await mnistRef.value?.runInference(backend.value);
+      return;
+    case ModelId.RESNET:
+      await resnetRef.value?.runInference(backend.value);
+      return;
+    case ModelId.YOLO:
+      await yoloRef.value?.runInference(backend.value);
+      return;
+    case ModelId.BERT:
+      await bertRef.value?.runInference(backend.value);
+      return;
+    case ModelId.GPT2:
+      await gpt2Ref.value?.runInference(backend.value);
+      return;
   }
 };
 </script>
@@ -231,7 +183,9 @@ button {
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
 }
 
 button:hover:not(:disabled) {
