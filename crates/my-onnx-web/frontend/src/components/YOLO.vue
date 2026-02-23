@@ -6,6 +6,7 @@ import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ImageUpload from './ImageUpload.vue';
 import ResultBox from './ResultBox.vue';
+import { loadLabels } from '../utils/labels';
 
 const INPUT_SIZE = 416;
 
@@ -203,18 +204,8 @@ function drawDetections(detections: Detection[]) {
   }
 }
 
-let cachedLabels: string[] | null = null;
-
-async function getCocoLabels(): Promise<string[]> {
-  if (cachedLabels) return cachedLabels;
-  try {
-    const resp = await fetch('/coco.names');
-    const text = await resp.text();
-    cachedLabels = text.trim().split('\n').map(s => s.trim());
-    return cachedLabels;
-  } catch {
-    return Array.from({ length: 80 }, (_, i) => `Class ${i}`);
-  }
+function getCocoLabels(): Promise<string[]> {
+  return loadLabels('/coco.names', 80);
 }
 
 async function runInference(backend?: Backend) {

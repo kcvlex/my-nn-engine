@@ -6,6 +6,7 @@ import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
+import { softmax } from '../utils/math';
 
 const VOCAB_SIZE = 50257;
 const HIDDEN_DIM = 768;
@@ -208,13 +209,6 @@ function projectToLogits(hiddenState: number[]): number[] {
     logits[v] = sum;
   }
   return Array.from(logits);
-}
-
-function softmax(values: number[]): number[] {
-  const max = Math.max(...values);
-  const exps = values.map(v => Math.exp(v - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map(e => e / sum);
 }
 
 function topK(logits: number[], k: number): { id: number; prob: number }[] {

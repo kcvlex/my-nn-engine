@@ -6,6 +6,7 @@ import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ImageUpload from './ImageUpload.vue';
 import ResultBox from './ResultBox.vue';
 import ProbabilityBars from './ProbabilityBars.vue';
+import { softmax } from '../utils/math';
 
 const props = defineProps<{
   backend: Backend;
@@ -42,13 +43,6 @@ function onImageLoaded(img: HTMLImageElement) {
     const gray = (pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114) / 255.0;
     tensorData.push(gray);
   }
-}
-
-function softmax(values: number[]): number[] {
-  const max = Math.max(...values);
-  const exps = values.map(v => Math.exp(v - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map(e => e / sum);
 }
 
 async function runInference(backend?: Backend) {

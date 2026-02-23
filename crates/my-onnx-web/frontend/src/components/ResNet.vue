@@ -6,6 +6,8 @@ import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ImageUpload from './ImageUpload.vue';
 import ResultBox from './ResultBox.vue';
 import ProbabilityBars from './ProbabilityBars.vue';
+import { softmax } from '../utils/math';
+import { loadLabels } from '../utils/labels';
 
 const props = defineProps<{
   backend: Backend;
@@ -47,13 +49,6 @@ function onImageLoaded(img: HTMLImageElement) {
     b.push((pixels[i + 2] / 255.0 - MEAN[2]) / STD[2]);
   }
   tensorData = [...r, ...g, ...b];
-}
-
-function softmax(values: number[]): number[] {
-  const max = Math.max(...values);
-  const exps = values.map(v => Math.exp(v - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map(e => e / sum);
 }
 
 async function runInference(backend?: Backend) {
@@ -114,22 +109,12 @@ async function runInference(backend?: Backend) {
   }
 }
 
-let cachedLabels: string[] | null = null;
-
-async function getImageNetLabels(): Promise<string[]> {
-  if (cachedLabels) return cachedLabels;
-  try {
-    const resp = await fetch('/synset.txt');
-    const text = await resp.text();
-    cachedLabels = text.trim().split('\n').map(line => {
-      // Format: "n01440764 tench, Tinca tinca" → "tench"
-      const desc = line.substring(line.indexOf(' ') + 1);
-      return desc.split(',')[0].trim();
-    });
-    return cachedLabels;
-  } catch {
-    return Array.from({ length: 1000 }, (_, i) => `Class ${i}`);
-  }
+function getImageNetLabels(): Promise<string[]> {
+  return loadLabels('/synset.txt', 1000, line => {
+    // Format: "n01440764 tench, Tinca tinca" → "tench"
+    const desc = line.substring(line.indexOf(' ') + 1);
+    return desc.split(',')[0].trim();
+  });
 }
 
 defineExpose({ runInference });
