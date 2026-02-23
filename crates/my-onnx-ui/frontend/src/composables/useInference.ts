@@ -22,11 +22,10 @@ export function useInference<T extends BaseInferenceResult>() {
     try {
       result.value = await fn(grpcClient);
     } catch (e) {
-      const errorResult: BaseInferenceResult = {
+      result.value = {
         type: 'error',
         message: e instanceof Error ? e.message : 'Unknown error',
-      };
-      result.value = errorResult as T;
+      } satisfies BaseInferenceResult as T;
     } finally {
       loading.value = false;
     }
