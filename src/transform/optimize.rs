@@ -11,12 +11,10 @@ use crate::transform::modify::SimpleGraphOp;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_optimize_passes0() -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager = SimplePassManager::new("Optimization before Lowering".to_string());
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
-    if !matches!(opt.target, Target::CPU) {
-        pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
-    }
+    pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
     pass_manager
 }
 
