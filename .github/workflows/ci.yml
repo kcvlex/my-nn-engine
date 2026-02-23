@@ -145,4 +145,4 @@ jobs:
         run: pnpm generate
 
       - name: Build
-        run: pnpm build
+        run: pnpm exec vue-tsc && pnpm exec vite build
