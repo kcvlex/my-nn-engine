@@ -17,6 +17,9 @@ public/synset.txt
 public/coco.names
 public/bert-vocab.txt
 
+# Generated protobuf code
+src/gen/
+
 # pnpm
 pnpm-lock.yaml
 

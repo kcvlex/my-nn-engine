@@ -5,6 +5,7 @@
 ```bash
 cd frontend
 pnpm i
+pnpm generate
 pnpm run dev
 ```
 
