@@ -1263,16 +1263,10 @@ fn non_zero() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn layer_norm() -> TestResult {
-    with_session_and_tensors(
-        "layer_norm",
-        &[Target::CUDA],
-        (1, 1),
-        |session, (inputs, expected)| {
-            let outputs = session.run(inputs)?;
-            assert_eq_epsilon!(outputs[0], expected[0], 1.0);
-            Ok(())
-        },
-    )
+    with_all_sessions_and_tensors("layer_norm", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1.0);
+        Ok(())
+    })
 }

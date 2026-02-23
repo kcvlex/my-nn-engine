@@ -2245,6 +2245,240 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    pub fn build_layer_norm(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        scale: TensorPtr<'ctx>,
+        bias: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        ln: &operator::LayerNormalization,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(src.ty.is_contiguous() && dst.ty.is_contiguous());
+
+        let axis = ln.axis.index(src.ty.dims.ndim());
+        assert_eq!(axis, src.ty.dims.ndim() - 1);
+
+        let val_ty = match src.ty.elem_type {
+            DataType::Float(t) => t,
+            _ => unimplemented!(),
+        };
+        let sqrt = self.intrinsics.sqrt.get(val_ty);
+        let fma = self.intrinsics.fma.get(val_ty);
+        let val_ty = val_ty.llvm_type(self.context);
+
+        let inner_bound = src.ty.dims[axis] as u64;
+        let outer_bound = src.ty.dims.size() as u64 / inner_bound;
+
+        let outer_header = self.context.append_basic_block(*self.func, "outer.header");
+        let mean_body = self.context.append_basic_block(*self.func, "mean.body");
+        let mean_done = self.context.append_basic_block(*self.func, "mean.done");
+        let var_body = self.context.append_basic_block(*self.func, "var.body");
+        let var_done = self.context.append_basic_block(*self.func, "var.done");
+        let norm_body = self.context.append_basic_block(*self.func, "norm.body");
+        let outer_latch = self.context.append_basic_block(*self.func, "outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        let epsilon = val_ty.const_float(ln.epsilon);
+        let inner_bound_f = val_ty.const_float(inner_bound as f64);
+
+        // entry -> outer_header
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(outer_header)?;
+
+        // Outer loop header
+        self.builder.position_at_end(outer_header);
+        let outer_i = self.builder.build_phi(self.context.i64_type(), "i.outer")?;
+        let outer_offset = self.builder.build_int_mul(
+            outer_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(inner_bound, false),
+            "outer.offset",
+        )?;
+        self.builder.build_unconditional_branch(mean_body)?;
+
+        // Helper: src offset = outer_offset + inner_i
+        macro_rules! src_offset {
+            ($inner_i:expr) => {
+                self.builder.build_int_add(
+                    outer_offset,
+                    $inner_i.as_basic_value().into_int_value(),
+                    "offset",
+                )?
+            };
+        }
+
+        // Pass 1: Sum for mean
+        self.builder.position_at_end(mean_body);
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let sum_acc = self.builder.build_phi(val_ty, "sum.acc")?;
+        let offset = src_offset!(inner_i);
+        let src_val = self
+            .build_load(&src.clone().set_offset(offset))?
+            .into_float_value();
+        let sum_next = self.builder.build_float_add(
+            sum_acc.as_basic_value().into_float_value(),
+            src_val,
+            "sum.next",
+        )?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, mean_done, mean_body)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), outer_header),
+            (&inner_i_next, mean_body),
+        ]);
+        sum_acc.add_incoming(&[
+            (&val_ty.const_float(0.0), outer_header),
+            (&sum_next, mean_body),
+        ]);
+
+        // mean_done: compute mean, branch to var_body
+        self.builder.position_at_end(mean_done);
+        let mean = self
+            .builder
+            .build_float_div(sum_next, inner_bound_f, "mean")?;
+        self.builder.build_unconditional_branch(var_body)?;
+
+        // Pass 2: Sum of (x - mean)^2
+        self.builder.position_at_end(var_body);
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let var_acc = self.builder.build_phi(val_ty, "var.acc")?;
+        let offset = src_offset!(inner_i);
+        let src_val = self
+            .build_load(&src.clone().set_offset(offset))?
+            .into_float_value();
+        let diff = self.builder.build_float_sub(src_val, mean, "diff")?;
+        let diff_sq = self.builder.build_float_mul(diff, diff, "diff.sq")?;
+        let var_next = self.builder.build_float_add(
+            var_acc.as_basic_value().into_float_value(),
+            diff_sq,
+            "var.next",
+        )?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, var_done, var_body)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), mean_done),
+            (&inner_i_next, var_body),
+        ]);
+        var_acc.add_incoming(&[(&val_ty.const_float(0.0), mean_done), (&var_next, var_body)]);
+
+        // var_done: compute inv_std = 1 / sqrt(variance + epsilon), branch to norm_body
+        self.builder.position_at_end(var_done);
+        let variance = self
+            .builder
+            .build_float_div(var_next, inner_bound_f, "variance")?;
+        let var_eps = self.builder.build_float_add(variance, epsilon, "var.eps")?;
+        let std_dev = self
+            .build_tail_call(sqrt, &[var_eps.into()], "std.dev")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let inv_std = self
+            .builder
+            .build_float_div(val_ty.const_float(1.0), std_dev, "inv.std")?;
+        self.builder.build_unconditional_branch(norm_body)?;
+
+        // Pass 3: Normalize, scale, bias
+        self.builder.position_at_end(norm_body);
+        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let offset = src_offset!(inner_i);
+        let src_val = self
+            .build_load(&src.clone().set_offset(offset))?
+            .into_float_value();
+        let diff = self.builder.build_float_sub(src_val, mean, "diff")?;
+        let scaled = self.builder.build_float_mul(diff, inv_std, "scaled")?;
+        let scale_val = self
+            .build_load(
+                &scale
+                    .clone()
+                    .set_offset(inner_i.as_basic_value().into_int_value()),
+            )?
+            .into_float_value();
+        let bias_val = self
+            .build_load(
+                &bias
+                    .clone()
+                    .set_offset(inner_i.as_basic_value().into_int_value()),
+            )?
+            .into_float_value();
+        let result = self
+            .build_tail_call(
+                fma,
+                &[scaled.into(), scale_val.into(), bias_val.into()],
+                "result",
+            )?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        self.build_store(
+            &dst.clone().set_offset(offset),
+            result.as_basic_value_enum(),
+        )?;
+        let inner_i_next = self.builder.build_int_add(
+            inner_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "inner.i.next",
+        )?;
+        let inner_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            inner_i_next,
+            self.context.i64_type().const_int(inner_bound, false),
+            "ec.inner",
+        )?;
+        self.builder
+            .build_conditional_branch(inner_ec, outer_latch, norm_body)?;
+        inner_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), var_done),
+            (&inner_i_next, norm_body),
+        ]);
+
+        // Outer latch
+        self.builder.position_at_end(outer_latch);
+        let outer_i_next = self.builder.build_int_add(
+            outer_i.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "outer.i.next",
+        )?;
+        let outer_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            outer_i_next,
+            self.context.i64_type().const_int(outer_bound, false),
+            "ec.outer",
+        )?;
+        self.builder
+            .build_conditional_branch(outer_ec, exit, outer_header)?;
+        outer_i.add_incoming(&[
+            (&self.context.i64_type().const_zero(), entry),
+            (&outer_i_next, outer_latch),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_gather(
         &self,
         dst: TensorPtr<'ctx>,

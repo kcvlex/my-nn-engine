@@ -30,6 +30,7 @@ use crate::codegen::cpu::op::*;
 use crate::codegen::cpu::translator::*;
 use crate::codegen::*;
 use crate::onnx::model::ValueId;
+use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
@@ -760,6 +761,14 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Softmax(ref softmax) => {
                     translator.build_softmax(ptrs[0].clone(), ptrs[1].clone(), entry, softmax)
                 }
+                Operator::LayerNormalization(ref ln) => translator.build_layer_norm(
+                    ptrs[0].clone(),
+                    ptrs[1 + args::LAYER_NORM_DATA].clone(),
+                    ptrs[1 + args::LAYER_NORM_SCALE].clone(),
+                    ptrs[1 + args::LAYER_NORM_BIAS].clone(),
+                    entry,
+                    ln,
+                ),
                 Operator::Split(ref split) => translator.build_split(
                     &ptrs[..ptrs.len() - 1],
                     ptrs.last().unwrap().clone(),
