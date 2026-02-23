@@ -218,33 +218,8 @@ const handleSubmit = async () => {
   margin-bottom: 20px;
 }
 
-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #333;
-}
-
-select,
-textarea {
-  width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 1rem;
-  transition: border 0.3s;
-  font-family: inherit;
-}
-
 textarea {
   font-family: 'Courier New', monospace;
-  resize: vertical;
-}
-
-select:focus,
-textarea:focus {
-  outline: none;
-  border-color: #667eea;
 }
 
 button {
@@ -269,46 +244,11 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.result {
-  margin-top: 20px;
-  padding: 15px;
-  border-radius: 6px;
-}
-
-.result.success {
-  background: #efe;
-  border-left: 4px solid #4a4;
-  color: #060;
-}
-
-.result.error {
-  background: #fee;
-  border-left: 4px solid #f44;
-  color: #c00;
-}
-
 h3 {
   margin-bottom: 10px;
 }
 
-details {
-  margin-top: 10px;
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
 .output-json {
-  background: #2d2d2d;
-  color: #f8f8f2;
-  padding: 15px;
-  border-radius: 6px;
-  overflow-x: auto;
-  font-size: 0.9rem;
   margin: 0;
 }
-
 </style>

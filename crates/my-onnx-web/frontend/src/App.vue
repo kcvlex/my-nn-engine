@@ -15,26 +15,6 @@
 import InferenceTab from './components/InferenceTab.vue';
 </script>
 
-<style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-    Ubuntu, Cantarell, sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  min-height: 100vh;
-  padding: 20px;
-}
-
-#app {
-  width: 100%;
-}
-</style>
-
 <style scoped>
 .app {
   max-width: 1200px;

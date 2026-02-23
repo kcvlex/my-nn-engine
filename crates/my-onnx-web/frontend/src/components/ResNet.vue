@@ -219,131 +219,20 @@ defineExpose({ runInference });
 </template>
 
 <style scoped>
-.upload-area {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.upload-btn,
-.run-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 10px 24px;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.upload-btn:hover,
-.run-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-}
-
-.run-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.file-name {
-  color: #666;
-  font-size: 0.9rem;
-}
-
-.preview-section {
-  margin-bottom: 20px;
-}
-
-.images {
-  display: flex;
-  gap: 30px;
-  margin-bottom: 20px;
-}
-
-.image-box {
-  text-align: center;
-}
-
-.image-box label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #333;
-  font-size: 0.9rem;
-}
-
 .preview-img {
   width: 224px;
   height: 224px;
-  object-fit: contain;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
 }
 
 .processed-canvas {
   width: 224px;
   height: 224px;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
-}
-
-.result {
-  margin-top: 20px;
-  padding: 15px;
-  border-radius: 6px;
-}
-
-.result.success {
-  background: #efe;
-  border-left: 4px solid #4a4;
-  color: #060;
-}
-
-.result.error {
-  background: #fee;
-  border-left: 4px solid #f44;
-  color: #c00;
-}
-
-.prediction {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 10px 0;
 }
 
 .top-label {
   font-size: 1.5rem;
   font-weight: 700;
   color: #333;
-}
-
-.confidence {
-  font-size: 1.1rem;
-  color: #666;
-}
-
-.probabilities {
-  list-style: none;
-  padding: 0;
-  margin: 10px 0;
-}
-
-.probabilities li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 0.9rem;
-}
-
-.probabilities li.highlight {
-  font-weight: 700;
 }
 
 .prob-label {
@@ -353,47 +242,5 @@ defineExpose({ runInference });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.prob-bar-bg {
-  flex: 1;
-  height: 16px;
-  background: #e0e0e0;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.prob-bar {
-  height: 100%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 3px;
-  transition: width 0.3s;
-}
-
-.prob-value {
-  width: 50px;
-  text-align: right;
-  color: #666;
-  font-family: 'Courier New', monospace;
-}
-
-details {
-  margin-top: 10px;
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.output-json {
-  background: #2d2d2d;
-  color: #f8f8f2;
-  padding: 15px;
-  border-radius: 6px;
-  overflow-x: auto;
-  font-size: 0.9rem;
-  margin: 8px 0 0;
 }
 </style>

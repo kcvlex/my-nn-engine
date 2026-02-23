@@ -300,80 +300,6 @@ defineExpose({ runInference });
 </template>
 
 <style scoped>
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #333;
-  font-size: 0.9rem;
-}
-
-textarea,
-input[type="text"] {
-  width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-family: inherit;
-  transition: border 0.3s;
-  box-sizing: border-box;
-}
-
-textarea {
-  resize: vertical;
-}
-
-textarea:focus,
-input[type="text"]:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.run-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 10px 24px;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.run-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-}
-
-.run-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.result {
-  margin-top: 20px;
-  padding: 15px;
-  border-radius: 6px;
-}
-
-.result.success {
-  background: #efe;
-  border-left: 4px solid #4a4;
-  color: #060;
-}
-
-.result.error {
-  background: #fee;
-  border-left: 4px solid #f44;
-  color: #c00;
-}
-
 .answer {
   margin: 12px 0;
 }
@@ -388,25 +314,5 @@ input[type="text"]:focus {
   font-size: 1.3rem;
   font-weight: 700;
   color: #333;
-}
-
-details {
-  margin-top: 10px;
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.output-json {
-  background: #2d2d2d;
-  color: #f8f8f2;
-  padding: 15px;
-  border-radius: 6px;
-  overflow-x: auto;
-  font-size: 0.9rem;
-  margin: 8px 0 0;
 }
 </style>
