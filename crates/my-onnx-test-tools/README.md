@@ -1,7 +1,7 @@
 ## Build
 
 ```bash
-cargo build -p onnx-test-tools --release
+cargo build -p my-onnx-test-tools --release
 ```
 
 ## Usage
@@ -9,7 +9,7 @@ cargo build -p onnx-test-tools --release
 ### Extraction
 
 ```bash
-./target/release/onnx-test-tools \
+./target/release/my-onnx-test-tools \
   --mode extract \
   --model-path models/validated/MODEL/MODEL.onnx \
   --input-paths models/validated/MODEL/test_data_set_0/input_*.pb \
@@ -23,10 +23,10 @@ Binary search runs the ONNX extraction and onnxruntime inference inside a contai
 
 ```bash
 # Build the test helper
-cargo build -p onnx-test-tools --example test_extracted --release
+cargo build -p my-onnx-test-tools --example test_extracted --release
 
 # Run binary search
-./target/release/onnx-test-tools \
+./target/release/my-onnx-test-tools \
   --mode binary-search \
   --model-path models/validated/bertsquad-12/bertsquad-12.onnx \
   --input-paths models/validated/bertsquad-12/test_data_set_0/input_*.pb \
