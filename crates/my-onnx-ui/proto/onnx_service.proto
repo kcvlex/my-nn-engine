@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package onnx_service;
+
+option optimize_for = LITE_RUNTIME;
+
+import "onnx.proto3";
+
+// Supported model IDs
+enum ModelId {
+  MNIST = 0;
+  RESNET = 1;
+  YOLO = 2;
+  BERT = 3;
+  GPT2 = 4;
+}
+
+// Target backend for execution
+enum Backend {
+  CPU = 0;
+  CUDA = 1;
+}
+
+// Inference request
+message InferenceRequest {
+  // Pre-defined model to use
+  ModelId model_id = 1;
+
+  // Input tensors
+  repeated onnx.TensorProto inputs = 2;
+
+  // Execution backend
+  Backend backend = 3;
+}
+
+// Inference response
+message InferenceResponse {
+  // Output tensors
+  repeated onnx.TensorProto outputs = 1;
+
+  // Inference time in milliseconds
+  double inference_time_ms = 2;
+}
+
+// Request to fetch a named initializer (weight tensor) from a model
+message GetInitializerRequest {
+  ModelId model_id = 1;
+  string name = 2;
+}
+
+// Response containing the initializer tensor
+message GetInitializerResponse {
+  onnx.TensorProto tensor = 1;
+}
+
+// ONNX Model Inference Service
+service OnnxInferenceService {
+  // Run inference on a pre-defined model
+  rpc RunInference(InferenceRequest) returns (InferenceResponse);
+
+  // Fetch a named initializer (weight tensor) from a model
+  rpc GetInitializer(GetInitializerRequest) returns (GetInitializerResponse);
+}
