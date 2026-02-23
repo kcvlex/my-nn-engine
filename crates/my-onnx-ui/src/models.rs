@@ -86,3 +86,57 @@ impl ModelRegistry {
         Ok(session)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_id_model_path() {
+        assert!(ModelId::Mnist.model_path().contains("mnist"));
+        assert!(ModelId::ResNet.model_path().contains("resnet"));
+        assert!(ModelId::Yolo.model_path().contains("yolo"));
+        assert!(ModelId::Bert.model_path().contains("bert"));
+        assert!(ModelId::Gpt2.model_path().to_lowercase().contains("gpt2"));
+    }
+
+    #[test]
+    fn test_model_id_display_name() {
+        assert_eq!(ModelId::Mnist.display_name(), "MNIST");
+        assert_eq!(ModelId::ResNet.display_name(), "ResNet");
+        assert_eq!(ModelId::Yolo.display_name(), "YOLO");
+        assert_eq!(ModelId::Bert.display_name(), "BERT");
+        assert_eq!(ModelId::Gpt2.display_name(), "GPT-2");
+    }
+
+    #[test]
+    fn test_model_registry_new() {
+        let registry = ModelRegistry::new("/tmp/models");
+        assert_eq!(registry.models_dir, PathBuf::from("/tmp/models"));
+        assert!(registry.models.is_empty());
+    }
+
+    #[test]
+    fn test_model_registry_model_path() {
+        let registry = ModelRegistry::new("/tmp/models");
+        let path = registry.model_path(ModelId::Mnist);
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/models").join(ModelId::Mnist.model_path())
+        );
+    }
+
+    #[test]
+    fn test_get_or_load_returns_error_for_missing_file() {
+        let mut registry = ModelRegistry::new("/tmp/nonexistent_models_dir");
+        let target = Target::CPU;
+        let result = registry.get_or_load(ModelId::Mnist, target, &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("MNIST"), "Error should mention model name");
+        assert!(
+            err.contains("Failed to load"),
+            "Error should indicate a load failure"
+        );
+    }
+}

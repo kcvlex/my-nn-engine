@@ -149,3 +149,65 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proto_model_id_to_model_id_valid() {
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_model_id_to_model_id(ProtoModelId::Mnist as i32)
+                .unwrap(),
+            ModelId::Mnist
+        );
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_model_id_to_model_id(ProtoModelId::Resnet as i32)
+                .unwrap(),
+            ModelId::ResNet
+        );
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_model_id_to_model_id(ProtoModelId::Yolo as i32)
+                .unwrap(),
+            ModelId::Yolo
+        );
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_model_id_to_model_id(ProtoModelId::Bert as i32)
+                .unwrap(),
+            ModelId::Bert
+        );
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_model_id_to_model_id(ProtoModelId::Gpt2 as i32)
+                .unwrap(),
+            ModelId::Gpt2
+        );
+    }
+
+    #[test]
+    fn test_proto_model_id_to_model_id_invalid() {
+        let result = OnnxInferenceServiceImpl::proto_model_id_to_model_id(9999);
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn test_proto_backend_to_target_valid() {
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_backend_to_target(ProtoBackend::Cpu as i32).unwrap(),
+            MyOnnxTarget::CPU
+        );
+        assert_eq!(
+            OnnxInferenceServiceImpl::proto_backend_to_target(ProtoBackend::Cuda as i32).unwrap(),
+            MyOnnxTarget::CUDA
+        );
+    }
+
+    #[test]
+    fn test_proto_backend_to_target_invalid() {
+        let result = OnnxInferenceServiceImpl::proto_backend_to_target(9999);
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+}
