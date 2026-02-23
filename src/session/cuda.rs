@@ -86,7 +86,7 @@ impl SessionCUDA {
         info!("Compiling");
         dbg!(&tmp_dir);
         if opt.save_build_dir {
-            let path = tmp_dir.into_path();
+            let path = tmp_dir.keep();
             info!("Build directory saved at {:?}", path);
         }
 
