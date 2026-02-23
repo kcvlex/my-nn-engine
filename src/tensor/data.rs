@@ -75,11 +75,11 @@ impl TensorData {
                             } else {
                                 let diff = (x - y).abs();
                                 let abs = diff < epsilon;
-                                let x = x.abs();
-                                let rel = if x == 0.0 {
+                                let y_abs = y.abs();
+                                let rel = if y_abs == 0.0 {
                                     diff < epsilon
                                 } else {
-                                    diff / x < epsilon
+                                    diff / y_abs < epsilon
                                 };
                                 match comp {
                                     CompPolicy::Abs => abs,
