@@ -82,7 +82,7 @@ impl SessionCPU {
         dbg!(&tmp_dir);
         let shared_obj = tmp_dir.path().join("model.so");
         if opt.save_build_dir {
-            let path = tmp_dir.into_path();
+            let path = tmp_dir.keep();
             info!("Build directory saved at {:?}", path);
         }
 
