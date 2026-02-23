@@ -41,6 +41,7 @@ impl ModelId {
 
 pub struct ModelRegistry {
     models: HashMap<(ModelId, Target), Arc<Session>>,
+    model_bytes_cache: HashMap<ModelId, Arc<Vec<u8>>>,
     models_dir: PathBuf,
 }
 
@@ -48,12 +49,23 @@ impl ModelRegistry {
     pub fn new(models_dir: impl AsRef<Path>) -> Self {
         Self {
             models: HashMap::new(),
+            model_bytes_cache: HashMap::new(),
             models_dir: models_dir.as_ref().to_path_buf(),
         }
     }
 
     pub fn model_path(&self, model_id: ModelId) -> PathBuf {
         self.models_dir.join(model_id.model_path())
+    }
+
+    pub fn get_model_bytes(&mut self, model_id: ModelId) -> std::io::Result<Arc<Vec<u8>>> {
+        if let Some(bytes) = self.model_bytes_cache.get(&model_id) {
+            return Ok(bytes.clone());
+        }
+        let path = self.model_path(model_id);
+        let bytes = Arc::new(std::fs::read(&path)?);
+        self.model_bytes_cache.insert(model_id, bytes.clone());
+        Ok(bytes)
     }
 
     pub fn get_or_load(

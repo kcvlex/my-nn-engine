@@ -121,11 +121,11 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         let req = request.into_inner();
         let model_id = Self::proto_model_id_to_model_id(req.model_id)?;
 
-        let registry = self.registry.read().await;
-        let model_path = registry.model_path(model_id);
-
-        let model_bytes = std::fs::read(&model_path)
+        let mut registry = self.registry.write().await;
+        let model_bytes = registry
+            .get_model_bytes(model_id)
             .map_err(|e| Status::not_found(format!("Failed to read model file: {}", e)))?;
+
         let model_proto = onnx::ModelProto::decode(model_bytes.as_slice())
             .map_err(|e| Status::internal(format!("Failed to decode model: {}", e)))?;
         let graph = model_proto
