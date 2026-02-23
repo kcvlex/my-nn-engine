@@ -1,0 +1,39 @@
+{
+  "name": "my-onnx-ui-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "make -q || make",
+    "dev": "vite",
+    "prebuild": "make",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "generate": "mkdir -p src/gen && protoc --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts --proto_path=../proto --proto_path=../../../third-party/onnx/onnx ../proto/onnx_service.proto ../../../third-party/onnx/onnx/onnx.proto3",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write 'src/**/*.{ts,vue}'",
+    "format:check": "prettier --check 'src/**/*.{ts,vue}'"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.11.0",
+    "@connectrpc/connect": "^2.1.1",
+    "@connectrpc/connect-web": "^2.1.1",
+    "gpt-tokenizer": "^3.4.0",
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.11.0",
+    "@eslint/js": "^10.0.1",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "eslint": "^10.0.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.8.0",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.4.2",
+    "typescript-eslint": "^8.56.0",
+    "vite": "^5.1.5",
+    "vue-tsc": "^2.0.6"
+  }
+}

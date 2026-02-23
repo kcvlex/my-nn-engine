@@ -14,7 +14,7 @@ YOLOV4_SHA256 = 7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2
 GPT2_10_SHA256 = 0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53
 
 .PHONY: all
-all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4 gpt2-10
+all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4 gpt2-10 synset.txt
 
 mnist-12: mnist-12.tar.gz
 	echo "$(MNIST_12_SHA256)  $<" | sha256sum -c -
@@ -57,3 +57,6 @@ gpt2-10: gpt2-10.tar.gz
 
 gpt2-10.tar.gz:
 	$(WGET) -O $@ $(TEXT)/gpt-2/model/$@
+
+synset.txt:
+	$(WGET) -O $@ $(CLASSIFICATION)/$@

@@ -56,3 +56,57 @@ jobs:
 
       - name: Check formatting
         run: cargo +nightly fmt -- --check
+
+  ui-test:
+    name: UI Crate Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          models: >-
+            mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
+
+      - name: Run tests
+        run: cargo test -p my-onnx-ui --no-default-features --verbose
+
+  frontend-lint:
+    name: Frontend Lint & Format
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/my-onnx-ui/frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: crates/my-onnx-ui/frontend/pnpm-lock.yaml
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate protobuf types
+        run: pnpm generate
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint

@@ -1,12 +1,12 @@
 use typed_builder::TypedBuilder;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     CPU,
     CUDA,
 }
 
-#[derive(Clone, TypedBuilder)]
+#[derive(Clone, Debug, TypedBuilder)]
 pub struct Options {
     #[builder(default = 100)]
     pub omp_threshold: usize,
