@@ -12,7 +12,7 @@ export type BaseInferenceResult = {
   rawOutput?: string;
 };
 
-export function useInference<T extends { type: string }>() {
+export function useInference<T extends BaseInferenceResult>() {
   const loading = shallowRef(false);
   const result = shallowRef<T | null>(null);
 
@@ -22,10 +22,11 @@ export function useInference<T extends { type: string }>() {
     try {
       result.value = await fn(grpcClient);
     } catch (e) {
-      result.value = {
+      const errorResult: BaseInferenceResult = {
         type: 'error',
         message: e instanceof Error ? e.message : 'Unknown error',
-      } as unknown as T;
+      };
+      result.value = errorResult as T;
     } finally {
       loading.value = false;
     }
