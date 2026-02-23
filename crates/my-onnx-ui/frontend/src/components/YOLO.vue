@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// COCO labels from: https://github.com/hunglc007/tensorflow-yolov4-tflite/blob/master/data/classes/coco.names
 import { ref, nextTick } from 'vue';
 import {
   useInference,
   type BaseInferenceResult,
 } from '../composables/useInference';
 import { useImageCanvas } from '../composables/useImageCanvas';
+import { sigmoid } from '../utils/math';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import ImageUpload from './ImageUpload.vue';
@@ -38,6 +38,16 @@ const STRIDES = [8, 16, 32];
 const SCORE_THRESHOLD = 0.5;
 const NMS_THRESHOLD = 0.3;
 
+type Detection = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  score: number;
+  classId: number;
+  label: string;
+};
+
 const props = defineProps<{
   backend: Backend;
 }>();
@@ -64,25 +74,11 @@ const { loading, result, run } = useInference<
   }
 >();
 
-interface Detection {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  score: number;
-  classId: number;
-  label: string;
-}
-
 let originalImg: HTMLImageElement | null = null;
 
 function onImageLoaded(img: HTMLImageElement) {
   originalImg = img;
   processImage(img);
-}
-
-function sigmoid(x: number): number {
-  return 1 / (1 + Math.exp(-x));
 }
 
 function decodeDetections(
@@ -92,10 +88,7 @@ function decodeDetections(
 
   for (let scaleIdx = 0; scaleIdx < 3; scaleIdx++) {
     const output = outputs[scaleIdx];
-    const data =
-      output.floatData.length > 0
-        ? Array.from(output.floatData)
-        : Array.from(output.doubleData);
+    const data = Array.from(output.floatData);
     const stride = STRIDES[scaleIdx];
     const gridSize = INPUT_SIZE / stride;
     const anchors = ANCHORS[scaleIdx];

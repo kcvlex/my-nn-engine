@@ -57,22 +57,7 @@
         :backend="backend"
       />
 
-      <!-- Other models: raw JSON input -->
-      <template v-else>
-        <div class="form-group">
-          <label for="input-tensor">Input Tensors (JSON array)</label>
-          <textarea
-            id="input-tensor"
-            v-model="inputJson"
-            :placeholder="placeholder"
-            rows="8"
-          ></textarea>
-        </div>
-
-        <button type="submit" :disabled="loading || !inputJson">
-          {{ loading ? 'Running...' : 'Run Inference' }}
-        </button>
-      </template>
+      <template v-else />
     </form>
 
     <div v-if="result" :class="['result', result.type]">
@@ -103,8 +88,6 @@ import GPT2 from './GPT2.vue';
 
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
-const inputJson = ref('');
-const loading = ref(false);
 const result = ref<{
   type: 'success' | 'error';
   message?: string;
@@ -117,15 +100,6 @@ const resnetRef = ref<InstanceType<typeof ResNet>>();
 const yoloRef = ref<InstanceType<typeof YOLO>>();
 const bertRef = ref<InstanceType<typeof BERT>>();
 const gpt2Ref = ref<InstanceType<typeof GPT2>>();
-
-const placeholder = `[
-  {
-    "name": "input",
-    "floatData": [0.0, 0.1, 0.2, ...],
-    "dims": [1, 1, 28, 28],
-    "dataType": 1
-  }
-]`;
 
 const handleSubmit = async () => {
   switch (modelId.value) {
