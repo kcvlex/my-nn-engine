@@ -9,7 +9,7 @@
     "prebuild": "make",
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
-    "generate": "protoc --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts --proto_path=../proto --proto_path=../../../third-party/onnx/onnx ../proto/onnx_service.proto ../../../third-party/onnx/onnx/onnx.proto3",
+    "generate": "mkdir -p src/gen && protoc --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts --proto_path=../proto --proto_path=../../../third-party/onnx/onnx ../proto/onnx_service.proto ../../../third-party/onnx/onnx/onnx.proto3",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write 'src/**/*.{ts,vue}'",
