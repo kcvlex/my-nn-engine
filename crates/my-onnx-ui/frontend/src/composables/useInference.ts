@@ -12,7 +12,7 @@ export type BaseInferenceResult = {
   rawOutput?: string;
 };
 
-export function useInference<T extends { type: string }>() {
+export function useInference<T extends BaseInferenceResult>() {
   const loading = shallowRef(false);
   const result = shallowRef<T | null>(null);
 
@@ -25,7 +25,7 @@ export function useInference<T extends { type: string }>() {
       result.value = {
         type: 'error',
         message: e instanceof Error ? e.message : 'Unknown error',
-      } as unknown as T;
+      } satisfies BaseInferenceResult as T;
     } finally {
       loading.value = false;
     }
