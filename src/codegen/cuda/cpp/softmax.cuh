@@ -16,14 +16,16 @@ __global__ void softmax(
     __shared__ T axis_sum;
 
     int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (input_size <= idx) return;
+    int base = (blockIdx.x / STRIDE) * DIM * STRIDE + (blockIdx.x % STRIDE);
+
+#define AXIS_POS(I) ((I) * BLOCK_SIZE + tid)
+#define ABS_POS(I) (base + AXIS_POS(I) * STRIDE)
 
     constexpr int REPEAT = (DIM + BLOCK_SIZE - 1) / BLOCK_SIZE;
     T inputs[REPEAT] = {};
-    for (int i = 0, offset = idx; i < REPEAT; i++, offset += BLOCK_SIZE * STRIDE) {
-        if (offset < input_size) {
-            inputs[i] = in[offset];
+    for (int i = 0; i < REPEAT; i++) {
+        if (AXIS_POS(i) < DIM) {
+            inputs[i] = in[ABS_POS(i)];
         }
     }
 
@@ -32,7 +34,10 @@ __global__ void softmax(
 
     T max_acc = std::numeric_limits<T>::min();
     for (int i = 0; i < REPEAT; i++) {
-        max_acc = max(max_acc, inputs[i]);
+        int axis_pos = i * BLOCK_SIZE + tid;
+        if (axis_pos < DIM) {
+            max_acc = max(max_acc, inputs[i]);
+        }
     }
     for (int s = tile32.size() / 2; 0 < s; s /= 2) {
         T other = tile32.shfl_down(max_acc, s);
@@ -52,8 +57,11 @@ __global__ void softmax(
 
     T sum_acc = 0;
     for (int i = 0; i < REPEAT; i++) {
-        inputs[i] = exp(inputs[i] - axis_max);
-        sum_acc += inputs[i];
+        int axis_pos = i * BLOCK_SIZE + tid;
+        if (axis_pos < DIM) {
+            inputs[i] = exp(inputs[i] - axis_max);
+            sum_acc += inputs[i];
+        }
     }
     for (int s = tile32.size() / 2; 0 < s; s /= 2) {
         T other = tile32.shfl_down(sum_acc, s);
@@ -70,11 +78,14 @@ __global__ void softmax(
     if (tid == 0) axis_sum = buf[0];
     cg::sync(cta);
 
-    for (int i = 0, offset = idx; i < REPEAT; i++, offset += BLOCK_SIZE * STRIDE) {
-        if (offset < input_size) {
-            out[offset] = inputs[i] / axis_sum;
+    for (int i = 0; i < REPEAT; i++) {
+        if (AXIS_POS(i) < DIM) {
+            out[ABS_POS(i)] = inputs[i] / axis_sum;
         }
     }
+
+#undef ABS_POS
+#undef AXIS_POS
 }
 
 #endif
