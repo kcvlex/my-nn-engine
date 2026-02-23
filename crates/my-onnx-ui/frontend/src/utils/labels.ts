@@ -13,7 +13,8 @@ export async function loadLabels(
     const labels = text.trim().split('\n').map(parseLine);
     cache.set(url, labels);
     return labels;
-  } catch {
+  } catch (err) {
+    console.error(`Failed to load labels from ${url}:`, err);
     return Array.from({ length: fallbackCount }, (_, i) => `Class ${i}`);
   }
 }
