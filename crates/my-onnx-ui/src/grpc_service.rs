@@ -120,12 +120,11 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
     ) -> Result<Response<GetInitializerResponse>, Status> {
         let req = request.into_inner();
 
-        if req.name.is_empty()
-            || !req
-                .name
+        if req.name.is_empty() ||
+            !req.name
                 .chars()
-                .all(|c| c.is_alphanumeric() || c == '.' || c == '_')
-            || req.name.contains("..")
+                .all(|c| c.is_alphanumeric() || c == '.' || c == '_') ||
+            req.name.contains("..")
         {
             return Err(Status::invalid_argument(
                 "Initializer name must be non-empty and contain only alphanumeric characters, dots, or underscores, and must not contain '..'",
@@ -162,4 +161,3 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         }))
     }
 }
-
