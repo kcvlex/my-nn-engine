@@ -47,9 +47,10 @@ async function loadWteWeight(client: GrpcClient): Promise<void> {
   if (tensor.floatData.length > 0) {
     wteWeight = new Float32Array(tensor.floatData);
   } else if (tensor.rawData.length > 0) {
-    // raw_data is little-endian float32; copy to ensure 4-byte alignment
-    const aligned = new Uint8Array(tensor.rawData).buffer;
-    wteWeight = new Float32Array(aligned);
+    // raw_data is little-endian float32; copy to ensure 4-byte alignment and independent storage
+    const rawView = new Uint8Array(tensor.rawData);
+    const copiedBuffer = rawView.slice(0).buffer;
+    wteWeight = new Float32Array(copiedBuffer);
   } else {
     throw new Error('wte.weight has no float data');
   }
