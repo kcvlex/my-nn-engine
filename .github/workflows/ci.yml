@@ -66,6 +66,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -79,8 +81,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: crates/my-onnx-ui/frontend/pnpm-lock.yaml
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Generate protobuf types
+        run: pnpm generate
 
       - name: Check formatting
         run: pnpm format:check
