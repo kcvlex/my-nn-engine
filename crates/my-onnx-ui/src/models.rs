@@ -86,3 +86,39 @@ impl ModelRegistry {
         Ok(session)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_registry_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = ModelRegistry::new(tmp.path());
+        assert_eq!(registry.models_dir, tmp.path());
+        assert!(registry.models.is_empty());
+    }
+
+    #[test]
+    fn test_model_registry_model_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = ModelRegistry::new(tmp.path());
+        let path = registry.model_path(ModelId::Mnist);
+        assert_eq!(path, tmp.path().join(ModelId::Mnist.model_path()));
+    }
+
+    #[test]
+    fn test_get_or_load_returns_error_for_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = ModelRegistry::new(tmp.path());
+        let target = Target::CPU;
+        let result = registry.get_or_load(ModelId::Mnist, target, &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("MNIST"), "Error should mention model name");
+        assert!(
+            err.contains("Failed to load"),
+            "Error should indicate a load failure"
+        );
+    }
+}

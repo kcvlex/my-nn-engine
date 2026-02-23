@@ -162,3 +162,4 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         }))
     }
 }
+
