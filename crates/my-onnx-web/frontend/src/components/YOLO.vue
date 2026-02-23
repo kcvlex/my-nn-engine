@@ -4,6 +4,8 @@ import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
+import ImageUpload from './ImageUpload.vue';
+import ResultBox from './ResultBox.vue';
 
 const INPUT_SIZE = 416;
 
@@ -22,11 +24,8 @@ const props = defineProps<{
   backend: Backend;
 }>();
 
-const fileInput = ref<HTMLInputElement>();
 const processedCanvas = ref<HTMLCanvasElement>();
 const resultCanvas = ref<HTMLCanvasElement>();
-const fileName = ref('');
-const previewUrl = ref('');
 const loading = ref(false);
 const result = ref<{
   type: 'success' | 'error';
@@ -46,26 +45,9 @@ interface Detection {
 let tensorData: number[] = [];
 let originalImg: HTMLImageElement | null = null;
 
-function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-
-  fileName.value = file.name;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target?.result as string;
-    previewUrl.value = dataUrl;
-
-    const img = new Image();
-    img.onload = () => {
-      originalImg = img;
-      processImage(img);
-    };
-    img.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
+function onImageLoaded(img: HTMLImageElement) {
+  originalImg = img;
+  processImage(img);
 }
 
 function processImage(img: HTMLImageElement) {
@@ -295,65 +277,43 @@ defineExpose({ runInference });
 
 <template>
   <div class="yolo">
-    <div class="upload-area">
-      <input
-        type="file"
-        accept="image/*"
-        @change="handleFileChange"
-        ref="fileInput"
-        hidden
-      />
-      <button type="button" class="upload-btn" @click="($refs.fileInput as HTMLInputElement).click()">
-        Choose Image
-      </button>
-      <span v-if="fileName" class="file-name">{{ fileName }}</span>
-    </div>
-
-    <div v-if="previewUrl" class="preview-section">
-      <div class="images">
-        <div class="image-box">
-          <label>Original</label>
-          <img :src="previewUrl" class="preview-img" />
-        </div>
+    <ImageUpload
+      run-label="Detect Objects"
+      :loading="loading"
+      @image-loaded="onImageLoaded"
+      @run="runInference()"
+    >
+      <template #canvas>
         <div class="image-box">
           <label>416x416 RGB</label>
           <canvas ref="processedCanvas" :width="INPUT_SIZE" :height="INPUT_SIZE" class="processed-canvas"></canvas>
         </div>
-      </div>
-
-      <button type="button" class="run-btn" @click="runInference()" :disabled="loading">
-        {{ loading ? 'Running...' : 'Detect Objects' }}
-      </button>
-    </div>
-
-    <div v-if="result" :class="['result', result.type]">
-      <template v-if="result.type === 'success'">
-        <p><strong>Time:</strong> {{ result.inferenceTime?.toFixed(2) }} ms</p>
-        <p><strong>Detections:</strong> {{ result.detections?.length ?? 0 }}</p>
-
-        <canvas ref="resultCanvas" class="result-canvas"></canvas>
-
-        <ul v-if="result.detections && result.detections.length > 0" class="detection-list">
-          <li v-for="(det, i) in result.detections" :key="i">
-            <span class="det-label">{{ det.label }}</span>
-            <span class="det-score">{{ (det.score * 100).toFixed(1) }}%</span>
-          </li>
-        </ul>
-
-        <details>
-          <summary>Raw output</summary>
-          <pre class="output-json">{{ result.rawOutput }}</pre>
-        </details>
       </template>
-      <template v-else>
-        <p>{{ result.message }}</p>
-      </template>
-    </div>
+    </ImageUpload>
+
+    <ResultBox
+      :visible="result != null"
+      :success="result?.type === 'success'"
+      :inference-time="result?.inferenceTime"
+      :error-message="result?.message"
+      :raw-output="result?.rawOutput"
+    >
+      <p><strong>Detections:</strong> {{ result?.detections?.length ?? 0 }}</p>
+
+      <canvas ref="resultCanvas" class="result-canvas"></canvas>
+
+      <ul v-if="result?.detections && result.detections.length > 0" class="detection-list">
+        <li v-for="(det, i) in result.detections" :key="i">
+          <span class="det-label">{{ det.label }}</span>
+          <span class="det-score">{{ (det.score * 100).toFixed(1) }}%</span>
+        </li>
+      </ul>
+    </ResultBox>
   </div>
 </template>
 
 <style scoped>
-.preview-img {
+:deep(.preview-img) {
   max-width: 416px;
   max-height: 416px;
 }

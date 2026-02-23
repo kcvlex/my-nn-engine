@@ -6,6 +6,7 @@ import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
+import ResultBox from './ResultBox.vue';
 
 const MAX_SEQ_LENGTH = 256;
 const MAX_QUERY_LENGTH = 64;
@@ -278,24 +279,18 @@ defineExpose({ runInference });
       {{ loading ? 'Running...' : 'Ask' }}
     </button>
 
-    <div v-if="result" :class="['result', result.type]">
-      <template v-if="result.type === 'success'">
-        <p><strong>Time:</strong> {{ result.inferenceTime?.toFixed(2) }} ms</p>
-
-        <div class="answer">
-          <span class="answer-label">Answer:</span>
-          <span class="answer-text">{{ result.answer }}</span>
-        </div>
-
-        <details>
-          <summary>Raw output</summary>
-          <pre class="output-json">{{ result.rawOutput }}</pre>
-        </details>
-      </template>
-      <template v-else>
-        <p>{{ result.message }}</p>
-      </template>
-    </div>
+    <ResultBox
+      :visible="result != null"
+      :success="result?.type === 'success'"
+      :inference-time="result?.inferenceTime"
+      :error-message="result?.message"
+      :raw-output="result?.rawOutput"
+    >
+      <div class="answer">
+        <span class="answer-label">Answer:</span>
+        <span class="answer-text">{{ result?.answer }}</span>
+      </div>
+    </ResultBox>
   </div>
 </template>
 

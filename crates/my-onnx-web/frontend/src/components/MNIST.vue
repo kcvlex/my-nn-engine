@@ -3,15 +3,15 @@ import { ref } from 'vue';
 import { grpcClient } from '../api/grpc_client';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
+import ImageUpload from './ImageUpload.vue';
+import ResultBox from './ResultBox.vue';
+import ProbabilityBars from './ProbabilityBars.vue';
 
 const props = defineProps<{
   backend: Backend;
 }>();
 
-const fileInput = ref<HTMLInputElement>();
 const processedCanvas = ref<HTMLCanvasElement>();
-const fileName = ref('');
-const previewUrl = ref('');
 const loading = ref(false);
 const result = ref<{
   type: 'success' | 'error';
@@ -24,26 +24,7 @@ const result = ref<{
 
 let tensorData: number[] = [];
 
-function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-
-  fileName.value = file.name;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target?.result as string;
-    previewUrl.value = dataUrl;
-
-    const img = new Image();
-    img.onload = () => processImage(img);
-    img.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
-}
-
-function processImage(img: HTMLImageElement) {
+function onImageLoaded(img: HTMLImageElement) {
   const canvas = processedCanvas.value;
   if (!canvas) return;
 
@@ -123,71 +104,46 @@ defineExpose({ runInference });
 
 <template>
   <div class="mnist">
-    <div class="upload-area">
-      <input
-        type="file"
-        accept="image/*"
-        @change="handleFileChange"
-        ref="fileInput"
-        hidden
-      />
-      <button type="button" class="upload-btn" @click="($refs.fileInput as HTMLInputElement).click()">
-        Choose Image
-      </button>
-      <span v-if="fileName" class="file-name">{{ fileName }}</span>
-    </div>
-
-    <div v-if="previewUrl" class="preview-section">
-      <div class="images">
-        <div class="image-box">
-          <label>Original</label>
-          <img :src="previewUrl" class="preview-img" />
-        </div>
+    <ImageUpload
+      run-label="Classify Digit"
+      :loading="loading"
+      @image-loaded="onImageLoaded"
+      @run="runInference()"
+    >
+      <template #canvas>
         <div class="image-box">
           <label>28x28 Grayscale</label>
           <canvas ref="processedCanvas" width="28" height="28" class="processed-canvas"></canvas>
         </div>
+      </template>
+    </ImageUpload>
+
+    <ResultBox
+      :visible="result != null"
+      :success="result?.type === 'success'"
+      :inference-time="result?.inferenceTime"
+      :error-message="result?.message"
+      :raw-output="result?.rawOutput"
+    >
+      <div class="prediction">
+        <span class="digit">{{ result?.prediction }}</span>
+        <span class="confidence">{{ ((result?.probabilities?.[result?.prediction!] ?? 0) * 100).toFixed(1) }}%</span>
       </div>
 
-      <button type="button" class="run-btn" @click="runInference()" :disabled="loading">
-        {{ loading ? 'Running...' : 'Classify Digit' }}
-      </button>
-    </div>
-
-    <div v-if="result" :class="['result', result.type]">
-      <template v-if="result.type === 'success'">
-        <p><strong>Time:</strong> {{ result.inferenceTime?.toFixed(2) }} ms</p>
-
-        <div class="prediction">
-          <span class="digit">{{ result.prediction }}</span>
-          <span class="confidence">{{ ((result.probabilities?.[result.prediction!] ?? 0) * 100).toFixed(1) }}%</span>
-        </div>
-
-        <ul class="probabilities">
-          <li v-for="(prob, i) in result.probabilities" :key="i" :class="{ highlight: i === result.prediction }">
-            <span class="prob-label">{{ i }}</span>
-            <div class="prob-bar-bg">
-              <div class="prob-bar" :style="{ width: (prob * 100) + '%' }"></div>
-            </div>
-            <span class="prob-value">{{ (prob * 100).toFixed(1) }}%</span>
-          </li>
-        </ul>
-
-        <details>
-          <summary>Raw output</summary>
-          <pre class="output-json">{{ result.rawOutput }}</pre>
-        </details>
-      </template>
-      <template v-else>
-        <p>{{ result.message }}</p>
-      </template>
-    </div>
+      <ProbabilityBars
+        :items="(result?.probabilities ?? []).map((prob, i) => ({
+          label: String(i),
+          probability: prob,
+          highlight: i === result?.prediction,
+        }))"
+      />
+    </ResultBox>
   </div>
 </template>
 
 
 <style scoped>
-.preview-img {
+:deep(.preview-img) {
   width: 112px;
   height: 112px;
   background: #000;
@@ -203,12 +159,6 @@ defineExpose({ runInference });
 .digit {
   font-size: 3rem;
   font-weight: 700;
-  color: #333;
-}
-
-.prob-label {
-  width: 20px;
-  text-align: right;
   color: #333;
 }
 </style>
