@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // COCO labels from: https://github.com/hunglc007/tensorflow-yolov4-tflite/blob/master/data/classes/coco.names
-import { ref } from 'vue';
+import { ref, nextTick } from 'vue';
 import {
   useInference,
   type BaseInferenceResult,
@@ -35,8 +35,8 @@ const ANCHORS = [
 ];
 const STRIDES = [8, 16, 32];
 
-const SCORE_THRESHOLD = 0.25;
-const NMS_THRESHOLD = 0.45;
+const SCORE_THRESHOLD = 0.5;
+const NMS_THRESHOLD = 0.3;
 
 const props = defineProps<{
   backend: Backend;
@@ -151,6 +151,7 @@ function decodeDetections(
   return nms(boxes);
 }
 
+// Compute Intersection over Union (IoU) between two boxes.
 function iou(a: Detection, b: Detection): number {
   const x1 = Math.max(a.x1, b.x1);
   const y1 = Math.max(a.y1, b.y1);
@@ -162,6 +163,7 @@ function iou(a: Detection, b: Detection): number {
   return inter / (areaA + areaB - inter);
 }
 
+// Non-Maximum Suppression to filter overlapping boxes.
 function nms(boxes: Detection[]): Detection[] {
   boxes.sort((a, b) => b.score - a.score);
   const keep: Detection[] = [];
@@ -250,8 +252,6 @@ async function runInference(backend?: Backend) {
       det.label = labels[det.classId] ?? `Class ${det.classId}`;
     }
 
-    drawDetections(detections);
-
     return {
       type: 'success' as const,
       inferenceTime: response.inferenceTimeMs,
@@ -259,6 +259,11 @@ async function runInference(backend?: Backend) {
       rawOutput: serializeOutputs(response.outputs, { summarize: true }),
     };
   });
+
+  if (result.value?.type === 'success' && result.value.detections) {
+    await nextTick();
+    drawDetections(result.value.detections);
+  }
 }
 
 defineExpose({ runInference });
