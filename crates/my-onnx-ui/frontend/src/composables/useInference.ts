@@ -25,7 +25,7 @@ export function useInference<T extends BaseInferenceResult>() {
       result.value = {
         type: 'error',
         message: e instanceof Error ? e.message : 'Unknown error',
-      } satisfies BaseInferenceResult as T;
+      } satisfies BaseInferenceResult;
     } finally {
       loading.value = false;
     }

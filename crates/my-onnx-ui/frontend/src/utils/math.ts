@@ -5,6 +5,10 @@ export function softmax(values: number[]): number[] {
   return exps.map((e) => e / sum);
 }
 
+export function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-x));
+}
+
 export function topK(
   logits: number[],
   k: number,

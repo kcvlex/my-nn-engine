@@ -3,7 +3,8 @@
 // wte.weight (LM head) fetched via GetInitializer RPC from the ONNX model
 import { ref } from 'vue';
 import { encode, decode } from 'gpt-tokenizer/encoding/r50k_base';
-import { useInference, type GrpcClient } from '../composables/useInference';
+import { useInference } from '../composables/useInference';
+import { useWteWeight } from '../composables/useWteWeight';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
 import { topK } from '../utils/math';
@@ -33,44 +34,10 @@ const { loading, result, run } = useInference<{
   tokens?: TokenType[];
 }>();
 
-// --- LM Head (wte.weight via GetInitializer RPC) ---
-
-let wteWeight: Float32Array | null = null;
-
-async function loadWteWeight(client: GrpcClient): Promise<void> {
-  if (wteWeight) return;
-  const resp = await client.getInitializer({
-    modelId: ModelId.GPT2,
-    name: 'wte.weight',
-  });
-  const tensor = resp.tensor!;
-  if (tensor.floatData.length > 0) {
-    wteWeight = new Float32Array(tensor.floatData);
-  } else if (tensor.rawData.length > 0) {
-    // raw_data is little-endian float32; copy to ensure 4-byte alignment and independent storage
-    const rawView = new Uint8Array(tensor.rawData);
-    const copiedBuffer = rawView.slice(0).buffer;
-    wteWeight = new Float32Array(copiedBuffer);
-  } else {
-    throw new Error('wte.weight has no float data');
-  }
-}
-
-function projectToLogits(hiddenState: number[]): number[] {
-  if (!wteWeight) return [];
-  // hiddenState: [HIDDEN_DIM], wteWeight: [VOCAB_SIZE, HIDDEN_DIM]
-  // logits[v] = sum(hiddenState[i] * wteWeight[v * HIDDEN_DIM + i])
-  const logits = new Float64Array(VOCAB_SIZE);
-  for (let v = 0; v < VOCAB_SIZE; v++) {
-    let sum = 0;
-    const offset = v * HIDDEN_DIM;
-    for (let i = 0; i < HIDDEN_DIM; i++) {
-      sum += hiddenState[i] * wteWeight[offset + i];
-    }
-    logits[v] = sum;
-  }
-  return Array.from(logits);
-}
+const { load: loadWteWeight, projectToLogits } = useWteWeight(
+  VOCAB_SIZE,
+  HIDDEN_DIM,
+);
 
 async function runInference(backend?: Backend) {
   if (!prompt.value.trim()) return;
@@ -86,12 +53,8 @@ async function runInference(backend?: Backend) {
     const startTime = performance.now();
 
     for (let step = 0; step < maxTokens.value; step++) {
-      // Sliding window: take last CONTEXT_SIZE tokens, right-pad to CONTEXT_SIZE
-      const window =
-        allIds.length <= CONTEXT_SIZE
-          ? allIds.slice()
-          : allIds.slice(allIds.length - CONTEXT_SIZE);
-      const realLen = window.length;
+      const realLen = Math.min(allIds.length, CONTEXT_SIZE);
+      const window = allIds.slice(-realLen);
       while (window.length < CONTEXT_SIZE) {
         window.push(PAD_TOKEN);
       }
@@ -113,12 +76,10 @@ async function runInference(backend?: Backend) {
       const output = response.outputs[0];
       if (!output) throw new Error('No output found');
 
-      const data =
-        output.floatData.length > 0 ? output.floatData : output.doubleData;
       // Extract hidden state at last real token position
       const lastOffset = (realLen - 1) * HIDDEN_DIM;
       const hiddenState = Array.from(
-        data.slice(lastOffset, lastOffset + HIDDEN_DIM),
+        output.floatData.slice(lastOffset, lastOffset + HIDDEN_DIM),
       );
 
       const logits = projectToLogits(hiddenState);
