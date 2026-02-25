@@ -18,7 +18,6 @@ use my_onnx::tensor::types::TensorType;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
-use my_onnx::transform::optimize::canonicalize::Canonicalize;
 use my_onnx::transform::optimize::layer_norm_fusion::LayerNormFusion;
 use my_onnx::transform::Pass;
 
@@ -108,9 +107,6 @@ fn test_valid_pattern_is_fused() {
     }
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
-    canonicalize.run(&mut graph, &mut modifier);
-    modifier.update_deleted_nodes(&mut graph);
     let pass = LayerNormFusion::default();
     pass.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
