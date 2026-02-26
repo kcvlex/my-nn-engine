@@ -82,9 +82,6 @@ pub enum Operator {
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
 
-    // For debug
-    ForceReshape,
-
     // Dummy
     Input(ValueId),
     Output(ValueId),
@@ -700,8 +697,6 @@ impl Operator {
             Operator::Contiguous => "Contiguous (Custom)",
             Operator::Im2Col(_) => "Im2Col (Custom)",
             Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
-
-            Operator::ForceReshape => "ForceReshape (For Debug)",
 
             // Dummy
             Operator::Input(_) => "Input",
