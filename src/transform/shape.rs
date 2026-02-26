@@ -506,8 +506,7 @@ pub fn infer_node_output(
         Operator::Input(_) |
         Operator::Output(_) |
         Operator::Im2Col(_) |
-        Operator::ReduceMatrix(_) |
-        Operator::ForceReshape => {
+        Operator::ReduceMatrix(_) => {
             for output in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(*output);
                 cond_error!(ty.is_none());
