@@ -355,6 +355,14 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         KernelExpr::Raw(match op {
             Operator::Cast(Cast { to }) => format!("({})({})", to, x),
             Operator::Exp => format!("exp({})", x),
+            Operator::GeLU(GeLU { approximate }) => {
+                if !approximate {
+                    unimplemented!()
+                }
+                format!(
+                    "({x} * 0.5 * (1.0 + tanh(0.7978845608028654 * ({x} + 0.044715 * {x} * {x} * {x}))))"
+                )
+            }
             Operator::Identity => format!("{}", x),
             Operator::LeakyReLU(LeakyReLU { alpha }) => {
                 format!("((0 <= {}) ? {} : {} * {})", x, x, alpha, x)
@@ -395,6 +403,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             }
             uop @ (Operator::Cast(_) |
             Operator::Exp |
+            Operator::GeLU(_) |
             Operator::Identity |
             Operator::LeakyReLU(_) |
             Operator::Log |
