@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use inkwell::context::Context;
@@ -5,7 +6,6 @@ use inkwell::targets::FileType;
 use itertools::zip_eq;
 use log::info;
 use rayon::prelude::*;
-use tempfile::TempDir;
 
 use crate::codegen::cpu::CodeGenContext;
 use crate::options::Options;
@@ -40,6 +40,7 @@ impl SessionCPU {
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
         opt: &Options,
+        build_dir: &Path,
     ) -> Result<Self, SessionError> {
         let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let (codegens, mut contexts): (Vec<_>, Vec<_>) = codegen_ctx
@@ -68,23 +69,16 @@ impl SessionCPU {
                 .map_err(SessionError::CodeGenError)?
         });
 
-        let tmp_dir = TempDir::with_prefix("my_model_")
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let codegens = codegens
             .par_iter()
             .enumerate()
             .map(|(i, codegen)| {
-                let path = tmp_dir.path().join(format!("model_{i}.o"));
+                let path = build_dir.join(format!("model_{i}.o"));
                 (path, codegen)
             })
             .collect::<Vec<_>>();
 
-        dbg!(&tmp_dir);
-        let shared_obj = tmp_dir.path().join("model.so");
-        if opt.save_build_dir {
-            let path = tmp_dir.keep();
-            info!("Build directory saved at {:?}", path);
-        }
+        let shared_obj = build_dir.join("model.so");
 
         info!("Compiling");
         let objs = codegens
