@@ -740,33 +740,37 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
                 let ty = ty.float_type().unwrap();
                 let tanh = self.intrinsics.tanh.get(ty);
+                let fma = self.intrinsics.fma.get(ty);
                 let ty = ty.llvm_type(self.context);
-                let src = unary_op!(operands).into_float_value();
-                let cube = self.builder.build_float_mul(src, src, "cube")?;
-                let cube = self.builder.build_float_mul(cube, src, "cube")?;
-                let inner =
-                    self.builder
-                        .build_float_mul(ty.const_float(0.044715), cube, "inner")?;
-                let inner = self.builder.build_float_add(src, inner, "inner")?;
-                let inner = self.builder.build_float_mul(
-                    ty.const_float(0.7978845608028654),
-                    inner,
-                    "inner",
-                )?;
-                let tanh = self
-                    .build_tail_call(tanh, &[inner.into()], "res")?
+
+                // x * (0.5 + 0.5 * tanh(x * (sqrt(2/pi) + 0.044715*sqrt(2/pi)*x^2)))
+                let a = ty.const_float(0.5);
+                let b = ty.const_float(0.7978845608028654); // sqrt(2/pi)
+                let c = ty.const_float(0.044715 * 0.7978845608028654); // 0.044715*sqrt(2/pi)
+
+                let x = unary_op!(operands).into_float_value();
+                let val = self.builder.build_float_mul(x, x, "x.sq")?;
+                let val = self
+                    .build_tail_call(fma, &[c.into(), val.into(), b.into()], "val")?
                     .try_as_basic_value()
                     .left()
                     .unwrap()
                     .into_float_value();
-                let add = self
-                    .builder
-                    .build_float_add(tanh, ty.const_float(1.0), "add")?;
-                let mul = self
-                    .builder
-                    .build_float_mul(src, ty.const_float(0.5), "mul")?;
+                let val = self.builder.build_float_mul(x, val, "x.mul")?;
+                let val = self
+                    .build_tail_call(tanh, &[val.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value();
+                let val = self
+                    .build_tail_call(fma, &[a.into(), val.into(), a.into()], "val")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value();
                 self.builder
-                    .build_float_mul(mul, add, "res")?
+                    .build_float_mul(x, val, "res")?
                     .as_basic_value_enum()
             }
 

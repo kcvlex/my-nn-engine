@@ -359,8 +359,9 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 if !approximate {
                     unimplemented!()
                 }
+                // x * (0.5 + 0.5 * tanh(x * (sqrt(2/pi) + 0.044715*sqrt(2/pi)*x^2)))
                 format!(
-                    "({x} * 0.5 * (1.0 + tanh(0.7978845608028654 * ({x} + 0.044715 * {x} * {x} * {x}))))"
+                    "({x} * (0.5 + 0.5 * tanh({x} * (0.7978845608028654 + 0.035677408136300125 * {x} * {x}))))"
                 )
             }
             Operator::Identity => format!("{}", x),
