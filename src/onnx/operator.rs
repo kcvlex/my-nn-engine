@@ -694,9 +694,9 @@ impl Operator {
             Operator::Unsqueeze(_) => "Unsqueeze",
 
             // Custom
-            Operator::Contiguous => "Contiguous (Custom)",
-            Operator::Im2Col(_) => "Im2Col (Custom)",
-            Operator::ReduceMatrix(_) => "ReduceMatrix (Custom)",
+            Operator::Contiguous => "Contiguous",
+            Operator::Im2Col(_) => "Im2Col",
+            Operator::ReduceMatrix(_) => "ReduceMatrix",
 
             // Dummy
             Operator::Input(_) => "Input",
