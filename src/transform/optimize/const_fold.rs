@@ -6,6 +6,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
 use crate::onnx::operator::*;
 use crate::tensor::data::TensorData;
+use crate::tensor::types::broadcast_shape;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::SIntType;
@@ -24,10 +25,9 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let left = graph.initializer.get(&node.inputs[0])?;
             let right = graph.initializer.get(&node.inputs[1])?;
 
-            // TODO: Broadcast.
-            if left.tensor_type() != right.tensor_type() {
-                return None;
-            }
+            let ty = broadcast_shape(&left.dims, &right.dims).ok()?;
+            let left = left.broadcast(&ty);
+            let right = right.broadcast(&ty);
 
             macro_rules! calc {
                 ($lhs: expr, $rhs: expr) => {{
