@@ -184,3 +184,8 @@ fn test_transpose_matmul_and_someone_cuda() -> Result {
         (2, 2),
     )
 }
+
+#[test]
+fn test_div_broadcast_scalar_cpu() -> Result {
+    run_test_default("div_broadcast_scalar", 1e-5)
+}
