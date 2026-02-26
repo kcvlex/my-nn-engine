@@ -285,8 +285,14 @@ impl CodeGenContext {
         let smin_i64 = get_intrinsic!("llvm.smin", &[i64_ty, i64_ty])?;
         let smax_i32 = get_intrinsic!("llvm.smax", &[i32_ty, i32_ty])?;
         let smax_i64 = get_intrinsic!("llvm.smax", &[i64_ty, i64_ty])?;
-        let tanh = f64_ty.fn_type(&[f64_ty.into()], false);
-        let tanh = unit.module.add_function("tanh", tanh, None);
+        let tanh = FloatIntrinsics {
+            f_f32: unit
+                .module
+                .add_function("tanhf", f32_ty.fn_type(&[f32_ty.into()], false), None),
+            f_f64: unit
+                .module
+                .add_function("tanh", f64_ty.fn_type(&[f64_ty.into()], false), None),
+        };
         // let lifetime_start = get_intrinsic!("llvm.lifetime.start", &[i64_ty, ptr_ty])?;
         // let lifetime_end = get_intrinsic!("llvm.lifetime.end", &[i64_ty, ptr_ty])?;
 
@@ -639,6 +645,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
                 Operator::Exp |
+                Operator::GeLU(_) |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Reciprocal |
@@ -661,6 +668,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Contiguous => SingleOpcode::Transfer,
                 Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
+                Operator::GeLU(v) => SingleOpcode::GeLU(*v),
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,

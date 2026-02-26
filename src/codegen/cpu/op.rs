@@ -7,6 +7,7 @@ use smallvec::SmallVec;
 
 use crate::codegen::cpu::translator::FunctionTranslator;
 use crate::onnx::operator::BatchNormalization;
+use crate::onnx::operator::GeLU;
 use crate::onnx::operator::LeakyReLU;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::types::DataType;
@@ -112,6 +113,7 @@ pub enum SingleOpcode {
     Cast(DataType, DataType),
     Div,
     Exp,
+    GeLU(GeLU),
     LeakyReLU(LeakyReLU),
     Log,
     Mul,

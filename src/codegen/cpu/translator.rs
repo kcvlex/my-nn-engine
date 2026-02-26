@@ -734,6 +734,42 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
             }
 
+            SingleOpcode::GeLU(operator::GeLU { approximate }) => {
+                if !approximate {
+                    unimplemented!()
+                }
+                let ty = ty.float_type().unwrap();
+                let tanh = self.intrinsics.tanh.get(ty);
+                let ty = ty.llvm_type(self.context);
+                let src = unary_op!(operands).into_float_value();
+                let cube = self.builder.build_float_mul(src, src, "cube")?;
+                let cube = self.builder.build_float_mul(cube, src, "cube")?;
+                let inner =
+                    self.builder
+                        .build_float_mul(ty.const_float(0.044715), cube, "inner")?;
+                let inner = self.builder.build_float_add(src, inner, "inner")?;
+                let inner = self.builder.build_float_mul(
+                    ty.const_float(0.7978845608028654),
+                    inner,
+                    "inner",
+                )?;
+                let tanh = self
+                    .build_tail_call(tanh, &[inner.into()], "res")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value();
+                let add = self
+                    .builder
+                    .build_float_add(tanh, ty.const_float(1.0), "add")?;
+                let mul = self
+                    .builder
+                    .build_float_mul(src, ty.const_float(0.5), "mul")?;
+                self.builder
+                    .build_float_mul(mul, add, "res")?
+                    .as_basic_value_enum()
+            }
+
             opcode @ (SingleOpcode::Exp | SingleOpcode::Log | SingleOpcode::Sqrt) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();
@@ -881,19 +917,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
 
             SingleOpcode::Tanh => {
-                let ty = ty.float_type().unwrap().llvm_type(self.context);
                 let src = unary_op!(operands).into_float_value();
-                let src = self
-                    .builder
-                    .build_float_ext(src, self.context.f64_type(), "ext")?;
-                let res = self
-                    .build_tail_call(self.intrinsics.tanh, &[src.into()], "res")?
+                let tanh = self.intrinsics.tanh.get(ty.float_type().unwrap());
+                self.build_tail_call(tanh, &[src.into()], "res")?
                     .try_as_basic_value()
                     .left()
-                    .unwrap();
-                self.builder
-                    .build_float_trunc(res.into_float_value(), ty, "res")?
-                    .as_basic_value_enum()
+                    .unwrap()
             }
 
             SingleOpcode::Transfer => unary_op!(operands),

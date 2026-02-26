@@ -236,7 +236,7 @@ pub struct Gather {
     pub axis: TensorIndex,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub struct GeLU {
     pub approximate: bool,
 }
