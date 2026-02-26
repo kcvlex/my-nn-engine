@@ -5,6 +5,7 @@ use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::tensor::data::ScalarData;
 use crate::transform::modify::GraphOp;
+use crate::transform::pattern::extract_other_binary_input;
 use crate::transform::pattern::PatternMatcher;
 use crate::transform::Pass;
 
@@ -159,18 +160,4 @@ fn match_layer_norm_pattern<T: GraphOp>(
         bias,
         epsilon,
     })
-}
-
-fn extract_other_binary_input(node: &Node, known_input: ValueId) -> Option<ValueId> {
-    if node.inputs.len() != 2 {
-        return None;
-    }
-
-    if node.inputs[0] == known_input {
-        Some(node.inputs[1])
-    } else if node.inputs[1] == known_input {
-        Some(node.inputs[0])
-    } else {
-        None
-    }
 }
