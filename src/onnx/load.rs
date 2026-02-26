@@ -12,6 +12,7 @@ use crate::onnx::model::Model;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::model::Nodes;
+use crate::onnx::model::OpsetImport;
 use crate::onnx::model::ValueId;
 use crate::onnx::model::ValueInfo;
 use crate::onnx::model::Values;
@@ -60,9 +61,26 @@ impl LoadProto for Model {
     fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self> {
         let model = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
         let model = ModelProto::decode(&*model).map_err(ModelLoadError::Decode)?;
+        let opset_import = model
+            .opset_import
+            .iter()
+            .map(|o| OpsetImport {
+                domain: o.domain.clone(),
+                version: o.version,
+            })
+            .collect();
         let graph = model.graph.ok_or(ModelLoadError::NoGraph)?;
         let graph = GraphLoader::default().load_graph(graph)?;
-        Ok(Model { graph })
+        Ok(Model {
+            ir_version: model.ir_version,
+            opset_import,
+            producer_name: model.producer_name,
+            producer_version: model.producer_version,
+            domain: model.domain,
+            model_version: model.model_version,
+            doc_string: model.doc_string,
+            graph,
+        })
     }
 }
 
@@ -356,7 +374,7 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
     Tensor::new(dims, data).map_err(ModelLoadError::TypeError)
 }
 
-fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
+pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
     let data_type = match tensor.data.elem_type() {
         DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
