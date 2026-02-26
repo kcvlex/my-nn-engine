@@ -2041,6 +2041,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let fexp = self.intrinsics.exp.get(val_ty);
         let val_ty = val_ty.llvm_type(self.context);
+
+        // Outer: Dimensions before the axis.
+        // Middle: Dimensions after the axis.
+        // Inner: The axis dimension.
+
         let outer_bound = {
             let mut acc = 1;
             for d in src.ty.dims.iter().take(axis) {
@@ -2082,14 +2087,17 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         macro_rules! get_offset {
             ($inner_i: expr) => {{
-                let offset = self.builder.build_int_add(
-                    outer_offset,
-                    middle_i.as_basic_value().into_int_value(),
-                    "offset",
+                let inner_offset = self.builder.build_int_mul(
+                    $inner_i.as_basic_value().into_int_value(),
+                    self.context.i64_type().const_int(middle_bound, false),
+                    "inner.offset",
                 )?;
+                let offset = self
+                    .builder
+                    .build_int_add(outer_offset, inner_offset, "offset")?;
                 let offset = self.builder.build_int_add(
                     offset,
-                    $inner_i.as_basic_value().into_int_value(),
+                    middle_i.as_basic_value().into_int_value(),
                     "offset",
                 )?;
                 offset

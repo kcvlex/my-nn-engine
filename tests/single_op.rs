@@ -1181,8 +1181,7 @@ fn softmax2() -> TestResult {
 fn softmax_axis() -> TestResult {
     with_all_sessions_and_tensors("softmax_axis", (1, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;
-        // TODO: The epsilong seems too large.
-        assert_eq_epsilon!(outputs[0], expected[0], 1.0);
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
         Ok(())
     })
 }
