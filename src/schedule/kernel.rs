@@ -209,10 +209,10 @@ impl KernelsBuilder {
                         )];
                         KernelBody::ElementWises(ElementWises { ops })
                     } else {
-                        let body = SingleKernel {
+                        let body = Opaque {
                             op: node.op.clone(),
                         };
-                        KernelBody::SingleKernel(body)
+                        KernelBody::Opaque(body)
                     };
                     Kernel {
                         inputs: graph.nodes[node_id].inputs.clone(),

@@ -116,7 +116,7 @@ impl CodeGenContext {
         // if node.is_dummy() {
         //     return false;
         // }
-        if matches_single_kernel!(kernel, Operator::Identity) {
+        if matches_opaque!(kernel, Operator::Identity) {
             let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
             let chunk_out = self
                 .value2alloc
@@ -588,7 +588,7 @@ impl<'ll> CodeGen<'ll, '_> {
             .collect::<Vec<_>>();
 
         // TODO
-        if matches_single_kernel!(kernel, Operator::Identity) {
+        if matches_opaque!(kernel, Operator::Identity) {
             builder.position_at_end(entry);
             let len = ptrs[0]
                 .ty
@@ -689,7 +689,7 @@ impl<'ll> CodeGen<'ll, '_> {
         };
 
         let exit = match &kernel.body {
-            KernelBody::SingleKernel(SingleKernel { op }) => match op {
+            KernelBody::Opaque(Opaque { op }) => match op {
                 Operator::Add |
                 Operator::BatchNormalization(_) |
                 Operator::Exp |

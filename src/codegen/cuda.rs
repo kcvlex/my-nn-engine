@@ -422,7 +422,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         }
 
         let conv = match kernel.body {
-            KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+            KernelBody::Opaque(Opaque { ref op }) => match op {
                 Operator::Conv(ref conv) => conv,
                 _ => unimplemented!(),
             },
@@ -899,7 +899,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         // Launch the kernel
         match kernel.body {
-            KernelBody::SingleKernel(SingleKernel { ref op }) => match op {
+            KernelBody::Opaque(Opaque { ref op }) => match op {
                 Operator::Identity => {
                     let input_chunk = self
                         .value2chunk

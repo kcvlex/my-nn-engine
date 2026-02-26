@@ -577,7 +577,7 @@ impl<'sched> SplitBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::Split(split),
         }) = &kernel.body
         else {
@@ -683,7 +683,7 @@ impl<'sched> ConcatBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::Concat(concat),
         }) = &kernel.body
         else {
@@ -827,7 +827,7 @@ impl<'sched> ContiguousBuilder<'sched> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         assert!(matches!(
             kernel.body,
-            KernelBody::SingleKernel(SingleKernel {
+            KernelBody::Opaque(Opaque {
                 op: Operator::Contiguous,
             })
         ));
@@ -925,7 +925,7 @@ impl<'sched> ResizeBuilder<'sched> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         let output = kernel.outputs[0];
         let input = kernel.inputs[0];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::Resize(resize),
         }) = &kernel.body
         else {
@@ -1002,7 +1002,7 @@ impl<'sched> OneHotBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::OneHot(one_hot),
         }) = &kernel.body
         else {
@@ -1056,7 +1056,7 @@ impl<'sched> GatherBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::Gather(gather),
         }) = &kernel.body
         else {
@@ -1111,7 +1111,7 @@ impl<'sched> CopyBuilder<'sched> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         assert!(matches!(
             kernel.body,
-            KernelBody::SingleKernel(SingleKernel {
+            KernelBody::Opaque(Opaque {
                 op: Operator::Identity,
             })
         ));
@@ -1149,7 +1149,7 @@ impl<'sched> MaxPoolBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::MaxPool(pool),
         }) = &kernel.body
         else {
@@ -1345,7 +1345,7 @@ impl<'sched> ReduceMatrixBuilder<'sched> {
 
     pub fn build(&mut self, block_size: usize) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::SingleKernel(SingleKernel {
+        let KernelBody::Opaque(Opaque {
             op: Operator::ReduceMatrix(op),
         }) = &kernel.body
         else {

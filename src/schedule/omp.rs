@@ -11,10 +11,9 @@ impl InnermostOMP {
             .iter()
             .filter_map(|(id, kernel)| {
                 match &kernel.body {
-                    KernelBody::SingleKernel(SingleKernel { op }) => {
-                        if !op.is_elementwise() {
-                            return None;
-                        }
+                    KernelBody::Opaque(Opaque { op }) => {
+                        assert!(!op.is_elementwise());
+                        return None;
                     }
                     KernelBody::ElementWises(ElementWises { ops }) => {
                         for (_, args) in ops.iter() {
