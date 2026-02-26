@@ -36,9 +36,8 @@ pub struct Intrinsics<'ll> {
     pub log: FloatIntrinsics<'ll>,
     pub pow: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
+    pub tanh: FloatIntrinsics<'ll>,
 
-    // TODO: Replace with llvm..tanh.* after bumping to llvm-19
-    pub tanh: FunctionValue<'ll>,
     pub smin_i32: FunctionValue<'ll>,
     pub smin_i64: FunctionValue<'ll>,
     pub smax_i32: FunctionValue<'ll>,
