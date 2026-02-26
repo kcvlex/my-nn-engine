@@ -644,6 +644,26 @@ impl Gather {
     }
 }
 
+impl GeLU {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let approximate = attributes
+            .get("approximate")
+            .map(|x| x.s())
+            .transpose()?
+            .unwrap_or("none");
+        let approximate = match approximate {
+            "none" => false,
+            "tanh" => true,
+            _ => {
+                return Err(ModelLoadError::Unexpected(
+                    "Invalid approximate".to_string(),
+                ))
+            }
+        };
+        Ok(GeLU { approximate })
+    }
+}
+
 impl Gemm {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let trans_a = attributes
@@ -950,6 +970,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Div" => Ok(Operator::Div),
         "Exp" => Ok(Operator::Exp),
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
+        "Gelu" => Ok(Operator::GeLU(GeLU::load(attributes)?)),
         "Gemm" => Ok(Operator::Gemm(Gemm::load(attributes)?)),
         "GlobalAveragePool" => Ok(Operator::GlobalAveragePool),
         "LayerNormalization" => Ok(Operator::LayerNormalization(LayerNormalization::load(
