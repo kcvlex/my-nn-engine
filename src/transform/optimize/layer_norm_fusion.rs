@@ -112,26 +112,6 @@ fn match_layer_norm_pattern<T: GraphOp>(
                 let rhs = node.inputs[1];
                 lhs == d && rhs == d
             }
-            Operator::Pow => {
-                let base = node.inputs[0];
-                let exponent = node.inputs[1];
-
-                if base != d {
-                    return false;
-                }
-
-                let Some(tensor) = graph.initializer.get(&exponent) else {
-                    return false;
-                };
-                let Some(scalar) = tensor.data.to_scalar_data() else {
-                    return false;
-                };
-
-                matches!(
-                    scalar,
-                    ScalarData::SInt(_, 2) | ScalarData::UInt(_, 2) | ScalarData::Float(_, 2.0)
-                )
-            }
             _ => false,
         })?
         .then(|(node, dd)| match &node.op {
@@ -144,9 +124,10 @@ fn match_layer_norm_pattern<T: GraphOp>(
         .then(|(node, _)| matches!(&node.op, Operator::Add))?
         .capture_node(&mut var_eps_node)
         .then(|(node, _)| matches!(&node.op, Operator::Sqrt))?
-        .then(|(node, stddev)| {
+        .then(|(node, _)| matches!(&node.op, Operator::Reciprocal))?
+        .then(|(node, inv_stddev)| {
             let d = d.unwrap();
-            matches!(&node.op, Operator::Div) && node.inputs[0] == d && node.inputs[1] == stddev
+            matches!(&node.op, Operator::Mul) && node.inputs[0] == d && node.inputs[1] == inv_stddev
         })?
         .capture_value(&mut normalized)
         .then(|(node, _)| matches!(&node.op, Operator::Mul))?
