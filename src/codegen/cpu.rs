@@ -780,6 +780,12 @@ impl<'ll> CodeGen<'ll, '_> {
             KernelBody::ElementWises(ElementWises { ops }) => {
                 let target_dim = ptrs[0].ty.dims.clone();
                 let nest = target_dim.ndim();
+                // Fused kernels may contain unary ops whose inputs have fewer
+                // dimensions than the kernel output (e.g., Reciprocal(scalar)
+                // fused with a Mul that produces a tensor).
+                for ptr in ptrs[1..].iter_mut() {
+                    ptr.ty = ptr.ty.broadcast(&target_dim);
+                }
                 let ops: Vec<_> = ops
                     .iter()
                     .map(|(op, args)| {

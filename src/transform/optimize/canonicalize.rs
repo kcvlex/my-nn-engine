@@ -28,7 +28,7 @@ impl<T: GraphOp> Pass<T> for Canonicalize {
 
 impl Canonicalize {
     fn rewrite<T: GraphOp>(&self, id: NodeId, graph: &mut Graph, modifier: &mut T) {
-        let node = &mut graph.nodes[id];
+        let node = &graph.nodes[id];
         match &node.op {
             Operator::Pow => {
                 let exponent = node.inputs[1];
@@ -45,9 +45,23 @@ impl Canonicalize {
                     return;
                 }
 
-                // TODO?: Remove exponent from initializer?
-                node.inputs[1] = node.inputs[0];
-                modifier.replace_op(graph, id, Operator::Mul);
+                let new_inputs = vec![node.inputs[0], node.inputs[0]];
+                let old_output = node.outputs[0];
+                let new_output = modifier.register_new_value(
+                    graph,
+                    format!("Canonicalize_Square_{:?}", id),
+                    graph.get_resolved_tensor_type(old_output).unwrap().clone(),
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node::create_node(
+                        new_inputs,
+                        vec![new_output],
+                        format!("Canonicalize_Square_{:?}", id),
+                        Operator::Mul,
+                    ),
+                );
+                modifier.replace_input_value(graph, old_output, new_output);
             }
 
             Operator::Div => {
