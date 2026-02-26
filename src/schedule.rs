@@ -53,12 +53,12 @@ pub struct Kernel {
 
 #[derive(Debug, Clone)]
 pub enum KernelBody {
-    SingleKernel(SingleKernel),
+    Opaque(Opaque),
     ElementWises(ElementWises),
 }
 
 #[derive(Debug, Clone)]
-pub struct SingleKernel {
+pub struct Opaque {
     pub op: Operator,
 }
 
@@ -216,13 +216,13 @@ impl Schedule {
     }
 }
 
-macro_rules! matches_single_kernel {
+macro_rules! matches_opaque {
     ($kernel:expr, $pat:pat) => {{
         match &$kernel.body {
-            KernelBody::SingleKernel(SingleKernel { op }) => matches!(op, $pat),
+            KernelBody::Opaque(Opaque { op }) => matches!(op, $pat),
             KernelBody::ElementWises(_) => false,
         }
     }};
 }
 
-pub(crate) use matches_single_kernel;
+pub(crate) use matches_opaque;

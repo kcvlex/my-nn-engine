@@ -167,7 +167,7 @@ impl<'sched> MemoryPlanner<'sched> {
                     *self.allocations.get_mut(output).unwrap() = AllocateType::Output(*v);
 
                     // TODO: Support other patterns
-                    if i == 0 && matches_single_kernel!(kernel, Operator::Identity) {
+                    if i == 0 && matches_opaque!(kernel, Operator::Identity) {
                         output_set.insert(kernel.inputs[0], *v);
                     }
                 }
@@ -255,7 +255,7 @@ impl<'sched> MemoryPlanner<'sched> {
                 Some(_) | None => continue,
             };
 
-            if let KernelBody::SingleKernel(SingleKernel { op }) = &kernel.body {
+            if let KernelBody::Opaque(Opaque { op }) = &kernel.body {
                 match op {
                     // TODO: Incorrect when the input is not contiguous for CUDA.
                     Operator::Identity => return Some(*input),
@@ -303,13 +303,16 @@ impl<'sched> MemoryPlanner<'sched> {
     fn can_in_place(&self, value_id: ValueId) -> bool {
         let kernel_id = self.deps.value2defined[&value_id];
         match &self.schedule.kernels.0[kernel_id].body {
-            KernelBody::SingleKernel(SingleKernel { op }) => match op {
+            KernelBody::Opaque(Opaque { op }) => match op {
                 Operator::Identity => true,
                 Operator::Gemm(_) => self.schedule.kernels.0[kernel_id]
                     .inputs
                     .get(args::GEMM_C)
                     .is_some(),
-                _ => op.is_elementwise(),
+                _ => {
+                    assert!(!op.is_elementwise());
+                    false
+                }
             },
             KernelBody::ElementWises(_) => true,
         }
