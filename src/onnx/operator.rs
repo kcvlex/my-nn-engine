@@ -45,6 +45,7 @@ pub enum Operator {
     Div,
     Exp,
     Gather(Gather),
+    GeLU(GeLU),
     Gemm(Gemm),
     GlobalAveragePool,
     Identity,
@@ -233,6 +234,11 @@ impl Conv {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gather {
     pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeLU {
+    pub approximate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -658,6 +664,7 @@ impl Operator {
             Operator::Div => "Div",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
+            Operator::GeLU(_) => "GeLU",
             Operator::Gemm(_) => "Gemm",
             Operator::GlobalAveragePool => "GlobalAveragePool",
             Operator::Identity => "Identity",
@@ -710,6 +717,7 @@ impl Operator {
                 Operator::Cast(_) |
                 Operator::Div |
                 Operator::Exp |
+                Operator::GeLU(_) |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |

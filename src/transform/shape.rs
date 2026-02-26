@@ -72,6 +72,7 @@ pub fn infer_node_output(
         }
         Operator::BatchNormalization(_) |
         Operator::Exp |
+        Operator::GeLU(_) |
         Operator::Identity |
         Operator::LayerNormalization(_) |
         Operator::LeakyReLU(_) |
