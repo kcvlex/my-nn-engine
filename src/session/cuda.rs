@@ -1,12 +1,12 @@
 use std::io::BufWriter;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
 use itertools::zip_eq;
 use log::info;
 use rayon::prelude::*;
-use tempfile::TempDir;
 
 use crate::codegen::cuda::*;
 use crate::codegen::*;
@@ -37,6 +37,7 @@ impl SessionCUDA {
         initializer: Vec<StrictTensor>,
         schedule: Schedule,
         opt: &Options,
+        build_dir: &Path,
     ) -> Result<Self, SessionError> {
         let mut hostcode_gen = HostCodeGenerator::new(&schedule);
         let hostcode = hostcode_gen
@@ -44,10 +45,7 @@ impl SessionCUDA {
             .map_err(CodeGenError::CudaBuildError)
             .map_err(SessionError::CodeGenError)?;
 
-        let tmp_dir = TempDir::with_prefix("my_model_")
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-
-        let main_file = tmp_dir.path().join("main.cu");
+        let main_file = build_dir.join("main.cu");
         let mut writer = std::fs::File::create(&main_file)
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
             .map(BufWriter::new)?;
@@ -61,14 +59,11 @@ impl SessionCUDA {
         let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/cpp");
         let paths = vec![
             (main_file.clone(), main_file.with_extension("o")),
-            (
-                kernel_dir.join("common.cu"),
-                tmp_dir.path().join("common.o"),
-            ),
+            (kernel_dir.join("common.cu"), build_dir.join("common.o")),
         ];
         info!("Generated");
 
-        let shared_lib = tmp_dir.path().join("libmodel.so");
+        let shared_lib = build_dir.join("libmodel.so");
 
         let cuda_arch = Command::new("nvidia-smi")
             .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
@@ -84,11 +79,6 @@ impl SessionCUDA {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
         info!("Compiling");
-        dbg!(&tmp_dir);
-        if opt.save_build_dir {
-            let path = tmp_dir.keep();
-            info!("Build directory saved at {:?}", path);
-        }
 
         let objs = paths
             .par_iter()

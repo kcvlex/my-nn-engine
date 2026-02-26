@@ -28,4 +28,7 @@ pub struct Options {
 
     #[builder(default = true)]
     pub save_build_dir: bool,
+
+    #[builder(default = true)]
+    pub save_transformed_model: bool,
 }

@@ -2,8 +2,10 @@ mod cpu;
 mod cuda;
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use log::info;
+use tempfile::TempDir;
 
 use crate::codegen::CodeGenError;
 use crate::onnx::load::*;
@@ -147,6 +149,19 @@ impl Session {
         transform_graph(&mut model.graph, options);
         info!("Transformed");
 
+        let tmp_dir = TempDir::with_prefix("my_model_")
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        dbg!(&tmp_dir);
+        let build_dir = PathBuf::from(tmp_dir.path());
+
+        if options.save_transformed_model {
+            let path = build_dir.join("transformed.onnx");
+            model
+                .save_to_path(&path)
+                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+            info!("Transformed model saved to {:?}", path);
+        }
+
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let initializer: Vec<_> = model
@@ -161,11 +176,30 @@ impl Session {
         schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
         info!("Scheduled");
 
+        if options.save_build_dir {
+            let path = tmp_dir.keep();
+            info!("Build directory saved at {:?}", path);
+        }
+
         match options.target {
-            Target::CPU => SessionCPU::new(inputs_ty, outputs_ty, initializer, schedule, options)
-                .map(Session::CPU),
-            Target::CUDA => SessionCUDA::new(inputs_ty, outputs_ty, initializer, schedule, options)
-                .map(Session::CUDA),
+            Target::CPU => SessionCPU::new(
+                inputs_ty,
+                outputs_ty,
+                initializer,
+                schedule,
+                options,
+                &build_dir,
+            )
+            .map(Session::CPU),
+            Target::CUDA => SessionCUDA::new(
+                inputs_ty,
+                outputs_ty,
+                initializer,
+                schedule,
+                options,
+                &build_dir,
+            )
+            .map(Session::CUDA),
         }
     }
 
