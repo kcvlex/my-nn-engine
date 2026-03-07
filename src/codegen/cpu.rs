@@ -403,6 +403,10 @@ impl<'ll> CodeGen<'ll, '_> {
         &self.unit.module
     }
 
+    pub fn into_module(self) -> Module<'ll> {
+        self.unit.module
+    }
+
     pub fn write_to_file<P: AsRef<Path>>(&self, ty: FileType, path: P) -> Result<(), CodeGenError> {
         self.target_machine
             .write_to_file(&self.unit.module, ty, path.as_ref())
