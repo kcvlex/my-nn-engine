@@ -8,7 +8,9 @@ use crate::transform::utils::TransposeGenerator;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct TransposeFusion {}
+pub struct TransposeFusion {
+    pub check_strides: bool,
+}
 
 impl<T: GraphOp> Pass<T> for TransposeFusion {
     fn summary(&self) -> &'static str {
@@ -56,7 +58,16 @@ impl<T: GraphOp> Pass<T> for TransposeFusion {
                 .set_perm(perm)
                 .generate(graph, modifier)
                 .unwrap();
-            modifier.replace_input_value(graph, old_output, new_output);
+            if self.check_strides {
+                modifier.replace_input_value(graph, old_output, new_output)
+            } else {
+                modifier.replace_input_value_if_without_typecheck(
+                    graph,
+                    old_output,
+                    new_output,
+                    |_, _| true,
+                );
+            }
         }
     }
 }
