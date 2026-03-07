@@ -2851,7 +2851,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .map(|(d, s)| {
                 let i = self.builder.build_int_unsigned_div(
                     ind.as_basic_value().into_int_value(),
-                    self.context.i64_type().const_int(*s as u64, false),
+                    self.context.i64_type().const_int((*s as u64).max(1), false),
                     "index",
                 )?;
                 self.builder.build_int_unsigned_rem(
