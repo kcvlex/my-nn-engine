@@ -192,9 +192,9 @@ fn test_no_causal_is_fused() {
     let transpose_node = &graph.nodes[transposes[0]];
     assert!(match_input!(transpose_node.inputs[0], inputs[1]));
 
-    // Input(q) + Input(k_t) + Input(v) + Output(y) + Transpose + Contiguous + Attention = 7
+    // Input(q) + Input(k_t) + Input(v) + Output(y) + Transpose + Attention = 6
     let final_total_nodes = graph.nodes.iter().count();
-    assert_eq!(final_total_nodes, 7);
+    assert_eq!(final_total_nodes, 6);
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn test_causal_is_fused() {
     let transpose_node = &graph.nodes[transposes[0]];
     assert!(match_input!(transpose_node.inputs[0], inputs[1]));
 
-    // Input(q) + Input(k_t) + Input(v) + Output(y) + Transpose + Contiguous + Attention = 7
+    // Input(q) + Input(k_t) + Input(v) + Output(y) + Transpose + Attention = 6
     let final_total_nodes = graph.nodes.iter().count();
-    assert_eq!(final_total_nodes, 7);
+    assert_eq!(final_total_nodes, 6);
 }
