@@ -67,10 +67,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session
     let input_types: Vec<_> = inputs.iter().map(|t| t.tensor_type()).collect();
+    let target = match std::env::var("TARGET").as_deref() {
+        Ok("CUDA") | Ok("cuda") => Target::CUDA,
+        _ => Target::CPU,
+    };
     let session = Session::new(
         &model_path,
         Some(&input_types),
-        &Options::builder().target(Target::CPU).build(),
+        &Options::builder().target(target).build(),
     )
     .map_err(|e| format!("Failed to create session: {:?}", e))?;
 
