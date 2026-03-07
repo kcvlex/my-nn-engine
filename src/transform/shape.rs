@@ -30,14 +30,6 @@ pub fn infer_node_output(
     mode: UnifyMode,
     _target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
-    macro_rules! cond_error {
-        ($cond: expr) => {{
-            if $cond {
-                return Err(TypeError::InferError(stringify!($cond).to_string()));
-            }
-        }};
-    }
-
     let node = &graph.nodes[node_id];
 
     // dbg!(node);
@@ -60,7 +52,7 @@ pub fn infer_node_output(
             let a = &inputs[0];
             let b = &inputs[1];
 
-            cond_error!(a.elem_type != b.elem_type);
+            assert_eq!(a.elem_type, b.elem_type);
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
@@ -172,9 +164,9 @@ pub fn infer_node_output(
                 _ => Err(TypeError::InferError("Invalid shape".to_string())),
             }?;
 
-            cond_error!(
-                a.dims.size() != shape.size() &&
-                    (!a.dims.compatible_with_scalar() || !shape.compatible_with_scalar())
+            assert!(
+                a.dims.size() == shape.size() ||
+                    (a.dims.compatible_with_scalar() && shape.compatible_with_scalar())
             );
             let reshaped = if matches!(mode, UnifyMode::CheckStrides) {
                 a.try_reshape(&shape)
@@ -200,7 +192,7 @@ pub fn infer_node_output(
             let a = &inputs[args::MATMUL_LHS];
             let b = &inputs[args::MATMUL_RHS];
 
-            cond_error!(a.elem_type != b.elem_type);
+            assert_eq!(a.elem_type, b.elem_type);
 
             let (ldim, l_prepended) = if a.dims.ndim() == 1 {
                 (ResolvedTensorDims::new(&[1, a.dims[0]]), true)
@@ -219,7 +211,7 @@ pub fn infer_node_output(
 
             let l_suffix = ldim.suffix(2);
             let r_suffix = rdim.suffix(2);
-            cond_error!(l_suffix[1] != r_suffix[0]);
+            assert_eq!(l_suffix[1], r_suffix[0]);
 
             let mut output = prefix;
             if !l_prepended {
@@ -348,8 +340,8 @@ pub fn infer_node_output(
                 let mut drop = vec![false; rank];
                 for &axis in axes.iter() {
                     let axis = axis.index(rank);
-                    cond_error!(axis >= rank);
-                    cond_error!(input_dims[axis] != 1);
+                    assert!(axis < rank);
+                    assert_eq!(input_dims[axis], 1);
                     drop[axis] = true;
                 }
                 drop
@@ -405,7 +397,7 @@ pub fn infer_node_output(
             let mut insert = vec![false; expanded_rank];
             for &axis in axes.iter() {
                 let axis = axis.index(expanded_rank);
-                cond_error!(axis >= expanded_rank);
+                assert!(axis < expanded_rank);
                 insert[axis] = true;
             }
             let mut dims = Vec::with_capacity(expanded_rank);
@@ -426,7 +418,7 @@ pub fn infer_node_output(
                 }
             }
 
-            cond_error!(input_iter.next().is_some());
+            assert!(input_iter.next().is_none());
 
             let ty = if matches!(mode, UnifyMode::CheckStrides) {
                 ResolvedTensorType::with_stride(
@@ -447,14 +439,14 @@ pub fn infer_node_output(
                 .ok_or(TypeError::UnresolvedInput)?;
             let ty = match shape.data {
                 TensorData::SInt(SIntType::I64, ref v) => {
-                    cond_error!(shape.dims.ndim() != 1);
+                    assert_eq!(shape.dims.ndim(), 1);
                     let dims = v
                         .iter()
                         .map(|&x| {
-                            cond_error!(x == 0);
-                            Ok(x as usize)
+                            assert!(x != 0);
+                            x as usize
                         })
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Vec<_>>();
                     ResolvedTensorType::new(value.elem_type(), ResolvedTensorDims::new(&dims))
                 }
                 _ => {
@@ -480,9 +472,9 @@ pub fn infer_node_output(
             let axis = axis as usize;
 
             // TODO: Support non-contiguous indices.
-            cond_error!(!indices.is_contiguous());
+            assert!(indices.is_contiguous());
             // TODO: Support non-innermost axis.
-            cond_error!(axis != indices.dims.ndim());
+            assert_eq!(axis, indices.dims.ndim());
 
             let depth = depth.ok_or(TypeError::InferError("Unresolved depth".to_string()))?;
 
@@ -490,7 +482,7 @@ pub fn infer_node_output(
                 on_value.ok_or(TypeError::InferError("Unresolved on_value".to_string()))?;
             let off_value =
                 off_value.ok_or(TypeError::InferError("Unresolved off_value".to_string()))?;
-            cond_error!(on_value.elem_type() != off_value.elem_type());
+            assert_eq!(on_value.elem_type(), off_value.elem_type());
             let elem_ty = on_value.elem_type();
 
             let mut dims = indices.dims.clone();
@@ -539,7 +531,7 @@ pub fn infer_node_output(
         Operator::ReduceMatrix(_) => {
             for output in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(*output);
-                cond_error!(ty.is_none());
+                assert!(ty.is_some());
                 res.push(ty.unwrap().clone());
             }
         }
