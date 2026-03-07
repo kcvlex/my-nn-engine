@@ -17,6 +17,7 @@ use itertools::Itertools;
 
 use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
+use crate::codegen::cuda::kernel::AttentionKernel;
 use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::CopyBuilder;
@@ -944,6 +945,67 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Sub |
                 Operator::Tanh => unreachable!(),
 
+                Operator::Attention(attn) => {
+                    let q = kernel.inputs[args::ATTENTION_Q];
+                    let k = kernel.inputs[args::ATTENTION_K];
+                    let v = kernel.inputs[args::ATTENTION_V];
+
+                    let q_ty = self.get_resolved_tensor_type(q)?;
+                    let k_ty = self.get_resolved_tensor_type(k)?;
+                    let v_ty = self.get_resolved_tensor_type(v)?;
+
+                    let q_dims = &q_ty.dims;
+                    let k_dims = &k_ty.dims;
+                    let v_dims = &v_ty.dims;
+                    assert!(q_dims.ndim() == 4);
+                    assert!(k_dims.ndim() == 4);
+                    assert!(v_dims.ndim() == 4);
+                    assert!(q_dims[0] == k_dims[0] && k_dims[0] == v_dims[0]);
+                    assert!(q_dims[1] == k_dims[1] && k_dims[1] == v_dims[1]);
+
+                    // TODO: Maybe `q_dims[2] == k_dims[2]` is unnecessary.
+                    assert!(q_dims[2] == k_dims[2] && k_dims[2] == v_dims[2]);
+                    assert!(q_dims[3] == k_dims[3] && k_dims[3] == v_dims[3]);
+
+                    let batch_size = q_dims[0];
+                    let num_heads = q_dims[1];
+                    let q_seq = q_dims[2];
+                    let head_size = q_dims[3];
+                    let threads_per_row = (head_size / 8).clamp(1, 32);
+                    let br = ceil_pow2(q_seq / threads_per_row).clamp(1, 256 / threads_per_row);
+                    let bc = ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
+                    let block_size = br * threads_per_row;
+                    let grid_size = {
+                        let y = batch_size * num_heads;
+                        let x = q_seq.div_ceil(br);
+                        format!("dim3({x}, {y})")
+                    };
+                    let cuda_kernel = kernel::CUDAKernel::AttentionKernel(AttentionKernel {
+                        data_ty: q_ty.elem_type,
+                        br,
+                        bc,
+                        threads_per_row,
+                        head_dim: head_size,
+                        q: self.device_identifier(q)?,
+                        k: self.device_identifier(k)?,
+                        v: self.device_identifier(v)?,
+                        n: q_seq,
+                        out: self.device_identifier(kernel.outputs[0])?,
+                        attn: *attn,
+                    });
+
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: grid_size.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::Concat(_) => {
                     let output_size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
@@ -1456,6 +1518,7 @@ impl HostCode {
             "cuda.h",
             "cublas_v2.h",
             "cudnn.h",
+            "attention.cuh",
             "layer_norm.cuh",
             "softmax.cuh",
             "cudnn_setting.h",
