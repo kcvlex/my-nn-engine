@@ -554,6 +554,18 @@ impl BatchNormalization {
     }
 }
 
+impl Attention {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let is_causal = attributes
+            .get("is_causal")
+            .map(|x| x.b())
+            .transpose()?
+            .unwrap_or(false);
+        let scale = attributes.get("scale").map(|x| x.f()).transpose()?.unwrap();
+        Ok(Self { is_causal, scale })
+    }
+}
+
 impl Cast {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         // TODO: saturate
@@ -975,6 +987,7 @@ impl Unsqueeze {
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
+        "Attention" => Ok(Operator::Attention(Attention::load(attributes)?)),
         "BatchNormalization" => Ok(Operator::BatchNormalization(BatchNormalization::load(
             attributes,
         )?)),

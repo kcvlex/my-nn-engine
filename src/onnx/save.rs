@@ -158,6 +158,11 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::NonZero |
         Operator::GlobalAveragePool => vec![],
 
+        Operator::Attention(attn) => vec![
+            attr_int("is_causal", if attn.is_causal { 1 } else { 0 }),
+            attr_float("scale", attn.scale),
+        ],
+
         Operator::BatchNormalization(bn) => vec![
             attr_float("epsilon", bn.epsilon),
             attr_float("momentum", bn.momentum),
