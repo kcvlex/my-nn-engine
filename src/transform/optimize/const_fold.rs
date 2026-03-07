@@ -147,6 +147,17 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let tensor = Tensor::new(shape, TensorData::SInt(SIntType::I64, indices)).ok()?;
             Some(vec![tensor])
         }
+        Operator::Reciprocal => {
+            let v = graph.initializer.get(&node.inputs[0])?;
+            let data = match &v.data {
+                TensorData::Float(ty, data) => {
+                    TensorData::Float(*ty, data.iter().map(|x| 1.0 / *x).collect_vec())
+                }
+                _ => return None,
+            };
+            let tensor = Tensor::new(v.dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
         Operator::Shape(Shape { ref start, ref end }) => {
             let input = node.inputs[0];
             let input = &graph.get_resolved_tensor_type(input)?.dims;
