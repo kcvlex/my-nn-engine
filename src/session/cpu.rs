@@ -62,7 +62,7 @@ impl SessionCPU {
             .par_iter()
             .try_for_each(|cg| -> Result<(), String> {
                 cg.compile().map_err(|e| format!("{e:?}"))?;
-                //cg.run_opt_aggressive().map_err(|e| format!("{e:?}"))?;
+                cg.run_opt_aggressive().map_err(|e| format!("{e:?}"))?;
                 Ok(())
             })
             .map_err(SessionError::OtherError)?;
