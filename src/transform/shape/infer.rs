@@ -4,7 +4,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::UnifyMode;
 use crate::tensor::types::TypeError;
 use crate::transform::optimize::const_fold::fold_constant;
-use crate::transform::optimize::const_prop::prop_constant;
+use crate::transform::optimize::const_fold::prop_constant;
 use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;

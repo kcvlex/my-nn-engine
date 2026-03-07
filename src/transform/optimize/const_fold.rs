@@ -4,13 +4,18 @@ use num::Zero;
 
 use crate::onnx::model::Graph;
 use crate::onnx::model::NodeId;
+use crate::onnx::operator::args;
 use crate::onnx::operator::*;
+use crate::onnx::utils::simple_topological_order;
+use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::broadcast_shape;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::SIntType;
 use crate::tensor::Tensor;
+use crate::transform::modify::GraphOp;
+use crate::transform::Pass;
 
 fn all_slice_indices(dims: &ResolvedTensorDims) -> (Vec<isize>, Vec<isize>) {
     let starts = vec![0; dims.ndim()];
@@ -220,5 +225,150 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![input.reshape(dims)])
         }
         _ => None,
+    }
+}
+
+// Propagate constant inputs "into" the given node.
+pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &mut T) {
+    match &graph.nodes[node_id].op {
+        Operator::OneHot(_) => {
+            let inputs = &graph.nodes[node_id].inputs;
+
+            let depth = inputs
+                .get(args::ONEHOT_DEPTH)
+                .and_then(|id| graph.initializer.get(id))
+                .map(|tensor| {
+                    let tensor = tensor
+                        .data
+                        .to_scalar_data()
+                        .expect("OneHot 'depth' must be a scalar.");
+                    match tensor {
+                        ScalarData::SInt(_, v) => v as usize,
+                        ScalarData::UInt(_, v) => v as usize,
+                        ScalarData::Float(_, v) => v as usize,
+                    }
+                });
+
+            let values = inputs
+                .get(args::ONEHOT_VALUES)
+                .and_then(|id| graph.initializer.get(id))
+                .map(|values| {
+                    let [off_value, on_value] = values.data.to_scalars()[..] else {
+                        panic!("OneHot 'values' input must contain exactly two scalar values.");
+                    };
+                    (off_value, on_value)
+                });
+
+            let Operator::OneHot(one_hot) = &mut graph.nodes[node_id].op else {
+                unreachable!();
+            };
+
+            if one_hot.depth.is_none() {
+                one_hot.depth = depth;
+            }
+
+            assert!(
+                one_hot.off_value.is_none() && one_hot.on_value.is_none() ||
+                    one_hot.off_value.is_some() && one_hot.on_value.is_some()
+            );
+            if one_hot.off_value.is_none() {
+                one_hot.off_value = values.map(|(off, _)| off);
+                one_hot.on_value = values.map(|(_, on)| on);
+            }
+
+            let mut args = [
+                (args::ONEHOT_DEPTH, depth.is_some()),
+                (args::ONEHOT_VALUES, values.is_some()),
+            ];
+            args.sort();
+            for (arg, drop) in args.iter().rev() {
+                if *drop && graph.nodes[node_id].inputs.get(*arg).is_some() {
+                    modifier.drop_node_input(graph, node_id, *arg);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Operator::Resize(resize) => {
+            if resize.scale.is_some() {
+                return;
+            }
+            let scales = graph.nodes[node_id]
+                .inputs
+                .get(args::RESIZE_SCALES)
+                .and_then(|id| graph.initializer.get(id))
+                .and_then(|tensor| tensor.to_1d_floats());
+
+            let sizes = graph.nodes[node_id]
+                .inputs
+                .get(args::RESIZE_SIZES)
+                .and_then(|id| graph.initializer.get(id))
+                .and_then(|tensor| tensor.to_1d_sints());
+
+            let scale = match (scales, sizes) {
+                (Some(scales), None) => ResizeScale::Scales(scales),
+                (Some(scales), Some(sizes)) if scales.is_empty() => ResizeScale::Sizes(sizes),
+                (None, Some(sizes)) => ResizeScale::Sizes(sizes),
+                (Some(_), Some(_)) => unreachable!(),
+                (None, None) => unimplemented!(),
+            };
+
+            let Operator::Resize(resize) = &mut graph.nodes[node_id].op else {
+                unreachable!();
+            };
+            resize.scale = Some(scale);
+
+            // TODO: Don't drop ROI.
+            let mut args = [args::RESIZE_ROI, args::RESIZE_SCALES, args::RESIZE_SIZES];
+            args.sort();
+            for arg in args.iter().rev() {
+                if graph.nodes[node_id].inputs.get(*arg).is_some() {
+                    modifier.drop_node_input(graph, node_id, *arg);
+                }
+            }
+        }
+
+        _ => (),
+    }
+}
+
+#[derive(Default)]
+pub struct ConstantFold {
+    pub check_strides: bool,
+}
+
+impl<T: GraphOp> Pass<T> for ConstantFold {
+    fn summary(&self) -> &'static str {
+        "Constant Fold"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let ids = simple_topological_order(graph);
+
+        for id in ids {
+            prop_constant(graph, id, modifier);
+
+            if let Some(constants) = fold_constant(graph, id) {
+                let outputs = graph.nodes[id].outputs.clone();
+                for (old_value, tensor) in izip!(outputs.iter(), constants.into_iter()) {
+                    let new_value = modifier.register_new_tensor(
+                        graph,
+                        tensor,
+                        format!("folded_{}", graph.nodes[id].name),
+                    );
+                    if self.check_strides {
+                        modifier.replace_input_value(graph, *old_value, new_value)
+                    } else {
+                        modifier.replace_input_value_if_without_typecheck(
+                            graph,
+                            *old_value,
+                            new_value,
+                            |_, _| true,
+                        );
+                    }
+                }
+            }
+        }
     }
 }

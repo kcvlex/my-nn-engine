@@ -1,7 +1,6 @@
 pub mod attention_fusion;
 pub mod canonicalize;
 pub mod const_fold;
-pub mod const_prop;
 pub mod elim_identity;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
@@ -19,6 +18,9 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
     let mut pass_manager = SimplePassManager::new("Optimization before Lowering".to_string());
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
+    pass_manager.add_pass(Box::new(const_fold::ConstantFold {
+        check_strides: false,
+    }));
     pass_manager.add_pass(Box::new(fast_gelu_fusion::FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
     if matches!(opt.target, Target::CUDA) {
@@ -33,7 +35,6 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
 pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager =
         SimplePassManager::new("Optimization between Lowering and Strides".to_string());
-    // pass_manager.add_pass(Box::new(const_prop::ConstProp::default()));
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
     if matches!(opt.target, Target::CPU) {
         pass_manager.add_pass(Box::new(im2col::InsertIm2Col::default()));
