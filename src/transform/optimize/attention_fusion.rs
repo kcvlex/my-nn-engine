@@ -50,7 +50,6 @@ impl<T: GraphOp> Pass<T> for AttentionFusion {
             let k_transposed = TransposeGenerator::default()
                 .set_input(k)
                 .set_perm(perm)
-                .set_contiguous(true)
                 .set_node_name(format!("AttentionFusion_K_Transpose_{:?}", matmul))
                 .set_value_name(format!("AttentionFusion_K_Transpose_Output_{:?}", matmul))
                 .generate(graph, modifier)
