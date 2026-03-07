@@ -64,6 +64,36 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
+        Operator::Attention(_) => {
+            let q = &inputs[args::ATTENTION_Q];
+            let k = &inputs[args::ATTENTION_K];
+            let v = &inputs[args::ATTENTION_V];
+            assert!(q.dims.ndim() == k.dims.ndim() && k.dims.ndim() == v.dims.ndim());
+            if q.dims.ndim() != 4 {
+                unimplemented!()
+            }
+            let batch_size = q.dims[0];
+            let q_num_heads = q.dims[1];
+            let kv_num_heads = k.dims[1];
+
+            assert!(q_num_heads == kv_num_heads);
+            assert!(k.dims[0] == batch_size);
+            assert!(v.dims[0] == batch_size);
+            assert!(k.dims[1] == kv_num_heads);
+
+            let q_sequence_length = q.dims[2];
+            let head_size = q.dims[3];
+            let kv_sequence_length = k.dims[2];
+            let v_head_size = v.dims[3];
+
+            assert!(k.dims[3] == head_size);
+            assert!(v.dims[2] == kv_sequence_length);
+
+            res.push(ResolvedTensorType::new(
+                q.elem_type,
+                ResolvedTensorDims::new(&[batch_size, q_num_heads, q_sequence_length, v_head_size]),
+            ));
+        }
         Operator::Pow => {
             let a = &inputs[0];
             let b = &inputs[1];

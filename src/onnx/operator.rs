@@ -36,6 +36,7 @@ impl TensorIndex {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Add,
+    Attention(Attention),
     BatchNormalization(BatchNormalization),
     Cast(Cast),
     Concat(Concat),
@@ -85,6 +86,12 @@ pub enum Operator {
     // Dummy
     Input(ValueId),
     Output(ValueId),
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct Attention {
+    pub is_causal: bool,
+    pub scale: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -652,6 +659,7 @@ impl Operator {
     pub fn name(&self) -> &str {
         match self {
             Operator::Add => "Add",
+            Operator::Attention(_) => "Attention",
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
             Operator::Concat(_) => "Concat",
@@ -738,6 +746,11 @@ pub enum ReduceOp {
 pub mod args {
     pub const ADD_LHS: usize = 0;
     pub const ADD_RHS: usize = 1;
+
+    pub const ATTENTION_Q: usize = 0;
+    pub const ATTENTION_K: usize = 1;
+    pub const ATTENTION_V: usize = 2;
+    pub const ATTENTION_MASK: usize = 3;
 
     pub const RESHAPE_DATA: usize = 0;
     pub const RESHAPE_SHAPE: usize = 1;
