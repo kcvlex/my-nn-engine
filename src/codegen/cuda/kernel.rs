@@ -13,9 +13,55 @@ use crate::tensor::types::ResolvedTensorDims;
 
 #[derive(From)]
 pub enum CUDAKernel {
+    AttentionKernel(AttentionKernel),
     GeneratedKernel(GeneratedKernel),
     LayerNormKernel(LayerNormKernel),
     SoftmaxKernel(SoftmaxKernel),
+}
+
+macro_rules! cast {
+    ($ty:expr, $e:expr) => {
+        format!("({} *)({})", $ty, $e)
+    };
+}
+
+pub struct AttentionKernel {
+    pub data_ty: DataType,
+    pub br: usize,
+    pub bc: usize,
+    pub threads_per_row: usize,
+    pub head_dim: usize,
+
+    pub out: Expr,
+    pub q: Expr,
+    pub k: Expr,
+    pub v: Expr,
+    pub n: usize,
+
+    pub attn: Attention,
+}
+
+impl AttentionKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "attention<{}, {}, {}, {}, {}>",
+            self.data_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.q),
+            cast!(self.data_ty, self.k),
+            cast!(self.data_ty, self.v),
+            self.attn.scale.to_string(),
+            if self.attn.is_causal { "1" } else { "0" }.to_string(),
+            self.attn
+                .penalty
+                .map(|p| p.to_string())
+                .unwrap_or("INFINITY".to_string()),
+            self.n.to_string(),
+        ];
+        (id, args)
+    }
 }
 
 pub struct GeneratedKernel {
@@ -33,12 +79,6 @@ impl GeneratedKernel {
             .collect::<Vec<_>>();
         (id, args)
     }
-}
-
-macro_rules! cast {
-    ($ty:expr, $e:expr) => {
-        format!("({} *)({})", $ty, $e)
-    };
 }
 
 pub struct LayerNormKernel {
@@ -109,6 +149,7 @@ pub struct LaunchKernel {
 impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
+            CUDAKernel::AttentionKernel(a) => a,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::SoftmaxKernel(s) => s,

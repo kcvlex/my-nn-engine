@@ -562,7 +562,12 @@ impl Attention {
             .transpose()?
             .unwrap_or(false);
         let scale = attributes.get("scale").map(|x| x.f()).transpose()?.unwrap();
-        Ok(Self { is_causal, scale })
+        let penalty = None;
+        Ok(Self {
+            is_causal,
+            scale,
+            penalty,
+        })
     }
 }
 
