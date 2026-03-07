@@ -1,3 +1,4 @@
+pub mod attention_fusion;
 pub mod canonicalize;
 pub mod const_fold;
 pub mod const_prop;
@@ -7,18 +8,23 @@ pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
 pub mod im2col;
 pub mod layer_norm_fusion;
+pub mod transpose_fusion;
 
 use crate::options::*;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_optimize_passes0() -> SimplePassManager<SimpleGraphOp> {
+pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager = SimplePassManager::new("Optimization before Lowering".to_string());
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
     pass_manager.add_pass(Box::new(fast_gelu_fusion::FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
+    if matches!(opt.target, Target::CUDA) {
+        pass_manager.add_pass(Box::new(attention_fusion::AttentionFusion::default()));
+    }
+    pass_manager.add_pass(Box::new(transpose_fusion::TransposeFusion::default()));
     pass_manager
 }
 

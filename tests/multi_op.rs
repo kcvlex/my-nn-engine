@@ -189,3 +189,14 @@ fn test_transpose_matmul_and_someone_cuda() -> Result {
 fn test_div_broadcast_scalar_cpu() -> Result {
     run_test_default("div_broadcast_scalar", 1e-5)
 }
+
+#[test]
+#[cfg(feature = "cuda")]
+fn test_gpt2_attention_cuda() -> Result {
+    run_test(
+        "gpt2_attention",
+        1e-4,
+        &Options::builder().target(Target::CUDA).build(),
+        (3, 1),
+    )
+}

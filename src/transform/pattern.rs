@@ -23,21 +23,30 @@ impl<'a, T: GraphOp> PatternMatcher<'a, T> {
         }
     }
 
-    pub fn then<F>(mut self, pred: F) -> Option<Self>
+    pub fn try_then<F>(mut self, pred: F) -> Result<Self, Self>
     where
         F: Fn((&Node, ValueId)) -> bool,
     {
-        for user in self.modifier.used_node(self.current_value)? {
-            let (node_id, _) = user;
-            let node = &self.graph.nodes[*node_id];
-            if pred((node, self.current_value)) {
-                self.last_node = *node_id;
-                self.current_value = node.outputs[0];
-                return Some(self);
+        if let Some(users) = self.modifier.used_node(self.current_value) {
+            for user in users.iter() {
+                let (node_id, _) = user;
+                let node = &self.graph.nodes[*node_id];
+                if pred((node, self.current_value)) {
+                    self.last_node = *node_id;
+                    self.current_value = node.outputs[0];
+                    return Ok(self);
+                }
             }
         }
 
-        None
+        Err(self)
+    }
+
+    pub fn then<F>(self, pred: F) -> Option<Self>
+    where
+        F: Fn((&Node, ValueId)) -> bool,
+    {
+        self.try_then(pred).ok()
     }
 
     pub fn last_node(&self) -> NodeId {
