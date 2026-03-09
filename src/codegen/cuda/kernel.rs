@@ -1150,11 +1150,9 @@ impl<'sched> CopyBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        assert!(matches!(
-            kernel.body,
-            KernelBody::Opaque(Opaque {
-                op: Operator::Identity,
-            })
+        assert!(matches_opaque!(
+            kernel,
+            Operator::Identity | Operator::Reinterpret(_)
         ));
 
         let gid = KernelVar::Gid;

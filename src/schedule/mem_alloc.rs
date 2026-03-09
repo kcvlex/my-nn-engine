@@ -167,7 +167,9 @@ impl<'sched> MemoryPlanner<'sched> {
                     *self.allocations.get_mut(output).unwrap() = AllocateType::Output(*v);
 
                     // TODO: Support other patterns
-                    if i == 0 && matches_opaque!(kernel, Operator::Identity) {
+                    if i == 0 &&
+                        matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_))
+                    {
                         output_set.insert(kernel.inputs[0], *v);
                     }
                 }
@@ -234,8 +236,8 @@ impl<'sched> MemoryPlanner<'sched> {
         res
     }
 
-    // TODO: Identity assumes that the computation MUST be in-place.
-    // If the source is not contiguous, we need to allocate a new chunk.
+    // TODO: Identity and Reinterpret assume that the computation MUST be in-place. If the source
+    // is not contiguous, we need to allocate a new chunk.
     fn try_in_place(&self, value_id: ValueId) -> Option<ValueId> {
         if !self.can_in_place(value_id) {
             return None;
@@ -258,7 +260,7 @@ impl<'sched> MemoryPlanner<'sched> {
             if let KernelBody::Opaque(Opaque { op }) = &kernel.body {
                 match op {
                     // TODO: Incorrect when the input is not contiguous for CUDA.
-                    Operator::Identity => return Some(*input),
+                    Operator::Identity | Operator::Reinterpret(_) => return Some(*input),
                     Operator::Gemm(_) => {
                         if !is_input &&
                             kernel
@@ -304,7 +306,7 @@ impl<'sched> MemoryPlanner<'sched> {
         let kernel_id = self.deps.value2defined[&value_id];
         match &self.schedule.kernels.0[kernel_id].body {
             KernelBody::Opaque(Opaque { op }) => match op {
-                Operator::Identity => true,
+                Operator::Identity | Operator::Reinterpret(_) => true,
                 Operator::Gemm(_) => self.schedule.kernels.0[kernel_id]
                     .inputs
                     .get(args::GEMM_C)

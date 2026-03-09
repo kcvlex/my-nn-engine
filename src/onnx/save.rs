@@ -406,6 +406,9 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             vec![attr_string("reduction", op)]
         }
 
+        // TODO
+        Operator::Reinterpret(_) => vec![],
+
         Operator::Input(_) | Operator::Output(_) => unreachable!(),
     }
 }

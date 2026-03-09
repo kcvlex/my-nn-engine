@@ -82,6 +82,7 @@ pub enum Operator {
     Contiguous,
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
+    Reinterpret(Reinterpret),
 
     // Dummy
     Input(ValueId),
@@ -359,6 +360,17 @@ pub struct Resize {
     pub mode: ResizeMode,
 
     pub scale: Option<ResizeScale>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReinterpretType {
+    Reshape(Vec<i64>),
+    Transpose(Transpose),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reinterpret {
+    pub ops: Vec<ReinterpretType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -706,6 +718,7 @@ impl Operator {
             Operator::Contiguous => "Contiguous",
             Operator::Im2Col(_) => "Im2Col",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
+            Operator::Reinterpret(_) => "Reinterpret",
 
             // Dummy
             Operator::Input(_) => "Input",

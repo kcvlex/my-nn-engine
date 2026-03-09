@@ -901,7 +901,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         // Launch the kernel
         match kernel.body {
             KernelBody::Opaque(Opaque { ref op }) => match op {
-                Operator::Identity => {
+                Operator::Identity | Operator::Reinterpret(_) => {
                     let input_chunk = self
                         .value2chunk
                         .get(&kernel.inputs[0])
