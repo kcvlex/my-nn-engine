@@ -8,6 +8,7 @@ use id_arena::Id;
 use itertools::zip_eq;
 
 use crate::onnx::operator::Operator;
+use crate::onnx::operator::OperatorType;
 use crate::tensor::types::Dimension;
 use crate::tensor::types::ParamKey;
 use crate::tensor::types::ResolvedTensorDims;
@@ -243,7 +244,7 @@ pub struct Node {
 
 impl Node {
     pub fn is_dummy(&self) -> bool {
-        matches!(self.op, Operator::Input(_) | Operator::Output(_))
+        self.op.operator_type() == OperatorType::Dummy
     }
 
     pub fn create_node(

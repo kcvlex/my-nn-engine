@@ -668,6 +668,14 @@ impl Transpose {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorType {
+    Elementwise,
+    Bijective,
+    Opaque,
+    Dummy,
+}
+
 impl Operator {
     pub fn name(&self) -> &str {
         match self {
@@ -726,26 +734,63 @@ impl Operator {
         }
     }
 
-    pub fn is_elementwise(&self) -> bool {
-        matches!(
-            self,
+    pub fn operator_type(&self) -> OperatorType {
+        match self {
             Operator::Add |
-                Operator::BatchNormalization(_) |
-                Operator::Cast(_) |
-                Operator::Div |
-                Operator::Exp |
-                Operator::GeLU(_) |
-                Operator::LeakyReLU(_) |
-                Operator::Log |
-                Operator::Mul |
-                Operator::Pow |
-                Operator::Reciprocal |
-                Operator::ReLU |
-                Operator::Sigmoid |
-                Operator::Sqrt |
-                Operator::Sub |
-                Operator::Tanh
-        )
+            Operator::BatchNormalization(_) |
+            Operator::Cast(_) |
+            Operator::Div |
+            Operator::Exp |
+            Operator::GeLU(_) |
+            Operator::Identity |
+            Operator::LeakyReLU(_) |
+            Operator::Log |
+            Operator::Mul |
+            Operator::Pow |
+            Operator::Reciprocal |
+            Operator::ReLU |
+            Operator::Sigmoid |
+            Operator::Sqrt |
+            Operator::Sub |
+            Operator::Tanh => OperatorType::Elementwise,
+
+            Operator::Contiguous |
+            Operator::Reshape |
+            Operator::Squeeze(_) |
+            Operator::Transpose(_) |
+            Operator::Unsqueeze(_) => OperatorType::Bijective,
+
+            Operator::Attention(_) |
+            Operator::Concat(_) |
+            Operator::Constant(_) |
+            Operator::ConstantOfShape(_) |
+            Operator::Conv(_) |
+            Operator::Gather(_) |
+            Operator::Gemm(_) |
+            Operator::GlobalAveragePool |
+            Operator::Im2Col(_) |
+            Operator::LayerNormalization(_) |
+            Operator::MatMul |
+            Operator::MaxPool(_) |
+            Operator::NonZero |
+            Operator::OneHot(_) |
+            Operator::ReduceMax(_) |
+            Operator::ReduceMatrix(_) |
+            Operator::ReduceMean(_) |
+            Operator::ReduceSum(_) |
+            Operator::Reinterpret(_) |
+            Operator::Resize(_) |
+            Operator::Shape(_) |
+            Operator::Slice |
+            Operator::Softmax(_) |
+            Operator::Split(_) => OperatorType::Opaque,
+
+            Operator::Input(_) | Operator::Output(_) => OperatorType::Dummy,
+        }
+    }
+
+    pub fn is_elementwise(&self) -> bool {
+        self.operator_type() == OperatorType::Elementwise
     }
 }
 
