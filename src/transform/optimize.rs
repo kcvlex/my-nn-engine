@@ -7,6 +7,7 @@ pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
 pub mod im2col;
 pub mod layer_norm_fusion;
+pub mod reorder_nodes;
 pub mod transpose_fusion;
 
 use crate::options::*;
@@ -26,6 +27,7 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
     if matches!(opt.target, Target::CUDA) {
         pass_manager.add_pass(Box::new(attention_fusion::AttentionFusion::default()));
     }
+    pass_manager.add_pass(Box::new(reorder_nodes::ReorderNodes::default()));
     pass_manager.add_pass(Box::new(transpose_fusion::TransposeFusion {
         check_strides: false,
     }));
