@@ -23,6 +23,68 @@ use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 use crate::transform::Target;
 
+fn reshape(
+    a: &ResolvedTensorType,
+    shape: &[i64],
+    mode: UnifyMode,
+) -> Result<ResolvedTensorType, TypeError> {
+    let prod0 = a.dims.size();
+    let prod1 = shape
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, x)| *x != -1)
+        .map(|(i, x)| if x == 0 { a.dims[i] } else { x as usize })
+        .product::<usize>();
+    let shape = ResolvedTensorDims::new(
+        shape
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, x)| {
+                if x == -1 {
+                    prod0 / prod1
+                } else if x == 0 {
+                    a.dims[i]
+                } else {
+                    x as usize
+                }
+            })
+            .collect_vec()
+            .as_slice(),
+    );
+
+    assert!(
+        a.dims.size() == shape.size() ||
+            (a.dims.compatible_with_scalar() && shape.compatible_with_scalar())
+    );
+    let reshaped = if matches!(mode, UnifyMode::CheckStrides) {
+        a.try_reshape(&shape)
+            .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?
+    } else {
+        ResolvedTensorType::new(a.elem_type, shape.clone())
+    };
+    Ok(reshaped)
+}
+
+fn transpose(
+    data: &ResolvedTensorType,
+    transpose: &Transpose,
+    mode: UnifyMode,
+) -> Result<ResolvedTensorType, TypeError> {
+    let perm = transpose
+        .perm(data.dims.ndim())
+        .ok_or(TypeError::InferError("Invalid permutation".to_string()))?;
+
+    let ty = data.transpose(perm.as_slice());
+    let ty = if matches!(mode, UnifyMode::CheckStrides) {
+        ty
+    } else {
+        ty.contiguous()
+    };
+    Ok(ty)
+}
+
 // TODO: Remove _target.
 pub fn infer_node_output(
     graph: &Graph,
@@ -31,8 +93,6 @@ pub fn infer_node_output(
     _target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
     let node = &graph.nodes[node_id];
-
-    // dbg!(node);
 
     let inputs: Vec<&ResolvedTensorType> = node
         .inputs
@@ -112,69 +172,25 @@ pub fn infer_node_output(
             let input = &inputs[0];
             res.push(ResolvedTensorType::new(*to, input.dims.clone()));
         }
-        Operator::Transpose(ref transpose) => {
+        Operator::Transpose(ref t) => {
             let data = &inputs[args::TRANSPOSE_DATA];
-            let perm = transpose
-                .perm(data.dims.ndim())
-                .ok_or(TypeError::InferError("Invalid permutation".to_string()))?;
-
-            let ty = data.transpose(perm.as_slice());
-            let ty = if matches!(mode, UnifyMode::CheckStrides) {
-                ty
-            } else {
-                ty.contiguous()
-            };
+            let ty = transpose(data, t, mode)?;
             res.push(ty);
         }
         Operator::Reshape => {
             let a = &inputs[args::RESHAPE_DATA];
-            let shape = node.inputs[args::RESHAPE_SHAPE];
             let shape = &graph
                 .initializer
-                .get(&shape)
+                .get(&node.inputs[args::RESHAPE_SHAPE])
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
             let shape = match shape {
-                TensorData::SInt(_, ref v) => {
-                    let prod0 = a.dims.size();
-                    let prod1 = v
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .filter(|(_, x)| *x != -1)
-                        .map(|(i, x)| if x == 0 { a.dims[i] } else { x as usize })
-                        .product::<usize>();
-                    Ok(ResolvedTensorDims::new(
-                        v.iter()
-                            .copied()
-                            .enumerate()
-                            .map(|(i, x)| {
-                                if x == -1 {
-                                    prod0 / prod1
-                                } else if x == 0 {
-                                    a.dims[i]
-                                } else {
-                                    x as usize
-                                }
-                            })
-                            .collect_vec()
-                            .as_slice(),
-                    ))
+                TensorData::SInt(SIntType::I64, ref v) => v,
+                _ => {
+                    return Err(TypeError::InferError("Invalid shape".to_string()));
                 }
-                _ => Err(TypeError::InferError("Invalid shape".to_string())),
-            }?;
-
-            assert!(
-                a.dims.size() == shape.size() ||
-                    (a.dims.compatible_with_scalar() && shape.compatible_with_scalar())
-            );
-            let reshaped = if matches!(mode, UnifyMode::CheckStrides) {
-                a.try_reshape(&shape)
-                    .ok_or(TypeError::InferError("Unsupported reshape".to_string()))?
-            } else {
-                ResolvedTensorType::new(a.elem_type, shape.clone())
             };
-            res.push(reshaped);
+            res.push(reshape(a, shape, mode)?);
         }
         Operator::Resize(resize) => {
             let dims = resize
@@ -524,6 +540,16 @@ pub fn infer_node_output(
         Operator::Contiguous => {
             let input = &inputs[0];
             res.push(input.contiguous());
+        }
+        Operator::Reinterpret(Reinterpret { ref ops }) => {
+            let mut ty = inputs[0].clone();
+            for op in ops.iter() {
+                ty = match op {
+                    ReinterpretType::Reshape(ref shape) => reshape(&ty, shape, mode)?,
+                    ReinterpretType::Transpose(ref perm) => transpose(&ty, perm, mode)?,
+                };
+            }
+            res.push(ty);
         }
         Operator::Input(_) |
         Operator::Output(_) |

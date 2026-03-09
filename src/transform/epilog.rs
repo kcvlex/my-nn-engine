@@ -1,9 +1,13 @@
 mod cleanup;
 
+use itertools::Itertools;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
-use crate::onnx::model::NodeMeta;
+use crate::onnx::model::NodeId;
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
+use crate::onnx::utils::simple_topological_order;
 use crate::options::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
@@ -12,40 +16,89 @@ use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
 #[derive(Default)]
-pub struct Ops2Identity {}
+pub struct Ops2Reinterpret {}
 
-impl<T: GraphOp> Pass<T> for Ops2Identity {
+fn bundle_reshape_and_transpose<T: GraphOp>(
+    graph: &Graph,
+    node_id: NodeId,
+    modifier: &T,
+) -> (Reinterpret, ValueId) {
+    assert!(matches!(
+        graph.nodes[node_id].op,
+        Operator::Reshape | Operator::Transpose(_)
+    ));
+    let mut ops = Vec::new();
+    let mut cur = (node_id, 0);
+    let mut input = graph.nodes[cur.0].inputs[0];
+    loop {
+        match &graph.nodes[cur.0].op {
+            Operator::Reshape => {
+                let output_shape = graph
+                    .get_resolved_tensor_type(graph.nodes[cur.0].outputs[cur.1])
+                    .unwrap();
+                ops.push(ReinterpretType::Reshape(
+                    output_shape.dims.iter().map(|d| *d as i64).collect(),
+                ));
+            }
+            Operator::Transpose(perm) => ops.push(ReinterpretType::Transpose(perm.clone())),
+            _ => break,
+        }
+        input = graph.nodes[cur.0].inputs[0];
+        cur = match modifier.defined_node(input) {
+            Some(v) => v,
+            None => break,
+        };
+    }
+
+    (Reinterpret { ops }, input)
+}
+
+impl<T: GraphOp> Pass<T> for Ops2Reinterpret {
     fn summary(&self) -> &'static str {
-        "Convert Reshape/Transpose to Identity"
+        "Convert Reshape/Transpose to Reinterpret"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let ids = graph
-            .nodes
-            .iter()
-            .filter_map(|(id, node)| match node.op {
-                Operator::Reshape | Operator::Transpose(_) => Some(id),
-                _ => None,
+        let ids = simple_topological_order(graph)
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    graph.nodes[*id].op,
+                    Operator::Reshape | Operator::Transpose(_)
+                )
             })
-            .collect::<Vec<_>>();
+            .rev()
+            .collect_vec();
+
         for id in ids.iter() {
-            let node = &graph.nodes[*id];
-            let input = node.inputs[0];
-            let old_output = node.outputs[0];
+            let old_output = graph.nodes[*id].outputs[0];
+            let Some(to_bundle) = modifier.used_node(old_output) else {
+                continue;
+            };
+            let to_bundle = to_bundle.iter().any(|(user_id, _)| {
+                !matches!(
+                    graph.nodes[*user_id].op,
+                    Operator::Reshape | Operator::Transpose(_)
+                )
+            });
+            if !to_bundle {
+                continue;
+            }
+
+            let (re, input) = bundle_reshape_and_transpose(graph, *id, modifier);
             let new_output = modifier.register_new_value(
                 graph,
-                format!("Identity_{}", old_output.index()),
+                format!("Reinterpret_{:?}", old_output),
                 graph.get_resolved_tensor_type(old_output).unwrap().clone(),
             );
             modifier.register_new_node(
                 graph,
-                Node {
-                    inputs: vec![input],
-                    outputs: vec![new_output],
-                    name: format!("Identity_{}", id.index()),
-                    op: Operator::Identity,
-                    meta: NodeMeta::default(),
-                },
+                Node::create_node(
+                    vec![input],
+                    vec![new_output],
+                    format!("Reinterpret_{:?}", id),
+                    Operator::Reinterpret(re),
+                ),
             );
             modifier.replace_input_value(graph, old_output, new_output);
         }
@@ -84,7 +137,7 @@ impl<T: GraphOp> Pass<T> for ElimCont {
 
 pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Epilog".to_string());
-    manager.add_pass(Box::new(Ops2Identity::default()));
+    manager.add_pass(Box::new(Ops2Reinterpret::default()));
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));
     }
