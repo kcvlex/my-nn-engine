@@ -18,6 +18,19 @@ use crate::tensor::Tensor;
 
 type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
 
+/// SAFETY: After JIT compilation is complete, the engine is only used via a raw function pointer.
+/// The engine and contexts are kept alive solely to prevent LLVM from deallocating the JIT code.
+struct JitState {
+    // engine must be dropped before contexts (field drop order guarantees this)
+    _engine: ExecutionEngine<'static>,
+    _contexts: Vec<Context>,
+}
+
+// SAFETY: Once JIT compilation is complete, the engine is not mutated and the compiled code
+// is safe to call from any thread (it's just a function pointer into mmap'd memory).
+unsafe impl Send for JitState {}
+unsafe impl Sync for JitState {}
+
 pub struct SessionCPU {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
@@ -27,11 +40,8 @@ pub struct SessionCPU {
     #[allow(dead_code)]
     codegen_ctx: CodeGenContext,
 
-    // engine must be dropped before contexts (field drop order guarantees this)
     #[allow(dead_code)]
-    _engine: ExecutionEngine<'static>,
-    #[allow(dead_code)]
-    _contexts: Vec<Context>,
+    jit: JitState,
     func: CodeType,
 }
 
@@ -139,8 +149,10 @@ impl SessionCPU {
             input_ty,
             output_ty,
             codegen_ctx,
-            _engine: engine,
-            _contexts: contexts,
+            jit: JitState {
+                _engine: engine,
+                _contexts: contexts,
+            },
             func,
             initializer,
         })
