@@ -25,15 +25,15 @@ use crate::transform::modify::SimpleGraphOp;
 
 #[derive(Default)]
 pub struct AnalysisResults {
-    map: HashMap<TypeId, Box<dyn Any>>,
+    map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl AnalysisResults {
-    pub fn insert<T: 'static>(&mut self, value: T) {
+    pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) {
         self.map.insert(TypeId::of::<T>(), Box::new(value));
     }
 
-    pub fn get<T: 'static>(&self) -> &T {
+    pub fn get<T: Send + Sync + 'static>(&self) -> &T {
         self.map
             .get(&TypeId::of::<T>())
             .unwrap_or_else(|| panic!("Analysis result not found: {}", std::any::type_name::<T>()))
