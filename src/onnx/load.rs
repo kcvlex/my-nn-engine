@@ -506,7 +506,7 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
                 .into_iter()
                 .map(load_utf8)
                 .collect::<Result<Vec<_>, _>>()
-                .map(|x| Attribute::Strings(x)),
+                .map(Attribute::Strings),
             attribute_proto::AttributeType::Tensor => {
                 load_tensor(attr.t.unwrap()).map(Attribute::Tensor)
             }

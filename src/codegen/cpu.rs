@@ -100,7 +100,7 @@ impl CodeGenContext {
             .kernels
             .iter()
             .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
-            .flat_map(|v| v)
+            .flatten()
             .map(|info| (info.value_id, *info))
             .collect::<HashMap<_, _>>();
 

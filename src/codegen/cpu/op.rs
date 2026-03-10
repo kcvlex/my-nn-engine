@@ -96,9 +96,9 @@ pub enum Opcode {
     Fused(Vec<(SingleOpcode, Vec<ElementwiseOpArg>)>),
 }
 
-impl Into<Opcode> for SingleOpcode {
-    fn into(self) -> Opcode {
-        Opcode::Single(self)
+impl From<SingleOpcode> for Opcode {
+    fn from(val: SingleOpcode) -> Self {
+        Opcode::Single(val)
     }
 }
 
@@ -120,11 +120,11 @@ pub struct OperationContext<'ctx> {
 
 impl OperationContext<'_> {
     pub fn to_paralleize(&self, nest: usize) -> bool {
-        self.omp_parallel.map_or(false, |n| n == nest)
+        self.omp_parallel == Some(nest)
     }
 
     pub fn to_for(&self, nest: usize) -> bool {
-        self.omp_for.map_or(false, |n| n == nest)
+        self.omp_for == Some(nest)
     }
 }
 

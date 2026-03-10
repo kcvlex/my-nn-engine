@@ -384,7 +384,7 @@ impl TensorType {
                 })
                 .collect::<Vec<_>>()
                 .join(" x "),
-            Self::Unresolved(_) => vec!["?".to_string()].join(" x "),
+            Self::Unresolved(_) => ["?".to_string()].join(" x "),
         }
     }
 }
