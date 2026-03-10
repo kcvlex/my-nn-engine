@@ -3,12 +3,13 @@ use std::collections::HashSet;
 
 use indexmap::IndexMap;
 use indexmap::IndexSet;
-use itertools::zip_eq;
 
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
+
+pub struct MemAllocResult(pub HashMap<KernelId, Vec<AllocateInfo>>);
 
 pub struct MemAllocPass;
 
@@ -19,9 +20,13 @@ impl SchedulePass for MemAllocPass {
 
     fn run(&self, schedule: &mut Schedule) {
         let info_v = MemoryPlanner::new(schedule).run();
-        for ((_, kernel), info) in zip_eq(schedule.kernels.0.iter_mut(), info_v) {
-            kernel.mem_alloc = Some(info);
-        }
+        let result = schedule
+            .kernels
+            .iter()
+            .map(|(id, _)| id)
+            .zip(info_v)
+            .collect();
+        schedule.analysis.insert(MemAllocResult(result));
     }
 }
 

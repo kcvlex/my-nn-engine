@@ -96,10 +96,10 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
 impl CodeGenContext {
     pub fn new(schedule: Schedule) -> Result<Self, CodeGenError> {
         let mem_size = calc_memsize(&schedule);
-        let value2alloc = schedule
-            .kernels
-            .iter()
-            .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+        let mem_alloc_result = schedule.analysis.get::<mem_alloc::MemAllocResult>();
+        let value2alloc = mem_alloc_result
+            .0
+            .values()
             .flatten()
             .map(|info| (info.value_id, *info))
             .collect::<HashMap<_, _>>();
@@ -160,15 +160,10 @@ fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
 fn calc_memsize(sched: &Schedule) -> Vec<u64> {
     let max_chunk_id = sched.max_chunk_id().map(|x| x + 1).unwrap_or(0);
     let mut mem_size = vec![0; max_chunk_id];
-    for vec in sched
-        .kernels
-        .iter()
-        .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
-    {
-        for info in vec.iter() {
-            if let Some(chunk_id) = info.ty.chunk_id() {
-                mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(sched, info.value_id));
-            }
+    let mem_alloc_result = sched.analysis.get::<mem_alloc::MemAllocResult>();
+    for info in mem_alloc_result.0.values().flatten() {
+        if let Some(chunk_id) = info.ty.chunk_id() {
+            mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(sched, info.value_id));
         }
     }
     mem_size
@@ -501,7 +496,12 @@ impl<'ll> CodeGen<'ll, '_> {
 
             builder.position_at_end(self.unit.entry);
 
-            for alloc in kernel.mem_alloc.as_ref().unwrap().iter() {
+            let mem_alloc = self
+                .gen_ctx
+                .schedule
+                .analysis
+                .get::<mem_alloc::MemAllocResult>();
+            for alloc in mem_alloc.0[&kernel_id].iter() {
                 let dst_ptr = match alloc.ty {
                     AllocateType::Chunk(chunk) => {
                         if alloc.is_first_use {
@@ -614,8 +614,14 @@ impl<'ll> CodeGen<'ll, '_> {
 
         // TODO
         let omp_ctx = None;
-        let omp_parallel = kernel.omp_info.omp_parallel;
-        let omp_for = kernel.omp_info.omp_for;
+        let omp_result = self
+            .gen_ctx
+            .schedule
+            .analysis
+            .get::<crate::schedule::omp::OmpResult>();
+        let omp_info = omp_result.0.get(&kernel_id);
+        let omp_parallel = omp_info.and_then(|info| info.omp_parallel);
+        let omp_for = omp_info.and_then(|info| info.omp_for);
 
         let mut ptrs = ptrs;
 

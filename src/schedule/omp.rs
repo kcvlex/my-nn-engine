@@ -1,4 +1,14 @@
+use std::collections::HashMap;
+
 use crate::schedule::*;
+
+#[derive(Debug, Clone, Default)]
+pub struct OmpInfo {
+    pub omp_parallel: Option<usize>,
+    pub omp_for: Option<usize>,
+}
+
+pub struct OmpResult(pub HashMap<KernelId, OmpInfo>);
 
 pub struct OmpAnnotatePass {
     pub threshold: usize,
@@ -10,63 +20,62 @@ impl SchedulePass for OmpAnnotatePass {
     }
 
     fn run(&self, schedule: &mut Schedule) {
-        InnermostOMP {
+        let result = InnermostOMP {
             threshold: self.threshold,
         }
         .annotate(schedule);
+        schedule.analysis.insert(result);
     }
 }
 
 struct InnermostOMP {
-    pub threshold: usize,
+    threshold: usize,
 }
 
 impl InnermostOMP {
-    fn annotate(&self, schedule: &mut Schedule) {
-        let ids = schedule
-            .kernels
-            .iter()
-            .filter_map(|(id, kernel)| {
-                match &kernel.body {
-                    KernelBody::Opaque(Opaque { op }) => {
-                        assert!(!op.is_elementwise());
-                        return None;
-                    }
-                    KernelBody::ElementWises(ElementWises { ops }) => {
-                        for (_, args) in ops.iter() {
-                            for arg in args {
-                                match arg {
-                                    // TODO: ????
-                                    ElementwiseOpArg::Input(n) if 3 <= *n => return None,
-                                    _ => (),
-                                }
-                            }
-                        }
-                    }
-                }
+    fn annotate(&self, schedule: &Schedule) -> OmpResult {
+        let mut map = HashMap::new();
 
-                let output = kernel.outputs[0];
-                let ty = &schedule.get_resolved_tensor_type(output).unwrap();
-                let annotate = ty
-                    .dims
-                    .last()
-                    .map(|x| self.threshold <= *x)
-                    .unwrap_or(false);
-                if !annotate {
-                    return None;
+        for (id, kernel) in schedule.kernels.iter() {
+            let omp_info = match &kernel.body {
+                KernelBody::Opaque(Opaque { op }) => {
+                    assert!(!op.is_elementwise());
+                    continue;
                 }
-                let ndim = ty.dims.ndim();
-                if ty.stride(ndim - 1) != 1 {
-                    return None;
-                }
-                Some((id, ty.dims.ndim() - 1))
-            })
-            .collect::<Vec<_>>();
+                KernelBody::ElementWises(ElementWises { ops }) => {
+                    let skip = ops.iter().any(|(_, args)| {
+                        args.iter()
+                            .any(|arg| matches!(arg, ElementwiseOpArg::Input(n) if 3 <= *n))
+                    });
+                    if skip {
+                        continue;
+                    }
 
-        for (id, dim) in ids.iter() {
-            let kernel = &mut schedule.kernels[*id];
-            kernel.omp_info.omp_parallel = Some(*dim);
-            kernel.omp_info.omp_for = Some(*dim);
+                    let output = kernel.outputs[0];
+                    let ty = schedule.get_resolved_tensor_type(output).unwrap();
+                    let annotate = ty
+                        .dims
+                        .last()
+                        .map(|x| self.threshold <= *x)
+                        .unwrap_or(false);
+                    if !annotate {
+                        continue;
+                    }
+                    let ndim = ty.dims.ndim();
+                    if ty.stride(ndim - 1) != 1 {
+                        continue;
+                    }
+                    let dim = ndim - 1;
+                    OmpInfo {
+                        omp_parallel: Some(dim),
+                        omp_for: Some(dim),
+                    }
+                }
+            };
+
+            map.insert(id, omp_info);
         }
+
+        OmpResult(map)
     }
 }

@@ -573,10 +573,11 @@ impl<'sched> HostCodeGenerator<'sched> {
             ChunkMemSize::default();
             self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0)
         ];
-        for (kernel_id, kernel) in self.schedule.kernels.iter() {
-            let mem_alloc = kernel
-                .mem_alloc
-                .as_ref()
+        let mem_alloc_result = self.schedule.analysis.get::<mem_alloc::MemAllocResult>();
+        for (kernel_id, _kernel) in self.schedule.kernels.iter() {
+            let mem_alloc = mem_alloc_result
+                .0
+                .get(&kernel_id)
                 .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
             for mem in mem_alloc.iter() {
                 let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
@@ -836,9 +837,10 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
         let kernel = &self.schedule.kernels[kernel_id];
-        let mem_alloc = kernel
-            .mem_alloc
-            .as_ref()
+        let mem_alloc_result = self.schedule.analysis.get::<mem_alloc::MemAllocResult>();
+        let mem_alloc = mem_alloc_result
+            .0
+            .get(&kernel_id)
             .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
         let copy = mem_alloc
             .iter()

@@ -75,23 +75,23 @@ fn build_chunk_deps(sched: &Schedule) -> HashMap<KernelId, Vec<KernelId>> {
 
     let value2chunk = {
         // TODO: Consolidate with the implementation in HostCodeGenerator.
+        let mem_alloc_result = sched
+            .analysis
+            .get::<crate::schedule::mem_alloc::MemAllocResult>();
         let mut res = HashMap::new();
-        for (_, kernel) in sched.kernels.iter() {
-            let mem_alloc = kernel.mem_alloc.as_ref().unwrap();
-            for mem in mem_alloc.iter() {
-                let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
-                    chunk_id
-                } else {
-                    unreachable!("non chunk");
-                };
+        for mem in mem_alloc_result.0.values().flatten() {
+            let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
+                chunk_id
+            } else {
+                unreachable!("non chunk");
+            };
 
-                match res.entry(mem.value_id) {
-                    Entry::Occupied(entry) => {
-                        assert!(*entry.get() == chunk_id);
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(chunk_id);
-                    }
+            match res.entry(mem.value_id) {
+                Entry::Occupied(entry) => {
+                    assert!(*entry.get() == chunk_id);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(chunk_id);
                 }
             }
         }
