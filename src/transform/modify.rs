@@ -85,6 +85,70 @@ pub trait GraphOp {
     }
 
     fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize);
+
+    /// Returns `(source_value, chain)` where `source_value` is the input of the last
+    /// matched node (i.e., the value just before the chain), and `chain` is the list of
+    /// matched `NodeId`s in backward order (closest to `value` first).
+    fn walk_chain_backward<F>(
+        &self,
+        graph: &Graph,
+        value: ValueId,
+        pred: F,
+    ) -> (ValueId, Vec<NodeId>)
+    where
+        F: Fn(&Node) -> bool,
+    {
+        let mut chain = Vec::new();
+        let mut cur = value;
+
+        loop {
+            let Some((node_id, _)) = self.defined_node(cur) else {
+                break;
+            };
+            let node = &graph.nodes[node_id];
+            if !pred(node) {
+                break;
+            }
+            chain.push(node_id);
+            cur = node.inputs[0];
+        }
+
+        (cur, chain)
+    }
+
+    /// Returns `(final_value, chain)` where `final_value` is the output of the last
+    /// matched node (i.e., the value just after the chain), and `chain` is the list of
+    /// matched `NodeId`s in forward order (closest to `value` first).
+    fn walk_chain_forward<F>(
+        &self,
+        graph: &Graph,
+        value: ValueId,
+        pred: F,
+    ) -> (ValueId, Vec<NodeId>)
+    where
+        F: Fn(&Node) -> bool,
+    {
+        let mut chain = Vec::new();
+        let mut cur = value;
+
+        loop {
+            let Some(users) = self.used_node(cur) else {
+                break;
+            };
+            if users.len() != 1 {
+                break;
+            }
+            let (node_id, _) = *users.iter().next().unwrap();
+            let node = &graph.nodes[node_id];
+            if !pred(node) {
+                break;
+            }
+            chain.push(node_id);
+            cur = node.outputs[0];
+        }
+
+        (cur, chain)
+    }
 }
 
 pub trait NodeDelete {
