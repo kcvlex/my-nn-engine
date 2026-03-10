@@ -1590,9 +1590,10 @@ mod test {
             .join("models/test/operator")
             .join("conv.onnx");
         let model = Model::load_from_path(path).unwrap();
-        let mut schedule =
-            Schedule::new(model.graph, Options::builder().target(Target::CUDA).build());
-        schedule.assign_mem();
+        let options = Options::builder().target(Target::CUDA).build();
+        let mut schedule = Schedule::new(model.graph, options.clone());
+        let schedule_passes = crate::schedule::create_schedule_passes(&options);
+        schedule_passes.run(&mut schedule);
 
         let mut host_gen = HostCodeGenerator::new(&schedule);
         host_gen.gen_decl_values().unwrap();

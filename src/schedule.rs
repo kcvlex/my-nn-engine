@@ -7,7 +7,7 @@ use std::ops::IndexMut;
 
 use id_arena::Arena;
 use id_arena::Id;
-use itertools::zip_eq;
+use log::info;
 use serde::Serialize;
 use serde_derive::Serialize;
 
@@ -18,6 +18,46 @@ use crate::onnx::operator::Operator;
 use crate::options::*;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
+
+pub trait SchedulePass {
+    fn summary(&self) -> &str;
+    fn run(&self, schedule: &mut Schedule);
+}
+
+pub struct SchedulePassManager {
+    name: String,
+    passes: Vec<Box<dyn SchedulePass>>,
+}
+
+impl SchedulePassManager {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            passes: Vec::new(),
+        }
+    }
+
+    pub fn add_pass(&mut self, pass: Box<dyn SchedulePass>) {
+        self.passes.push(pass);
+    }
+
+    pub fn run(&self, schedule: &mut Schedule) {
+        info!("SchedulePassManager: {}", self.name);
+        for pass in self.passes.iter() {
+            info!("-- Running pass: {}", pass.summary());
+            pass.run(schedule);
+        }
+    }
+}
+
+pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
+    let mut manager = SchedulePassManager::new("Schedule".to_string());
+    manager.add_pass(Box::new(mem_alloc::MemAllocPass));
+    manager.add_pass(Box::new(omp::OmpAnnotatePass {
+        threshold: options.omp_threshold,
+    }));
+    manager
+}
 
 #[derive(Default)]
 pub struct Kernels(Arena<Kernel>);
@@ -180,18 +220,6 @@ impl Schedule {
 
             graph,
         }
-    }
-
-    pub fn assign_mem(&mut self) {
-        let info_v = mem_alloc::MemoryPlanner::new(self).run();
-        for ((_, kernel), info) in zip_eq(self.kernels.0.iter_mut(), info_v) {
-            kernel.mem_alloc = Some(info);
-        }
-    }
-
-    pub fn annotate_omp(&mut self, threshold: usize) {
-        let annotater = omp::InnermostOMP { threshold };
-        annotater.annotate(self);
     }
 
     pub fn get_resolved_tensor_type(&self, id: ValueId) -> Option<&ResolvedTensorType> {

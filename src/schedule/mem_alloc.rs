@@ -3,11 +3,27 @@ use std::collections::HashSet;
 
 use indexmap::IndexMap;
 use indexmap::IndexSet;
+use itertools::zip_eq;
 
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
+
+pub struct MemAllocPass;
+
+impl SchedulePass for MemAllocPass {
+    fn summary(&self) -> &str {
+        "Memory allocation"
+    }
+
+    fn run(&self, schedule: &mut Schedule) {
+        let info_v = MemoryPlanner::new(schedule).run();
+        for ((_, kernel), info) in zip_eq(schedule.kernels.0.iter_mut(), info_v) {
+            kernel.mem_alloc = Some(info);
+        }
+    }
+}
 
 // TODO: Make the order deterministic
 #[derive(Debug)]

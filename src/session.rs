@@ -13,6 +13,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::Model;
 use crate::onnx::model::ValueId;
 use crate::options::*;
+use crate::schedule::create_schedule_passes;
 use crate::schedule::Schedule;
 use crate::session::cpu::SessionCPU;
 use crate::session::cuda::SessionCUDA;
@@ -172,8 +173,8 @@ impl Session {
             .collect::<Vec<_>>();
 
         let mut schedule = Schedule::new(model.graph, options.clone());
-        schedule.assign_mem();
-        schedule.annotate_omp(options.omp_threshold); // TODO: Move to SessionCPU
+        let schedule_passes = create_schedule_passes(options);
+        schedule_passes.run(&mut schedule);
         info!("Scheduled");
 
         if options.save_build_dir {
