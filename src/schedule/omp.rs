@@ -1,11 +1,28 @@
 use crate::schedule::*;
 
-pub struct InnermostOMP {
+pub struct OmpAnnotatePass {
+    pub threshold: usize,
+}
+
+impl SchedulePass for OmpAnnotatePass {
+    fn summary(&self) -> &str {
+        "OpenMP annotation"
+    }
+
+    fn run(&self, schedule: &mut Schedule) {
+        InnermostOMP {
+            threshold: self.threshold,
+        }
+        .annotate(schedule);
+    }
+}
+
+struct InnermostOMP {
     pub threshold: usize,
 }
 
 impl InnermostOMP {
-    pub fn annotate(&self, schedule: &mut Schedule) {
+    fn annotate(&self, schedule: &mut Schedule) {
         let ids = schedule
             .kernels
             .iter()
