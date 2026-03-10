@@ -219,8 +219,6 @@ impl KernelsBuilder {
                         outputs: graph.nodes[node_id].outputs.clone(),
                         body,
                         name: node.name.clone(),
-                        mem_alloc: None,
-                        omp_info: OmpInfo::default(),
                     }
                 }
                 KernelTag::ElementwiseLast(group_id) => {
@@ -235,8 +233,6 @@ impl KernelsBuilder {
                         outputs,
                         body,
                         name,
-                        mem_alloc: None,
-                        omp_info: OmpInfo::default(),
                     }
                 }
             };

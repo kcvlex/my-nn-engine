@@ -2,6 +2,9 @@ pub mod kernel;
 pub mod mem_alloc;
 pub mod omp;
 
+use std::any::Any;
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::ops::Index;
 use std::ops::IndexMut;
 
@@ -18,6 +21,25 @@ use crate::onnx::operator::Operator;
 use crate::options::*;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
+
+#[derive(Default)]
+pub struct AnalysisResults {
+    map: HashMap<TypeId, Box<dyn Any>>,
+}
+
+impl AnalysisResults {
+    pub fn insert<T: 'static>(&mut self, value: T) {
+        self.map.insert(TypeId::of::<T>(), Box::new(value));
+    }
+
+    pub fn get<T: 'static>(&self) -> &T {
+        self.map
+            .get(&TypeId::of::<T>())
+            .unwrap_or_else(|| panic!("Analysis result not found: {}", std::any::type_name::<T>()))
+            .downcast_ref()
+            .unwrap()
+    }
+}
 
 pub trait SchedulePass {
     fn summary(&self) -> &str;
@@ -70,14 +92,9 @@ pub struct Schedule {
 
     pub kernels: Kernels,
     pub options: Options,
+    pub analysis: AnalysisResults,
 
     graph: Graph,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct OmpInfo {
-    pub omp_parallel: Option<usize>,
-    pub omp_for: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -86,9 +103,6 @@ pub struct Kernel {
     pub outputs: Vec<ValueId>,
     pub body: KernelBody,
     pub name: String,
-
-    pub mem_alloc: Option<Vec<AllocateInfo>>,
-    pub omp_info: OmpInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +231,7 @@ impl Schedule {
 
             kernels,
             options,
+            analysis: AnalysisResults::default(),
 
             graph,
         }
@@ -235,9 +250,10 @@ impl Schedule {
     }
 
     pub fn max_chunk_id(&self) -> Option<usize> {
-        self.kernels
-            .iter()
-            .filter_map(|(_, kernel)| kernel.mem_alloc.as_ref())
+        let mem_alloc = self.analysis.get::<mem_alloc::MemAllocResult>();
+        mem_alloc
+            .0
+            .values()
             .flatten()
             .filter_map(|info| info.ty.chunk_id())
             .max()
