@@ -23,6 +23,9 @@ pub struct Options {
     #[builder(default = Target::CPU)]
     pub target: Target,
 
+    #[builder(default = 16)]
+    pub num_cuda_streams: usize,
+
     #[builder(default = false)]
     pub profile: bool,
 

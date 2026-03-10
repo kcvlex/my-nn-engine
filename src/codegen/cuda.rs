@@ -37,9 +37,9 @@ use crate::onnx::model::ValueId;
 use crate::onnx::operator;
 use crate::onnx::operator::*;
 use crate::options::Options;
-use crate::schedule::stream::allocate_streams;
 use crate::schedule::stream::EventId;
 use crate::schedule::stream::KernelStreamAssignment;
+use crate::schedule::stream::StreamAllocResult;
 use crate::schedule::stream::StreamId;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
@@ -218,7 +218,7 @@ pub struct HostCodeGenerator<'sched> {
 
     stmts: Vec<Statement>,
 
-    streams: HashMap<KernelId, KernelStreamAssignment>,
+    streams: &'sched HashMap<KernelId, KernelStreamAssignment>,
     to_record_events: HashSet<EventId>,
 
     value2chunk: HashMap<ValueId, ChunkId>,
@@ -248,7 +248,6 @@ pub struct HostCode {
 const ARG_INPUT: &str = "input";
 const ARG_OUTPUT: &str = "output";
 const ARG_INITIALIZER: &str = "initializer";
-const MAX_STREAMS: usize = 16;
 const DEFAULT_BLOCK_SIZE: usize = 256;
 
 struct CudnnCodeGenerator<'sched> {
@@ -509,7 +508,7 @@ fn ceil_pow2(mut x: usize) -> usize {
 
 impl<'sched> HostCodeGenerator<'sched> {
     pub fn new(schedule: &'sched Schedule) -> Self {
-        let streams = allocate_streams(schedule, MAX_STREAMS);
+        let streams = &schedule.analysis.get::<StreamAllocResult>().0;
         let to_record_events = streams
             .values()
             .flat_map(|s| s.to_wait.iter())
