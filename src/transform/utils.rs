@@ -218,10 +218,10 @@ impl ReshapeGenerator {
 
 #[allow(dead_code)]
 #[derive(Default)]
-pub struct ContigousOutput {}
+pub struct ContiguousOutput {}
 
 // This pass is assumed to be run before shape inference
-impl<T: GraphOp> Pass<T> for ContigousOutput {
+impl<T: GraphOp> Pass<T> for ContiguousOutput {
     fn summary(&self) -> &'static str {
         "Insert contiguous before all Outputs"
     }
