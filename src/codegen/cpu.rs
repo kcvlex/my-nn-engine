@@ -31,6 +31,7 @@ use crate::codegen::cpu::translator::*;
 use crate::codegen::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
+use crate::onnx::operator::Contiguous;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
@@ -651,7 +652,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     }
                 }
 
-                Operator::Contiguous |
+                Operator::Contiguous(_) |
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
                 Operator::Exp |
@@ -675,7 +676,10 @@ impl<'ll> CodeGen<'ll, '_> {
                     let src = operands[0].0;
                     SingleOpcode::Cast(src, cast.to)
                 }
-                Operator::Contiguous => SingleOpcode::Transfer,
+                Operator::Contiguous(Contiguous { ref ops }) if ops.is_empty() => {
+                    SingleOpcode::Transfer
+                }
+                Operator::Contiguous(_) => unimplemented!("Contiguous with reinterpret ops"),
                 Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
@@ -714,7 +718,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sub |
                 Operator::Tanh => unreachable!(),
 
-                operator @ Operator::Contiguous => {
+                operator @ Operator::Contiguous(_) => {
                     let target_dim = ptrs[0].ty.dims.clone();
                     let nest = target_dim.ndim();
                     let operator =

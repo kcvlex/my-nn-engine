@@ -1023,7 +1023,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                Operator::Contiguous => {
+                Operator::Contiguous(_) => {
                     let output_size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
                         .dims

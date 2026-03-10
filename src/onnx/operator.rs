@@ -79,7 +79,7 @@ pub enum Operator {
     Unsqueeze(Unsqueeze),
 
     // Custom
-    Contiguous,
+    Contiguous(Contiguous),
     Im2Col(Im2Col),
     ReduceMatrix(ReduceOp),
     Reinterpret(Reinterpret),
@@ -523,6 +523,11 @@ impl Default for Gemm {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Contiguous {
+    pub ops: Vec<ReinterpretType>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Channel {
     Meld(usize),  // Conv
@@ -723,7 +728,7 @@ impl Operator {
             Operator::Unsqueeze(_) => "Unsqueeze",
 
             // Custom
-            Operator::Contiguous => "Contiguous",
+            Operator::Contiguous(_) => "Contiguous",
             Operator::Im2Col(_) => "Im2Col",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
             Operator::Reinterpret(_) => "Reinterpret",
@@ -754,7 +759,7 @@ impl Operator {
             Operator::Sub |
             Operator::Tanh => OperatorType::Elementwise,
 
-            Operator::Contiguous |
+            Operator::Contiguous(_) |
             Operator::Reshape |
             Operator::Squeeze(_) |
             Operator::Transpose(_) |

@@ -1,4 +1,5 @@
 mod cleanup;
+pub mod fold_cont;
 
 use itertools::Itertools;
 
@@ -114,7 +115,7 @@ impl<T: GraphOp> Pass<T> for ElimCont {
             .nodes
             .iter()
             .filter(|(_, node)| match node.op {
-                Operator::Contiguous => {
+                Operator::Contiguous(_) => {
                     let input_shape = graph.get_resolved_tensor_type(node.inputs[0]).unwrap();
                     input_shape.is_contiguous()
                 }
@@ -138,6 +139,8 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));
     }
+    // TODO: Enable once codegen supports Contiguous with reinterpret ops.
+    // manager.add_pass(Box::new(fold_cont::FoldContiguous::default()));
     manager.add_pass(Box::new(cleanup::CleanupTensors::default()));
     manager
 }

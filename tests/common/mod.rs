@@ -33,7 +33,6 @@ macro_rules! build_graph {
         use std::collections::hash_map::Entry;
 
         let mut graph = Graph::empty_graph($name.to_string());
-        let mut initializers_list = Vec::new();
         let mut registry: HashMap<&str, ValueId> = HashMap::new();
 
         // Create values
@@ -82,7 +81,6 @@ macro_rules! build_graph {
             });
             registry.insert(name, init);
             graph.initializer.insert(init, $init_val);
-            initializers_list.push(init);
         )*
 
         // Create nodes

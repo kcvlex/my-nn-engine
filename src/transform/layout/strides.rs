@@ -157,7 +157,7 @@ impl AssignStridesImpl {
             Node {
                 inputs: vec![input],
                 outputs: vec![new_output],
-                op: Operator::Contiguous,
+                op: Operator::Contiguous(Contiguous { ops: vec![] }),
                 name: format!("Contiguous_{}", name),
                 meta: NodeMeta::default(),
             },

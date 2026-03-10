@@ -869,7 +869,7 @@ impl<'sched> ContiguousBuilder<'sched> {
         assert!(matches!(
             kernel.body,
             KernelBody::Opaque(Opaque {
-                op: Operator::Contiguous,
+                op: Operator::Contiguous(_),
             })
         ));
 

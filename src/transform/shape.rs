@@ -537,7 +537,7 @@ pub fn infer_node_output(
         }
 
         // Custom
-        Operator::Contiguous => {
+        Operator::Contiguous(_) => {
             let input = &inputs[0];
             res.push(input.contiguous());
         }
