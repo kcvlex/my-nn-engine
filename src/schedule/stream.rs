@@ -5,10 +5,7 @@ use std::collections::HashSet;
 use indexmap::IndexSet;
 
 use crate::onnx::model::ValueId;
-use crate::schedule::AllocateType;
-use crate::schedule::ChunkId;
-use crate::schedule::KernelId;
-use crate::schedule::Schedule;
+use crate::schedule::*;
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
 pub struct StreamId(usize);
@@ -75,9 +72,7 @@ fn build_chunk_deps(sched: &Schedule) -> HashMap<KernelId, Vec<KernelId>> {
 
     let value2chunk = {
         // TODO: Consolidate with the implementation in HostCodeGenerator.
-        let mem_alloc_result = sched
-            .analysis
-            .get::<crate::schedule::mem_alloc::MemAllocResult>();
+        let mem_alloc_result = sched.analysis.get::<super::mem_alloc::MemAllocResult>();
         let mut res = HashMap::new();
         for mem in mem_alloc_result.0.values().flatten() {
             let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
