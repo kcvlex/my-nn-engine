@@ -199,7 +199,7 @@ impl Conv {
 
         let feature_map_size = weight_shape[0];
 
-        assert!(feature_map_size % self.groups == 0);
+        assert!(feature_map_size.is_multiple_of(self.groups));
         assert!(channels == weight_shape[1] * self.groups);
 
         let kernel_shape = &weight_shape[2..];
