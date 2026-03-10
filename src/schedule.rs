@@ -1,6 +1,7 @@
 pub mod kernel;
 pub mod mem_alloc;
 pub mod omp;
+pub mod stream;
 
 use std::any::Any;
 use std::any::TypeId;
