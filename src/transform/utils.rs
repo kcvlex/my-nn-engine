@@ -94,7 +94,7 @@ impl TransposeGenerator {
                 Node {
                     inputs: vec![transposed],
                     outputs: vec![new_value],
-                    op: Operator::Contiguous,
+                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("{node_name}_Contiguous"),
                     meta: NodeMeta::default(),
                 },
@@ -189,7 +189,7 @@ impl ReshapeGenerator {
                         Node {
                             inputs: vec![input],
                             outputs: vec![new_value],
-                            op: Operator::Contiguous,
+                            op: Operator::Contiguous(Contiguous { ops: vec![] }),
                             name: node_name,
                             meta: NodeMeta::default(),
                         },
@@ -240,7 +240,7 @@ impl<T: GraphOp> Pass<T> for ContiguousOutput {
                 Node {
                     inputs: vec![input],
                     outputs: vec![new_value],
-                    op: Operator::Contiguous,
+                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("Contiguous_Output_{}", id.index()),
                     meta: NodeMeta::default(),
                 },

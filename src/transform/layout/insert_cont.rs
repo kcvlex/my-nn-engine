@@ -55,7 +55,7 @@ impl InsertContiguous {
                 Node {
                     inputs: vec![*input],
                     outputs: vec![new_value],
-                    op: Operator::Contiguous,
+                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("{}_contiguous_{}", node_name, i),
                     meta: NodeMeta::default(),
                 },
@@ -96,7 +96,7 @@ impl InsertContiguous {
                 Node {
                     inputs: vec![input],
                     outputs: vec![new_value],
-                    op: Operator::Contiguous,
+                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("{}_contiguous_{}", name, arg),
                     meta: NodeMeta::default(),
                 },
