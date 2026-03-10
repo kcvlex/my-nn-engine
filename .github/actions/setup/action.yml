@@ -44,11 +44,16 @@ runs:
         echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> $GITHUB_ENV
 
+    - name: Hash requested models
+      id: model-hash
+      shell: bash
+      run: echo "hash=$(echo '${{ inputs.models }}' | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
     - name: Cache validated model archives
       uses: actions/cache@v4
       with:
         path: models/validated/*.tar.gz
-        key: ${{ runner.os }}-validated-model-archives-v1
+        key: ${{ runner.os }}-validated-model-archives-${{ steps.model-hash.outputs.hash }}
         restore-keys: |
           ${{ runner.os }}-validated-model-archives-
 
