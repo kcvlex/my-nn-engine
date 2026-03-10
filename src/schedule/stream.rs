@@ -7,6 +7,23 @@ use indexmap::IndexSet;
 use crate::onnx::model::ValueId;
 use crate::schedule::*;
 
+pub struct StreamAllocResult(pub HashMap<KernelId, KernelStreamAssignment>);
+
+pub struct StreamAllocPass {
+    pub num_streams: usize,
+}
+
+impl SchedulePass for StreamAllocPass {
+    fn summary(&self) -> &str {
+        "CUDA stream allocation"
+    }
+
+    fn run(&self, schedule: &mut Schedule) {
+        let result = StreamAllocator::new(schedule, self.num_streams).run();
+        schedule.analysis.insert(StreamAllocResult(result));
+    }
+}
+
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
 pub struct StreamId(usize);
 

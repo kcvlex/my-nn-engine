@@ -76,9 +76,16 @@ impl SchedulePassManager {
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
     manager.add_pass(Box::new(mem_alloc::MemAllocPass));
-    manager.add_pass(Box::new(omp::OmpAnnotatePass {
-        threshold: options.omp_threshold,
-    }));
+    if options.target == Target::CPU {
+        manager.add_pass(Box::new(omp::OmpAnnotatePass {
+            threshold: options.omp_threshold,
+        }));
+    }
+    if options.target == Target::CUDA {
+        manager.add_pass(Box::new(stream::StreamAllocPass {
+            num_streams: options.num_cuda_streams,
+        }));
+    }
     manager
 }
 
