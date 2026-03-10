@@ -31,13 +31,15 @@ impl<T: GraphOp> Pass<T> for TransposeFusion {
                 continue;
             }
             visited.insert(transpose_id);
-            let mut defs = follow_defs(transpose_id, graph, modifier);
+            let input_value = graph.nodes[transpose_id].inputs[0];
+            let (input, mut defs) = modifier.walk_chain_backward(graph, input_value, |node| {
+                matches!(node.op, Operator::Transpose(_))
+            });
             if defs.is_empty() {
                 continue;
             }
             defs.reverse();
             defs.push(transpose_id);
-            let input = graph.nodes[defs[0]].inputs[0];
             let old_output = graph.nodes[transpose_id].outputs[0];
             let mut perm = match graph.nodes[defs[0]].op {
                 Operator::Transpose(ref p) => p.perm.clone().unwrap(),
@@ -70,20 +72,4 @@ impl<T: GraphOp> Pass<T> for TransposeFusion {
             }
         }
     }
-}
-
-fn follow_defs<T: GraphOp>(id: NodeId, graph: &Graph, modifier: &T) -> Vec<NodeId> {
-    let mut res = Vec::new();
-    let mut cur = id;
-    loop {
-        let Some((def, _)) = modifier.defined_node(graph.nodes[cur].inputs[0]) else {
-            break;
-        };
-        if !matches!(graph.nodes[def].op, Operator::Transpose(_)) {
-            break;
-        }
-        cur = def;
-        res.push(def);
-    }
-    res
 }

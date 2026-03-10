@@ -23,34 +23,31 @@ fn bundle_reshape_and_transpose<T: GraphOp>(
     node_id: NodeId,
     modifier: &T,
 ) -> (Reinterpret, ValueId) {
-    assert!(matches!(
-        graph.nodes[node_id].op,
-        Operator::Reshape | Operator::Transpose(_)
-    ));
-    let mut ops = Vec::new();
-    let mut cur = (node_id, 0);
-    let mut input = graph.nodes[cur.0].inputs[0];
-    loop {
-        match &graph.nodes[cur.0].op {
+    let input_value = graph.nodes[node_id].inputs[0];
+    let (source, chain) = modifier.walk_chain_backward(graph, input_value, |node| {
+        matches!(node.op, Operator::Reshape | Operator::Transpose(_))
+    });
+
+    let all_nodes: Vec<NodeId> = chain
+        .into_iter()
+        .rev()
+        .chain(std::iter::once(node_id))
+        .collect();
+    let ops = all_nodes
+        .iter()
+        .map(|&id| match &graph.nodes[id].op {
             Operator::Reshape => {
                 let output_shape = graph
-                    .get_resolved_tensor_type(graph.nodes[cur.0].outputs[cur.1])
+                    .get_resolved_tensor_type(graph.nodes[id].outputs[0])
                     .unwrap();
-                ops.push(ReinterpretType::Reshape(
-                    output_shape.dims.iter().map(|d| *d as i64).collect(),
-                ));
+                ReinterpretType::Reshape(output_shape.dims.iter().map(|d| *d as i64).collect())
             }
-            Operator::Transpose(perm) => ops.push(ReinterpretType::Transpose(perm.clone())),
-            _ => break,
-        }
-        input = graph.nodes[cur.0].inputs[0];
-        cur = match modifier.defined_node(input) {
-            Some(v) => v,
-            None => break,
-        };
-    }
+            Operator::Transpose(perm) => ReinterpretType::Transpose(perm.clone()),
+            _ => unreachable!(),
+        })
+        .collect();
 
-    (Reinterpret { ops }, input)
+    (Reinterpret { ops }, source)
 }
 
 impl<T: GraphOp> Pass<T> for Ops2Reinterpret {
