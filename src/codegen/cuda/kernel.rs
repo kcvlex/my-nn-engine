@@ -8,6 +8,7 @@ use itertools::Itertools;
 use crate::codegen::cuda::*;
 use crate::onnx::operator;
 use crate::onnx::operator::args;
+use crate::onnx::operator::ReinterpretType;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 
@@ -866,28 +867,98 @@ impl<'sched> ContiguousBuilder<'sched> {
 
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        assert!(matches!(
-            kernel.body,
+        let ops = match &kernel.body {
             KernelBody::Opaque(Opaque {
-                op: Operator::Contiguous(_),
-            })
-        ));
+                op: Operator::Contiguous(operator::Contiguous { ops }),
+            }) => ops,
+            _ => panic!("expected Contiguous"),
+        };
 
         let gid = KernelVar::Gid;
         let input = kernel.inputs[0];
         let output = kernel.outputs[0];
-        let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
-        let input_idx = self.ctx.tensor_idx(input, KernelVar::Gid, None)?;
+        let out_ty = self.ctx.get_resolved_tensor_type(output)?;
+        let in_ty = self.ctx.get_resolved_tensor_type(input)?;
+        let size = out_ty.dims.size().max(1);
         let in_ = KernelVar::Value(input);
         let out = KernelVar::Value(output);
         let decl = self.ctx.decl.decl();
+
+        if ops.is_empty() {
+            let input_idx = self.ctx.tensor_idx(input, KernelVar::Gid, None)?;
+            return Ok(format!(
+                "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {out}[{gid}] = {in_}[{input_idx}];
+}}
+"
+            ));
+        }
+
+        let mut body = String::new();
+
+        for (i, d) in out_ty.dims.iter().enumerate().rev() {
+            body.push_str(&format!("int idx_{i}=offset%{d};\n"));
+            body.push_str(&format!("offset=offset/{d};\n"));
+        }
+        body.push_str("offset=0;\n");
+        for (i, d) in out_ty.dims.iter().enumerate() {
+            body.push_str(&format!("offset=offset*{d}+idx_{i};\n"));
+        }
+
+        let mut shape: Vec<usize> = out_ty.dims.iter().copied().collect();
+        for op in ops.iter().rev() {
+            match op {
+                ReinterpretType::Reshape { before, .. } => {
+                    shape = before.clone();
+                }
+                ReinterpretType::Transpose(transpose) => {
+                    let cur_ndim = shape.len();
+                    let perm = transpose
+                        .perm
+                        .clone()
+                        .unwrap_or_else(|| (0..cur_ndim).collect());
+
+                    for (i, d) in shape.iter().enumerate().rev() {
+                        body.push_str(&format!("int t_{i}=offset%{d};\n"));
+                        body.push_str(&format!("offset=offset/{d};\n"));
+                    }
+
+                    let old_shape = shape.clone();
+                    let mut inv_perm = vec![0; cur_ndim];
+                    for (i, &p) in perm.iter().enumerate() {
+                        shape[p] = old_shape[i];
+                        inv_perm[p] = i;
+                    }
+
+                    body.push_str("offset=0;\n");
+                    for (k, d) in shape.iter().enumerate() {
+                        body.push_str(&format!("offset=offset*{d}+t_{};\n", inv_perm[k]));
+                    }
+                }
+            }
+        }
+
+        let src_strides: Vec<usize> = in_ty.strides().iter().copied().collect();
+        for (i, d) in shape.iter().enumerate().rev() {
+            body.push_str(&format!("int s_{i}=offset%{d};\n"));
+            body.push_str(&format!("offset=offset/{d};\n"));
+        }
+        body.push_str("int src_idx=0;\n");
+        for (i, s) in src_strides.iter().enumerate() {
+            body.push_str(&format!("src_idx+=s_{i}*{s};\n"));
+        }
 
         Ok(format!(
             "
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
-    {out}[{gid}] = {in_}[{input_idx}];
+    int offset = {gid};
+{body}    
+    {out}[{gid}] = {in_}[src_idx];
 }}
 "
         ))
