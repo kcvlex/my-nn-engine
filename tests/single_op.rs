@@ -1327,7 +1327,7 @@ fn attention_causal_large() -> TestResult {
 // Transpose -> Output => Reinterpret -> Contiguous -> Output => Contiguous(transpose) -> Output
 #[test]
 fn transpose_contiguous_fold() -> TestResult {
-    with_cpu_session("transpose.onnx", |session| {
+    with_all_sessions("transpose.onnx", |session| {
         let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
         let output = session.run(&[input])?;
         let expected = orig

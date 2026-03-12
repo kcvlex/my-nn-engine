@@ -145,9 +145,7 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));
     }
-    if matches!(opt.target, Target::CPU) {
-        manager.add_pass(Box::new(fold_cont::FoldContiguous::default()));
-    }
+    manager.add_pass(Box::new(fold_cont::FoldContiguous::default()));
     manager.add_pass(Box::new(cleanup::CleanupTensors::default()));
     manager
 }
