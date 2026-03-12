@@ -38,8 +38,8 @@ fn transpose_ops(perm: Vec<usize>) -> Vec<ReinterpretType> {
     vec![ReinterpretType::Transpose(Transpose { perm: Some(perm) })]
 }
 
-fn reshape_ops(dims: Vec<i64>) -> Vec<ReinterpretType> {
-    vec![ReinterpretType::Reshape(dims)]
+fn reshape_ops(before: Vec<usize>, after: Vec<usize>) -> Vec<ReinterpretType> {
+    vec![ReinterpretType::single_reshape(before, after)]
 }
 
 // Reinterpret -> Contiguous
@@ -83,7 +83,7 @@ fn test_reinterpret_then_contiguous() {
 // Contiguous
 #[test]
 fn test_contiguous_then_reinterpret() {
-    let re_ops = reshape_ops(vec![2, 32, 16]);
+    let re_ops = reshape_ops(vec![2, 4, 8, 16], vec![2, 32, 16]);
 
     let mut graph = build_graph! {
         name: "cont_reinterpret",
@@ -123,7 +123,7 @@ fn test_contiguous_then_reinterpret() {
 #[test]
 fn test_reinterpret_contiguous_reinterpret() {
     let before_ops = transpose_ops(vec![0, 2, 1, 3]);
-    let after_ops = reshape_ops(vec![2, 32, 16]);
+    let after_ops = reshape_ops(vec![2, 8, 4, 16], vec![2, 32, 16]);
 
     let mut graph = build_graph! {
         name: "re_cont_re",
@@ -281,7 +281,7 @@ fn test_no_fold_multi_user() {
 #[test]
 fn test_contiguous_with_existing_ops_and_trailing_reinterpret() {
     let existing_ops = transpose_ops(vec![0, 2, 1, 3]);
-    let trailing_ops = reshape_ops(vec![2, 32, 16]);
+    let trailing_ops = reshape_ops(vec![2, 8, 4, 16], vec![2, 32, 16]);
 
     let mut graph = build_graph! {
         name: "existing_ops",

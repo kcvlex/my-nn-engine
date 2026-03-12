@@ -364,8 +364,17 @@ pub struct Resize {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReinterpretType {
-    Reshape(Vec<i64>),
+    Reshape {
+        before: Vec<usize>,
+        after: Vec<usize>,
+    },
     Transpose(Transpose),
+}
+
+impl ReinterpretType {
+    pub fn single_reshape(before: Vec<usize>, after: Vec<usize>) -> Self {
+        Self::Reshape { before, after }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

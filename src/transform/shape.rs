@@ -545,7 +545,10 @@ pub fn infer_node_output(
             let mut ty = inputs[0].clone();
             for op in ops.iter() {
                 ty = match op {
-                    ReinterpretType::Reshape(ref shape) => reshape(&ty, shape, mode)?,
+                    ReinterpretType::Reshape { ref after, .. } => {
+                        let shape: Vec<i64> = after.iter().map(|d| *d as i64).collect();
+                        reshape(&ty, &shape, mode)?
+                    }
                     ReinterpretType::Transpose(ref perm) => transpose(&ty, perm, mode)?,
                 };
             }
