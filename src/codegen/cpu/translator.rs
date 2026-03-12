@@ -1402,7 +1402,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(())
     }
 
-    pub fn omp_for_static(
+    fn omp_for_static(
         &self,
         omp_ctx: &OMPContext<'ctx>,
         bound: u64,
@@ -1489,8 +1489,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         max_nest: usize,
         loop_range: Option<(IntValue<'ctx>, IntValue<'ctx>)>,
     ) -> Result<(), BuilderError> {
-        if op_ctx.to_paralleize(nest) {
-            // Collect captures: (ptr, offset) pairs for each tensor operand
+        if op_ctx.to_for(nest) {
             let tensors = op_ctx.operation.operands.to_vec();
             let captures: Vec<BasicValueEnum<'ctx>> = tensors
                 .iter()
@@ -1502,7 +1501,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .iter()
                 .map(|t| (t.ty.clone(), t.name.clone()))
                 .collect();
-            let omp_for = op_ctx.omp_for;
+            let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
 
             self.omp_parallel(&captures, |translator, omp_ctx, loaded, loop_bb| {
                 let operands: smallvec::SmallVec<[TensorPtr<'ctx>; 4]> = tensor_info
@@ -1516,50 +1515,39 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     })
                     .collect();
 
-                let op_ctx = OperationContext {
-                    operation: Operation { opcode, operands },
-                    omp_ctx: Some(omp_ctx.clone()),
-                    omp_parallel: None,
-                    omp_for,
-                };
+                let range = translator.omp_for_static(omp_ctx, bound, loop_bb.exit)?;
 
-                translator.build_nested_loop_rec(op_ctx, loop_bb, nest, max_nest, None)
+                // Adjust operand offsets by lb * stride
+                let i64_type = translator.context.i64_type();
+                let new_header = translator
+                    .context
+                    .append_basic_block(*translator.func, "omp.for.header");
+                let mut op_ctx = OperationContext {
+                    operation: Operation { opcode, operands },
+                    omp_for: None,
+                };
+                for op in op_ctx.operation.operands.iter_mut() {
+                    let add = translator.builder.build_int_mul(
+                        range.lb,
+                        i64_type.const_int(op.stride(nest).try_into().unwrap(), false),
+                        "add",
+                    )?;
+                    op.offset = translator.builder.build_int_add(op.offset, add, "offset")?;
+                }
+                translator.builder.build_unconditional_branch(new_header)?;
+
+                let new_loop_bb = LoopBB {
+                    preheader: range.body_bb,
+                    header: new_header,
+                    exit: range.epilog_bb,
+                };
+                let loop_range = Some((range.lb, range.ub));
+                translator.builder.position_at_end(new_header);
+                translator.build_nested_loop_rec(op_ctx, new_loop_bb, nest, max_nest, loop_range)
             })?;
             self.builder.build_unconditional_branch(loop_bb.exit)?;
 
             return Ok(());
-        }
-
-        if op_ctx.to_for(nest) {
-            let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
-            let omp_ctx = op_ctx.omp_ctx.as_ref().unwrap();
-            let range = self.omp_for_static(omp_ctx, bound, loop_bb.exit)?;
-
-            // Adjust operand offsets by lb * stride
-            let i64_type = self.context.i64_type();
-            let new_header = self
-                .context
-                .append_basic_block(*self.func, "omp.for.header");
-            let mut op_ctx = op_ctx;
-            for op in op_ctx.operation.operands.iter_mut() {
-                let add = self.builder.build_int_mul(
-                    range.lb,
-                    i64_type.const_int(op.stride(nest).try_into().unwrap(), false),
-                    "add",
-                )?;
-                op.offset = self.builder.build_int_add(op.offset, add, "offset")?;
-            }
-            self.builder.build_unconditional_branch(new_header)?;
-
-            op_ctx.omp_for = None;
-            let new_loop_bb = LoopBB {
-                preheader: range.body_bb,
-                header: new_header,
-                exit: range.epilog_bb,
-            };
-            let loop_range = Some((range.lb, range.ub));
-            self.builder.position_at_end(new_header);
-            return self.build_nested_loop_rec(op_ctx, new_loop_bb, nest, max_nest, loop_range);
         }
 
         if nest == max_nest {
@@ -1935,9 +1923,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             };
             let op = OperationContext {
                 operation: op,
-                omp_ctx: None,
                 omp_for: None,
-                omp_parallel: None,
             };
             entry = self.build_nested_loop(op, entry, max_nest)?;
             acc += src.ty.dims[axis] * stride;
@@ -3147,20 +3133,27 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     }
 }
 
+#[derive(Clone)]
+struct OMPContext<'ctx> {
+    global_tid: PointerValue<'ctx>,
+    is_last: PointerValue<'ctx>,
+    lb: PointerValue<'ctx>,
+    ub: PointerValue<'ctx>,
+    stride: PointerValue<'ctx>,
+}
+
+struct OMPForRange<'ctx> {
+    lb: IntValue<'ctx>,
+    ub: IntValue<'ctx>,
+    body_bb: BasicBlock<'ctx>,
+    epilog_bb: BasicBlock<'ctx>,
+}
+
 #[derive(Debug)]
 struct LoopBB<'ctx> {
     preheader: BasicBlock<'ctx>,
     header: BasicBlock<'ctx>,
     exit: BasicBlock<'ctx>,
-}
-
-/// Result of `omp_for_static`: the `[lb, ub)` range assigned to the
-/// current thread and the basic blocks for the loop body and epilog.
-pub struct OMPForRange<'ctx> {
-    pub lb: IntValue<'ctx>,
-    pub ub: IntValue<'ctx>,
-    pub body_bb: BasicBlock<'ctx>,
-    pub epilog_bb: BasicBlock<'ctx>,
 }
 
 #[derive(Debug)]

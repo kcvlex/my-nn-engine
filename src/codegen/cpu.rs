@@ -613,15 +613,12 @@ impl<'ll> CodeGen<'ll, '_> {
             return Ok(());
         }
 
-        // TODO
-        let omp_ctx = None;
         let omp_result = self
             .gen_ctx
             .schedule
             .analysis
             .get::<crate::schedule::omp::OmpResult>();
         let omp_info = omp_result.0.get(&kernel_id);
-        let omp_parallel = omp_info.and_then(|info| info.omp_parallel);
         let omp_for = omp_info.and_then(|info| info.omp_for);
 
         let mut ptrs = ptrs;
@@ -630,8 +627,6 @@ impl<'ll> CodeGen<'ll, '_> {
             ($op: expr, $nest: expr) => {{
                 let op = OperationContext {
                     operation: $op,
-                    omp_ctx,
-                    omp_parallel,
                     omp_for,
                 };
                 translator.build_nested_loop(op, entry, $nest)
