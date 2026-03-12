@@ -984,8 +984,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let entry = if let Some(c) = c {
             {
                 let op = ReinterpretType::single_reshape(
-                    c.ty.dims.iter().map(|d| *d as usize).collect(),
-                    dst.ty.dims.iter().map(|d| *d as usize).collect(),
+                    c.ty.dims.iter().map(|d| *d).collect(),
+                    dst.ty.dims.iter().map(|d| *d).collect(),
                 );
                 self.build_contiguous(dst, c.clone(), entry, &[op])?
             }
