@@ -4,7 +4,6 @@ use crate::schedule::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct OmpInfo {
-    pub omp_parallel: Option<usize>,
     pub omp_for: Option<usize>,
 }
 
@@ -66,10 +65,7 @@ impl InnermostOMP {
                         continue;
                     }
                     let dim = ndim - 1;
-                    OmpInfo {
-                        omp_parallel: Some(dim),
-                        omp_for: Some(dim),
-                    }
+                    OmpInfo { omp_for: Some(dim) }
                 }
             };
 

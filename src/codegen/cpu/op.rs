@@ -102,27 +102,12 @@ impl From<SingleOpcode> for Opcode {
     }
 }
 
-#[derive(Clone)]
-pub struct OMPContext<'ctx> {
-    pub global_tid: PointerValue<'ctx>,
-    pub is_last: PointerValue<'ctx>,
-    pub lb: PointerValue<'ctx>,
-    pub ub: PointerValue<'ctx>,
-    pub stride: PointerValue<'ctx>,
-}
-
 pub struct OperationContext<'ctx> {
     pub operation: Operation<'ctx>,
-    pub omp_ctx: Option<OMPContext<'ctx>>,
-    pub omp_parallel: Option<usize>,
     pub omp_for: Option<usize>,
 }
 
 impl OperationContext<'_> {
-    pub fn to_paralleize(&self, nest: usize) -> bool {
-        self.omp_parallel == Some(nest)
-    }
-
     pub fn to_for(&self, nest: usize) -> bool {
         self.omp_for == Some(nest)
     }
