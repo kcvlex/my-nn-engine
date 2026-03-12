@@ -1322,3 +1322,20 @@ fn attention_causal_large() -> TestResult {
         },
     )
 }
+
+// Transpose generates Contiguous with non-empty ops after FoldContiguous:
+// Transpose -> Output => Reinterpret -> Contiguous -> Output => Contiguous(transpose) -> Output
+#[test]
+fn transpose_contiguous_fold() -> TestResult {
+    with_cpu_session("transpose.onnx", |session| {
+        let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;
+        let output = session.run(&[input])?;
+        let expected = orig
+            .view()
+            .permuted_axes([2, 3, 1, 0])
+            .to_owned()
+            .into_dyn();
+        tensor_assert_eq!(output[0], expected);
+        Ok(())
+    })
+}

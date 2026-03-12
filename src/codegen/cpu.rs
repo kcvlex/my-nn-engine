@@ -676,10 +676,6 @@ impl<'ll> CodeGen<'ll, '_> {
                     let src = operands[0].0;
                     SingleOpcode::Cast(src, cast.to)
                 }
-                Operator::Contiguous(Contiguous { ref ops }) if ops.is_empty() => {
-                    SingleOpcode::Transfer
-                }
-                Operator::Contiguous(_) => unimplemented!("Contiguous with reinterpret ops"),
                 Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
@@ -718,16 +714,8 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sub |
                 Operator::Tanh => unreachable!(),
 
-                operator @ Operator::Contiguous(_) => {
-                    let target_dim = ptrs[0].ty.dims.clone();
-                    let nest = target_dim.ndim();
-                    let operator =
-                        adjust_ptrs_and_convert_op(operator, &mut ptrs[1..], &[], &target_dim);
-                    let op = Operation {
-                        opcode: operator.into(),
-                        operands: ptrs.into(),
-                    };
-                    nested_loop!(op, nest)
+                Operator::Contiguous(Contiguous { ref ops }) => {
+                    translator.build_contiguous(&ptrs[0], ptrs[1].clone(), entry, ops)
                 }
 
                 Operator::Concat(ref concat) => {

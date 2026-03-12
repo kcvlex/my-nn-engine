@@ -6,6 +6,7 @@ use inkwell::module::Module;
 use inkwell::types::*;
 use inkwell::values::*;
 use itertools::izip;
+use itertools::Itertools;
 use smallvec::smallvec;
 
 use crate::codegen::cpu::blas::*;
@@ -13,6 +14,7 @@ use crate::codegen::cpu::llvm::*;
 use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::onnx::operator;
+use crate::onnx::operator::ReinterpretType;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
@@ -978,18 +980,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         gemm: &operator::Gemm,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         // TODO?: Omit if c.ptr == dst.ptr.
+        // TODO?: Explicitly insert Contiguous if needed.
         let entry = if let Some(c) = c {
-            let op = Operation {
-                opcode: SingleOpcode::Transfer.into(),
-                operands: smallvec![dst.clone(), c.clone()],
-            };
-            let op = OperationContext {
-                operation: op,
-                omp_ctx: None,
-                omp_parallel: None,
-                omp_for: None,
-            };
-            self.build_nested_loop(op, entry, dst.ty.dims.ndim())?
+            {
+                let op = ReinterpretType::single_reshape(
+                    c.ty.dims.iter().map(|d| *d as usize).collect(),
+                    dst.ty.dims.iter().map(|d| *d as usize).collect(),
+                );
+                self.build_contiguous(dst, c.clone(), entry, &[op])?
+            }
         } else {
             entry
         };
@@ -2983,6 +2982,164 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         ind.add_incoming(&[
             (&self.context.i64_type().const_zero(), entry),
             (&ind_next, bb),
+        ]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
+    // Assumes dst is not a slice of a larger tensor (i.e., dst strides must be
+    // consistent with dst dims) because `ind` is used directly as the store offset.
+    pub fn build_contiguous(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        ops: &[ReinterpretType],
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let body = self.context.append_basic_block(*self.func, "body");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let mut offset = {
+            let mut indexes = Vec::new();
+            for (d, s) in izip!(dst.ty.dims.iter(), dst.ty.strides().iter()) {
+                let idx = self.builder.build_int_unsigned_div(
+                    ind.as_basic_value().into_int_value(),
+                    self.context.i64_type().const_int((*s as u64).max(1), false),
+                    "index",
+                )?;
+                let idx = self.builder.build_int_unsigned_rem(
+                    idx,
+                    self.context.i64_type().const_int(*d as u64, false),
+                    "index",
+                )?;
+                indexes.push(idx);
+            }
+            let mut acc = self.context.i64_type().const_zero();
+            for (i, d) in indexes.iter().zip(dst.ty.dims.iter()) {
+                acc = self.builder.build_int_mul(
+                    acc,
+                    self.context.i64_type().const_int(*d as u64, false),
+                    "offset",
+                )?;
+                acc = self.builder.build_int_add(acc, *i, "offset")?;
+            }
+            acc
+        };
+        let mut shape = dst.ty.dims.iter().map(|d| *d as u64).collect_vec();
+        for op in ops.iter().rev() {
+            match op {
+                ReinterpretType::Reshape { before, .. } => {
+                    shape = before.iter().map(|d| *d as u64).collect_vec();
+                }
+                ReinterpretType::Transpose(transpose) => {
+                    let mut cur = offset;
+                    let mut new_indexes = Vec::new();
+                    for d in shape.iter().rev() {
+                        let idx = self.builder.build_int_unsigned_rem(
+                            cur,
+                            self.context.i64_type().const_int(*d, false),
+                            "index",
+                        )?;
+                        new_indexes.push(idx);
+                        cur = self.builder.build_int_unsigned_div(
+                            cur,
+                            self.context.i64_type().const_int(*d, false),
+                            "index",
+                        )?;
+                    }
+                    new_indexes.reverse();
+
+                    let perm = transpose
+                        .perm
+                        .clone()
+                        .unwrap_or_else(|| (0..shape.len()).collect_vec());
+                    let new_shape = shape.clone();
+                    let mut indexes = vec![self.context.i64_type().const_zero(); shape.len()];
+                    for (i, p) in perm.iter().enumerate() {
+                        // forward perm: new_idx[i] = idx[perm[i]]
+                        // inverse perm: idx[perm[i]] = new_idx[i]
+                        indexes[*p] = new_indexes[i];
+                        shape[*p] = new_shape[i];
+                    }
+
+                    offset = self.context.i64_type().const_zero();
+                    for (i, d) in izip!(indexes.iter(), shape.iter()) {
+                        offset = self.builder.build_int_mul(
+                            offset,
+                            self.context.i64_type().const_int(*d, false),
+                            "offset",
+                        )?;
+                        offset = self.builder.build_int_add(offset, *i, "offset")?;
+                    }
+                }
+            }
+        }
+
+        let offset = {
+            let mut indexes = Vec::new();
+            let mut cur = offset;
+            for d in shape.iter().rev() {
+                let idx = self.builder.build_int_unsigned_rem(
+                    cur,
+                    self.context.i64_type().const_int(*d, false),
+                    "index",
+                )?;
+                indexes.push(idx);
+                cur = self.builder.build_int_unsigned_div(
+                    cur,
+                    self.context.i64_type().const_int(*d, false),
+                    "index",
+                )?;
+            }
+            indexes.reverse();
+            let mut acc = self.context.i64_type().const_zero();
+            for (i, s) in indexes.iter().zip(src.ty.strides().iter()) {
+                let add = self.builder.build_int_mul(
+                    *i,
+                    self.context.i64_type().const_int(*s as u64, false),
+                    "add",
+                )?;
+                acc = self.builder.build_int_add(acc, add, "offset")?;
+            }
+            acc
+        };
+
+        let elem_type = dst.ty.elem_type.llvm_type(self.context);
+        let src_offset = self
+            .builder
+            .build_int_add(src.offset, offset, "src.offset")?;
+        let src = src.set_offset(src_offset);
+        let src_val = self.build_load(&src)?;
+        let dst_offset = self.builder.build_int_add(
+            dst.offset,
+            ind.as_basic_value().into_int_value(),
+            "dst.offset",
+        )?;
+        self.build_raw_store(elem_type, dst.ptr, dst_offset, src_val)?;
+
+        let ind_inc = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            self.context.i64_type().const_int(1, false),
+            "ind.next",
+        )?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_inc,
+            self.context
+                .i64_type()
+                .const_int(dst.ty.dims.size().max(1) as u64, false),
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, body)?;
+        ind.add_incoming(&[
+            (&self.context.i64_type().const_zero(), entry),
+            (&ind_inc, body),
         ]);
 
         self.builder.position_at_end(exit);

@@ -38,10 +38,16 @@ fn bundle_reshape_and_transpose<T: GraphOp>(
         .iter()
         .map(|&id| match &graph.nodes[id].op {
             Operator::Reshape => {
+                let input_shape = graph
+                    .get_resolved_tensor_type(graph.nodes[id].inputs[0])
+                    .unwrap();
                 let output_shape = graph
                     .get_resolved_tensor_type(graph.nodes[id].outputs[0])
                     .unwrap();
-                ReinterpretType::Reshape(output_shape.dims.iter().map(|d| *d as i64).collect())
+                ReinterpretType::Reshape {
+                    before: input_shape.dims.iter().map(|d| *d as usize).collect(),
+                    after: output_shape.dims.iter().map(|d| *d as usize).collect(),
+                }
             }
             Operator::Transpose(perm) => ReinterpretType::Transpose(perm.clone()),
             _ => unreachable!(),
@@ -139,8 +145,9 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));
     }
-    // TODO: Enable once codegen supports Contiguous with reinterpret ops.
-    // manager.add_pass(Box::new(fold_cont::FoldContiguous::default()));
+    if matches!(opt.target, Target::CPU) {
+        manager.add_pass(Box::new(fold_cont::FoldContiguous::default()));
+    }
     manager.add_pass(Box::new(cleanup::CleanupTensors::default()));
     manager
 }
