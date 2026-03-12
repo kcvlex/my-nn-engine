@@ -213,6 +213,12 @@ impl std::fmt::Display for Statement {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Include {
+    System(&'static str),
+    Local(&'static str),
+}
+
 pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
 
@@ -231,6 +237,7 @@ pub struct HostCodeGenerator<'sched> {
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
     separated_codes: Vec<SeparatedCode>,
+    includes: HashSet<Include>,
 
     host_memcpy: Vec<(String, String, ValueId)>,
 }
@@ -242,6 +249,7 @@ pub struct HostCode {
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
 
+    includes: HashSet<Include>,
     profile: bool,
 }
 
@@ -531,6 +539,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
+            includes: HashSet::from([Include::Local("common.cuh"), Include::System("cuda.h")]),
             host_memcpy: Vec::new(),
         }
     }
@@ -946,6 +955,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Tanh => unreachable!(),
 
                 Operator::Attention(attn) => {
+                    self.includes.insert(Include::Local("attention.cuh"));
                     let q = kernel.inputs[args::ATTENTION_Q];
                     let k = kernel.inputs[args::ATTENTION_K];
                     let v = kernel.inputs[args::ATTENTION_V];
@@ -1269,6 +1279,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::LayerNormalization(LayerNormalization { axis, epsilon }) => {
+                    self.includes.insert(Include::Local("layer_norm.cuh"));
                     let input_ty = self
                         .get_resolved_tensor_type(kernel.inputs[operator::args::LAYER_NORM_DATA])?;
                     let out = self.device_identifier(kernel.outputs[0])?;
@@ -1343,6 +1354,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::ReduceMatrix(_) => {
+                    self.includes
+                        .insert(Include::System("cooperative_groups.h"));
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
                     let [row, col] = input_ty.dims[..] else {
                         panic!("Invalid ReduceMatrix output shape");
@@ -1365,6 +1378,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Softmax(Softmax { axis }) => {
+                    self.includes.insert(Include::Local("softmax.cuh"));
                     let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
                     let out = self.device_identifier(kernel.outputs[0])?;
                     let in_ = self.device_identifier(kernel.inputs[0])?;
@@ -1497,12 +1511,20 @@ impl<'sched> HostCodeGenerator<'sched> {
         let mut kernel_codes = Vec::new();
         std::mem::swap(&mut self.separated_codes, &mut kernel_codes);
 
+        if !self.cublas_handlers.is_empty() {
+            self.includes.insert(Include::System("cublas_v2.h"));
+        }
+        if !self.cudnn_ctxs.is_empty() {
+            self.includes.insert(Include::Local("cudnn_setting.h"));
+        }
+
         Ok(HostCode {
             decl_values,
             decl_cuda_objs,
             computes,
             finalize,
             kernel_codes,
+            includes: self.includes.clone(),
             profile: opt.profile,
         })
     }
@@ -1513,17 +1535,17 @@ impl HostCode {
         for h in ["algorithm", "limits", "chrono", "iostream", "cstring"] {
             writeln!(writer, "#include <{}>", h)?;
         }
-        for h in [
-            "common.cuh",
-            "cuda.h",
-            "cublas_v2.h",
-            "cudnn.h",
-            "attention.cuh",
-            "layer_norm.cuh",
-            "softmax.cuh",
-            "cudnn_setting.h",
-        ] {
-            writeln!(writer, "#include \"{}\"", h)?;
+        for h in &self.includes {
+            match h {
+                Include::System(name) => writeln!(writer, "#include <{}>", name)?,
+                Include::Local(name) => writeln!(writer, "#include \"{}\"", name)?,
+            }
+        }
+        if self
+            .includes
+            .contains(&Include::System("cooperative_groups.h"))
+        {
+            writeln!(writer, "namespace cg = cooperative_groups;")?;
         }
 
         for code in self.kernel_codes.iter() {
