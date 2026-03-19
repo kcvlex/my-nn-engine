@@ -780,6 +780,14 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     split,
                 ),
+                Operator::Attention(ref attn) => translator.build_attention(
+                    &ptrs[0],
+                    &ptrs[1 + args::ATTENTION_Q],
+                    &ptrs[1 + args::ATTENTION_K],
+                    &ptrs[1 + args::ATTENTION_V],
+                    entry,
+                    attn,
+                ),
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {

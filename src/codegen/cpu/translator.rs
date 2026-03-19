@@ -3131,6 +3131,394 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(exit);
         Ok(exit)
     }
+
+    pub fn build_attention(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        q: &TensorPtr<'ctx>,
+        k: &TensorPtr<'ctx>,
+        v: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        attn: &operator::Attention,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert_eq!(q.ty.dims.ndim(), 4);
+        assert!(q.ty.is_contiguous());
+        assert!(k.ty.is_contiguous());
+        assert!(v.ty.is_contiguous());
+        assert!(dst.ty.is_contiguous());
+
+        // q: [batch, heads, seq_q, head_dim]
+        // k: [batch, heads, seq_k, head_dim]
+        // v: [batch, heads, seq_k, head_dim]
+        // dst: [batch, heads, seq_q, head_dim]
+        //
+        // For each (batch, head):
+        //   QK = Q @ trans(K)
+        //   if causal then
+        //     Mask QK and add penalty
+        //   dst = softmax(QK) @ V
+
+        let seq_q = q.ty.dims[2];
+        let head_dim = q.ty.dims[3];
+        let seq_k = k.ty.dims[2];
+        let num_outer = q.ty.dims[0] * q.ty.dims[1]; // batch * heads
+
+        let fp_ty = q.ty.elem_type.float_type().unwrap();
+        let llvm_fp_ty = fp_ty.llvm_type(self.context);
+        let i64_ty = self.context.i64_type();
+        let fmax_id = match fp_ty {
+            FloatType::F32 => f32::MIN as f64,
+            FloatType::F64 => f64::MIN,
+        };
+        let fmax = self.intrinsics.fmax.get(fp_ty);
+        let fexp = self.intrinsics.exp.get(fp_ty);
+
+        let qk_buf = self.builder.build_array_alloca(
+            llvm_fp_ty,
+            i64_ty.const_int((seq_q * seq_k) as u64, false),
+            "attn.qk.buf",
+        )?;
+
+        let header = self.context.append_basic_block(*self.func, "attn.header");
+        let body = self.context.append_basic_block(*self.func, "attn.body");
+        let latch = self.context.append_basic_block(*self.func, "attn.latch");
+        let exit = self.context.append_basic_block(*self.func, "attn.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(header)?;
+
+        self.builder.position_at_end(header);
+        let outer_i = self.builder.build_phi(i64_ty, "attn.outer.i")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let outer_idx = outer_i.as_basic_value().into_int_value();
+
+        let q_offset = self.builder.build_int_mul(
+            outer_idx,
+            i64_ty.const_int((seq_q * head_dim) as u64, false),
+            "attn.q.off",
+        )?;
+        let k_offset = self.builder.build_int_mul(
+            outer_idx,
+            i64_ty.const_int((seq_k * head_dim) as u64, false),
+            "attn.k.off",
+        )?;
+        let v_offset = self.builder.build_int_mul(
+            outer_idx,
+            i64_ty.const_int((seq_k * head_dim) as u64, false),
+            "attn.v.off",
+        )?;
+        let out_offset = self.builder.build_int_mul(
+            outer_idx,
+            i64_ty.const_int((seq_q * head_dim) as u64, false),
+            "attn.out.off",
+        )?;
+
+        // TODO: Probably incorrect when the input tensors are slices of larger tensors, need to
+        // add the base offset to the computed offset above.
+        let q_ptr = self.build_gep(&q.clone().set_offset(q_offset))?;
+        let k_ptr = self.build_gep(&k.clone().set_offset(k_offset))?;
+        let v_ptr = self.build_gep(&v.clone().set_offset(v_offset))?;
+        let out_ptr = self.build_gep(&dst.clone().set_offset(out_offset))?;
+
+        // Q[seq_q, head_dim] @ K^T[seq_k, head_dim] → QK[seq_q, seq_k]
+        let qk_tensor = TensorPtr::new(
+            qk_buf,
+            ResolvedTensorType::new(q.ty.elem_type, ResolvedTensorDims::new(&[seq_q, seq_k])),
+            i64_ty.const_zero(),
+            "attn.qk".to_string(),
+        );
+        let q_slice = TensorPtr::new(
+            q_ptr,
+            ResolvedTensorType::new(q.ty.elem_type, ResolvedTensorDims::new(&[seq_q, head_dim])),
+            i64_ty.const_zero(),
+            "attn.q.slice".to_string(),
+        );
+        let k_slice = TensorPtr::new(
+            k_ptr,
+            ResolvedTensorType::new(k.ty.elem_type, ResolvedTensorDims::new(&[seq_k, head_dim])),
+            i64_ty.const_zero(),
+            "attn.k.slice".to_string(),
+        );
+
+        // QK = Q @ K^T
+        let gemm1 = GemmArgs {
+            a: (q_slice.ptr, false),
+            b: (k_slice.ptr, true),
+            c: qk_tensor.ptr,
+            m: seq_q as u64,
+            n: seq_k as u64,
+            k: head_dim as u64,
+            alpha: attn.scale as f64,
+            beta: 0.0,
+        };
+        self.blas.call_gemm(fp_ty, &gemm1, self.builder)?;
+
+        let sm_row_header = self
+            .context
+            .append_basic_block(*self.func, "attn.sm.row.hdr");
+        let sm_mask_body = self.context.append_basic_block(*self.func, "attn.sm.mask");
+        let sm_max_body = self.context.append_basic_block(*self.func, "attn.sm.max");
+        let sm_exp_body = self.context.append_basic_block(*self.func, "attn.sm.exp");
+        let sm_div_body = self.context.append_basic_block(*self.func, "attn.sm.div");
+        let sm_row_latch = self
+            .context
+            .append_basic_block(*self.func, "attn.sm.row.latch");
+        let sm_exit = self.context.append_basic_block(*self.func, "attn.sm.exit");
+
+        self.builder.build_unconditional_branch(sm_row_header)?;
+
+        self.builder.position_at_end(sm_row_header);
+        let row_i = self.builder.build_phi(i64_ty, "attn.sm.row")?;
+        let row_base = self.builder.build_int_mul(
+            row_i.as_basic_value().into_int_value(),
+            i64_ty.const_int(seq_k as u64, false),
+            "attn.row.base",
+        )?;
+
+        if attn.is_causal {
+            self.builder.build_unconditional_branch(sm_mask_body)?;
+        } else {
+            self.builder.build_unconditional_branch(sm_max_body)?;
+        }
+
+        if attn.is_causal {
+            // Set QK[row][col] = -penalty for col > row
+            self.builder.position_at_end(sm_mask_body);
+            let col_j = self.builder.build_phi(i64_ty, "attn.mask.col")?;
+            let col_idx = col_j.as_basic_value().into_int_value();
+            let is_masked = self.builder.build_int_compare(
+                inkwell::IntPredicate::UGT,
+                col_idx,
+                row_i.as_basic_value().into_int_value(),
+                "attn.is.masked",
+            )?;
+            let penalty_val = attn.penalty.unwrap_or(f32::INFINITY) as f64;
+            let neg_penalty = llvm_fp_ty.const_float(-penalty_val);
+
+            // Load current value, select masked
+            let offset = self
+                .builder
+                .build_int_add(row_base, col_idx, "attn.qk.idx")?;
+            let cur_val = self
+                .build_raw_load(llvm_fp_ty, qk_buf, offset)?
+                .into_float_value();
+            let masked_val =
+                self.builder
+                    .build_select(is_masked, neg_penalty, cur_val, "attn.masked")?;
+            self.build_raw_store(llvm_fp_ty, qk_buf, offset, masked_val)?;
+
+            let col_next = self.builder.build_int_add(
+                col_idx,
+                i64_ty.const_int(1, false),
+                "attn.mask.col.next",
+            )?;
+            let col_ec = self.builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                col_next,
+                i64_ty.const_int(seq_k as u64, false),
+                "attn.mask.ec",
+            )?;
+            self.builder
+                .build_conditional_branch(col_ec, sm_max_body, sm_mask_body)?;
+            col_j.add_incoming(&[
+                (&i64_ty.const_zero(), sm_row_header),
+                (&col_next, sm_mask_body),
+            ]);
+        }
+
+        // Find max in row
+        self.builder.position_at_end(sm_max_body);
+        let max_j = self.builder.build_phi(i64_ty, "attn.max.j")?;
+        let max_val = self.builder.build_phi(llvm_fp_ty, "attn.max.val")?;
+        let offset = self.builder.build_int_add(
+            row_base,
+            max_j.as_basic_value().into_int_value(),
+            "attn.max.idx",
+        )?;
+        let val = self
+            .build_raw_load(llvm_fp_ty, qk_buf, offset)?
+            .into_float_value();
+        let new_max = self
+            .build_tail_call(
+                fmax,
+                &[max_val.as_basic_value().into(), val.into()],
+                "attn.fmax",
+            )?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let max_j_next = self.builder.build_int_add(
+            max_j.as_basic_value().into_int_value(),
+            i64_ty.const_int(1, false),
+            "attn.max.j.next",
+        )?;
+        let max_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            max_j_next,
+            i64_ty.const_int(seq_k as u64, false),
+            "attn.max.ec",
+        )?;
+        self.builder
+            .build_conditional_branch(max_ec, sm_exp_body, sm_max_body)?;
+        let max_entry_bb = if attn.is_causal {
+            sm_mask_body
+        } else {
+            sm_row_header
+        };
+        max_j.add_incoming(&[
+            (&i64_ty.const_zero(), max_entry_bb),
+            (&max_j_next, sm_max_body),
+        ]);
+        max_val.add_incoming(&[
+            (&llvm_fp_ty.const_float(fmax_id), max_entry_bb),
+            (&new_max, sm_max_body),
+        ]);
+        let row_max = new_max;
+
+        // QK = softmax(QK)
+        self.builder.position_at_end(sm_exp_body);
+        let exp_j = self.builder.build_phi(i64_ty, "attn.exp.j")?;
+        let exp_sum = self.builder.build_phi(llvm_fp_ty, "attn.exp.sum")?;
+        let offset = self.builder.build_int_add(
+            row_base,
+            exp_j.as_basic_value().into_int_value(),
+            "attn.exp.idx",
+        )?;
+        let val = self
+            .build_raw_load(llvm_fp_ty, qk_buf, offset)?
+            .into_float_value();
+        let val_sub = self.builder.build_float_sub(val, row_max, "attn.sub")?;
+        let exp_val = self
+            .build_tail_call(fexp, &[val_sub.into()], "attn.exp")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        self.build_raw_store(llvm_fp_ty, qk_buf, offset, exp_val)?;
+        let new_sum = self.builder.build_float_add(
+            exp_sum.as_basic_value().into_float_value(),
+            exp_val,
+            "attn.sum",
+        )?;
+        let exp_j_next = self.builder.build_int_add(
+            exp_j.as_basic_value().into_int_value(),
+            i64_ty.const_int(1, false),
+            "attn.exp.j.next",
+        )?;
+        let exp_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            exp_j_next,
+            i64_ty.const_int(seq_k as u64, false),
+            "attn.exp.ec",
+        )?;
+        self.builder
+            .build_conditional_branch(exp_ec, sm_div_body, sm_exp_body)?;
+        exp_j.add_incoming(&[
+            (&i64_ty.const_zero(), sm_max_body),
+            (&exp_j_next, sm_exp_body),
+        ]);
+        exp_sum.add_incoming(&[
+            (&llvm_fp_ty.const_float(0.0), sm_max_body),
+            (&new_sum, sm_exp_body),
+        ]);
+        let row_sum = new_sum;
+
+        self.builder.position_at_end(sm_div_body);
+        let div_j = self.builder.build_phi(i64_ty, "attn.div.j")?;
+        let offset = self.builder.build_int_add(
+            row_base,
+            div_j.as_basic_value().into_int_value(),
+            "attn.div.idx",
+        )?;
+        let val = self
+            .build_raw_load(llvm_fp_ty, qk_buf, offset)?
+            .into_float_value();
+        let val_div = self.builder.build_float_div(val, row_sum, "attn.div")?;
+        self.build_raw_store(llvm_fp_ty, qk_buf, offset, val_div)?;
+        let div_j_next = self.builder.build_int_add(
+            div_j.as_basic_value().into_int_value(),
+            i64_ty.const_int(1, false),
+            "attn.div.j.next",
+        )?;
+        let div_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            div_j_next,
+            i64_ty.const_int(seq_k as u64, false),
+            "attn.div.ec",
+        )?;
+        self.builder
+            .build_conditional_branch(div_ec, sm_row_latch, sm_div_body)?;
+        div_j.add_incoming(&[
+            (&i64_ty.const_zero(), sm_exp_body),
+            (&div_j_next, sm_div_body),
+        ]);
+
+        self.builder.position_at_end(sm_row_latch);
+        let row_next = self.builder.build_int_add(
+            row_i.as_basic_value().into_int_value(),
+            i64_ty.const_int(1, false),
+            "attn.sm.row.next",
+        )?;
+        let row_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            row_next,
+            i64_ty.const_int(seq_q as u64, false),
+            "attn.sm.row.ec",
+        )?;
+        self.builder
+            .build_conditional_branch(row_ec, sm_exit, sm_row_header)?;
+        row_i.add_incoming(&[(&i64_ty.const_zero(), body), (&row_next, sm_row_latch)]);
+
+        // dst = softmax(QK) @ V
+        self.builder.position_at_end(sm_exit);
+        let v_slice = TensorPtr::new(
+            v_ptr,
+            ResolvedTensorType::new(v.ty.elem_type, ResolvedTensorDims::new(&[seq_k, head_dim])),
+            i64_ty.const_zero(),
+            "attn.v.slice".to_string(),
+        );
+        let out_slice = TensorPtr::new(
+            out_ptr,
+            ResolvedTensorType::new(
+                dst.ty.elem_type,
+                ResolvedTensorDims::new(&[seq_q, head_dim]),
+            ),
+            i64_ty.const_zero(),
+            "attn.out.slice".to_string(),
+        );
+        let gemm2 = GemmArgs {
+            a: (qk_tensor.ptr, false),
+            b: (v_slice.ptr, false),
+            c: out_slice.ptr,
+            m: seq_q as u64,
+            n: head_dim as u64,
+            k: seq_k as u64,
+            alpha: 1.0,
+            beta: 0.0,
+        };
+        self.blas.call_gemm(fp_ty, &gemm2, self.builder)?;
+        self.builder.build_unconditional_branch(latch)?;
+
+        self.builder.position_at_end(latch);
+        let outer_next =
+            self.builder
+                .build_int_add(outer_idx, i64_ty.const_int(1, false), "attn.outer.next")?;
+        let outer_ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            outer_next,
+            i64_ty.const_int(num_outer as u64, false),
+            "attn.outer.ec",
+        )?;
+        self.builder
+            .build_conditional_branch(outer_ec, exit, header)?;
+        outer_i.add_incoming(&[(&i64_ty.const_zero(), entry), (&outer_next, latch)]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
 }
 
 #[derive(Clone)]

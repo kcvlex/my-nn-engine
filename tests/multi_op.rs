@@ -191,6 +191,16 @@ fn test_div_broadcast_scalar_cpu() -> Result {
 }
 
 #[test]
+fn test_gpt2_attention_cpu() -> Result {
+    run_test(
+        "gpt2_attention",
+        1e-4,
+        &Options::builder().target(Target::CPU).build(),
+        (3, 1),
+    )
+}
+
+#[test]
 #[cfg(feature = "cuda")]
 fn test_gpt2_attention_cuda() -> Result {
     run_test(
