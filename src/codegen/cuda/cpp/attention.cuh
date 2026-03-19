@@ -14,7 +14,9 @@ __global__ void attention(
     T *V,
     T scale,
     bool is_causal,
-    T penalty,
+    T *mask,
+    int mask_outer_stride,
+    int mask_row_stride,
     int N
 ) {
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
@@ -68,15 +70,20 @@ __global__ void attention(
             }
             int g_row = blockIdx.x * Br + local_row;
             int g_col = i * Bc + j;
-            bool is_masked = is_causal && g_row < g_col;
-            T val = -penalty;
-            if (!is_masked) {
+            bool masked_out = is_causal && g_row < g_col;
+            T val;
+            if (masked_out) {
+                val = -INFINITY;
+            } else {
                 for (int s = tile.size() / 2; 0 < s; s /= 2) {
                     T other = tile.shfl_down(sum, s);
                     sum += other;
                 }
                 sum = tile.shfl(sum, 0);
                 val = sum * scale;
+                if (mask) {
+                    val += mask[blockIdx.y * mask_outer_stride + g_row * mask_row_stride + g_col];
+                }
             }
             P[j] = val;
             row_max = max(row_max, val);

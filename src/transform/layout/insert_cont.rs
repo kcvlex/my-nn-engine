@@ -77,8 +77,10 @@ impl InsertContiguous {
         let name = node.name.clone();
         assert!(matches!(node.op, Operator::Attention(_)));
 
-        // TODO: What about mask?
-        let inputs = [args::ATTENTION_Q, args::ATTENTION_K, args::ATTENTION_V];
+        let mut inputs = vec![args::ATTENTION_Q, args::ATTENTION_K, args::ATTENTION_V];
+        if node.inputs.len() > args::ATTENTION_MASK {
+            inputs.push(args::ATTENTION_MASK);
+        }
         for arg in inputs {
             let input = graph.nodes[id].inputs[arg];
             let input_type = &graph.get_resolved_tensor_type(input).unwrap();

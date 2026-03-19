@@ -3138,6 +3138,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         q: &TensorPtr<'ctx>,
         k: &TensorPtr<'ctx>,
         v: &TensorPtr<'ctx>,
+        mask: Option<&TensorPtr<'ctx>>,
         entry: BasicBlock<'ctx>,
         attn: &operator::Attention,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
@@ -3146,6 +3147,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         assert!(k.ty.is_contiguous());
         assert!(v.ty.is_contiguous());
         assert!(dst.ty.is_contiguous());
+        if let Some(mask) = mask {
+            assert!(mask.ty.is_contiguous());
+        }
 
         // q: [batch, heads, seq_q, head_dim]
         // k: [batch, heads, seq_k, head_dim]
@@ -3255,6 +3259,36 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         self.blas.call_gemm(fp_ty, &gemm1, self.builder)?;
 
+        // Pre-compute mask broadcast strides for the outer (batch*heads) and row dimensions.
+        let (mask_outer_stride, mask_row_stride) = if let Some(mask) = mask {
+            let md = &mask.ty.dims;
+            let mndim = md.ndim();
+            // mask shape is [d0, d1, ..., seq_q_or_1, seq_k].
+            // The last dim always covers seq_k (possibly broadcast).
+            // Compute the outer stride = product of last two dims (if not broadcast),
+            // and the row stride = seq_k (if dim[-2] > 1, else 0 for broadcast).
+            let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
+            let mask_last_col = md[mndim - 1];
+            let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
+            let mask_slice_size = mask_last_row * mask_last_col;
+            // outer dims: product of all dims except last two
+            let mask_outer_size: usize = if mndim > 2 {
+                md[..mndim - 2].iter().product()
+            } else {
+                1
+            };
+            let mask_outer_stride = if mask_outer_size > 1 {
+                mask_slice_size
+            } else {
+                0
+            };
+            (mask_outer_stride, mask_row_stride)
+        } else {
+            (0, 0)
+        };
+
+        let needs_mask_loop = attn.is_causal || mask.is_some();
+
         let sm_row_header = self
             .context
             .append_basic_block(*self.func, "attn.sm.row.hdr");
@@ -3277,37 +3311,74 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             "attn.row.base",
         )?;
 
-        if attn.is_causal {
+        if needs_mask_loop {
             self.builder.build_unconditional_branch(sm_mask_body)?;
         } else {
             self.builder.build_unconditional_branch(sm_max_body)?;
         }
 
-        if attn.is_causal {
-            // Set QK[row][col] = -penalty for col > row
+        if needs_mask_loop {
+            // Apply is_causal and/or additive mask to QK
             self.builder.position_at_end(sm_mask_body);
             let col_j = self.builder.build_phi(i64_ty, "attn.mask.col")?;
             let col_idx = col_j.as_basic_value().into_int_value();
-            let is_masked = self.builder.build_int_compare(
-                inkwell::IntPredicate::UGT,
-                col_idx,
-                row_i.as_basic_value().into_int_value(),
-                "attn.is.masked",
-            )?;
-            let penalty_val = attn.penalty.unwrap_or(f32::INFINITY) as f64;
-            let neg_penalty = llvm_fp_ty.const_float(-penalty_val);
 
-            // Load current value, select masked
-            let offset = self
+            let qk_offset = self
                 .builder
                 .build_int_add(row_base, col_idx, "attn.qk.idx")?;
             let cur_val = self
-                .build_raw_load(llvm_fp_ty, qk_buf, offset)?
+                .build_raw_load(llvm_fp_ty, qk_buf, qk_offset)?
                 .into_float_value();
-            let masked_val =
-                self.builder
-                    .build_select(is_masked, neg_penalty, cur_val, "attn.masked")?;
-            self.build_raw_store(llvm_fp_ty, qk_buf, offset, masked_val)?;
+
+            let mut result_val = cur_val;
+
+            // If is_causal: set to -inf when col > row
+            if attn.is_causal {
+                let is_masked = self.builder.build_int_compare(
+                    inkwell::IntPredicate::UGT,
+                    col_idx,
+                    row_i.as_basic_value().into_int_value(),
+                    "attn.is.masked",
+                )?;
+                let neg_inf = llvm_fp_ty.const_float(f64::NEG_INFINITY);
+                result_val = self
+                    .builder
+                    .build_select(is_masked, neg_inf, result_val, "attn.causal")?
+                    .into_float_value();
+            }
+
+            // If mask tensor is present: add mask value
+            if let Some(mask) = mask {
+                let mask_off_outer = self.builder.build_int_mul(
+                    outer_idx,
+                    i64_ty.const_int(mask_outer_stride as u64, false),
+                    "attn.mask.off.outer",
+                )?;
+                let mask_off_row = self.builder.build_int_mul(
+                    row_i.as_basic_value().into_int_value(),
+                    i64_ty.const_int(mask_row_stride as u64, false),
+                    "attn.mask.off.row",
+                )?;
+                let mask_off = self.builder.build_int_add(
+                    mask_off_outer,
+                    mask_off_row,
+                    "attn.mask.off.tmp",
+                )?;
+                let mask_off = self
+                    .builder
+                    .build_int_add(mask_off, col_idx, "attn.mask.off")?;
+
+                let mask_ptr = self.build_gep(mask)?;
+                let mask_val = self
+                    .build_raw_load(llvm_fp_ty, mask_ptr, mask_off)?
+                    .into_float_value();
+
+                result_val = self
+                    .builder
+                    .build_float_add(result_val, mask_val, "attn.masked")?;
+            }
+
+            self.build_raw_store(llvm_fp_ty, qk_buf, qk_offset, result_val)?;
 
             let col_next = self.builder.build_int_add(
                 col_idx,
@@ -3326,6 +3397,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 (&i64_ty.const_zero(), sm_row_header),
                 (&col_next, sm_mask_body),
             ]);
+        } else {
+            // Add terminator to unused block to keep LLVM IR valid.
+            self.builder.position_at_end(sm_mask_body);
+            self.builder.build_unreachable()?;
         }
 
         // Find max in row
@@ -3363,7 +3438,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         )?;
         self.builder
             .build_conditional_branch(max_ec, sm_exp_body, sm_max_body)?;
-        let max_entry_bb = if attn.is_causal {
+        let max_entry_bb = if needs_mask_loop {
             sm_mask_body
         } else {
             sm_row_header
