@@ -92,7 +92,7 @@ impl SessionCPU {
         // Generate main module
         let main_context = Context::create();
         let main_codegen = codegen_ctx
-            .new_codegen_for_main(&main_context)
+            .new_codegen_for_main(&main_context, opt)
             .map_err(SessionError::CodeGenError)?;
         main_codegen.compile().map_err(SessionError::CodeGenError)?;
         main_codegen

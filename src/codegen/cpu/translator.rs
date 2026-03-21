@@ -1583,7 +1583,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let flat_idx = ind.as_basic_value().into_int_value();
 
         for (op_idx, ptr) in op.operands.iter_mut().enumerate() {
-            if op_idx != 0 && ptr.ty == *dst_ty {
+            if ptr.ty == *dst_ty && ptr.ty.is_contiguous() {
                 ptr.offset = self.builder.build_int_add(
                     base_offsets[op_idx],
                     flat_idx,

@@ -33,6 +33,7 @@ use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Contiguous;
 use crate::onnx::operator::Operator;
+use crate::options::Options;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
@@ -68,6 +69,7 @@ pub struct CodeGen<'ll, 'gen> {
     omp: OMP<'ll>,
     debug_stuff: llvm::DebugStuff<'ll>,
     target_machine: TargetMachine,
+    profile: bool,
 }
 
 // TODO: correct?
@@ -190,12 +192,13 @@ impl CodeGenContext {
             entry,
         };
 
-        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine)
+        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine, false)
     }
 
     pub fn new_codegen_for_main<'ll>(
         &self,
         ll_ctx: &'ll Context,
+        options: &Options,
     ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
         let module = ll_ctx.create_module("main");
         let builder = ll_ctx.create_builder();
@@ -219,7 +222,7 @@ impl CodeGenContext {
             func: main,
             entry,
         };
-        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine)
+        self.new_codegen_with_func(ll_ctx, unit, attrs, target_machine, options.profile)
     }
 
     fn new_codegen_with_func<'ll>(
@@ -228,6 +231,7 @@ impl CodeGenContext {
         unit: UnitInfo<'ll>,
         attrs: Attributes,
         target_machine: TargetMachine,
+        profile: bool,
     ) -> Result<CodeGen<'ll, '_>, CodeGenError> {
         let entry = unit.entry;
         let f32_ty = ll_ctx.f32_type().into();
@@ -325,6 +329,7 @@ impl CodeGenContext {
             omp,
             debug_stuff,
             target_machine,
+            profile,
         })
     }
 
@@ -483,6 +488,33 @@ impl<'ll> CodeGen<'ll, '_> {
         let mut ptr_values = self.init_main_args()?;
         let mut chunk2ptr = HashMap::new();
         let builder = self.ll_ctx.create_builder();
+
+        let rdtsc = self.profile.then(|| {
+            Intrinsic::find("llvm.readcyclecounter")
+                .and_then(|i| i.get_declaration(&self.unit.module, &[]))
+                .unwrap()
+        });
+        let fprintf = if self.profile {
+            let i32_ty = self.ll_ctx.i32_type();
+            let ptr_ty = self.ll_ctx.ptr_type(AddressSpace::default());
+            let fn_ty = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], true);
+            Some(self.unit.module.add_function(
+                "fprintf",
+                fn_ty,
+                Some(inkwell::module::Linkage::External),
+            ))
+        } else {
+            None
+        };
+        let stderr_ptr = if self.profile {
+            let ptr_ty = self.ll_ctx.ptr_type(AddressSpace::default());
+            let global = self.unit.module.add_global(ptr_ty, None, "stderr");
+            global.set_linkage(inkwell::module::Linkage::External);
+            Some(global)
+        } else {
+            None
+        };
+
         for (kernel_id, kernel) in self.gen_ctx.schedule.kernels.iter() {
             let function = if !self.gen_ctx.need_to_generate(kernel_id) {
                 None
@@ -528,6 +560,19 @@ impl<'ll> CodeGen<'ll, '_> {
             }
 
             if let Some(function) = function {
+                let start = if let Some(rdtsc) = rdtsc {
+                    Some(
+                        builder
+                            .build_call(rdtsc, &[], "tsc.start")?
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_int_value(),
+                    )
+                } else {
+                    None
+                };
+
                 let args = kernel
                     .outputs
                     .iter()
@@ -537,6 +582,37 @@ impl<'ll> CodeGen<'ll, '_> {
                     .collect::<Vec<_>>();
                 let call = builder.build_call(function, &args[..], "")?;
                 call.set_tail_call(true);
+
+                if let (Some(start), Some(rdtsc), Some(fprintf), Some(stderr_ptr)) =
+                    (start, rdtsc, fprintf, stderr_ptr)
+                {
+                    let end = builder
+                        .build_call(rdtsc, &[], "tsc.end")?
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_int_value();
+                    let diff = builder.build_int_sub(end, start, "tsc.diff")?;
+                    let kernel_name = get_kernel_name_or(kernel, kernel_id);
+                    let fmt = builder.build_global_string_ptr(
+                        &format!("[profile] {kernel_name}: %lu cycles\n"),
+                        &format!("fmt.{}", kernel_id.index()),
+                    )?;
+                    let stderr_val = builder.build_load(
+                        self.ll_ctx.ptr_type(AddressSpace::default()),
+                        stderr_ptr.as_pointer_value(),
+                        "stderr",
+                    )?;
+                    builder.build_call(
+                        fprintf,
+                        &[
+                            stderr_val.into(),
+                            fmt.as_pointer_value().into(),
+                            diff.into(),
+                        ],
+                        "",
+                    )?;
+                }
             }
         }
         builder.position_at_end(self.unit.entry);

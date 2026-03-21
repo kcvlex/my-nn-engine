@@ -39,11 +39,15 @@ impl Annotator {
             match &kernel.body {
                 KernelBody::Opaque(Opaque { op }) => {
                     if let Operator::Attention(_) = op {
-                        // batch * heads
                         let q = kernel.inputs[args::ATTENTION_Q];
+                        let k = kernel.inputs[args::ATTENTION_K];
                         let q_dims = &schedule.get_resolved_tensor_type(q).unwrap().dims;
+                        let k_dims = &schedule.get_resolved_tensor_type(k).unwrap().dims;
                         let num_outer = q_dims[0] * q_dims[1];
-                        if num_outer < self.attention_threshold {
+                        let seq_q = q_dims[2];
+                        let seq_k = k_dims[2];
+                        let work = num_outer * seq_q * seq_k;
+                        if work < self.attention_threshold {
                             continue;
                         }
                     } else {
