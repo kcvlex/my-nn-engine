@@ -1,6 +1,7 @@
 pub mod attention_fusion;
 pub mod canonicalize;
 pub mod const_fold;
+pub mod conv_bn_fusion;
 pub mod elim_identity;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
@@ -22,6 +23,7 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
     pass_manager.add_pass(Box::new(const_fold::ConstantFold {
         check_strides: false,
     }));
+    pass_manager.add_pass(Box::new(conv_bn_fusion::ConvBNFusion::default()));
     pass_manager.add_pass(Box::new(fast_gelu_fusion::FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
     pass_manager.add_pass(Box::new(attention_fusion::AttentionFusion::default()));
