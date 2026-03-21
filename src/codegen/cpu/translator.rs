@@ -3398,7 +3398,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 (&col_next, sm_mask_body),
             ]);
         } else {
-            // Add terminator to unused block to keep LLVM IR valid.
             self.builder.position_at_end(sm_mask_body);
             self.builder.build_unreachable()?;
         }
