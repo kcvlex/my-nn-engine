@@ -2,6 +2,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
@@ -32,6 +33,41 @@ impl<T: GraphOp> Pass<T> for InsertContiguous {
     }
 }
 
+fn find_or_create_contiguous<T: GraphOp>(
+    graph: &mut Graph,
+    modifier: &mut T,
+    input: ValueId,
+    name: &str,
+) -> ValueId {
+    // Check if a Contiguous node already exists for this input
+    if let Some(users) = modifier.used_node(input) {
+        for (user_id, _) in users.iter() {
+            let user = &graph.nodes[*user_id];
+            if matches!(user.op, Operator::Contiguous(_)) && user.inputs[0] == input {
+                return user.outputs[0];
+            }
+        }
+    }
+
+    let input_type = graph.get_resolved_tensor_type(input).unwrap().clone();
+    let new_value = modifier.register_new_value(
+        graph,
+        format!("{}_contiguous", name),
+        input_type.contiguous(),
+    );
+    modifier.register_new_node(
+        graph,
+        Node {
+            inputs: vec![input],
+            outputs: vec![new_value],
+            op: Operator::Contiguous(Contiguous { ops: vec![] }),
+            name: format!("{}_contiguous", name),
+            meta: NodeMeta::default(),
+        },
+    );
+    new_value
+}
+
 impl InsertContiguous {
     fn handle_matmul<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
         let node = &graph.nodes[id];
@@ -45,24 +81,13 @@ impl InsertContiguous {
             }
 
             // TODO: Last two dimensions can be handled by transpose parameter of Gemm.
-            let new_value = modifier.register_new_value(
+            let new_value = find_or_create_contiguous(
                 graph,
-                format!("{}_contiguous_input_{}", node_name, i),
-                input_type.contiguous(),
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![*input],
-                    outputs: vec![new_value],
-                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
-                    name: format!("{}_contiguous_{}", node_name, i),
-                    meta: NodeMeta::default(),
-                },
+                modifier,
+                *input,
+                &format!("{}_input_{}", node_name, i),
             );
 
-            // TODO: Other nodes also should use new_value. Currently simply replacing all uses of
-            // *input which may cause inconsistent strides computed earlier.
             modifier.replace_input_value_if_without_typecheck(
                 graph,
                 *input,
@@ -88,21 +113,13 @@ impl InsertContiguous {
                 continue;
             }
 
-            let new_value = modifier.register_new_value(
+            let new_value = find_or_create_contiguous(
                 graph,
-                format!("{}_contiguous_input_{}", name, arg),
-                input_type.contiguous(),
+                modifier,
+                input,
+                &format!("{}_input_{}", name, arg),
             );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![input],
-                    outputs: vec![new_value],
-                    op: Operator::Contiguous(Contiguous { ops: vec![] }),
-                    name: format!("{}_contiguous_{}", name, arg),
-                    meta: NodeMeta::default(),
-                },
-            );
+
             modifier.replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| {
                 id == id2
             });
