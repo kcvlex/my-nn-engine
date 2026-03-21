@@ -32,7 +32,9 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
             .collect();
 
         for mean_node in mean_nodes {
-            let Some(pattern) = match_layer_norm_pattern(graph, modifier, mean_node) else {
+            let Some(pattern) = match_layer_norm_pattern(graph, modifier, mean_node)
+                .or_else(|| match_batchnorm_layer_norm_pattern(graph, modifier, mean_node))
+            else {
                 continue;
             };
             let mut inputs = [pattern.input; 3];
@@ -71,6 +73,112 @@ struct LayerNormPattern {
     scale: ValueId,
     bias: ValueId,
     epsilon: f64,
+}
+
+// TensorFlow-style batchnorm decomposition of LayerNorm (used by BERT):
+//
+//   Mean = ReduceMean(X)
+//   D = Sub(X, Mean)
+//   DD = Mul(D, D)
+//   Var = ReduceMean(DD)
+//   VarEps = Add(Var, epsilon)
+//   StdDev = Sqrt(VarEps)
+//   InvStdDev = Reciprocal(StdDev)
+//   ScaleInv = Mul(InvStdDev, gamma)
+//   YUnbiased = Mul(X, ScaleInv)
+//   MeanScaled = Mul(Mean, ScaleInv)
+//   EffBias = Sub(beta, MeanScaled)
+//   Y = Add(YUnbiased, EffBias)
+fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
+    graph: &Graph,
+    modifier: &T,
+    mean_node: NodeId,
+) -> Option<LayerNormPattern> {
+    let mean = graph.nodes[mean_node].outputs[0];
+    let x = graph.nodes[mean_node].inputs[0];
+
+    let mut var: Option<ValueId> = None;
+    let mut var_eps_node: Option<NodeId> = None;
+    let mut inv_stddev: Option<ValueId> = None;
+    let mut scale_inv_node: Option<NodeId> = None;
+
+    // Match: Mean → Sub → Mul(D,D) → ReduceMean → Add(eps) → Sqrt → Reciprocal → Mul(gamma)
+    let _ = PatternMatcher::new(graph, modifier, (mean_node, 0))
+        .then(|(node, mean)| {
+            matches!(&node.op, Operator::Sub) && node.inputs[0] == x && node.inputs[1] == mean
+        })?
+        .then(|(node, d)| {
+            matches!(&node.op, Operator::Mul) && node.inputs[0] == d && node.inputs[1] == d
+        })?
+        .then(|(node, dd)| match &node.op {
+            Operator::ReduceMean(Reduce { axes, .. }) => {
+                axes.len() == 1 && axes[0] == -1 && node.inputs[0] == dd
+            }
+            _ => false,
+        })?
+        .capture_value(&mut var)
+        .then(|(node, _)| matches!(&node.op, Operator::Add))?
+        .capture_node(&mut var_eps_node)
+        .then(|(node, _)| matches!(&node.op, Operator::Sqrt))?
+        .then(|(node, _)| matches!(&node.op, Operator::Reciprocal))?
+        .capture_value(&mut inv_stddev)
+        .then(|(node, _)| matches!(&node.op, Operator::Mul))?
+        .capture_node(&mut scale_inv_node);
+
+    let inv_stddev = inv_stddev?;
+    let scale_inv_node = scale_inv_node?;
+    let gamma = extract_other_binary_input(&graph.nodes[scale_inv_node], inv_stddev)?;
+
+    // Branch A: Mul(X, ScaleInv) → YUnbiased
+    let mut y_unbiased_node: Option<NodeId> = None;
+    let _ = PatternMatcher::new(graph, modifier, (scale_inv_node, 0))
+        .then(|(node, scale_inv)| {
+            matches!(&node.op, Operator::Mul) &&
+                extract_other_binary_input(node, scale_inv) == Some(x)
+        })?
+        .capture_node(&mut y_unbiased_node);
+
+    // Branch B: Mul(Mean, ScaleInv) → Sub(beta, MeanScaled) → EffBias
+    let mut eff_bias_node: Option<NodeId> = None;
+    let _ = PatternMatcher::new(graph, modifier, (scale_inv_node, 0))
+        .then(|(node, scale_inv)| {
+            matches!(&node.op, Operator::Mul) &&
+                extract_other_binary_input(node, scale_inv) == Some(mean)
+        })?
+        .then(|(node, mean_scaled)| {
+            matches!(&node.op, Operator::Sub) && node.inputs[1] == mean_scaled
+        })?
+        .capture_node(&mut eff_bias_node);
+
+    let y_unbiased_node = y_unbiased_node?;
+    let eff_bias_node = eff_bias_node?;
+    let eff_bias = graph.nodes[eff_bias_node].outputs[0];
+    let beta = graph.nodes[eff_bias_node].inputs[0];
+
+    // Find Y = Add(YUnbiased, EffBias)
+    let last_node = PatternMatcher::new(graph, modifier, (y_unbiased_node, 0))
+        .then(|(node, y_unbiased)| {
+            matches!(&node.op, Operator::Add) &&
+                extract_other_binary_input(node, y_unbiased) == Some(eff_bias)
+        })?
+        .last_node();
+
+    // Extract epsilon
+    let var = var.unwrap();
+    let var_eps_node = &graph.nodes[var_eps_node.unwrap()];
+    let epsilon = extract_other_binary_input(var_eps_node, var)?;
+    let epsilon = graph.initializer.get(&epsilon)?.data.to_scalar_data()?;
+    let ScalarData::Float(_, epsilon) = epsilon else {
+        return None;
+    };
+
+    Some(LayerNormPattern {
+        last_node,
+        input: x,
+        scale: gamma,
+        bias: beta,
+        epsilon,
+    })
 }
 
 // From https://onnx.ai/onnx/operators/onnx__LayerNormalization.html
