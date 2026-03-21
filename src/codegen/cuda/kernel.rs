@@ -37,7 +37,10 @@ pub struct AttentionKernel {
     pub q: Expr,
     pub k: Expr,
     pub v: Expr,
+    pub mask: Option<Expr>,
     pub n: usize,
+    pub mask_outer_stride: usize,
+    pub mask_row_stride: usize,
 
     pub attn: Attention,
 }
@@ -48,6 +51,10 @@ impl AttentionKernel {
             "attention<{}, {}, {}, {}, {}>",
             self.data_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
         );
+        let mask = match &self.mask {
+            Some(mask) => mask.to_owned(),
+            None => "nullptr".to_literal(),
+        };
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
@@ -55,10 +62,9 @@ impl AttentionKernel {
             cast!(self.data_ty, self.v),
             self.attn.scale.to_string(),
             if self.attn.is_causal { "1" } else { "0" }.to_string(),
-            self.attn
-                .penalty
-                .map(|p| p.to_string())
-                .unwrap_or("INFINITY".to_string()),
+            cast!(self.data_ty, mask),
+            self.mask_outer_stride.to_string(),
+            self.mask_row_stride.to_string(),
             self.n.to_string(),
         ];
         (id, args)

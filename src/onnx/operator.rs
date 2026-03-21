@@ -93,7 +93,6 @@ pub enum Operator {
 pub struct Attention {
     pub is_causal: bool,
     pub scale: f32,
-    pub penalty: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]

@@ -1279,11 +1279,9 @@ fn gelu_tanh() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn attention_no_causal() -> TestResult {
-    with_session_and_tensors(
+    with_all_sessions_and_tensors(
         "attention_no_causal",
-        &[Target::CUDA],
         (3, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;
@@ -1294,26 +1292,18 @@ fn attention_no_causal() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn attention_causal() -> TestResult {
-    with_session_and_tensors(
-        "attention_causal",
-        &[Target::CUDA],
-        (3, 1),
-        |session, (inputs, expected)| {
-            let outputs = session.run(inputs)?;
-            assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
-            Ok(())
-        },
-    )
+    with_all_sessions_and_tensors("attention_causal", (3, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
+        Ok(())
+    })
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn attention_causal_large() -> TestResult {
-    with_session_and_tensors(
+    with_all_sessions_and_tensors(
         "attention_causal_large",
-        &[Target::CUDA],
         (3, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;

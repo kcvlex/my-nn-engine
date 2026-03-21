@@ -785,6 +785,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     &ptrs[1 + args::ATTENTION_Q],
                     &ptrs[1 + args::ATTENTION_K],
                     &ptrs[1 + args::ATTENTION_V],
+                    ptrs.get(1 + args::ATTENTION_MASK),
                     entry,
                     attn,
                 ),
