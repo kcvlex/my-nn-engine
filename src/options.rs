@@ -9,7 +9,10 @@ pub enum Target {
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct Options {
     #[builder(default = 100)]
-    pub omp_threshold: usize,
+    pub omp_elementwise_threshold: usize,
+
+    #[builder(default = 24)]
+    pub omp_attention_threshold: usize,
 
     #[builder(default = true)]
     pub enable_fuse_ops: bool,

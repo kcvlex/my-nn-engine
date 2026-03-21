@@ -106,7 +106,10 @@ where
         .join(p);
     for target in targets.iter().copied() {
         let opt = match target {
-            Target::CPU => Options::builder().target(target).omp_threshold(10).build(),
+            Target::CPU => Options::builder()
+                .target(target)
+                .omp_elementwise_threshold(10)
+                .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
         let session = Session::new(&path, None, &opt)?;
@@ -147,7 +150,10 @@ where
 
     for target in targets.iter().copied() {
         let opt = match target {
-            Target::CPU => Options::builder().target(target).omp_threshold(10).build(),
+            Target::CPU => Options::builder()
+                .target(target)
+                .omp_elementwise_threshold(10)
+                .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
         let session = Session::new(dir.join("model.onnx"), None, &opt)?;

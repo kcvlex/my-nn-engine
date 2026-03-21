@@ -78,7 +78,8 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     manager.add_pass(Box::new(mem_alloc::MemAllocPass));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
-            threshold: options.omp_threshold,
+            elementwise_threshold: options.omp_elementwise_threshold,
+            attention_threshold: options.omp_attention_threshold,
         }));
     }
     if options.target == Target::CUDA {

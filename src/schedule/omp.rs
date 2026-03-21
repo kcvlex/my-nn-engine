@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 
+use crate::onnx::operator::args;
 use crate::onnx::operator::Operator;
 use crate::schedule::*;
 
 pub struct OmpResult(pub HashSet<KernelId>);
 
 pub struct OmpAnnotatePass {
-    pub threshold: usize,
+    pub elementwise_threshold: usize,
+    pub attention_threshold: usize,
 }
 
 impl SchedulePass for OmpAnnotatePass {
@@ -16,7 +18,8 @@ impl SchedulePass for OmpAnnotatePass {
 
     fn run(&self, schedule: &mut Schedule) {
         let result = Annotator {
-            threshold: self.threshold,
+            elementwise_threshold: self.elementwise_threshold,
+            attention_threshold: self.attention_threshold,
         }
         .annotate(schedule);
         schedule.analysis.insert(result);
@@ -24,7 +27,8 @@ impl SchedulePass for OmpAnnotatePass {
 }
 
 struct Annotator {
-    threshold: usize,
+    elementwise_threshold: usize,
+    attention_threshold: usize,
 }
 
 impl Annotator {
@@ -34,7 +38,15 @@ impl Annotator {
         for (id, kernel) in schedule.kernels.iter() {
             match &kernel.body {
                 KernelBody::Opaque(Opaque { op }) => {
-                    if !matches!(op, Operator::Attention(_)) {
+                    if let Operator::Attention(_) = op {
+                        // batch * heads
+                        let q = kernel.inputs[args::ATTENTION_Q];
+                        let q_dims = &schedule.get_resolved_tensor_type(q).unwrap().dims;
+                        let num_outer = q_dims[0] * q_dims[1];
+                        if num_outer < self.attention_threshold {
+                            continue;
+                        }
+                    } else {
                         continue;
                     }
                 }
@@ -54,7 +66,7 @@ impl Annotator {
                         .unwrap()
                         .dims
                         .size();
-                    if size < self.threshold {
+                    if size < self.elementwise_threshold {
                         continue;
                     }
                 }
