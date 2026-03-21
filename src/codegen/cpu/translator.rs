@@ -1475,28 +1475,38 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         })
     }
 
-    fn build_nested_loop_rec(
+    pub fn build_flat_loop(
         &self,
-        op_ctx: OperationContext<'ctx>,
-        loop_bb: LoopBB<'ctx>,
-        nest: usize,
-        max_nest: usize,
-        loop_range: Option<(IntValue<'ctx>, IntValue<'ctx>)>,
-    ) -> Result<(), BuilderError> {
-        if op_ctx.to_for(nest) {
-            let tensors = op_ctx.operation.operands.to_vec();
-            let captures: Vec<BasicValueEnum<'ctx>> = tensors
-                .iter()
-                .flat_map(|t| [t.ptr.as_basic_value_enum(), t.offset.as_basic_value_enum()])
-                .collect();
+        op: Operation<'ctx>,
+        preheader: BasicBlock<'ctx>,
+        use_omp: bool,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let output_size: u64 = op.result_dims().size().try_into().unwrap();
+        let operand_info: Vec<Vec<(u64, u64)>> = op
+            .operands
+            .iter()
+            .map(|ptr| {
+                (0..ptr.ty.dims.ndim())
+                    .map(|d| (ptr.ty.dims[d] as u64, ptr.ty.stride(d) as u64))
+                    .collect()
+            })
+            .collect();
+        let output_dims: Vec<u64> = op.result_dims().iter().map(|d| *d as u64).collect();
+        let dst_ty = op.dst_operand().ty.clone();
+        let tensor_info: Vec<_> = op
+            .operands
+            .iter()
+            .map(|t| (t.ty.clone(), t.name.clone()))
+            .collect();
+        let opcode = op.opcode.clone();
+        let captures: Vec<BasicValueEnum<'ctx>> = op
+            .operands
+            .iter()
+            .flat_map(|t| [t.ptr.as_basic_value_enum(), t.offset.as_basic_value_enum()])
+            .collect();
 
-            let opcode = op_ctx.operation.opcode.clone();
-            let tensor_info: Vec<_> = tensors
-                .iter()
-                .map(|t| (t.ty.clone(), t.name.clone()))
-                .collect();
-            let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
-
+        if use_omp {
+            let exit = self.context.append_basic_block(*self.func, "flat.exit");
             self.omp_parallel(&captures, |translator, omp_ctx, loaded, loop_bb| {
                 let operands: smallvec::SmallVec<[TensorPtr<'ctx>; 4]> = tensor_info
                     .iter()
@@ -1508,151 +1518,127 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                         name: name.clone(),
                     })
                     .collect();
-
-                let range = translator.omp_for_static(omp_ctx, bound, loop_bb.exit)?;
-
-                // Adjust operand offsets by lb * stride
-                let i64_type = translator.context.i64_type();
-                let new_header = translator
-                    .context
-                    .append_basic_block(*translator.func, "omp.for.header");
-                let mut op_ctx = OperationContext {
-                    operation: Operation { opcode, operands },
-                    omp_for: None,
+                let op = Operation {
+                    opcode: opcode.clone(),
+                    operands,
                 };
-                for op in op_ctx.operation.operands.iter_mut() {
-                    let add = translator.builder.build_int_mul(
-                        range.lb,
-                        i64_type.const_int(op.stride(nest).try_into().unwrap(), false),
-                        "add",
-                    )?;
-                    op.offset = translator.builder.build_int_add(op.offset, add, "offset")?;
-                }
-                translator.builder.build_unconditional_branch(new_header)?;
-
-                let new_loop_bb = LoopBB {
-                    preheader: range.body_bb,
-                    header: new_header,
-                    exit: range.epilog_bb,
-                };
-                let loop_range = Some((range.lb, range.ub));
-                translator.builder.position_at_end(new_header);
-                translator.build_nested_loop_rec(op_ctx, new_loop_bb, nest, max_nest, loop_range)
+                let range = translator.omp_for_static(omp_ctx, output_size, loop_bb.exit)?;
+                translator.build_flat_loop_body(
+                    op,
+                    range.body_bb,
+                    range.lb,
+                    range.ub,
+                    &operand_info,
+                    &output_dims,
+                    &dst_ty,
+                )?;
+                translator
+                    .builder
+                    .build_unconditional_branch(range.epilog_bb)?;
+                Ok(())
             })?;
-            self.builder.build_unconditional_branch(loop_bb.exit)?;
-
-            return Ok(());
+            self.builder.build_unconditional_branch(exit)?;
+            self.builder.position_at_end(exit);
+            Ok(exit)
+        } else {
+            let i64_type = self.context.i64_type();
+            let lb = i64_type.const_zero();
+            let ub = i64_type.const_int(output_size, false);
+            self.build_flat_loop_body(op, preheader, lb, ub, &operand_info, &output_dims, &dst_ty)
         }
-
-        if nest == max_nest {
-            self.build_operation(&op_ctx.operation)?;
-            self.builder.build_unconditional_branch(loop_bb.exit)?;
-            return Ok(());
-        }
-        let ind = self
-            .builder
-            .build_phi(self.context.i64_type(), format!("ind.{}", nest).as_str())?;
-        let exiting_bb = self
-            .context
-            .append_basic_block(*self.func, format!("exit.{}", nest).as_str());
-        let bound = match loop_range {
-            Some((_, ub)) => ub,
-            None => {
-                let bound: u64 = op_ctx.operation.result_dims()[nest].try_into().unwrap();
-                self.context.i64_type().const_int(bound, false)
-            }
-        };
-
-        // Update op
-        let mut next_op_ctx = op_ctx;
-        let phis = next_op_ctx
-            .operation
-            .operands
-            .iter()
-            .map(|op| {
-                self.builder.build_phi(
-                    op.offset.get_type(),
-                    format!("offset.{}.{}", op.name, nest).as_str(),
-                )
-            })
-            .collect::<Result<Vec<_>, BuilderError>>()?;
-        for (op, offset_phi) in next_op_ctx.operation.operands.iter_mut().zip(phis) {
-            let offset_int = offset_phi.as_basic_value().into_int_value();
-            self.builder.position_at_end(exiting_bb);
-            let stride = self
-                .context
-                .i64_type()
-                .const_int(op.stride(nest).try_into().unwrap(), false);
-            let offset_next = self.builder.build_int_add(
-                offset_int,
-                stride,
-                format!("offset.{}.{}.next", op.name, nest).as_str(),
-            )?;
-            self.builder.position_at_end(loop_bb.header);
-            offset_phi.add_incoming(&[
-                (
-                    &self.context.i64_type().const_int(0, false),
-                    loop_bb.preheader,
-                ),
-                (&offset_next, exiting_bb),
-            ]);
-            op.offset = self.builder.build_int_add(
-                op.offset,
-                offset_int,
-                format!("offset.sum.{}.{}", op.name, nest).as_str(),
-            )?;
-        }
-
-        // Comp and branch
-        let next_bb = self
-            .context
-            .append_basic_block(*self.func, format!("loop.{}", nest).as_str());
-        self.builder.build_unconditional_branch(next_bb)?;
-        self.builder.position_at_end(exiting_bb);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            format!("ind.{}.next", nest).as_str(),
-        )?;
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            ind_next,
-            bound,
-            format!("cond.{}", nest).as_str(),
-        )?;
-        self.builder
-            .build_conditional_branch(cond, loop_bb.header, loop_bb.exit)?;
-
-        let ind_init = match loop_range {
-            Some((lb, _)) => lb,
-            None => self.context.i64_type().const_zero(),
-        };
-        ind.add_incoming(&[(&ind_init, loop_bb.preheader), (&ind_next, exiting_bb)]);
-        self.builder.position_at_end(next_bb);
-        let next_loop_bb = LoopBB {
-            preheader: loop_bb.header,
-            header: next_bb,
-            exit: exiting_bb,
-        };
-        self.build_nested_loop_rec(next_op_ctx, next_loop_bb, nest + 1, max_nest, None)
     }
 
-    pub fn build_nested_loop(
+    fn build_flat_loop_body(
         &self,
-        op_ctx: OperationContext<'ctx>,
+        mut op: Operation<'ctx>,
         preheader: BasicBlock<'ctx>,
-        max_nest: usize,
+        lb: IntValue<'ctx>,
+        ub: IntValue<'ctx>,
+        operand_info: &[Vec<(u64, u64)>],
+        output_dims: &[u64],
+        dst_ty: &ResolvedTensorType,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let header = self.context.append_basic_block(*self.func, "header");
-        let exit = self.context.append_basic_block(*self.func, "exit");
+        let i64_type = self.context.i64_type();
+
+        let header = self.context.append_basic_block(*self.func, "flat.header");
+        let body = self.context.append_basic_block(*self.func, "flat.body");
+        let latch = self.context.append_basic_block(*self.func, "flat.latch");
+        let exit = self.context.append_basic_block(*self.func, "flat.exit");
+
+        let base_offsets: Vec<IntValue<'ctx>> = op.operands.iter().map(|ptr| ptr.offset).collect();
+
         self.builder.build_unconditional_branch(header)?;
         self.builder.position_at_end(header);
-        let loop_bb = LoopBB {
-            preheader,
-            header,
-            exit,
-        };
-        self.build_nested_loop_rec(op_ctx, loop_bb, 0, max_nest, None)?;
+
+        let ind = self.builder.build_phi(i64_type, "flat.ind")?;
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ind.as_basic_value().into_int_value(),
+            ub,
+            "flat.cond",
+        )?;
+        self.builder.build_conditional_branch(cond, body, exit)?;
+
+        self.builder.position_at_end(body);
+        let flat_idx = ind.as_basic_value().into_int_value();
+
+        for (op_idx, ptr) in op.operands.iter_mut().enumerate() {
+            if op_idx != 0 && ptr.ty == *dst_ty {
+                ptr.offset = self.builder.build_int_add(
+                    base_offsets[op_idx],
+                    flat_idx,
+                    &format!("off.{}", op_idx),
+                )?;
+            } else {
+                let info = &operand_info[op_idx];
+                let mut offset = base_offsets[op_idx];
+                let mut remaining = flat_idx;
+
+                for (dim_idx, out_dim) in output_dims.iter().enumerate().rev() {
+                    let dim_const = i64_type.const_int(*out_dim, false);
+                    let idx = self.builder.build_int_unsigned_rem(
+                        remaining,
+                        dim_const,
+                        &format!("idx.{}.{}", op_idx, dim_idx),
+                    )?;
+                    remaining = self.builder.build_int_unsigned_div(
+                        remaining,
+                        dim_const,
+                        &format!("rem.{}.{}", op_idx, dim_idx),
+                    )?;
+
+                    let (_, stride) = info[dim_idx];
+                    if stride != 0 {
+                        let stride_const = i64_type.const_int(stride, false);
+                        let contrib = self.builder.build_int_mul(
+                            idx,
+                            stride_const,
+                            &format!("contrib.{}.{}", op_idx, dim_idx),
+                        )?;
+                        offset = self.builder.build_int_add(
+                            offset,
+                            contrib,
+                            &format!("off.{}.{}", op_idx, dim_idx),
+                        )?;
+                    }
+                }
+
+                ptr.offset = offset;
+            }
+        }
+
+        self.build_operation(&op)?;
+
+        self.builder.build_unconditional_branch(latch)?;
+        self.builder.position_at_end(latch);
+        let ind_next = self.builder.build_int_add(
+            ind.as_basic_value().into_int_value(),
+            i64_type.const_int(1, false),
+            "flat.ind.next",
+        )?;
+        self.builder.build_unconditional_branch(header)?;
+        ind.add_incoming(&[(&lb, preheader), (&ind_next, latch)]);
+
         self.builder.position_at_end(exit);
         Ok(exit)
     }
@@ -1894,7 +1880,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         entry: BasicBlock<'ctx>,
         axis: usize,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let max_nest = dst.ty.dims.ndim();
         let mut acc = 0;
         let mut entry = entry;
         let stride = dst.ty.stride(axis);
@@ -1915,11 +1900,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 opcode: SingleOpcode::Transfer.into(),
                 operands: smallvec![dst, src.clone()],
             };
-            let op = OperationContext {
-                operation: op,
-                omp_for: None,
-            };
-            entry = self.build_nested_loop(op, entry, max_nest)?;
+            entry = self.build_flat_loop(op, entry, false)?;
             acc += src.ty.dims[axis] * stride;
         }
         Ok(entry)

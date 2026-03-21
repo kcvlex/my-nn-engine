@@ -618,20 +618,9 @@ impl<'ll> CodeGen<'ll, '_> {
             .schedule
             .analysis
             .get::<crate::schedule::omp::OmpResult>();
-        let omp_info = omp_result.0.get(&kernel_id);
-        let omp_for = omp_info.and_then(|info| info.omp_for);
+        let use_omp = omp_result.0.contains(&kernel_id);
 
         let mut ptrs = ptrs;
-
-        macro_rules! nested_loop {
-            ($op: expr, $nest: expr) => {{
-                let op = OperationContext {
-                    operation: $op,
-                    omp_for,
-                };
-                translator.build_nested_loop(op, entry, $nest)
-            }};
-        }
 
         // TODO: When same Input is used in multiple nodes
         let adjust_ptrs_and_convert_op = |op: &Operator,
@@ -793,7 +782,6 @@ impl<'ll> CodeGen<'ll, '_> {
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
                 let target_dim = ptrs[0].ty.dims.clone();
-                let nest = target_dim.ndim();
                 // Fused kernels may contain unary ops whose inputs have fewer
                 // dimensions than the kernel output (e.g., Reciprocal(scalar)
                 // fused with a Mul that produces a tensor).
@@ -826,7 +814,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     opcode: Opcode::Fused(ops),
                     operands: ptrs.clone().into(),
                 };
-                nested_loop!(op, nest)
+                translator.build_flat_loop(op, entry, use_omp)
             }
         }?;
 

@@ -102,17 +102,6 @@ impl From<SingleOpcode> for Opcode {
     }
 }
 
-pub struct OperationContext<'ctx> {
-    pub operation: Operation<'ctx>,
-    pub omp_for: Option<usize>,
-}
-
-impl OperationContext<'_> {
-    pub fn to_for(&self, nest: usize) -> bool {
-        self.omp_for == Some(nest)
-    }
-}
-
 impl<'ctx> Operation<'ctx> {
     pub fn result_dims(&self) -> &ResolvedTensorDims {
         &self.dst_operand().ty.dims
