@@ -51,22 +51,22 @@ impl AttentionKernel {
             "attention<{}, {}, {}, {}, {}>",
             self.data_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
         );
-        let mut args = vec![
+        let mask = match &self.mask {
+            Some(mask) => mask.to_owned(),
+            None => "nullptr".to_literal(),
+        };
+        let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
             cast!(self.data_ty, self.k),
             cast!(self.data_ty, self.v),
             self.attn.scale.to_string(),
             if self.attn.is_causal { "1" } else { "0" }.to_string(),
+            cast!(self.data_ty, mask),
+            self.mask_outer_stride.to_string(),
+            self.mask_row_stride.to_string(),
+            self.n.to_string(),
         ];
-        if let Some(ref mask) = self.mask {
-            args.push(cast!(self.data_ty, mask));
-        } else {
-            args.push(format!("({} *)nullptr", self.data_ty));
-        }
-        args.push(self.mask_outer_stride.to_string());
-        args.push(self.mask_row_stride.to_string());
-        args.push(self.n.to_string());
         (id, args)
     }
 }

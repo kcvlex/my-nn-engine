@@ -167,6 +167,7 @@ impl std::fmt::Display for ChunkMemSize {
     }
 }
 
+#[derive(Clone)]
 enum Expr {
     Identifier(String),
     Literal(String),
