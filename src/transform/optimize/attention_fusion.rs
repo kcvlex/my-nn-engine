@@ -139,8 +139,29 @@ fn build_causal_additive_mask(
         let TensorData::Float(_, ref data) = mask.data else {
             return None;
         };
-        let penalty = data[1];
-        for i in (0..mty.dims.size()).step_by(n) {
+        let total = mty.dims.size();
+        if total < 2 {
+            return None;
+        }
+        // Derive the penalty from the first masked (c > r) element, if any.
+        let mut penalty_opt: Option<f64> = None;
+        'outer: for i in (0..total).step_by(n) {
+            let slice = &data[i..i + n];
+            for r in 0..qk_row {
+                for c in 0..qk_col {
+                    if c > r {
+                        let idx = r * qk_col + c;
+                        penalty_opt = Some(slice[idx]);
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let penalty = match penalty_opt {
+            Some(p) => p,
+            None => return None,
+        };
+        for i in (0..total).step_by(n) {
             let slice = &data[i..i + n];
             for r in 0..qk_row {
                 for c in 0..qk_col {
