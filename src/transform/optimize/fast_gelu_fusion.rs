@@ -145,16 +145,23 @@ fn match_fast_gelu_pattern<T: GraphOp>(
             let Some(other) = extract_other_binary_input(node, add) else {
                 return false;
             };
-            let Some((other, _)) = modifier.defined_node(other) else {
-                return false;
-            };
-            let other = &graph.nodes[other];
-            if !matches!(&other.op, Operator::Mul) {
-                return false;
+            // GPT-2 pattern: Mul(add, Mul(x, 0.5))
+            if let Some((other_id, _)) = modifier.defined_node(other) {
+                let other_node = &graph.nodes[other_id];
+                if matches!(&other_node.op, Operator::Mul) &&
+                    is_applied_constant(other_node, x, 0.5)
+                {
+                    return true;
+                }
             }
-            is_applied_constant(other, x, 0.5)
+            // BERT pattern: Mul(0.5, add)
+            is_applied_constant(node, add, 0.5)
         })?
-        .last_node();
+        // BERT pattern has an extra Mul(x, result) at the end
+        .try_then(|(node, mul)| {
+            matches!(&node.op, Operator::Mul) && extract_other_binary_input(node, mul) == Some(x)
+        })
+        .map_or_else(|m| m.last_node(), |m| m.last_node());
 
     Some(FastGeLUPattern {
         last_node,
