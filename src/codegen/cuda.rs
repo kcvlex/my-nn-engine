@@ -980,34 +980,33 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     let seq_q = q_dims[2];
 
-                    let has_mask = kernel.inputs.len() > args::ATTENTION_MASK;
-                    let (mask_expr, mask_outer_stride, mask_row_stride) = if has_mask {
-                        let mask_id = kernel.inputs[args::ATTENTION_MASK];
-                        let mask_ty = self.get_resolved_tensor_type(mask_id)?;
-                        let md = &mask_ty.dims;
-                        let mndim = md.ndim();
-                        let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
-                        let mask_last_col = md[mndim - 1];
-                        let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
-                        let mask_slice_size = mask_last_row * mask_last_col;
-                        let mask_outer_size: usize = if mndim > 2 {
-                            md[..mndim - 2].iter().product()
+                    let (mask_expr, mask_outer_stride, mask_row_stride) =
+                        if let Some(mask_id) = kernel.inputs.get(args::ATTENTION_MASK).copied() {
+                            let mask_ty = self.get_resolved_tensor_type(mask_id)?;
+                            let md = &mask_ty.dims;
+                            let mndim = md.ndim();
+                            let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
+                            let mask_last_col = md[mndim - 1];
+                            let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
+                            let mask_slice_size = mask_last_row * mask_last_col;
+                            let mask_outer_size: usize = if mndim > 2 {
+                                md[..mndim - 2].iter().product()
+                            } else {
+                                1
+                            };
+                            let mask_outer_stride = if mask_outer_size > 1 {
+                                mask_slice_size
+                            } else {
+                                0
+                            };
+                            (
+                                Some(self.device_identifier(mask_id)?),
+                                mask_outer_stride,
+                                mask_row_stride,
+                            )
                         } else {
-                            1
+                            (None, 0, 0)
                         };
-                        let mask_outer_stride = if mask_outer_size > 1 {
-                            mask_slice_size
-                        } else {
-                            0
-                        };
-                        (
-                            Some(self.device_identifier(mask_id)?),
-                            mask_outer_stride,
-                            mask_row_stride,
-                        )
-                    } else {
-                        (None, 0, 0)
-                    };
 
                     let batch_size = q_dims[0];
                     let num_heads = q_dims[1];
