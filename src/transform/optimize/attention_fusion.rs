@@ -92,19 +92,17 @@ struct AttentionPattern {
     mask: Option<ValueId>,
 }
 
-/// Build an additive mask tensor from the GPT-2 causal (Mul) + penalty (Sub) pattern.
-///
-/// The combined mask is: `0` where `c <= r`, `-penalty` where `c > r`.
-fn build_causal_additive_mask<T: GraphOp>(
-    graph: &mut Graph,
-    modifier: &mut T,
+// Build an additive mask tensor from the GPT-2 causal (Mul) + penalty (Sub) pattern.
+//
+// The combined mask is: `0` where `c <= r`, `-penalty` where `c > r`.
+fn build_causal_additive_mask(
+    graph: &Graph,
     causal_node: NodeId,
     mask_node: Option<NodeId>,
     qk_scaled: ValueId,
     qk_row: usize,
     qk_col: usize,
-    matmul_node: NodeId,
-) -> Option<ValueId> {
+) -> Option<Tensor> {
     let causal_mat = extract_other_binary_input(&graph.nodes[causal_node], qk_scaled)?;
     let causal = graph.initializer.get(&causal_mat)?;
     let ty = &causal.tensor_type();
@@ -173,12 +171,7 @@ fn build_causal_additive_mask<T: GraphOp>(
             }
         }
     }
-    let tensor = Tensor::new(dims, TensorData::Float(float_ty, additive_data)).ok()?;
-    Some(modifier.register_new_tensor(
-        graph,
-        tensor,
-        format!("AttentionFusion_CausalMask_{:?}", matmul_node),
-    ))
+    Tensor::new(dims, TensorData::Float(float_ty, additive_data)).ok()
 }
 
 fn match_attention_pattern<T: GraphOp>(
@@ -199,20 +192,25 @@ fn match_attention_pattern<T: GraphOp>(
     let mut sub_node = None;
     let mut add_node = None;
 
-    let last_node = matcher
+    let matcher = matcher
         .capture_value(&mut qk)
         .then(|(node, _)| matches!(&node.op, Operator::Mul))?
         .capture_value(&mut qk_scaled)
-        .capture_node(&mut scale_node)
-        // GPT-2 path: optional Mul (causal mask with 1s/0s)
+        .capture_node(&mut scale_node);
+
+    // GPT-2 path: optional Mul (causal mask with 1s/0s) and Sub (penalty)
+    let matcher = matcher
         .try_then(|(node, _)| matches!(&node.op, Operator::Mul))
-        .map(|res| res.capture_node(&mut causal_node))
-        .unwrap_or_else(|matcher| matcher)
-        // GPT-2 path: optional Sub (penalty)
-        .try_then(|(node, v)| matches!(&node.op, Operator::Sub) && node.inputs[0] == v)
-        .map(|res| res.capture_node(&mut sub_node))
-        .unwrap_or_else(|matcher| matcher)
-        // BERT path: optional Add (additive mask)
+        .and_then(|matcher| {
+            matcher
+                .capture_node(&mut causal_node)
+                .try_then(|(node, v)| matches!(&node.op, Operator::Sub) && node.inputs[0] == v)
+                .map(|res| res.capture_node(&mut sub_node))
+        })
+        .unwrap_or_else(|matcher| matcher);
+
+    // BERT path: optional Add (additive mask)
+    let matcher = matcher
         .try_then(|(node, v)| {
             if !matches!(&node.op, Operator::Add) {
                 return false;
@@ -224,7 +222,9 @@ fn match_attention_pattern<T: GraphOp>(
             node.inputs[0] == v || node.inputs[1] == v
         })
         .map(|res| res.capture_node(&mut add_node))
-        .unwrap_or_else(|matcher| matcher)
+        .unwrap_or_else(|matcher| matcher);
+
+    let last_node = matcher
         .then(|(node, v)| match &node.op {
             Operator::Softmax(Softmax { axis }) => {
                 let Some(ty) = graph.get_resolved_tensor_type(v) else {
@@ -255,17 +255,13 @@ fn match_attention_pattern<T: GraphOp>(
     // Determine the mask value, if any.
     let mask = if let Some(causal_node) = causal_node {
         // GPT-2 path: precompute additive mask from Mul(causal) + optional Sub(penalty)
-        let mask_value = build_causal_additive_mask(
+        let tensor =
+            build_causal_additive_mask(graph, causal_node, sub_node, qk_scaled?, qk_row, qk_col)?;
+        Some(modifier.register_new_tensor(
             graph,
-            modifier,
-            causal_node,
-            sub_node,
-            qk_scaled?,
-            qk_row,
-            qk_col,
-            matmul_node,
-        )?;
-        Some(mask_value)
+            tensor,
+            format!("AttentionFusion_CausalMask_{:?}", matmul_node),
+        ))
     } else if let Some(add_node) = add_node {
         // BERT path: the other input to Add is the mask
         let add_input = extract_other_binary_input(&graph.nodes[add_node], qk_scaled?)?;
