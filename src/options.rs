@@ -32,9 +32,9 @@ pub struct Options {
     #[builder(default = false)]
     pub profile: bool,
 
-    #[builder(default = true)]
+    #[builder(default = std::env::var("MY_ONNX_SAVE_BUILD_DIR").is_ok())]
     pub save_build_dir: bool,
 
-    #[builder(default = true)]
+    #[builder(default = std::env::var("MY_ONNX_SAVE_BUILD_DIR").is_ok())]
     pub save_transformed_model: bool,
 }

@@ -135,6 +135,7 @@ impl Session {
         input_ty: Option<&[ResolvedTensorType]>,
         options: &Options,
     ) -> Result<Self, SessionError> {
+        let _ = env_logger::try_init();
         info!("Session starting");
 
         let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
@@ -152,7 +153,7 @@ impl Session {
 
         let tmp_dir = TempDir::with_prefix("my_model_")
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-        dbg!(&tmp_dir);
+        info!("Build directory: {:?}", tmp_dir.path());
         let build_dir = PathBuf::from(tmp_dir.path());
 
         if options.save_transformed_model {

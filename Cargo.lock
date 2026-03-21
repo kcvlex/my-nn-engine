@@ -1246,6 +1246,7 @@ dependencies = [
  "bytes",
  "delegate",
  "derive_more",
+ "env_logger",
  "id-arena",
  "image",
  "indexmap 2.13.0",
