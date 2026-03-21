@@ -780,23 +780,15 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     split,
                 ),
-                Operator::Attention(ref attn) => {
-                    let has_mask = ptrs.len() > 1 + args::ATTENTION_MASK;
-                    let mask = if has_mask {
-                        Some(&ptrs[1 + args::ATTENTION_MASK])
-                    } else {
-                        None
-                    };
-                    translator.build_attention(
-                        &ptrs[0],
-                        &ptrs[1 + args::ATTENTION_Q],
-                        &ptrs[1 + args::ATTENTION_K],
-                        &ptrs[1 + args::ATTENTION_V],
-                        mask,
-                        entry,
-                        attn,
-                    )
-                }
+                Operator::Attention(ref attn) => translator.build_attention(
+                    &ptrs[0],
+                    &ptrs[1 + args::ATTENTION_Q],
+                    &ptrs[1 + args::ATTENTION_K],
+                    &ptrs[1 + args::ATTENTION_V],
+                    ptrs.get(1 + args::ATTENTION_MASK),
+                    entry,
+                    attn,
+                ),
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
