@@ -368,6 +368,10 @@ pub enum ReinterpretType {
         after: Vec<usize>,
     },
     Transpose(Transpose),
+    Broadcast {
+        before: Vec<usize>,
+        after: Vec<usize>,
+    },
 }
 
 impl ReinterpretType {

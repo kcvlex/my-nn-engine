@@ -172,6 +172,29 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 },
             );
 
+            // Add bias right after Gemm (before Reshape/Transpose)
+            // bias is 1D [C_out] which broadcasts with Gemm output [M, C_out]
+            let biased_output = if let Some(bias) = bias_value {
+                let add_output = modifier.register_new_value(
+                    graph,
+                    format!("Im2Col_{index}_AddBias"),
+                    graph.get_resolved_tensor_type(gemm_output).unwrap().clone(),
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![gemm_output, bias],
+                        outputs: vec![add_output],
+                        name: format!("Im2Col_{index}_AddBias"),
+                        op: Operator::Add,
+                        meta: NodeMeta::default(),
+                    },
+                );
+                add_output
+            } else {
+                gemm_output
+            };
+
             // Reshape the output
             let reshaped_output_shape = {
                 let mut vec = Vec::with_capacity(one_fm_shape.ndim() + 2);
@@ -181,7 +204,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 vec
             };
             let reshaped_output = ReshapeGenerator::default()
-                .set_input(gemm_output)
+                .set_input(biased_output)
                 .set_dims(&reshaped_output_shape)
                 .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
                 .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
@@ -208,43 +231,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 .generate(graph, modifier)
                 .unwrap();
 
-            // TODO: Meld into Gemm
-            let new_output_value = if let Some(bias) = bias_value {
-                let bias_dims = &graph.get_resolved_tensor_type(bias).unwrap().dims;
-                assert!(bias_dims.ndim() == 1);
-                let mut reshaped_bias_shape = vec![1; one_fm_shape.ndim() + 1];
-                reshaped_bias_shape[0] = bias_dims[0];
-                let reshaped_bias = ReshapeGenerator::default()
-                    .set_input(bias)
-                    .set_dims(&reshaped_bias_shape)
-                    .set_node_name(format!("Im2Col_{index}_ReshapeBias"))
-                    .set_value_name(format!("Im2Col_{index}_ReshapeBias"))
-                    .generate(graph, modifier)
-                    .unwrap();
-                let new_output_value = modifier.register_new_value(
-                    graph,
-                    format!("Im2Col_{index}_Output"),
-                    graph
-                        .get_resolved_tensor_type(transposed_output)
-                        .unwrap()
-                        .clone(),
-                );
-                modifier.register_new_node(
-                    graph,
-                    Node {
-                        inputs: vec![transposed_output, reshaped_bias],
-                        outputs: vec![new_output_value],
-                        name: format!("Im2Col_{index}_AddBias"),
-                        op: Operator::Add,
-                        meta: NodeMeta::default(),
-                    },
-                );
-                new_output_value
-            } else {
-                transposed_output
-            };
-
-            modifier.replace_input_value(graph, old_output_value, new_output_value);
+            modifier.replace_input_value(graph, old_output_value, transposed_output);
         }
 
         Operator::MaxPool(ref pooling) => {

@@ -2,6 +2,7 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
+use crate::tensor::types::broadcast_shape;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
@@ -51,8 +52,10 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
                     return None;
                 }
 
-                // For now, bail out if broadcast is necessary for the Add operation.
-                if graph.get_resolved_tensor_type(lhs) != graph.get_resolved_tensor_type(rhs) {
+                // The bias must be broadcastable to the Gemm output shape.
+                let lhs_dims = &graph.get_resolved_tensor_type(lhs).unwrap().dims;
+                let rhs_dims = &graph.get_resolved_tensor_type(rhs).unwrap().dims;
+                if broadcast_shape(lhs_dims, rhs_dims).is_err() {
                     return None;
                 }
 
@@ -61,31 +64,70 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
             .collect::<Vec<_>>();
 
         for (gemm_id, add_id) in res.into_iter() {
-            let gemm_node = &graph.nodes[gemm_id];
-            let add_node = &graph.nodes[add_id];
-            let mut gemm = match &gemm_node.op {
+            let mut gemm = match &graph.nodes[gemm_id].op {
                 Operator::Gemm(g) => g.clone(),
                 _ => unreachable!(),
             };
-            assert!(gemm_node.inputs.len() == 2);
+            assert!(graph.nodes[gemm_id].inputs.len() == 2);
             assert!(gemm.beta == 0.0);
-            assert!(matches!(add_node.op, Operator::Add));
+            assert!(matches!(graph.nodes[add_id].op, Operator::Add));
 
-            let gemm_output = gemm_node.outputs[0];
-            let add_another = if add_node.inputs[0] == gemm_output {
-                add_node.inputs[1]
-            } else if add_node.inputs[1] == gemm_output {
-                add_node.inputs[0]
+            let gemm_output = graph.nodes[gemm_id].outputs[0];
+            let add_another = if graph.nodes[add_id].inputs[0] == gemm_output {
+                graph.nodes[add_id].inputs[1]
+            } else if graph.nodes[add_id].inputs[1] == gemm_output {
+                graph.nodes[add_id].inputs[0]
             } else {
                 unreachable!()
             };
-            let add_output = add_node.outputs[0];
+            let add_output = graph.nodes[add_id].outputs[0];
+
+            let gemm_ty = graph.get_resolved_tensor_type(gemm_output).unwrap().clone();
+            let bias_ty = graph.get_resolved_tensor_type(add_another).unwrap().clone();
+
+            // If broadcast is needed, insert a Contiguous node to expand the bias
+            // to match the Gemm output shape. ConstantFold will later fold this
+            // into a materialized initializer if the bias is constant.
+            let c_value = if gemm_ty.dims != bias_ty.dims {
+                let broadcast_op = ReinterpretType::Broadcast {
+                    before: bias_ty.dims.iter().copied().collect(),
+                    after: gemm_ty.dims.iter().copied().collect(),
+                };
+                let cont_output = modifier.register_new_value(
+                    graph,
+                    format!(
+                        "GemmAddFusion_BiasCont_{}_{}",
+                        gemm_id.index(),
+                        add_id.index()
+                    ),
+                    gemm_ty,
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![add_another],
+                        outputs: vec![cont_output],
+                        name: format!(
+                            "GemmAddFusion_BiasCont_{}_{}",
+                            gemm_id.index(),
+                            add_id.index()
+                        ),
+                        op: Operator::Contiguous(Contiguous {
+                            ops: vec![broadcast_op],
+                        }),
+                        meta: NodeMeta::default(),
+                    },
+                );
+                cont_output
+            } else {
+                add_another
+            };
 
             let ty = graph.get_resolved_tensor_type(add_output).unwrap().clone();
             let inputs = vec![
-                gemm_node.inputs[args::GEMM_A],
-                gemm_node.inputs[args::GEMM_B],
-                add_another,
+                graph.nodes[gemm_id].inputs[args::GEMM_A],
+                graph.nodes[gemm_id].inputs[args::GEMM_B],
+                c_value,
             ];
             gemm.beta = 1.0;
 

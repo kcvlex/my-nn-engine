@@ -944,6 +944,22 @@ impl<'sched> ContiguousBuilder<'sched> {
                         body.push_str(&format!("offset=offset*{d}+t_{};\n", inv_perm[k]));
                     }
                 }
+                ReinterpretType::Broadcast { before, .. } => {
+                    for (i, d) in shape.iter().enumerate().rev() {
+                        body.push_str(&format!("int t_{i}=offset%{d};\n"));
+                        body.push_str(&format!("offset=offset/{d};\n"));
+                    }
+
+                    shape = before.clone();
+                    body.push_str("offset=0;\n");
+                    for (i, d) in before.iter().enumerate() {
+                        if *d == 1 {
+                            body.push_str(&format!("offset=offset*{d};\n"));
+                        } else {
+                            body.push_str(&format!("offset=offset*{d}+t_{i};\n"));
+                        }
+                    }
+                }
             }
         }
 

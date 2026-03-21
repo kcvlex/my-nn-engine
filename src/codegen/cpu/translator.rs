@@ -979,16 +979,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         entry: BasicBlock<'ctx>,
         gemm: &operator::Gemm,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        // TODO?: Omit if c.ptr == dst.ptr.
-        // TODO?: Explicitly insert Contiguous if needed.
+        // Copy C into output buffer so BLAS can compute alpha*A*B + beta*C in-place.
         let entry = if let Some(c) = c {
-            {
-                let op = ReinterpretType::single_reshape(
-                    c.ty.dims.iter().map(|d| *d).collect(),
-                    dst.ty.dims.iter().map(|d| *d).collect(),
-                );
-                self.build_contiguous(dst, c.clone(), entry, &[op])?
-            }
+            assert_eq!(c.ty.dims, dst.ty.dims);
+            self.build_contiguous(dst, c.clone(), entry, &[])?
         } else {
             entry
         };
@@ -3062,6 +3056,40 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             "offset",
                         )?;
                         offset = self.builder.build_int_add(offset, *i, "offset")?;
+                    }
+                }
+                ReinterpretType::Broadcast { before, .. } => {
+                    // Compute multi-index from output offset, then mod each dim
+                    // by the before-shape to get the source index
+                    let mut cur = offset;
+                    let mut indexes = Vec::new();
+                    for d in shape.iter().rev() {
+                        let idx = self.builder.build_int_unsigned_rem(
+                            cur,
+                            self.context.i64_type().const_int(*d, false),
+                            "index",
+                        )?;
+                        indexes.push(idx);
+                        cur = self.builder.build_int_unsigned_div(
+                            cur,
+                            self.context.i64_type().const_int(*d, false),
+                            "index",
+                        )?;
+                    }
+                    indexes.reverse();
+
+                    // Map output index to input index via broadcast (mod by before dim)
+                    shape = before.iter().map(|d| *d as u64).collect_vec();
+                    offset = self.context.i64_type().const_zero();
+                    for (idx, d) in izip!(indexes.iter(), before.iter()) {
+                        let d_val = self.context.i64_type().const_int(*d as u64, false);
+                        let src_idx = if *d == 1 {
+                            self.context.i64_type().const_zero()
+                        } else {
+                            *idx
+                        };
+                        offset = self.builder.build_int_mul(offset, d_val, "offset")?;
+                        offset = self.builder.build_int_add(offset, src_idx, "offset")?;
                     }
                 }
             }

@@ -46,5 +46,8 @@ pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp
         gemm_transpose_fusion::GemmTransposeFusion::default(),
     ));
     pass_manager.add_pass(Box::new(gemm_add_fusion::GemmAddFusion::default()));
+    pass_manager.add_pass(Box::new(const_fold::ConstantFold {
+        check_strides: true,
+    }));
     pass_manager
 }

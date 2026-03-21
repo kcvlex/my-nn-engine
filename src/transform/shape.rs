@@ -550,6 +550,10 @@ pub fn infer_node_output(
                         reshape(&ty, &shape, mode)?
                     }
                     ReinterpretType::Transpose(ref perm) => transpose(&ty, perm, mode)?,
+                    ReinterpretType::Broadcast { ref after, .. } => {
+                        let dims = ResolvedTensorDims::new(after);
+                        ResolvedTensorType::new(ty.elem_type, dims)
+                    }
                 };
             }
             res.push(ty);

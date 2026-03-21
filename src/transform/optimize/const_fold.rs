@@ -224,6 +224,24 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let dims = &graph.get_resolved_tensor_type(node.outputs[0])?.dims;
             Some(vec![input.reshape(dims)])
         }
+        Operator::Contiguous(Contiguous { ref ops }) => {
+            let mut tensor = graph.initializer.get(&node.inputs[0])?.clone();
+            for op in ops {
+                match op {
+                    ReinterpretType::Reshape { after, .. } => {
+                        tensor = tensor.reshape(&ResolvedTensorDims::new(after));
+                    }
+                    ReinterpretType::Transpose(Transpose { perm }) => {
+                        let perm = perm.as_ref()?;
+                        tensor = tensor.transpose(perm);
+                    }
+                    ReinterpretType::Broadcast { after, .. } => {
+                        tensor = tensor.broadcast(&ResolvedTensorDims::new(after));
+                    }
+                }
+            }
+            Some(vec![tensor])
+        }
         _ => None,
     }
 }
