@@ -9,6 +9,13 @@ use crate::transform::pattern::extract_other_binary_input;
 use crate::transform::pattern::PatternMatcher;
 use crate::transform::Pass;
 
+fn is_reduce_mean_last_axis(node: &Node, ndim: usize) -> bool {
+    let Operator::ReduceMean(Reduce { axes, .. }) = &node.op else {
+        return false;
+    };
+    axes.len() == 1 && TensorIndex::new(axes[0] as isize).index(ndim) == ndim - 1
+}
+
 #[derive(Default)]
 pub struct LayerNormFusion {}
 
@@ -22,12 +29,16 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
             .nodes
             .iter()
             .filter_map(|(id, node)| {
-                matches!(
-                    &node.op,
-                    Operator::ReduceMean(Reduce { axes, keepdims, .. })
-                    if axes.len() == 1 && axes[0] == -1 && *keepdims
-                )
-                .then_some(id)
+                let Operator::ReduceMean(Reduce { axes, keepdims, .. }) = &node.op else {
+                    return None;
+                };
+                if axes.len() != 1 || !keepdims {
+                    return None;
+                }
+                let input = node.inputs[0];
+                let ndim = graph.get_resolved_tensor_type(input)?.dims.ndim();
+                let axis = TensorIndex::new(axes[0] as isize).index(ndim);
+                (axis == ndim - 1).then_some(id)
             })
             .collect();
 
@@ -96,6 +107,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
 ) -> Option<LayerNormPattern> {
     let mean = graph.nodes[mean_node].outputs[0];
     let x = graph.nodes[mean_node].inputs[0];
+    let ndim = graph.get_resolved_tensor_type(x)?.dims.ndim();
 
     let mut var: Option<ValueId> = None;
     let mut var_eps_node: Option<NodeId> = None;
@@ -110,12 +122,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
         .then(|(node, d)| {
             matches!(&node.op, Operator::Mul) && node.inputs[0] == d && node.inputs[1] == d
         })?
-        .then(|(node, dd)| match &node.op {
-            Operator::ReduceMean(Reduce { axes, .. }) => {
-                axes.len() == 1 && axes[0] == -1 && node.inputs[0] == dd
-            }
-            _ => false,
-        })?
+        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0] == dd)?
         .capture_value(&mut var)
         .then(|(node, _)| matches!(&node.op, Operator::Add))?
         .capture_node(&mut var_eps_node)
@@ -201,6 +208,7 @@ fn match_layer_norm_pattern<T: GraphOp>(
 
     // Get input X from the mean node
     let x = graph.nodes[mean_node].inputs[0];
+    let ndim = graph.get_resolved_tensor_type(x)?.dims.ndim();
 
     let mut d: Option<ValueId> = None;
     let mut var: Option<ValueId> = None;
@@ -223,12 +231,7 @@ fn match_layer_norm_pattern<T: GraphOp>(
             }
             _ => false,
         })?
-        .then(|(node, dd)| match &node.op {
-            Operator::ReduceMean(Reduce { axes, .. }) => {
-                axes.len() == 1 && axes[0] == -1 && node.inputs[0] == dd
-            }
-            _ => false,
-        })?
+        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0] == dd)?
         .capture_value(&mut var)
         .then(|(node, _)| matches!(&node.op, Operator::Add))?
         .capture_node(&mut var_eps_node)
