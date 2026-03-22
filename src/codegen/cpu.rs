@@ -1,4 +1,4 @@
-mod blas;
+pub(crate) mod blas;
 mod llvm;
 mod omp;
 mod op;

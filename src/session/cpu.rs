@@ -31,6 +31,21 @@ struct JitState {
 unsafe impl Send for JitState {}
 unsafe impl Sync for JitState {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlasBackend {
+    OpenBLAS,
+    MKL,
+}
+
+impl BlasBackend {
+    pub fn shared_library_name(&self) -> &'static str {
+        match self {
+            BlasBackend::OpenBLAS => "libopenblas.so",
+            BlasBackend::MKL => "libmkl_rt.so",
+        }
+    }
+}
+
 pub struct SessionCPU {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
@@ -54,7 +69,24 @@ impl SessionCPU {
         opt: &Options,
         build_dir: &Path,
     ) -> Result<Self, SessionError> {
-        let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
+        info!("Load external libraries");
+        (|| {
+            for b in [BlasBackend::MKL, BlasBackend::OpenBLAS] {
+                if load_library_permanently(Path::new(b.shared_library_name())).is_ok() {
+                    info!("Using BLAS: {:?}", b);
+                    return Ok(b);
+                }
+            }
+            Err(SessionError::OtherError(
+                "Failed to load any BLAS library".to_string(),
+            ))
+        })()?;
+
+        load_library_permanently(Path::new("libomp.so"))
+            .map_err(|e| SessionError::OtherError(format!("Failed to load libomp.so: {:?}", e)))?;
+
+        let codegen_ctx =
+            CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let kernel_ids = codegen_ctx.all_necessary_kernels();
 
         let mut contexts: Vec<Context> = kernel_ids.iter().map(|_| Context::create()).collect();
@@ -103,13 +135,6 @@ impl SessionCPU {
             main_codegen.module().print_to_file(&ll_path).unwrap();
         }
         let main_module = main_codegen.into_module();
-
-        info!("Load external libraries");
-        for lib in &["libopenblas.so", "libomp.so"] {
-            load_library_permanently(Path::new(lib)).map_err(|e| {
-                SessionError::OtherError(format!("Failed to load {}: {:?}", lib, e))
-            })?;
-        }
 
         info!("Linking and JIT compiling");
         let engine = main_module
