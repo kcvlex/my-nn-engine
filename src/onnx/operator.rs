@@ -37,6 +37,7 @@ impl TensorIndex {
 pub enum Operator {
     Add,
     Attention(Attention),
+    BatchedGemm(BatchedGemm),
     BatchNormalization(BatchNormalization),
     Cast(Cast),
     Concat(Concat),
@@ -524,6 +525,14 @@ pub struct Gemm {
     pub trans_b: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchedGemm {
+    pub alpha: f64,
+    pub beta: f64,
+    pub trans_a: bool,
+    pub trans_b: bool,
+}
+
 impl Default for Gemm {
     fn default() -> Self {
         Self {
@@ -698,6 +707,7 @@ impl Operator {
         match self {
             Operator::Add => "Add",
             Operator::Attention(_) => "Attention",
+            Operator::BatchedGemm(_) => "BatchedGemm",
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
             Operator::Concat(_) => "Concat",
@@ -778,6 +788,7 @@ impl Operator {
             Operator::Unsqueeze(_) => OperatorType::Bijective,
 
             Operator::Attention(_) |
+            Operator::BatchedGemm(_) |
             Operator::Concat(_) |
             Operator::Constant(_) |
             Operator::ConstantOfShape(_) |

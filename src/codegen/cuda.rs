@@ -1149,7 +1149,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                op @ (Operator::Gemm(_) | Operator::MatMul) => {
+                op @ (Operator::Gemm(_) | Operator::BatchedGemm(_)) => {
                     let Gemm {
                         alpha,
                         beta,
@@ -1157,11 +1157,11 @@ impl<'sched> HostCodeGenerator<'sched> {
                         trans_b,
                     } = match op {
                         Operator::Gemm(gemm) => gemm.clone(),
-                        Operator::MatMul => Gemm {
-                            alpha: 1.0,
-                            beta: 0.0,
-                            trans_a: false,
-                            trans_b: false,
+                        Operator::BatchedGemm(gemm) => Gemm {
+                            alpha: gemm.alpha,
+                            beta: gemm.beta,
+                            trans_a: gemm.trans_a,
+                            trans_b: gemm.trans_b,
                         },
                         _ => unreachable!(),
                     };
@@ -1276,27 +1276,14 @@ impl<'sched> HostCodeGenerator<'sched> {
                         Operator::Gemm(_) => {
                             self.stmts.push(CublasApi::Gemm(gemm).into());
                         }
-                        Operator::MatMul => {
-                            let stride_a = m * k;
-                            let stride_b = k * n;
+                        Operator::BatchedGemm(_) => {
+                            // cuBLAS A = row-major B (inputs[1]), cuBLAS B = row-major A (inputs[0])
+                            let stride_a = m * k;  // cuBLAS A stride
+                            let stride_b = k * n;  // cuBLAS B stride
                             let stride_c = m * n;
                             let batch_count =
-                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size() /
-                                    stride_a;
-
-                            for (value, stride) in izip!(
-                                [kernel.inputs[1], kernel.inputs[0], kernel.outputs[0]],
-                                [stride_a, stride_b, stride_c]
-                            ) {
-                                let ty = self.get_resolved_tensor_type(value)?;
-
-                                // Assume both inputs are contiguous.
-                                assert!(ty.is_contiguous());
-
-                                // Consistent dimensions.
-                                assert!(ty.dims.size() / stride == batch_count);
-                                assert!(ty.dims.size() % stride == 0);
-                            }
+                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size()
+                                    / stride_a;
 
                             let bgemm = BatchedGemmArgs {
                                 gemm,
@@ -1309,6 +1296,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                         }
                         _ => unreachable!(),
                     }
+                }
+
+                Operator::MatMul => {
+                    todo!("MatMul with broadcast should be lowered to BatchedGemm or loop of Gemm")
                 }
 
                 Operator::LayerNormalization(LayerNormalization { axis, epsilon }) => {

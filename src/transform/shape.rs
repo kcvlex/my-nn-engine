@@ -116,6 +116,28 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
+        Operator::BatchedGemm(gemm) => {
+            let a = &inputs[0];
+            let b = &inputs[1];
+            assert!(a.dims.ndim() >= 3 && b.dims.ndim() >= 3);
+            let ndim = a.dims.ndim();
+            let (m, k_a) = if gemm.trans_a {
+                (a.dims[ndim - 1], a.dims[ndim - 2])
+            } else {
+                (a.dims[ndim - 2], a.dims[ndim - 1])
+            };
+            let (k_b, n) = if gemm.trans_b {
+                (b.dims[ndim - 1], b.dims[ndim - 2])
+            } else {
+                (b.dims[ndim - 2], b.dims[ndim - 1])
+            };
+            assert_eq!(k_a, k_b);
+            let prefix = broadcast_shape(&a.dims.prefix(ndim - 2), &b.dims.prefix(ndim - 2))?;
+            let mut dims = prefix;
+            dims.push(m);
+            dims.push(n);
+            res.push(ResolvedTensorType::new(a.elem_type, dims));
+        }
         Operator::Attention(_) => {
             let q = &inputs[args::ATTENTION_Q];
             let k = &inputs[args::ATTENTION_K];

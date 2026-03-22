@@ -108,20 +108,23 @@ impl Canonicalize {
                 let rhs = node.inputs[args::MATMUL_RHS];
                 let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
                 let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
+                let old_output = node.outputs[0];
+                let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+                // Only convert 2D MatMul to Gemm here.
+                // 3D+ MatMul → BatchedGemm is done later (after AttentionFusion).
                 if ldim != 2 || rdim != 2 {
                     return;
                 }
-                let old_output = node.outputs[0];
-                let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
-                let new_output =
-                    modifier.register_new_value(graph, format!("MatMul2Gemm_{:?}", id), ty);
+                let name = format!("MatMul2Gemm_{:?}", id);
+                let op = Operator::Gemm(Gemm::default());
+                let new_output = modifier.register_new_value(graph, name.clone(), ty);
                 modifier.register_new_node(
                     graph,
                     Node {
                         inputs: vec![lhs, rhs],
                         outputs: vec![new_output],
-                        name: format!("MatMul2Gemm_{:?}", id),
-                        op: Operator::Gemm(Gemm::default()),
+                        name,
+                        op,
                         meta: NodeMeta::default(),
                     },
                 );
@@ -129,6 +132,68 @@ impl Canonicalize {
             }
 
             _ => (),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct MatMul2BatchedGemm {}
+
+impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
+    fn summary(&self) -> &'static str {
+        "Convert batched MatMul to BatchedGemm"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let ids: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| {
+                if !matches!(node.op, Operator::MatMul) {
+                    return None;
+                }
+                let lhs = node.inputs[args::MATMUL_LHS];
+                let rhs = node.inputs[args::MATMUL_RHS];
+                let ldim = graph.get_resolved_tensor_type(lhs)?.dims.ndim();
+                let rdim = graph.get_resolved_tensor_type(rhs)?.dims.ndim();
+                if ldim < 3 || rdim < 3 {
+                    return None;
+                }
+                // BatchedGemm requires batch dims to match exactly.
+                // If broadcast is needed (e.g. [2,3,4] @ [1,3,5]), keep as MatMul.
+                let l_dims = &graph.get_resolved_tensor_type(lhs)?.dims;
+                let r_dims = &graph.get_resolved_tensor_type(rhs)?.dims;
+                if l_dims[..ldim - 2] != r_dims[..rdim - 2] {
+                    return None;
+                }
+                Some(id)
+            })
+            .collect();
+
+        for id in ids {
+            let node = &graph.nodes[id];
+            let lhs = node.inputs[args::MATMUL_LHS];
+            let rhs = node.inputs[args::MATMUL_RHS];
+            let old_output = node.outputs[0];
+            let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+            let name = format!("MatMul2BatchedGemm_{:?}", id);
+            let new_output = modifier.register_new_value(graph, name.clone(), ty);
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![lhs, rhs],
+                    outputs: vec![new_output],
+                    name,
+                    op: Operator::BatchedGemm(BatchedGemm {
+                        alpha: 1.0,
+                        beta: 0.0,
+                        trans_a: false,
+                        trans_b: false,
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+            modifier.replace_input_value(graph, old_output, new_output);
         }
     }
 }

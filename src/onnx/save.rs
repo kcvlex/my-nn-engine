@@ -163,6 +163,13 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             attr_float("scale", attn.scale),
         ],
 
+        Operator::BatchedGemm(gemm) => vec![
+            attr_float("alpha", gemm.alpha as f32),
+            attr_float("beta", gemm.beta as f32),
+            attr_int("trans_a", if gemm.trans_a { 1 } else { 0 }),
+            attr_int("trans_b", if gemm.trans_b { 1 } else { 0 }),
+        ],
+
         Operator::BatchNormalization(bn) => vec![
             attr_float("epsilon", bn.epsilon),
             attr_float("momentum", bn.momentum),

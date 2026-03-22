@@ -27,6 +27,7 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
     pass_manager.add_pass(Box::new(fast_gelu_fusion::FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
     pass_manager.add_pass(Box::new(attention_fusion::AttentionFusion::default()));
+    pass_manager.add_pass(Box::new(canonicalize::MatMul2BatchedGemm::default()));
     pass_manager.add_pass(Box::new(reorder_nodes::ReorderNodes::default()));
     pass_manager.add_pass(Box::new(transpose_fusion::TransposeFusion {
         check_strides: false,

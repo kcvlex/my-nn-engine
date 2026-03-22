@@ -1018,6 +1018,98 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(entry)
     }
 
+    pub fn build_batched_gemm(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        a: &TensorPtr<'ctx>,
+        b: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        gemm: &operator::BatchedGemm,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let ndim = a.ty.dims.ndim();
+        assert!(ndim >= 3);
+        assert!(a.ty.is_contiguous());
+        assert!(b.ty.is_contiguous());
+        assert!(dst.ty.is_contiguous());
+        let fp_ty = a.ty.elem_type.float_type().unwrap();
+        let i64_ty = self.context.i64_type();
+
+        let (m, k) = if gemm.trans_a {
+            (a.ty.dims[ndim - 1], a.ty.dims[ndim - 2])
+        } else {
+            (a.ty.dims[ndim - 2], a.ty.dims[ndim - 1])
+        };
+        let n = if gemm.trans_b {
+            b.ty.dims[ndim - 2]
+        } else {
+            b.ty.dims[ndim - 1]
+        };
+        let batch_count = a.ty.dims.size() / (a.ty.dims[ndim - 2] * a.ty.dims[ndim - 1]);
+        let stride_a = (a.ty.dims[ndim - 2] * a.ty.dims[ndim - 1]) as u64;
+        let stride_b = (b.ty.dims[ndim - 2] * b.ty.dims[ndim - 1]) as u64;
+        let stride_c = (m * n) as u64;
+
+        self.builder.position_at_end(entry);
+
+        let body = self.context.append_basic_block(*self.func, "bgemm.body");
+        let exit = self.context.append_basic_block(*self.func, "bgemm.exit");
+
+        let guard = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            i64_ty.const_int(batch_count as u64, false),
+            i64_ty.const_zero(),
+            "bgemm.guard",
+        )?;
+        self.builder.build_conditional_branch(guard, exit, body)?;
+        self.builder.position_at_end(body);
+        let ind = self.builder.build_phi(i64_ty, "bgemm.i")?;
+        let idx = ind.as_basic_value().into_int_value();
+
+        let a_off = self
+            .builder
+            .build_int_mul(idx, i64_ty.const_int(stride_a, false), "a.off")?;
+        let b_off = self
+            .builder
+            .build_int_mul(idx, i64_ty.const_int(stride_b, false), "b.off")?;
+        let c_off = self
+            .builder
+            .build_int_mul(idx, i64_ty.const_int(stride_c, false), "c.off")?;
+
+        let a_base = self.builder.build_int_add(a.offset, a_off, "a.base")?;
+        let b_base = self.builder.build_int_add(b.offset, b_off, "b.base")?;
+        let c_base = self.builder.build_int_add(dst.offset, c_off, "c.base")?;
+        let a_slice = self.build_gep(&a.clone().set_offset(a_base))?;
+        let b_slice = self.build_gep(&b.clone().set_offset(b_base))?;
+        let c_slice = self.build_gep(&dst.clone().set_offset(c_base))?;
+
+        let gemm_args = GemmArgs {
+            a: (a_slice, gemm.trans_a),
+            b: (b_slice, gemm.trans_b),
+            c: c_slice,
+            m: m as u64,
+            n: n as u64,
+            k: k as u64,
+            alpha: gemm.alpha,
+            beta: gemm.beta,
+        };
+        self.blas.call_gemm(fp_ty, &gemm_args, self.builder)?;
+
+        let ind_next = self
+            .builder
+            .build_int_add(idx, i64_ty.const_int(1, false), "bgemm.next")?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ind_next,
+            i64_ty.const_int(batch_count as u64, false),
+            "bgemm.ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, body)?;
+        ind.add_incoming(&[(&i64_ty.const_zero(), entry), (&ind_next, body)]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_matmul(
         &self,
         dst: &TensorPtr<'ctx>,

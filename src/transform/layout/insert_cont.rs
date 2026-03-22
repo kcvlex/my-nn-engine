@@ -19,13 +19,15 @@ impl<T: GraphOp> Pass<T> for InsertContiguous {
         let ids = graph
             .nodes
             .iter()
-            .filter(|(_, node)| matches!(node.op, Operator::MatMul | Operator::Attention(_)))
+            .filter(|(_, node)| {
+                matches!(node.op, Operator::BatchedGemm(_) | Operator::Attention(_))
+            })
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
 
         for id in ids {
             match graph.nodes[id].op {
-                Operator::MatMul => self.handle_matmul(graph, modifier, id),
+                Operator::BatchedGemm(_) => self.handle_batched_gemm(graph, modifier, id),
                 Operator::Attention(_) => self.handle_attention(graph, modifier, id),
                 _ => unreachable!(),
             }
@@ -69,9 +71,9 @@ fn find_or_create_contiguous<T: GraphOp>(
 }
 
 impl InsertContiguous {
-    fn handle_matmul<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
+    fn handle_batched_gemm<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
         let node = &graph.nodes[id];
-        assert!(matches!(node.op, Operator::MatMul));
+        assert!(matches!(node.op, Operator::BatchedGemm(_)));
 
         let node_name = node.name.clone();
         for (i, input) in node.inputs.clone().iter().enumerate() {

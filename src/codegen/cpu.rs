@@ -858,6 +858,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     attn,
                 ),
+                Operator::BatchedGemm(ref gemm) => {
+                    translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)
+                }
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
