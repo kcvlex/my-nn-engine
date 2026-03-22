@@ -594,8 +594,12 @@ impl<'ll> CodeGen<'ll, '_> {
                         .into_int_value();
                     let diff = builder.build_int_sub(end, start, "tsc.diff")?;
                     let kernel_name = get_kernel_name_or(kernel, kernel_id);
+                    let op_type = match &kernel.body {
+                        KernelBody::Opaque(Opaque { op }) => op.name().to_string(),
+                        KernelBody::ElementWises(_) => "ElementWises".to_string(),
+                    };
                     let fmt = builder.build_global_string_ptr(
-                        &format!("[profile] {kernel_name}: %lu cycles\n"),
+                        &format!("[profile] [{op_type}] {kernel_name}: %lu cycles\n"),
                         &format!("fmt.{}", kernel_id.index()),
                     )?;
                     let stderr_val = builder.build_load(
