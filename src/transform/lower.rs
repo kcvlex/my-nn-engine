@@ -4,8 +4,11 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::options::*;
+use crate::tensor::data::TensorData;
+use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::utils::*;
@@ -318,6 +321,33 @@ impl<T: GraphOp> Pass<T> for DecomposeAttention {
 
             // Apply mask
             let mut qk_masked = qk;
+            let mask = if let Some(mask) = mask {
+                Some(mask)
+            } else if attn.is_causal {
+                let mut data = vec![0.0f64; seq_q * seq_k];
+                for r in 0..seq_q {
+                    for c in 0..seq_k {
+                        if c > r {
+                            data[r * seq_k + c] = f64::NEG_INFINITY;
+                        }
+                    }
+                }
+                let DataType::Float(float_ty) = q_ty.elem_type else {
+                    panic!("Attention requires float type");
+                };
+                let mask_tensor = Tensor::new(
+                    ResolvedTensorDims::new(&[seq_q, seq_k]),
+                    TensorData::Float(float_ty, data),
+                )
+                .unwrap();
+                Some(modifier.register_new_tensor(
+                    graph,
+                    mask_tensor,
+                    format!("DecompAttn_CausalMask_{:?}", attn_id),
+                ))
+            } else {
+                None
+            };
             if let Some(mask) = mask {
                 let qk_with_mask = modifier.register_new_value(
                     graph,
