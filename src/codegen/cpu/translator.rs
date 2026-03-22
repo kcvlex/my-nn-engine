@@ -3274,130 +3274,39 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let llvm_fp_ty = fp_ty.llvm_type(self.context);
         let i64_ty = self.context.i64_type();
 
-        // Save and set BLAS threads to 1 for the parallel region
-        let saved_nthreads = self.blas.call_get_num_threads(self.builder)?;
-        self.blas
-            .call_set_num_threads(self.builder, self.context.i32_type().const_int(1, false))?;
+        let qk_buf = self.builder.build_array_alloca(
+            llvm_fp_ty,
+            i64_ty.const_int((seq_q * seq_k) as u64, false),
+            "attn.qk.buf",
+        )?;
 
-        // Captures for OMP: dst, q, k, v, [mask]
-        let mut captures: Vec<BasicValueEnum<'ctx>> = vec![
-            dst.ptr.as_basic_value_enum(),
-            dst.offset.as_basic_value_enum(),
-            q.ptr.as_basic_value_enum(),
-            q.offset.as_basic_value_enum(),
-            k.ptr.as_basic_value_enum(),
-            k.offset.as_basic_value_enum(),
-            v.ptr.as_basic_value_enum(),
-            v.offset.as_basic_value_enum(),
-        ];
-        if let Some(mask) = mask {
-            captures.push(mask.ptr.as_basic_value_enum());
-            captures.push(mask.offset.as_basic_value_enum());
-        }
-
-        let has_mask = mask.is_some();
-        let mask_ty = mask.map(|m| m.ty.clone());
-        let dst_ty = dst.ty.clone();
-        let q_ty = q.ty.clone();
-        let k_ty = k.ty.clone();
-        let v_ty = v.ty.clone();
-        let attn = attn.clone();
-
+        let body = self.context.append_basic_block(*self.func, "attn.body");
+        let latch = self.context.append_basic_block(*self.func, "attn.latch");
         let exit = self.context.append_basic_block(*self.func, "attn.exit");
 
-        self.omp_parallel(&captures, |translator, omp_ctx, loaded, loop_bb| {
-            let dst_ptr = loaded[0].into_pointer_value();
-            let dst_off = loaded[1].into_int_value();
-            let q_ptr = loaded[2].into_pointer_value();
-            let q_off = loaded[3].into_int_value();
-            let k_ptr = loaded[4].into_pointer_value();
-            let k_off = loaded[5].into_int_value();
-            let v_ptr = loaded[6].into_pointer_value();
-            let v_off = loaded[7].into_int_value();
-            let mask_loaded = if has_mask {
-                Some((loaded[8].into_pointer_value(), loaded[9].into_int_value()))
-            } else {
-                None
-            };
+        self.builder.build_unconditional_branch(body)?;
+        self.builder.position_at_end(body);
+        let outer_i = self.builder.build_phi(i64_ty, "attn.outer.i")?;
+        let outer_idx = outer_i.as_basic_value().into_int_value();
 
-            let dst = TensorPtr::new(dst_ptr, dst_ty.clone(), dst_off, "attn.dst".into());
-            let q = TensorPtr::new(q_ptr, q_ty.clone(), q_off, "attn.q".into());
-            let k = TensorPtr::new(k_ptr, k_ty.clone(), k_off, "attn.k".into());
-            let v = TensorPtr::new(v_ptr, v_ty.clone(), v_off, "attn.v".into());
-            let mask = mask_loaded.map(|(ptr, off)| {
-                TensorPtr::new(ptr, mask_ty.clone().unwrap(), off, "attn.mask".into())
-            });
+        self.build_attention_body(
+            outer_idx, qk_buf, dst, q, k, v, mask, attn, body, seq_q, seq_k, head_dim, fp_ty,
+        )?;
 
-            let range = translator.omp_for_static(omp_ctx, num_outer as u64, loop_bb.exit)?;
+        self.builder.build_unconditional_branch(latch)?;
+        self.builder.position_at_end(latch);
+        let outer_next =
+            self.builder
+                .build_int_add(outer_idx, i64_ty.const_int(1, false), "attn.outer.next")?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            outer_next,
+            i64_ty.const_int(num_outer as u64, false),
+            "attn.outer.ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, body)?;
+        outer_i.add_incoming(&[(&i64_ty.const_zero(), entry), (&outer_next, latch)]);
 
-            // Allocate per-thread QK buffer
-            let qk_buf = translator.builder.build_array_alloca(
-                llvm_fp_ty,
-                i64_ty.const_int((seq_q * seq_k) as u64, false),
-                "attn.qk.buf",
-            )?;
-
-            let header = translator
-                .context
-                .append_basic_block(*translator.func, "attn.header");
-            let body = translator
-                .context
-                .append_basic_block(*translator.func, "attn.body");
-            let latch = translator
-                .context
-                .append_basic_block(*translator.func, "attn.latch");
-            let omp_exit = range.epilog_bb;
-
-            translator.builder.build_unconditional_branch(header)?;
-
-            translator.builder.position_at_end(header);
-            let outer_i = translator.builder.build_phi(i64_ty, "attn.outer.i")?;
-            let outer_idx = outer_i.as_basic_value().into_int_value();
-            let cond = translator.builder.build_int_compare(
-                inkwell::IntPredicate::SLT,
-                outer_idx,
-                range.ub,
-                "attn.outer.cond",
-            )?;
-            translator
-                .builder
-                .build_conditional_branch(cond, body, omp_exit)?;
-
-            translator.builder.position_at_end(body);
-            translator.build_attention_body(
-                outer_idx,
-                qk_buf,
-                &dst,
-                &q,
-                &k,
-                &v,
-                mask.as_ref(),
-                &attn,
-                body,
-                seq_q,
-                seq_k,
-                head_dim,
-                fp_ty,
-            )?;
-            translator.builder.build_unconditional_branch(latch)?;
-
-            translator.builder.position_at_end(latch);
-            let outer_next = translator.builder.build_int_add(
-                outer_idx,
-                i64_ty.const_int(1, false),
-                "attn.outer.next",
-            )?;
-            translator.builder.build_unconditional_branch(header)?;
-            outer_i.add_incoming(&[(&range.lb, range.body_bb), (&outer_next, latch)]);
-
-            Ok(())
-        })?;
-
-        // Restore BLAS threads
-        self.blas
-            .call_set_num_threads(self.builder, saved_nthreads)?;
-
-        self.builder.build_unconditional_branch(exit)?;
         self.builder.position_at_end(exit);
         Ok(exit)
     }

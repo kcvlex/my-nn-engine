@@ -206,28 +206,13 @@ impl<'ctx> Routines<'ctx> {
 pub struct BLAS<'ctx> {
     s_routines: Routines<'ctx>,
     d_routines: Routines<'ctx>,
-    set_num_threads: FunctionValue<'ctx>,
-    get_num_threads: FunctionValue<'ctx>,
 }
 
 impl<'ctx> BLAS<'ctx> {
     pub fn new(ctx: &'ctx Context, module: &'_ Module<'ctx>) -> Self {
-        let i32_ty = ctx.i32_type();
-        let set_num_threads = module.add_function(
-            "openblas_set_num_threads",
-            ctx.void_type().fn_type(&[i32_ty.into()], false),
-            Some(Linkage::External),
-        );
-        let get_num_threads = module.add_function(
-            "openblas_get_num_threads",
-            i32_ty.fn_type(&[], false),
-            Some(Linkage::External),
-        );
         Self {
             s_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F32),
             d_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F64),
-            set_num_threads,
-            get_num_threads,
         }
     }
 
@@ -241,27 +226,6 @@ impl<'ctx> BLAS<'ctx> {
             FloatType::F32 => self.s_routines.call_gemm(gemm, builder),
             FloatType::F64 => self.d_routines.call_gemm(gemm, builder),
         }
-    }
-
-    pub fn call_set_num_threads(
-        &self,
-        builder: &Builder<'ctx>,
-        n: IntValue<'ctx>,
-    ) -> Result<(), BuilderError> {
-        builder.build_call(self.set_num_threads, &[n.into()], "")?;
-        Ok(())
-    }
-
-    pub fn call_get_num_threads(
-        &self,
-        builder: &Builder<'ctx>,
-    ) -> Result<IntValue<'ctx>, BuilderError> {
-        Ok(builder
-            .build_call(self.get_num_threads, &[], "blas_nthreads")?
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_int_value())
     }
 
     #[allow(dead_code)]

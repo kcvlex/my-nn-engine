@@ -6,7 +6,6 @@ use my_onnx::session::Session;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
-use serial_test::serial;
 
 type Result = std::result::Result<(), SessionError>;
 
@@ -56,37 +55,37 @@ fn run_test(
 }
 
 #[test]
-#[serial]
+
 fn test_mnist12() -> Result {
     run_test("mnist-12", 1e-3, (1, 1), None)
 }
 
 #[test]
-#[serial]
+
 fn test_resnet18() -> Result {
     run_test("resnet18-v2-7", 1e-3, (1, 1), None)
 }
 
 #[test]
-#[serial]
+
 fn test_resnet152() -> Result {
     run_test("resnet152-v2-7", 1e-3, (1, 1), None)
 }
 
 #[test]
-#[serial]
+
 fn test_yolov4() -> Result {
     run_test("yolov4", 1e-3, (1, 1), None)
 }
 
 #[test]
-#[serial]
+
 fn test_bertsquad12() -> Result {
     run_test("bertsquad-12", 1e-2, (4, 3), None)
 }
 
 #[test]
-#[serial]
+
 fn test_gpt2() -> Result {
     run_test("GPT2", 1e-2, (1, 13), Some("model.onnx"))
 }
