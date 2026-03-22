@@ -1050,64 +1050,92 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let stride_c = (m * n) as u64;
 
         self.builder.position_at_end(entry);
+        let a_ptr = self.build_gep(a)?;
+        let b_ptr = self.build_gep(b)?;
+        let dst_ptr = self.build_gep(dst)?;
 
-        let body = self.context.append_basic_block(*self.func, "bgemm.body");
-        let exit = self.context.append_basic_block(*self.func, "bgemm.exit");
+        if self.blas.has_batch_strided() {
+            self.blas.call_gemm_batch_strided(
+                fp_ty,
+                &BatchedGemmArgs {
+                    a: (a_ptr, gemm.trans_a),
+                    b: (b_ptr, gemm.trans_b),
+                    c: dst_ptr,
+                    m: m as u64,
+                    n: n as u64,
+                    k: k as u64,
+                    alpha: gemm.alpha,
+                    beta: gemm.beta,
+                    stride_a,
+                    stride_b,
+                    stride_c,
+                    batch_count: batch_count as u64,
+                },
+                self.builder,
+            )?;
+        } else {
+            let body = self.context.append_basic_block(*self.func, "bgemm.body");
+            let exit = self.context.append_basic_block(*self.func, "bgemm.exit");
 
-        let guard = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            i64_ty.const_int(batch_count as u64, false),
-            i64_ty.const_zero(),
-            "bgemm.guard",
-        )?;
-        self.builder.build_conditional_branch(guard, exit, body)?;
-        self.builder.position_at_end(body);
-        let ind = self.builder.build_phi(i64_ty, "bgemm.i")?;
-        let idx = ind.as_basic_value().into_int_value();
+            let guard = self.builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                i64_ty.const_int(batch_count as u64, false),
+                i64_ty.const_zero(),
+                "bgemm.guard",
+            )?;
+            self.builder.build_conditional_branch(guard, exit, body)?;
+            self.builder.position_at_end(body);
+            let ind = self.builder.build_phi(i64_ty, "bgemm.i")?;
+            let idx = ind.as_basic_value().into_int_value();
 
-        let a_off = self
-            .builder
-            .build_int_mul(idx, i64_ty.const_int(stride_a, false), "a.off")?;
-        let b_off = self
-            .builder
-            .build_int_mul(idx, i64_ty.const_int(stride_b, false), "b.off")?;
-        let c_off = self
-            .builder
-            .build_int_mul(idx, i64_ty.const_int(stride_c, false), "c.off")?;
+            let a_off =
+                self.builder
+                    .build_int_mul(idx, i64_ty.const_int(stride_a, false), "a.off")?;
+            let b_off =
+                self.builder
+                    .build_int_mul(idx, i64_ty.const_int(stride_b, false), "b.off")?;
+            let c_off =
+                self.builder
+                    .build_int_mul(idx, i64_ty.const_int(stride_c, false), "c.off")?;
 
-        let a_base = self.builder.build_int_add(a.offset, a_off, "a.base")?;
-        let b_base = self.builder.build_int_add(b.offset, b_off, "b.base")?;
-        let c_base = self.builder.build_int_add(dst.offset, c_off, "c.base")?;
-        let a_slice = self.build_gep(&a.clone().set_offset(a_base))?;
-        let b_slice = self.build_gep(&b.clone().set_offset(b_base))?;
-        let c_slice = self.build_gep(&dst.clone().set_offset(c_base))?;
+            let a_base = self.builder.build_int_add(a.offset, a_off, "a.base")?;
+            let b_base = self.builder.build_int_add(b.offset, b_off, "b.base")?;
+            let c_base = self.builder.build_int_add(dst.offset, c_off, "c.base")?;
+            let a_slice = self.build_gep(&a.clone().set_offset(a_base))?;
+            let b_slice = self.build_gep(&b.clone().set_offset(b_base))?;
+            let c_slice = self.build_gep(&dst.clone().set_offset(c_base))?;
 
-        let gemm_args = GemmArgs {
-            a: (a_slice, gemm.trans_a),
-            b: (b_slice, gemm.trans_b),
-            c: c_slice,
-            m: m as u64,
-            n: n as u64,
-            k: k as u64,
-            alpha: gemm.alpha,
-            beta: gemm.beta,
-        };
-        self.blas.call_gemm(fp_ty, &gemm_args, self.builder)?;
+            self.blas.call_gemm(
+                fp_ty,
+                &GemmArgs {
+                    a: (a_slice, gemm.trans_a),
+                    b: (b_slice, gemm.trans_b),
+                    c: c_slice,
+                    m: m as u64,
+                    n: n as u64,
+                    k: k as u64,
+                    alpha: gemm.alpha,
+                    beta: gemm.beta,
+                },
+                self.builder,
+            )?;
 
-        let ind_next = self
-            .builder
-            .build_int_add(idx, i64_ty.const_int(1, false), "bgemm.next")?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_next,
-            i64_ty.const_int(batch_count as u64, false),
-            "bgemm.ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, body)?;
-        ind.add_incoming(&[(&i64_ty.const_zero(), entry), (&ind_next, body)]);
+            let ind_next =
+                self.builder
+                    .build_int_add(idx, i64_ty.const_int(1, false), "bgemm.next")?;
+            let ec = self.builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                ind_next,
+                i64_ty.const_int(batch_count as u64, false),
+                "bgemm.ec",
+            )?;
+            self.builder.build_conditional_branch(ec, exit, body)?;
+            ind.add_incoming(&[(&i64_ty.const_zero(), entry), (&ind_next, body)]);
 
-        self.builder.position_at_end(exit);
-        Ok(exit)
+            self.builder.position_at_end(exit);
+            return Ok(exit);
+        }
+        Ok(entry)
     }
 
     pub fn build_matmul(

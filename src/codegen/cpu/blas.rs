@@ -51,9 +51,16 @@ impl CBLAS_TRANSPOSE {
 
 struct Routines<'ctx> {
     gemm: FunctionValue<'ctx>,
+    gemm_batch_strided: Option<FunctionValue<'ctx>>,
     dot: FunctionValue<'ctx>,
     i32_ty: inkwell::types::IntType<'ctx>,
     fp_ty: inkwell::types::FloatType<'ctx>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    OpenBLAS,
+    MKL,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +78,21 @@ pub struct GemmArgs<'ctx> {
     pub beta: f64,
 }
 
+pub struct BatchedGemmArgs<'ctx> {
+    pub a: (PointerValue<'ctx>, bool),
+    pub b: (PointerValue<'ctx>, bool),
+    pub c: PointerValue<'ctx>,
+    pub m: u64,
+    pub n: u64,
+    pub k: u64,
+    pub alpha: f64,
+    pub beta: f64,
+    pub stride_a: u64,
+    pub stride_b: u64,
+    pub stride_c: u64,
+    pub batch_count: u64,
+}
+
 pub struct DotArgs<'ctx> {
     pub x: (PointerValue<'ctx>, u64),
     pub y: (PointerValue<'ctx>, u64),
@@ -78,7 +100,7 @@ pub struct DotArgs<'ctx> {
 }
 
 impl<'ctx> Routines<'ctx> {
-    fn new(ctx: &'ctx Context, module: &Module<'ctx>, fp_ty: FloatType) -> Self {
+    fn new(ctx: &'ctx Context, module: &Module<'ctx>, fp_ty: FloatType, backend: Backend) -> Self {
         let prefix = match fp_ty {
             FloatType::F32 => 's',
             FloatType::F64 => 'd',
@@ -114,6 +136,39 @@ impl<'ctx> Routines<'ctx> {
             Some(Linkage::External),
         );
 
+        let gemm_batch_strided = if backend == Backend::MKL {
+            let ty = void_ty.fn_type(
+                &[
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    fp_ty.into(),
+                    ptr_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    ptr_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    fp_ty.into(),
+                    ptr_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                    i32_ty.into(),
+                ],
+                false,
+            );
+            Some(module.add_function(
+                format!("cblas_{}gemm_batch_strided", prefix).as_str(),
+                ty,
+                Some(Linkage::External),
+            ))
+        } else {
+            None
+        };
+
         let dot = fp_ty.fn_type(
             &[
                 i32_ty.into(), // N
@@ -132,6 +187,7 @@ impl<'ctx> Routines<'ctx> {
 
         Self {
             gemm,
+            gemm_batch_strided,
             dot,
             fp_ty,
             i32_ty,
@@ -181,6 +237,53 @@ impl<'ctx> Routines<'ctx> {
         )
     }
 
+    fn call_gemm_batch_strided(
+        &self,
+        gemm: &BatchedGemmArgs<'ctx>,
+        builder: &Builder<'ctx>,
+    ) -> Result<CallSiteValue<'ctx>, BuilderError> {
+        let func = self
+            .gemm_batch_strided
+            .expect("batch_strided not available");
+        let (a_ptr, a_trans) = gemm.a;
+        let (b_ptr, b_trans) = gemm.b;
+        let m = self.i32_ty.const_int(gemm.m, false);
+        let n = self.i32_ty.const_int(gemm.n, false);
+        let k = self.i32_ty.const_int(gemm.k, false);
+        let lda = if !a_trans { k } else { m };
+        let ldb = if !b_trans { n } else { k };
+        builder.build_call(
+            func,
+            &[
+                self.i32_ty
+                    .const_int(CBLAS_ORDER::RowMajor.to_raw().into(), false)
+                    .into(),
+                self.i32_ty
+                    .const_int(CBLAS_TRANSPOSE::from(a_trans).to_raw().into(), false)
+                    .into(),
+                self.i32_ty
+                    .const_int(CBLAS_TRANSPOSE::from(b_trans).to_raw().into(), false)
+                    .into(),
+                m.into(),
+                n.into(),
+                k.into(),
+                self.fp_ty.const_float(gemm.alpha).into(),
+                a_ptr.into(),
+                lda.into(),
+                self.i32_ty.const_int(gemm.stride_a, false).into(),
+                b_ptr.into(),
+                ldb.into(),
+                self.i32_ty.const_int(gemm.stride_b, false).into(),
+                self.fp_ty.const_float(gemm.beta).into(),
+                gemm.c.into(),
+                n.into(),
+                self.i32_ty.const_int(gemm.stride_c, false).into(),
+                self.i32_ty.const_int(gemm.batch_count, false).into(),
+            ],
+            "",
+        )
+    }
+
     fn call_dot(
         &self,
         dot: &DotArgs<'ctx>,
@@ -204,15 +307,17 @@ impl<'ctx> Routines<'ctx> {
 
 #[allow(non_camel_case_types)]
 pub struct BLAS<'ctx> {
+    backend: Backend,
     s_routines: Routines<'ctx>,
     d_routines: Routines<'ctx>,
 }
 
 impl<'ctx> BLAS<'ctx> {
-    pub fn new(ctx: &'ctx Context, module: &'_ Module<'ctx>) -> Self {
+    pub fn new(ctx: &'ctx Context, module: &'_ Module<'ctx>, backend: Backend) -> Self {
         Self {
-            s_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F32),
-            d_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F64),
+            backend,
+            s_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F32, backend),
+            d_routines: Routines::new(ctx, module, crate::tensor::types::FloatType::F64, backend),
         }
     }
 
@@ -226,6 +331,24 @@ impl<'ctx> BLAS<'ctx> {
             FloatType::F32 => self.s_routines.call_gemm(gemm, builder),
             FloatType::F64 => self.d_routines.call_gemm(gemm, builder),
         }
+    }
+
+    pub fn call_gemm_batch_strided(
+        &self,
+        ty: FloatType,
+        gemm: &BatchedGemmArgs<'ctx>,
+        builder: &Builder<'ctx>,
+    ) -> Result<CallSiteValue<'ctx>, BuilderError> {
+        match ty {
+            FloatType::F32 => self.s_routines.call_gemm_batch_strided(gemm, builder),
+            FloatType::F64 => self.d_routines.call_gemm_batch_strided(gemm, builder),
+        }
+    }
+
+    pub fn has_batch_strided(&self) -> bool {
+        // NOTE: OpenBLAS also supports cblas_sgemm_batch_strided and cblas_dgemm_batch_strided,
+        // but they didn't work for some reason (segmentation fault locally).
+        self.backend == Backend::MKL
     }
 
     #[allow(dead_code)]

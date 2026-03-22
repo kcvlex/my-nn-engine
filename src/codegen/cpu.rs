@@ -55,6 +55,7 @@ enum UnitType {
 
 pub struct CodeGenContext {
     pub schedule: Schedule,
+    blas_backend: blas::Backend,
     mem_size: Vec<u64>,
     value2alloc: HashMap<ValueId, AllocateInfo>,
 }
@@ -97,7 +98,7 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
 }
 
 impl CodeGenContext {
-    pub fn new(schedule: Schedule) -> Result<Self, CodeGenError> {
+    pub fn new(schedule: Schedule, blas_backend: blas::Backend) -> Result<Self, CodeGenError> {
         let mem_size = calc_memsize(&schedule);
         let mem_alloc_result = schedule.analysis.get::<mem_alloc::MemAllocResult>();
         let value2alloc = mem_alloc_result
@@ -109,6 +110,7 @@ impl CodeGenContext {
 
         Ok(CodeGenContext {
             schedule,
+            blas_backend,
             mem_size,
             value2alloc,
         })
@@ -314,7 +316,7 @@ impl CodeGenContext {
             // lifetime_end,
         };
 
-        let blas = BLAS::new(ll_ctx, &unit.module);
+        let blas = BLAS::new(ll_ctx, &unit.module, self.blas_backend);
         let omp = OMP::new(ll_ctx, &unit.module, &builder).map_err(CodeGenError::BuilderError)?;
 
         let debug_stuff = DebugStuff::new(ll_ctx, &unit.module, &builder);

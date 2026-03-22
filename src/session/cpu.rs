@@ -8,6 +8,7 @@ use itertools::zip_eq;
 use log::info;
 use rayon::prelude::*;
 
+use crate::codegen::cpu::blas;
 use crate::codegen::cpu::CodeGenContext;
 use crate::options::Options;
 use crate::schedule::Schedule;
@@ -31,17 +32,11 @@ struct JitState {
 unsafe impl Send for JitState {}
 unsafe impl Sync for JitState {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlasBackend {
-    OpenBLAS,
-    MKL,
-}
-
-impl BlasBackend {
-    pub fn shared_library_name(&self) -> &'static str {
+impl blas::Backend {
+    fn shared_library_name(&self) -> &'static str {
         match self {
-            BlasBackend::OpenBLAS => "libopenblas.so",
-            BlasBackend::MKL => "libmkl_rt.so",
+            Self::OpenBLAS => "libopenblas.so",
+            Self::MKL => "libmkl_rt.so",
         }
     }
 }
@@ -70,8 +65,8 @@ impl SessionCPU {
         build_dir: &Path,
     ) -> Result<Self, SessionError> {
         info!("Load external libraries");
-        (|| {
-            for b in [BlasBackend::MKL, BlasBackend::OpenBLAS] {
+        let blas_backend = (|| {
+            for b in [blas::Backend::MKL, blas::Backend::OpenBLAS] {
                 if load_library_permanently(Path::new(b.shared_library_name())).is_ok() {
                     info!("Using BLAS: {:?}", b);
                     return Ok(b);
@@ -85,7 +80,8 @@ impl SessionCPU {
         load_library_permanently(Path::new("libomp.so"))
             .map_err(|e| SessionError::OtherError(format!("Failed to load libomp.so: {:?}", e)))?;
 
-        let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
+        let codegen_ctx =
+            CodeGenContext::new(schedule, blas_backend).map_err(SessionError::CodeGenError)?;
         let kernel_ids = codegen_ctx.all_necessary_kernels();
 
         let mut contexts: Vec<Context> = kernel_ids.iter().map(|_| Context::create()).collect();
