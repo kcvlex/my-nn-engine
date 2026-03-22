@@ -77,8 +77,16 @@ impl SessionCPU {
             ))
         })()?;
 
-        load_library_permanently(Path::new("libomp.so"))
-            .map_err(|e| SessionError::OtherError(format!("Failed to load libomp.so: {:?}", e)))?;
+        // MKL uses libiomp5 internally; load the same runtime to share the thread pool
+        // and avoid contention between two separate OpenMP runtimes.
+        let omp_lib = if blas_backend == blas::Backend::MKL {
+            "libiomp5.so"
+        } else {
+            "libomp.so"
+        };
+        load_library_permanently(Path::new(omp_lib)).map_err(|e| {
+            SessionError::OtherError(format!("Failed to load {}: {:?}", omp_lib, e))
+        })?;
 
         let codegen_ctx =
             CodeGenContext::new(schedule, blas_backend).map_err(SessionError::CodeGenError)?;

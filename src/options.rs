@@ -11,6 +11,9 @@ pub struct Options {
     #[builder(default = 100000)]
     pub omp_elementwise_threshold: usize,
 
+    #[builder(default = 64)]
+    pub omp_softmax_threshold: usize,
+
     #[builder(default = true)]
     pub enable_fuse_ops: bool,
 

@@ -834,9 +834,13 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Resize(ref resize) => {
                     translator.build_resize(ptrs[0].clone(), ptrs[1].clone(), entry, resize)
                 }
-                Operator::Softmax(ref softmax) => {
-                    translator.build_softmax(ptrs[0].clone(), ptrs[1].clone(), entry, softmax)
-                }
+                Operator::Softmax(ref softmax) => translator.build_softmax(
+                    ptrs[0].clone(),
+                    ptrs[1].clone(),
+                    entry,
+                    softmax,
+                    use_omp,
+                ),
                 Operator::LayerNormalization(ref ln) => translator.build_layer_norm(
                     ptrs[0].clone(),
                     ptrs[1 + args::LAYER_NORM_DATA].clone(),
