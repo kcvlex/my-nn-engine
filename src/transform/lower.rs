@@ -1,7 +1,9 @@
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
+use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
+use crate::options::*;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
@@ -240,10 +242,140 @@ impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
     }
 }
 
-pub fn create_lower_passes() -> SimplePassManager<SimpleGraphOp> {
+pub fn create_lower_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
     passes.add_pass(Box::new(Squeeze2Reshape::default()));
+    if matches!(opt.target, Target::CPU) {
+        passes.add_pass(Box::new(DecomposeAttention::default()));
+    }
     passes
+}
+
+#[derive(Default)]
+pub struct DecomposeAttention {}
+
+impl<T: GraphOp> Pass<T> for DecomposeAttention {
+    fn summary(&self) -> &'static str {
+        "Decompose Attention into BatchedGemm + Softmax (CPU)"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let attn_ids: Vec<NodeId> = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| matches!(&node.op, Operator::Attention(_)))
+            .map(|(id, _)| id)
+            .collect();
+
+        for attn_id in attn_ids {
+            let node = &graph.nodes[attn_id];
+            let Operator::Attention(attn) = &node.op else {
+                unreachable!()
+            };
+            let attn = *attn;
+            let q = node.inputs[args::ATTENTION_Q];
+            let k = node.inputs[args::ATTENTION_K];
+            let v = node.inputs[args::ATTENTION_V];
+            let mask = node.inputs.get(args::ATTENTION_MASK).copied();
+            let old_output = node.outputs[0];
+
+            let q_ty = graph.get_resolved_tensor_type(q).unwrap().clone();
+            let k_ty = graph.get_resolved_tensor_type(k).unwrap().clone();
+            let out_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+
+            // Q: [b, h, seq_q, d], K: [b, h, seq_k, d]
+            // BatchedGemm(Q, K, trans_b=true, alpha=scale) → [b, h, seq_q, seq_k]
+            let ndim = q_ty.dims.ndim();
+            let seq_q = q_ty.dims[ndim - 2];
+            let seq_k = k_ty.dims[ndim - 2];
+            let mut qk_dims: Vec<usize> = q_ty.dims.iter().copied().collect();
+            qk_dims[ndim - 2] = seq_q;
+            qk_dims[ndim - 1] = seq_k;
+            let qk_ty = ResolvedTensorType::new(q_ty.elem_type, ResolvedTensorDims::new(&qk_dims));
+
+            let qk = modifier.register_new_value(
+                graph,
+                format!("DecompAttn_QK_{:?}", attn_id),
+                qk_ty.clone(),
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![q, k],
+                    outputs: vec![qk],
+                    name: format!("DecompAttn_QK_{:?}", attn_id),
+                    op: Operator::BatchedGemm(BatchedGemm {
+                        alpha: attn.scale as f64,
+                        beta: 0.0,
+                        trans_a: false,
+                        trans_b: true,
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            // Apply mask
+            let mut qk_masked = qk;
+            if let Some(mask) = mask {
+                let qk_with_mask = modifier.register_new_value(
+                    graph,
+                    format!("DecompAttn_QKMask_{:?}", attn_id),
+                    qk_ty.clone(),
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![qk_masked, mask],
+                        outputs: vec![qk_with_mask],
+                        name: format!("DecompAttn_QKMask_{:?}", attn_id),
+                        op: Operator::Add,
+                        meta: NodeMeta::default(),
+                    },
+                );
+                qk_masked = qk_with_mask;
+            }
+
+            // Softmax(QK, axis=-1)
+            let qk_softmax = modifier.register_new_value(
+                graph,
+                format!("DecompAttn_Softmax_{:?}", attn_id),
+                qk_ty,
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![qk_masked],
+                    outputs: vec![qk_softmax],
+                    name: format!("DecompAttn_Softmax_{:?}", attn_id),
+                    op: Operator::Softmax(Softmax {
+                        axis: TensorIndex::new(-1),
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            // Output = BatchedGemm(Softmax(QK), V)
+            let new_output =
+                modifier.register_new_value(graph, format!("DecompAttn_Out_{:?}", attn_id), out_ty);
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![qk_softmax, v],
+                    outputs: vec![new_output],
+                    name: format!("DecompAttn_Out_{:?}", attn_id),
+                    op: Operator::BatchedGemm(BatchedGemm {
+                        alpha: 1.0,
+                        beta: 0.0,
+                        trans_a: false,
+                        trans_b: false,
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            modifier.replace_input_value(graph, old_output, new_output);
+        }
+    }
 }

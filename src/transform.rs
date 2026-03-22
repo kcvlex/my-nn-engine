@@ -80,7 +80,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options),
         create_optimize_passes0(options),
-        create_lower_passes(),
+        create_lower_passes(options),
         create_optimize_passes1(options),
         create_layout_passes(options),
         create_epilog_passes(options),

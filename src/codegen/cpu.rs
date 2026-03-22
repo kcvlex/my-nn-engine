@@ -849,15 +849,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     split,
                 ),
-                Operator::Attention(ref attn) => translator.build_attention(
-                    &ptrs[0],
-                    &ptrs[1 + args::ATTENTION_Q],
-                    &ptrs[1 + args::ATTENTION_K],
-                    &ptrs[1 + args::ATTENTION_V],
-                    ptrs.get(1 + args::ATTENTION_MASK),
-                    entry,
-                    attn,
-                ),
+                Operator::Attention(_) => panic!(),
                 Operator::BatchedGemm(ref gemm) => {
                     translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)
                 }

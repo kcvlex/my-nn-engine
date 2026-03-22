@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use my_onnx::onnx::load::LoadProto;
 use my_onnx::onnx::model::Model;
 use my_onnx::onnx::operator::Operator;
-use my_onnx::options::Options;
+use my_onnx::options::*;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::transform_graph;
 
@@ -23,7 +23,10 @@ fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> M
         .collect();
     model.graph.resolve_input_types(&input_types).unwrap();
 
-    transform_graph(&mut model.graph, &Options::builder().build());
+    transform_graph(
+        &mut model.graph,
+        &Options::builder().target(Target::CUDA).build(),
+    );
     model
 }
 
