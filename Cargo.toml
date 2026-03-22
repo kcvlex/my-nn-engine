@@ -43,3 +43,4 @@ prost-build = "0.13.1"
 
 [dev-dependencies]
 insta = { version = "1.43.1", features = ["yaml"] }
+serial_test = "3"
