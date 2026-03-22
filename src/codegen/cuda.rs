@@ -11,7 +11,6 @@ use delegate::delegate;
 use derive_more::From;
 use indexmap::IndexMap;
 use itertools::chain;
-use itertools::izip;
 use itertools::Itertools;
 
 use crate::codegen::cuda::cublas::*;
@@ -1278,12 +1277,12 @@ impl<'sched> HostCodeGenerator<'sched> {
                         }
                         Operator::BatchedGemm(_) => {
                             // cuBLAS A = row-major B (inputs[1]), cuBLAS B = row-major A (inputs[0])
-                            let stride_a = m * k;  // cuBLAS A stride
-                            let stride_b = k * n;  // cuBLAS B stride
+                            let stride_a = m * k; // cuBLAS A stride
+                            let stride_b = k * n; // cuBLAS B stride
                             let stride_c = m * n;
                             let batch_count =
-                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size()
-                                    / stride_a;
+                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size() /
+                                    stride_a;
 
                             let bgemm = BatchedGemmArgs {
                                 gemm,

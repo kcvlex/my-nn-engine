@@ -6,13 +6,7 @@ use my_onnx::options::*;
 use my_onnx::session::Session;
 use my_onnx::tensor::Tensor;
 
-fn bench(
-    model_name: &str,
-    model_file: &str,
-    num_inputs: usize,
-    label: &str,
-    target: Target,
-) {
+fn bench(model_name: &str, model_file: &str, num_inputs: usize, label: &str, target: Target) {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model_name);
@@ -104,7 +98,13 @@ fn bench_bert_cpu() {
 #[test]
 #[ignore]
 fn bench_resnet18_cpu() {
-    bench("resnet18-v2-7", "resnet18-v2-7.onnx", 1, "ResNet18", Target::CPU);
+    bench(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18",
+        Target::CPU,
+    );
 }
 
 #[test]
@@ -118,12 +118,24 @@ fn bench_gpt2_cuda() {
 #[ignore]
 #[cfg(feature = "cuda")]
 fn bench_bert_cuda() {
-    bench("bertsquad-12", "bertsquad-12.onnx", 4, "BERT CUDA", Target::CUDA);
+    bench(
+        "bertsquad-12",
+        "bertsquad-12.onnx",
+        4,
+        "BERT CUDA",
+        Target::CUDA,
+    );
 }
 
 #[test]
 #[ignore]
 #[cfg(feature = "cuda")]
 fn bench_resnet18_cuda() {
-    bench("resnet18-v2-7", "resnet18-v2-7.onnx", 1, "ResNet18 CUDA", Target::CUDA);
+    bench(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18 CUDA",
+        Target::CUDA,
+    );
 }

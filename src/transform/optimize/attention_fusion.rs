@@ -157,10 +157,7 @@ fn build_causal_additive_mask(
                 }
             }
         }
-        let penalty = match penalty_opt {
-            Some(p) => p,
-            None => return None,
-        };
+        let penalty = penalty_opt?;
         for i in (0..total).step_by(n) {
             let slice = &data[i..i + n];
             for r in 0..qk_row {

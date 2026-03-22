@@ -45,8 +45,8 @@ fn bundle_reshape_and_transpose<T: GraphOp>(
                     .get_resolved_tensor_type(graph.nodes[id].outputs[0])
                     .unwrap();
                 ReinterpretType::Reshape {
-                    before: input_shape.dims.iter().map(|d| *d).collect(),
-                    after: output_shape.dims.iter().map(|d| *d).collect(),
+                    before: input_shape.dims.iter().copied().collect(),
+                    after: output_shape.dims.iter().copied().collect(),
                 }
             }
             Operator::Transpose(perm) => ReinterpretType::Transpose(perm.clone()),

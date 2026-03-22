@@ -85,8 +85,7 @@ impl SessionCPU {
         load_library_permanently(Path::new("libomp.so"))
             .map_err(|e| SessionError::OtherError(format!("Failed to load libomp.so: {:?}", e)))?;
 
-        let codegen_ctx =
-            CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
+        let codegen_ctx = CodeGenContext::new(schedule).map_err(SessionError::CodeGenError)?;
         let kernel_ids = codegen_ctx.all_necessary_kernels();
 
         let mut contexts: Vec<Context> = kernel_ids.iter().map(|_| Context::create()).collect();
