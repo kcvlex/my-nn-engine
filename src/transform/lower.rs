@@ -198,49 +198,6 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
 }
 
 #[derive(Default)]
-pub struct MatMul2Gemm {}
-
-impl<T: GraphOp> Pass<T> for MatMul2Gemm {
-    fn summary(&self) -> &'static str {
-        "Convert 2-D MatMul to Gemm"
-    }
-
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let mut res = Vec::new();
-        for (id, node) in graph.nodes.iter() {
-            let (lhs, rhs) = if matches!(node.op, Operator::MatMul) {
-                (node.inputs[args::MATMUL_LHS], node.inputs[args::MATMUL_RHS])
-            } else {
-                continue;
-            };
-
-            let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
-            let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
-            if ldim == 2 && rdim == 2 {
-                res.push(id)
-            }
-        }
-        for (index, id) in res.into_iter().enumerate() {
-            let lhs = graph.nodes[id].inputs[args::MATMUL_LHS];
-            let rhs = graph.nodes[id].inputs[args::MATMUL_RHS];
-            let old_output = graph.nodes[id].outputs[0];
-            let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
-            let new_output =
-                modifier.register_new_value(graph, format!("MatMul2Gemm_Output_{index}"), ty);
-            let new_node = Node {
-                inputs: vec![lhs, rhs],
-                outputs: vec![new_output],
-                name: format!("MatMul2Gemm_{index}"),
-                op: Operator::Gemm(Gemm::default()),
-                meta: NodeMeta::default(),
-            };
-            modifier.register_new_node(graph, new_node);
-            modifier.replace_input_value(graph, old_output, new_output);
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct Squeeze2Reshape {}
 
 impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
@@ -287,7 +244,6 @@ pub fn create_lower_passes() -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
-    passes.add_pass(Box::new(MatMul2Gemm::default()));
     passes.add_pass(Box::new(Squeeze2Reshape::default()));
     passes
 }

@@ -3,6 +3,7 @@ use itertools::Itertools;
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
+use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::tensor::data::ScalarData;
 use crate::transform::modify::GraphOp;
@@ -100,6 +101,31 @@ impl Canonicalize {
                 );
 
                 modifier.replace_input_value(graph, output, new_output);
+            }
+
+            Operator::MatMul => {
+                let lhs = node.inputs[args::MATMUL_LHS];
+                let rhs = node.inputs[args::MATMUL_RHS];
+                let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
+                let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
+                if ldim != 2 || rdim != 2 {
+                    return;
+                }
+                let old_output = node.outputs[0];
+                let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+                let new_output =
+                    modifier.register_new_value(graph, format!("MatMul2Gemm_{:?}", id), ty);
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![lhs, rhs],
+                        outputs: vec![new_output],
+                        name: format!("MatMul2Gemm_{:?}", id),
+                        op: Operator::Gemm(Gemm::default()),
+                        meta: NodeMeta::default(),
+                    },
+                );
+                modifier.replace_input_value(graph, old_output, new_output);
             }
 
             _ => (),
