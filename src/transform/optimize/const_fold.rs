@@ -216,13 +216,21 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
         Operator::Gather(Gather { ref axis }) => {
             let input = &graph.initializer.get(&node.inputs[0])?;
             let indices = &graph.initializer.get(&node.inputs[1])?;
+            if indices.dims.ndim() > 1 {
+                return None;
+            }
             let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(indices, axis)])
         }
-        Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
+        Operator::Reshape | Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
             let input = graph.initializer.get(&node.inputs[0])?;
             let dims = &graph.get_resolved_tensor_type(node.outputs[0])?.dims;
             Some(vec![input.reshape(dims)])
+        }
+        Operator::Transpose(Transpose { ref perm }) => {
+            let input = graph.initializer.get(&node.inputs[0])?;
+            let perm = perm.as_ref()?;
+            Some(vec![input.transpose(perm)])
         }
         Operator::Contiguous(Contiguous { ref ops }) => {
             let mut tensor = graph.initializer.get(&node.inputs[0])?.clone();
