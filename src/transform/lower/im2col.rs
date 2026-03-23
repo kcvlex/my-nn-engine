@@ -10,11 +10,9 @@ use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct InsertIm2Col {}
+pub struct DecomposeConv {}
 #[derive(Default)]
-pub struct InsertIm2ColConv {}
-#[derive(Default)]
-pub struct InsertIm2ColMaxPool {}
+pub struct DecomposeMaxPool {}
 
 fn gen_im2col_from_conv(
     conv: &Conv,
@@ -300,33 +298,9 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     }
 }
 
-impl<T: GraphOp> Pass<T> for InsertIm2Col {
+impl<T: GraphOp> Pass<T> for DecomposeConv {
     fn summary(&self) -> &'static str {
-        "Insert explicit Im2Col nodes and expand Conv/MaxPool"
-    }
-
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let res = graph
-            .nodes
-            .iter()
-            .filter_map(|(id, node)| {
-                if matches!(node.op, Operator::Conv(_) | Operator::MaxPool(_)) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for id in res.into_iter() {
-            im2col_core(graph, modifier, id);
-        }
-    }
-}
-
-impl<T: GraphOp> Pass<T> for InsertIm2ColConv {
-    fn summary(&self) -> &'static str {
-        "Insert explicit Im2Col nodes and expand Conv/MaxPool"
+        "Decompose Conv into Im2Col + Gemm"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
@@ -348,9 +322,9 @@ impl<T: GraphOp> Pass<T> for InsertIm2ColConv {
     }
 }
 
-impl<T: GraphOp> Pass<T> for InsertIm2ColMaxPool {
+impl<T: GraphOp> Pass<T> for DecomposeMaxPool {
     fn summary(&self) -> &'static str {
-        "Insert explicit Im2Col nodes and expand Conv/MaxPool"
+        "Decompose MaxPool into Im2Col + Reduce"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {

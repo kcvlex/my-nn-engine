@@ -6,7 +6,6 @@ pub mod elim_identity;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
-pub mod im2col;
 pub mod layer_norm_fusion;
 pub mod reorder_nodes;
 pub mod transpose_fusion;
@@ -39,9 +38,6 @@ pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp
     let mut pass_manager =
         SimplePassManager::new("Optimization between Lowering and Strides".to_string());
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
-    if matches!(opt.target, Target::CPU) {
-        pass_manager.add_pass(Box::new(im2col::InsertIm2Col::default()));
-    }
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(
         gemm_transpose_fusion::GemmTransposeFusion::default(),

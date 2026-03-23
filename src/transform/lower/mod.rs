@@ -1,3 +1,5 @@
+pub mod im2col;
+
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
@@ -251,6 +253,8 @@ pub fn create_lower_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
     passes.add_pass(Box::new(Squeeze2Reshape::default()));
     if matches!(opt.target, Target::CPU) {
+        passes.add_pass(Box::new(im2col::DecomposeConv::default()));
+        passes.add_pass(Box::new(im2col::DecomposeMaxPool::default()));
         passes.add_pass(Box::new(DecomposeAttention::default()));
     }
     passes
