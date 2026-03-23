@@ -6,7 +6,10 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::tensor::data::ScalarData;
+use crate::tensor::types::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
+use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]
@@ -29,10 +32,12 @@ impl<T: GraphOp> Pass<T> for Canonicalize {
 
 impl Canonicalize {
     fn rewrite<T: GraphOp>(&self, id: NodeId, graph: &mut Graph, modifier: &mut T) {
-        let node = &graph.nodes[id];
-        match &node.op {
+        let op = graph.nodes[id].op.clone();
+        let inputs = graph.nodes[id].inputs.clone();
+        let outputs = graph.nodes[id].outputs.clone();
+        match &op {
             Operator::Pow => {
-                let exponent = node.inputs[1];
+                let exponent = inputs[1];
                 let Some(tensor) = graph.initializer.get(&exponent) else {
                     return;
                 };
@@ -46,8 +51,8 @@ impl Canonicalize {
                     return;
                 }
 
-                let new_inputs = vec![node.inputs[0], node.inputs[0]];
-                let old_output = node.outputs[0];
+                let new_inputs = vec![inputs[0], inputs[0]];
+                let old_output = outputs[0];
                 let new_output = modifier.register_new_value(
                     graph,
                     format!("Canonicalize_Square_{:?}", id),
@@ -66,9 +71,9 @@ impl Canonicalize {
             }
 
             Operator::Div => {
-                let lhs = node.inputs[0];
-                let rhs = node.inputs[1];
-                let output = node.outputs[0];
+                let lhs = inputs[0];
+                let rhs = inputs[1];
+                let output = outputs[0];
 
                 let reciprocal = modifier.register_new_value(
                     graph,
@@ -104,11 +109,11 @@ impl Canonicalize {
             }
 
             Operator::MatMul => {
-                let lhs = node.inputs[args::MATMUL_LHS];
-                let rhs = node.inputs[args::MATMUL_RHS];
+                let lhs = inputs[args::MATMUL_LHS];
+                let rhs = inputs[args::MATMUL_RHS];
                 let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
                 let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
-                let old_output = node.outputs[0];
+                let old_output = outputs[0];
                 let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
                 // Only convert 2D MatMul to Gemm here.
                 // 3D+ MatMul → BatchedGemm is done later (after AttentionFusion).
@@ -129,6 +134,26 @@ impl Canonicalize {
                     },
                 );
                 modifier.replace_input_value(graph, old_output, new_output);
+            }
+
+            Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
+                let input = inputs[0];
+                let old_output = outputs[0];
+                let node_name = graph.nodes[id].name.clone();
+                let output_dims = graph
+                    .get_resolved_tensor_type(old_output)
+                    .unwrap()
+                    .dims
+                    .clone();
+                let reshaped = ReshapeGenerator::default()
+                    .set_input(input)
+                    .set_dims(&output_dims[..])
+                    .set_allow_contiguous(false)
+                    .set_node_name(format!("Squeeze2Reshape_{node_name}"))
+                    .set_value_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))
+                    .generate(graph, modifier)
+                    .unwrap();
+                modifier.replace_input_value(graph, old_output, reshaped);
             }
 
             _ => (),

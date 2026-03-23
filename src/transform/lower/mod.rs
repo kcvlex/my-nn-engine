@@ -204,54 +204,10 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
     }
 }
 
-#[derive(Default)]
-pub struct Squeeze2Reshape {}
-
-impl<T: GraphOp> Pass<T> for Squeeze2Reshape {
-    fn summary(&self) -> &'static str {
-        "Convert Squeeze/Unsqueeze to Reshape"
-    }
-
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let ids = graph
-            .nodes
-            .iter()
-            .filter_map(|(id, node)| {
-                if matches!(node.op, Operator::Squeeze(_) | Operator::Unsqueeze(_)) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for id in ids.iter() {
-            let input = graph.nodes[*id].inputs[0];
-            let old_output = graph.nodes[*id].outputs[0];
-            let node_name = graph.nodes[*id].name.clone();
-            let output_dims = graph
-                .get_resolved_tensor_type(old_output)
-                .unwrap()
-                .dims
-                .clone();
-            let reshaped = ReshapeGenerator::default()
-                .set_input(input)
-                .set_dims(&output_dims[..])
-                .set_allow_contiguous(false)
-                .set_node_name(format!("Squeeze2Reshape_{node_name}"))
-                .set_value_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))
-                .generate(graph, modifier)
-                .unwrap();
-            modifier.replace_input_value(graph, old_output, reshaped);
-        }
-    }
-}
-
 pub fn create_lower_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
-    passes.add_pass(Box::new(Squeeze2Reshape::default()));
     if matches!(opt.target, Target::CPU) {
         passes.add_pass(Box::new(im2col::DecomposeConv::default()));
         passes.add_pass(Box::new(im2col::DecomposeMaxPool::default()));
