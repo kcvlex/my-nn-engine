@@ -10,13 +10,12 @@ pub mod layer_norm_fusion;
 pub mod reorder_nodes;
 pub mod transpose_fusion;
 
-use crate::options::*;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
-    let mut pass_manager = SimplePassManager::new("Optimization before Lowering".to_string());
+pub fn create_optimize_passes() -> SimplePassManager<SimpleGraphOp> {
+    let mut pass_manager = SimplePassManager::new("Optimization".to_string());
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
     pass_manager.add_pass(Box::new(const_fold::ConstantFold {
@@ -31,12 +30,6 @@ pub fn create_optimize_passes0(opt: &Options) -> SimplePassManager<SimpleGraphOp
     pass_manager.add_pass(Box::new(transpose_fusion::TransposeFusion {
         check_strides: false,
     }));
-    pass_manager
-}
-
-pub fn create_optimize_passes1(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
-    let mut pass_manager =
-        SimplePassManager::new("Optimization between Lowering and Strides".to_string());
     pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
     pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
     pass_manager.add_pass(Box::new(
