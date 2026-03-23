@@ -216,9 +216,6 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
         Operator::Gather(Gather { ref axis }) => {
             let input = &graph.initializer.get(&node.inputs[0])?;
             let indices = &graph.initializer.get(&node.inputs[1])?;
-            if indices.dims.ndim() > 1 {
-                return None;
-            }
             let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(indices, axis)])
         }

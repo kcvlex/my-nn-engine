@@ -56,21 +56,27 @@ pub fn ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
     axis: usize,
     indices: RawTensor<'_, U>,
 ) -> Array<T, IxDyn> {
-    if indices.dims.len().max(1) != 1 {
-        unimplemented!("Indices must be 1D tensor");
-    }
-
     let axis_dim = data.dims[axis];
-    let indices = into_array_view!(indices)
+    let flat_indices = into_array_view!(indices)
         .unwrap()
         .flatten()
         .into_iter()
         .map(|x| x.try_into().map_err(|_| "convert").unwrap())
         .map(|x| TensorIndex::new(x).index(axis_dim))
         .collect::<Vec<_>>();
-    into_array_view!(data)
+
+    let selected = into_array_view!(data)
         .unwrap()
-        .select(Axis(axis), &indices[..])
+        .select(Axis(axis), &flat_indices[..]);
+
+    let mut out_dims = Vec::new();
+    out_dims.extend_from_slice(&data.dims[..axis]);
+    out_dims.extend_from_slice(indices.dims);
+    out_dims.extend_from_slice(&data.dims[axis + 1..]);
+
+    selected
+        .into_shape_with_order(&out_dims[..])
+        .unwrap()
         .into_dyn()
         .to_owned()
 }
@@ -83,41 +89,5 @@ pub fn ndarray_broadcast<T: Clone>(
         .unwrap()
         .broadcast(target_dims)
         .unwrap()
-        .to_owned()
-}
-
-#[allow(unused)]
-fn experimental_ndarray_gather<T: Clone, U: Clone + TryInto<isize>>(
-    data: RawTensor<'_, T>,
-    axis: usize,
-    indices: RawTensor<'_, U>,
-) -> Array<T, IxDyn> {
-    let input = into_array_view!(data).unwrap();
-    let dims = {
-        let mut dims = data.dims.to_vec();
-        let shape = input.shape();
-        dims.extend_from_slice(&shape[..axis]);
-        if axis + 1 < shape.len() {
-            dims.extend_from_slice(&shape[axis + 1..]);
-        }
-        dims
-    };
-    let axis_dim = input.shape()[axis];
-    let slices = into_array_view!(indices)
-        .unwrap()
-        .flatten()
-        .into_iter()
-        .map(|x| {
-            input.index_axis(
-                Axis(axis),
-                TensorIndex::new(x.try_into().map_err(|_| "convert").unwrap()).index(axis_dim),
-            )
-        })
-        .collect::<Vec<_>>();
-    stack(Axis(axis), &slices[..])
-        .unwrap()
-        .to_shape(dims)
-        .unwrap()
-        .into_dyn()
         .to_owned()
 }
