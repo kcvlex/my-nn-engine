@@ -580,6 +580,13 @@ pub fn infer_node_output(
             }
             res.push(ty);
         }
+        Operator::NHWC2NCHW => {
+            let data = &inputs[0];
+            let perm = vec![0, 3, 1, 2];
+            let t = Transpose { perm: Some(perm) };
+            let ty = transpose(data, &t, mode)?.contiguous();
+            res.push(ty);
+        }
         Operator::Input(_) |
         Operator::Output(_) |
         Operator::Im2Col(_) |

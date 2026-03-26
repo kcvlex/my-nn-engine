@@ -402,6 +402,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
 
         // TODO
         Operator::Im2Col(_) => vec![],
+        Operator::NHWC2NCHW => vec![],
 
         Operator::ReduceMatrix(op) => {
             let op = match op {

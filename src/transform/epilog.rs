@@ -1,5 +1,6 @@
 mod cleanup;
 pub mod fold_cont;
+mod lower_nhwc2nchw;
 
 use itertools::Itertools;
 
@@ -141,6 +142,7 @@ impl<T: GraphOp> Pass<T> for ElimCont {
 
 pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Epilog".to_string());
+    manager.add_pass(Box::new(lower_nhwc2nchw::LowerNHWC2NCHW::default()));
     manager.add_pass(Box::new(Ops2Reinterpret::default()));
     if matches!(opt.target, Target::CUDA) {
         manager.add_pass(Box::new(ElimCont::default()));

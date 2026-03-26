@@ -209,27 +209,22 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 .generate(graph, modifier)
                 .unwrap();
 
-            // Transpose the output.
-            let perm = {
-                let mut vec = Vec::with_capacity(one_fm_shape.ndim() + 2);
-                vec.push(0);
-                vec.push(one_fm_shape.ndim() + 1);
-                vec.extend((0..one_fm_shape.ndim()).map(|x| x + 1));
-                vec
-            };
+            let nhwc_ty = graph.get_resolved_tensor_type(reshaped_output).unwrap();
+            let nchw_ty = nhwc_ty.transpose(&[0, 3, 1, 2]).contiguous();
+            let nchw_output =
+                modifier.register_new_value(graph, format!("Im2Col_{index}_NHWC2NCHW"), nchw_ty);
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![reshaped_output],
+                    outputs: vec![nchw_output],
+                    name: format!("Im2Col_{index}_NHWC2NCHW"),
+                    op: Operator::NHWC2NCHW,
+                    meta: NodeMeta::default(),
+                },
+            );
 
-            // TODO: Avoid to force contiguous after the feature for the replacement with a
-            // different shape (strides) is supported.
-            let transposed_output = TransposeGenerator::default()
-                .set_contiguous(true)
-                .set_input(reshaped_output)
-                .set_perm(perm)
-                .set_node_name(format!("Im2Col_{index}_TransposeOutput"))
-                .set_value_name(format!("Im2Col_{index}_TransposeOutput"))
-                .generate(graph, modifier)
-                .unwrap();
-
-            modifier.replace_input_value(graph, old_output_value, transposed_output);
+            modifier.replace_input_value(graph, old_output_value, nchw_output);
         }
 
         Operator::MaxPool(ref pooling) => {

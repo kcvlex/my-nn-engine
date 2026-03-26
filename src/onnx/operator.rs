@@ -82,6 +82,7 @@ pub enum Operator {
     // Custom
     Contiguous(Contiguous),
     Im2Col(Im2Col),
+    NHWC2NCHW,
     ReduceMatrix(ReduceOp),
     Reinterpret(Reinterpret),
 
@@ -752,6 +753,7 @@ impl Operator {
             // Custom
             Operator::Contiguous(_) => "Contiguous",
             Operator::Im2Col(_) => "Im2Col",
+            Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
             Operator::Reinterpret(_) => "Reinterpret",
 
@@ -782,6 +784,7 @@ impl Operator {
             Operator::Tanh => OperatorType::Elementwise,
 
             Operator::Contiguous(_) |
+            Operator::NHWC2NCHW |
             Operator::Reshape |
             Operator::Squeeze(_) |
             Operator::Transpose(_) |
