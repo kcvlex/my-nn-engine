@@ -77,11 +77,6 @@ impl InsertContiguous {
 
         let node_name = node.name.clone();
         for (i, input) in node.inputs.clone().iter().enumerate() {
-            let input_type = graph.get_resolved_tensor_type(*input).unwrap().clone();
-            if input_type.is_contiguous() {
-                continue;
-            }
-
             // TODO: Last two dimensions can be handled by transpose parameter of Gemm.
             let new_value = find_or_create_contiguous(
                 graph,
@@ -110,10 +105,6 @@ impl InsertContiguous {
         }
         for arg in inputs {
             let input = graph.nodes[id].inputs[arg];
-            let input_type = &graph.get_resolved_tensor_type(input).unwrap();
-            if input_type.is_contiguous() {
-                continue;
-            }
 
             let new_value = find_or_create_contiguous(
                 graph,
