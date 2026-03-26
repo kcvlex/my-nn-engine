@@ -1,3 +1,4 @@
+mod detect_nhwc2nchw;
 pub mod fold_cont;
 pub mod insert_cont;
 pub mod ops2reinterpret;
@@ -21,5 +22,6 @@ pub fn create_layout_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     }
     manager.add_pass(Box::new(ops2reinterpret::Ops2Reinterpret::default()));
     manager.add_pass(Box::new(fold_cont::FoldContiguous::backward_only()));
+    manager.add_pass(Box::new(detect_nhwc2nchw::DetectNHWC2NCHW::default()));
     manager
 }
