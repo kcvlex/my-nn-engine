@@ -970,6 +970,277 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_store(op.dst_operand(), res)
     }
 
+    pub fn build_im2col_nhwc(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        im2col: &operator::Im2Col,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        // Input: [N, H, W, C] contiguous
+        // Output: [N * H_out * W_out, C_in * kH * kW]
+        assert_eq!(im2col.one_fm_shape.ndim(), 2); // 2D conv only
+
+        let i64_ty = self.context.i64_type();
+        let elem_ty = src.ty.elem_type.llvm_type(self.context);
+
+        let nbatch = im2col.nbatch as u64;
+        let h_out = im2col.one_fm_shape[0] as u64;
+        let w_out = im2col.one_fm_shape[1] as u64;
+        let kh = im2col.one_kernel_shape[0] as u64;
+        let kw = im2col.one_kernel_shape[1] as u64;
+        let c_in = im2col.channel.inner() as u64;
+        let h_in = src.ty.dims[1] as u64;
+        let w_in = src.ty.dims[2] as u64;
+        let stride_h = im2col.strides[0] as u64;
+        let stride_w = im2col.strides[1] as u64;
+        let dilation_h = im2col.dilations[0] as u64;
+        let dilation_w = im2col.dilations[1] as u64;
+        let default_pad = operator::OptionalVec::new(None, (0, 0));
+        let pad = match &im2col.pad {
+            operator::ConvPad::NotSet(ref pad) => pad,
+            operator::ConvPad::Valid => &default_pad,
+            _ => unimplemented!(),
+        };
+        let pad_h = pad[0].0 as u64;
+        let pad_w = pad[1].0 as u64;
+
+        let pad_val = match (src.ty.elem_type, im2col.pad_val) {
+            (_, operator::PadVal::Zero) => elem_ty.const_zero(),
+            (DataType::Float(ft), operator::PadVal::NInf) => {
+                let v = match ft {
+                    FloatType::F32 => f32::NEG_INFINITY as f64,
+                    FloatType::F64 => f64::NEG_INFINITY,
+                };
+                ft.llvm_type(self.context)
+                    .const_float(v)
+                    .as_basic_value_enum()
+            }
+            _ => unimplemented!(),
+        };
+
+        let dst_cols = c_in * kh * kw;
+
+        // for n in 0..N:
+        //   for oh in 0..H_out:
+        //     for ow in 0..W_out:
+        //       for kh_ in 0..kH:
+        //         for kw_ in 0..kW:
+        //           for c in 0..C_in:
+        //             ih = oh * stride_h + kh_ * dilation_h - pad_h
+        //             iw = ow * stride_w + kw_ * dilation_w - pad_w
+        //             dst[n*H_out*W_out + oh*W_out + ow, c*kH*kW + kh_*kW + kw_]
+        //               = oob(ih, iw) ? pad_val : src[n, ih, iw, c]
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+        let hdr_n = bb("nhwc.n.hdr");
+        let hdr_oh = bb("nhwc.oh.hdr");
+        let hdr_ow = bb("nhwc.ow.hdr");
+        let hdr_kh = bb("nhwc.kh.hdr");
+        let hdr_kw = bb("nhwc.kw.hdr");
+        let hdr_c = bb("nhwc.c.hdr");
+        let body = bb("nhwc.body");
+        let latch_c = bb("nhwc.c.latch");
+        let latch_kw = bb("nhwc.kw.latch");
+        let latch_kh = bb("nhwc.kh.latch");
+        let latch_ow = bb("nhwc.ow.latch");
+        let latch_oh = bb("nhwc.oh.latch");
+        let latch_n = bb("nhwc.n.latch");
+        let exit = bb("nhwc.exit");
+
+        macro_rules! phi {
+            ($bb:expr) => {{
+                self.builder.position_at_end($bb);
+                let p = self.builder.build_phi(i64_ty, "ind")?;
+                (p, p.as_basic_value().into_int_value())
+            }};
+        }
+        macro_rules! latch {
+            ($phi:expr, $prev_bb:expr, $val:expr, $bound:expr, $next:expr, $exit:expr, $latch_bb:expr) => {{
+                self.builder.position_at_end($latch_bb);
+                let next_val =
+                    self.builder
+                        .build_int_add($val, i64_ty.const_int(1, false), "next")?;
+                let ec = self.builder.build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    next_val,
+                    i64_ty.const_int($bound, false),
+                    "ec",
+                )?;
+                self.builder.build_conditional_branch(ec, $exit, $next)?;
+                $phi.add_incoming(&[(&i64_ty.const_zero(), $prev_bb), (&next_val, $latch_bb)]);
+            }};
+        }
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(hdr_n)?;
+
+        let (phi_n, ind_n) = phi!(hdr_n);
+        self.builder.build_unconditional_branch(hdr_oh)?;
+
+        let (phi_oh, ind_oh) = phi!(hdr_oh);
+        self.builder.build_unconditional_branch(hdr_ow)?;
+
+        let (phi_ow, ind_ow) = phi!(hdr_ow);
+        self.builder.build_unconditional_branch(hdr_kh)?;
+
+        let (phi_kh, ind_kh) = phi!(hdr_kh);
+        self.builder.build_unconditional_branch(hdr_kw)?;
+
+        let (phi_kw, ind_kw) = phi!(hdr_kw);
+        self.builder.build_unconditional_branch(hdr_c)?;
+
+        let (phi_c, ind_c) = phi!(hdr_c);
+        self.builder.build_unconditional_branch(body)?;
+
+        // Body
+        self.builder.position_at_end(body);
+
+        // ih = oh * stride_h + kh * dilation_h - pad_h
+        let ih = {
+            let a =
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
+            let c = self.builder.build_int_add(a, b, "ih_raw")?;
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
+        };
+        // iw = ow * stride_w + kw * dilation_w - pad_w
+        let iw = {
+            let a =
+                self.builder
+                    .build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
+            let c = self.builder.build_int_add(a, b, "iw_raw")?;
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
+        };
+
+        // Bounds check (signed: ih < 0 || ih >= h_in || iw < 0 || iw >= w_in)
+        let oob = {
+            let ih_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ih,
+                i64_ty.const_zero(),
+                "ih_neg",
+            )?;
+            let ih_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ih,
+                i64_ty.const_int(h_in, false),
+                "ih_big",
+            )?;
+            let iw_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                iw,
+                i64_ty.const_zero(),
+                "iw_neg",
+            )?;
+            let iw_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                iw,
+                i64_ty.const_int(w_in, false),
+                "iw_big",
+            )?;
+            let a = self.builder.build_or(ih_neg, ih_big, "oob_h")?;
+            let b = self.builder.build_or(iw_neg, iw_big, "oob_w")?;
+            self.builder.build_or(a, b, "oob")?
+        };
+
+        let bb_load = bb("nhwc.load");
+        let bb_pad = bb("nhwc.pad");
+        let bb_store = bb("nhwc.store");
+        self.builder
+            .build_conditional_branch(oob, bb_pad, bb_load)?;
+
+        // Load from src[n, ih, iw, c]
+        self.builder.position_at_end(bb_load);
+        let src_offset = {
+            let o = self.builder.build_int_mul(
+                ind_n,
+                i64_ty.const_int(h_in * w_in * c_in, false),
+                "so_n",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?,
+                "so_nh",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?,
+                "so_nhw",
+            )?;
+            self.builder.build_int_add(o, ind_c, "src_off")?
+        };
+        let src_val = self
+            .build_load(&src.clone().set_offset(src_offset))?
+            .into_float_value();
+        self.builder.build_unconditional_branch(bb_store)?;
+
+        // Pad value
+        self.builder.position_at_end(bb_pad);
+        self.builder.build_unconditional_branch(bb_store)?;
+
+        // Store to dst[dst_row, dst_col]
+        self.builder.position_at_end(bb_store);
+        let val = self.builder.build_phi(elem_ty, "val")?;
+        val.add_incoming(&[(&src_val, bb_load), (&pad_val, bb_pad)]);
+
+        let dst_row = {
+            let o = self.builder.build_int_mul(
+                ind_n,
+                i64_ty.const_int(h_out * w_out, false),
+                "dr_n",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?,
+                "dr_noh",
+            )?;
+            self.builder.build_int_add(o, ind_ow, "dst_row")?
+        };
+        let dst_col = {
+            // Channel outermost to match NCHW weight layout: c * kH * kW + kh * kW + kw
+            let o = self
+                .builder
+                .build_int_mul(ind_c, i64_ty.const_int(kh * kw, false), "dc_c")?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?,
+                "dc_ckh",
+            )?;
+            self.builder.build_int_add(o, ind_kw, "dst_col")?
+        };
+        let dst_offset = {
+            let o =
+                self.builder
+                    .build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
+            self.builder.build_int_add(o, dst_col, "dst_off")?
+        };
+        self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
+        self.builder.build_unconditional_branch(latch_c)?;
+
+        // Latches (innermost to outermost)
+        latch!(phi_c, hdr_kw, ind_c, c_in, hdr_c, latch_kw, latch_c);
+        latch!(phi_kw, hdr_kh, ind_kw, kw, hdr_kw, latch_kh, latch_kw);
+        latch!(phi_kh, hdr_ow, ind_kh, kh, hdr_kh, latch_ow, latch_kh);
+        latch!(phi_ow, hdr_oh, ind_ow, w_out, hdr_ow, latch_oh, latch_ow);
+        latch!(phi_oh, hdr_n, ind_oh, h_out, hdr_oh, latch_n, latch_oh);
+        latch!(phi_n, entry, ind_n, nbatch, hdr_n, exit, latch_n);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_gemm(
         &self,
         dst: &TensorPtr<'ctx>,

@@ -9,7 +9,7 @@ pub struct FoldNHWC2NCHW {}
 
 impl<T: GraphOp> Pass<T> for FoldNHWC2NCHW {
     fn summary(&self) -> &'static str {
-        "Fold NHWC2NCHW into Conv by setting layout to NHWC"
+        "Fold NHWC2NCHW into Conv/Im2Col by setting layout to NHWC"
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
@@ -28,29 +28,32 @@ impl<T: GraphOp> Pass<T> for FoldNHWC2NCHW {
                 if user_input_idx != 0 {
                     return None;
                 }
-                if !matches!(graph.nodes[user_id].op, Operator::Conv(_)) {
-                    return None;
+                match &graph.nodes[user_id].op {
+                    Operator::Conv(_) => Some((nchw_id, user_id)),
+                    Operator::Im2Col(Im2Col {
+                        channel: Channel::Meld(_),
+                        ..
+                    }) => Some((nchw_id, user_id)),
+                    _ => None,
                 }
-                Some((nchw_id, user_id))
             })
             .collect();
 
-        for (nchw_id, conv_id) in targets {
+        for (nchw_id, target_id) in targets {
             let nchw_input = graph.nodes[nchw_id].inputs[0];
             let nchw_output = graph.nodes[nchw_id].outputs[0];
 
-            // Set Conv layout to NHWC
-            let Operator::Conv(ref mut conv) = graph.nodes[conv_id].op else {
-                unreachable!();
-            };
-            conv.layout = Layout::NHWC;
+            match &mut graph.nodes[target_id].op {
+                Operator::Conv(ref mut conv) => conv.layout = Layout::NHWC,
+                Operator::Im2Col(ref mut im2col) => im2col.layout = Layout::NHWC,
+                _ => unreachable!(),
+            }
 
-            // Wire NHWC2NCHW's input directly to Conv
             modifier.replace_input_value_if_without_typecheck(
                 graph,
                 nchw_output,
                 nchw_input,
-                |id, _| id == conv_id,
+                |id, _| id == target_id,
             );
         }
     }
