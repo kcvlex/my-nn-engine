@@ -109,6 +109,18 @@ fn bench_resnet18_cpu() {
 
 #[test]
 #[ignore]
+fn bench_resnet152_cpu() {
+    bench(
+        "resnet152-v2-7",
+        "resnet152-v2-7.onnx",
+        1,
+        "ResNet152",
+        Target::CPU,
+    );
+}
+
+#[test]
+#[ignore]
 #[cfg(feature = "cuda")]
 fn bench_gpt2_cuda() {
     bench("GPT2", "model.onnx", 1, "GPT-2 CUDA", Target::CUDA);
