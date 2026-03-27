@@ -87,6 +87,7 @@ fn build_conv_bn_graph_no_conv_bias() -> Graph {
                 groups: 1,
                 kernel_shape: ResolvedTensorDims::new(&[1, 1]),
                 strides: OptionalVec::new(None, 1),
+                layout: Layout::NCHW,
             }),
               [x, weight] => conv_out: &[1, c_out, 4, 4] },
 
@@ -138,6 +139,7 @@ fn build_conv_bn_graph_with_conv_bias() -> Graph {
                 groups: 1,
                 kernel_shape: ResolvedTensorDims::new(&[1, 1]),
                 strides: OptionalVec::new(None, 1),
+                layout: Layout::NCHW,
             }),
               [x, weight, conv_bias] => conv_out: &[1, c_out, 4, 4] },
 
@@ -273,6 +275,7 @@ fn test_conv_bn_not_fused_when_multiple_users() {
                 groups: 1,
                 kernel_shape: ResolvedTensorDims::new(&[1, 1]),
                 strides: OptionalVec::new(None, 1),
+                layout: Layout::NCHW,
             }),
               [x, weight] => conv_out: &[1, c_out, 4, 4] },
 

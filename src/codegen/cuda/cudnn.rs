@@ -43,14 +43,15 @@ pub enum CudnnConvolutionMode {
     CrossCorrelation,
 }
 
-#[allow(dead_code)]
-#[derive(AsRefStr)]
-pub enum CudnnTensorFormat {
-    #[strum(serialize = "CUDNN_TENSOR_NCHW")]
-    NCHW,
+use crate::onnx::operator::Layout;
 
-    #[strum(serialize = "CUDNN_TENSOR_NHWC")]
-    NHWC,
+impl Layout {
+    pub fn cudnn_format(&self) -> &'static str {
+        match self {
+            Layout::NCHW => "CUDNN_TENSOR_NCHW",
+            Layout::NHWC => "CUDNN_TENSOR_NHWC",
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -210,7 +211,7 @@ pub enum CudnnOps {
     SetTensor4dDescriptor {
         desc: TensorDescriptor,
         data_type: DataType,
-        format: CudnnTensorFormat,
+        format: Layout,
         nbatch: usize,
         channels: usize,
         height: usize,
@@ -219,7 +220,7 @@ pub enum CudnnOps {
     SetFilter4dDescriptor {
         id: CudnnSettingName,
         data_type: DataType,
-        format: CudnnTensorFormat,
+        format: Layout,
         out_feature_maps: usize,
         in_feature_maps: usize,
         height: usize,
@@ -316,7 +317,7 @@ impl std::fmt::Display for CudnnOps {
                     f,
                     "cudnnSetTensor4dDescriptor({}, {}, {}, {}, {}, {}, {})",
                     desc,
-                    format.as_ref(),
+                    format.cudnn_format(),
                     data_type.cudnn(),
                     nbatch,
                     channels,
@@ -338,7 +339,7 @@ impl std::fmt::Display for CudnnOps {
                     "cudnnSetFilter4dDescriptor({}, {}, {}, {}, {}, {}, {})",
                     id.filter_descriptor(),
                     data_type.cudnn(),
-                    format.as_ref(),
+                    format.cudnn_format(),
                     out_feature_maps,
                     in_feature_maps,
                     height,

@@ -13,6 +13,12 @@ use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    NCHW,
+    NHWC,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TensorIndex(isize);
 
 impl TensorIndex {
@@ -162,6 +168,7 @@ pub struct Conv {
     pub groups: usize,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+    pub layout: Layout,
 }
 
 #[derive(Debug)]
