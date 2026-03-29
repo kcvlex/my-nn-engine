@@ -1,5 +1,4 @@
 use ndarray::concatenate;
-use ndarray::stack;
 use ndarray::Array;
 use ndarray::ArrayView;
 use ndarray::Axis;
