@@ -95,11 +95,11 @@ mod test {
     use super::*;
     use crate::onnx::load::*;
     use crate::onnx::model::*;
+    use crate::options::Options;
     use crate::tensor::types::FloatType;
-    use crate::transform::lower::strides::AssignStrides;
-    use crate::transform::modify::SimpleGraphOp;
-    use crate::transform::shape::infer::ShapeInference;
-    use crate::transform::*;
+    use crate::tensor::types::ResolvedTensorDims;
+    use crate::tensor::types::ResolvedTensorType;
+    use crate::transform::transform_graph;
 
     #[test]
     fn infer_yolov4() {
@@ -116,15 +116,7 @@ mod test {
                 ResolvedTensorDims::new(&[1, 416, 416, 3]),
             )])
             .unwrap();
-        let mut modifier = SimpleGraphOp::new(&graph);
-        let mut pass_manager = SimplePassManager::new("Shape".to_string());
-        let target = Target::CPU;
-        pass_manager.add_pass(Box::new(ShapeInference { target }));
-        pass_manager.add_pass(Box::new(AssignStrides { target }));
-        pass_manager.add_pass(Box::new(VerifyShape {
-            target,
-            check_strides: true,
-        }));
-        pass_manager.run(&mut graph, &mut modifier);
+        let options = Options::builder().build();
+        transform_graph(&mut graph, &options);
     }
 }

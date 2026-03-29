@@ -223,8 +223,16 @@ pub fn infer_node_output(
         Operator::Conv(ref conv) => {
             let x = &inputs[args::CONV_DATA];
             let w = &inputs[args::CONV_WEIGHT];
+            if matches!(mode, UnifyMode::CheckStrides) {
+                assert!(x.is_contiguous(), "Conv input must be contiguous");
+                assert!(w.is_contiguous(), "Conv weight must be contiguous");
+            }
             let dims = conv.output_shape(&x.dims, &w.dims);
-            res.push(ResolvedTensorType::new(x.elem_type, dims));
+            let ty = ResolvedTensorType::new(x.elem_type, dims);
+            if matches!(mode, UnifyMode::CheckStrides) {
+                assert!(ty.is_contiguous(), "Conv output must be contiguous");
+            }
+            res.push(ty);
         }
         Operator::MatMul => {
             let a = &inputs[args::MATMUL_LHS];
