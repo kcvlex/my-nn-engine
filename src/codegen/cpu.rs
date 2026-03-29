@@ -32,7 +32,6 @@ use crate::codegen::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
 use crate::onnx::operator::Contiguous;
-use crate::onnx::operator::Layout;
 use crate::onnx::operator::Operator;
 use crate::options::Options;
 use crate::schedule::*;
@@ -820,10 +819,9 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Gemm(ref gemm) => {
                     translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
                 }
-                Operator::Im2Col(ref im2col) => match im2col.layout {
-                    Layout::NCHW => translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry),
-                    Layout::NHWC => translator.build_im2col_nhwc(&ptrs[0], &ptrs[1], im2col, entry),
-                },
+                Operator::Im2Col(ref im2col) => {
+                    translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
+                }
                 Operator::OneHot(ref one_hot) => {
                     translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
                 }

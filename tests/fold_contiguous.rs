@@ -10,7 +10,7 @@ use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::operator::*;
 use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
-use my_onnx::transform::layout::fold_cont::FoldContiguous;
+use my_onnx::transform::epilog::fold_cont::FoldContiguous;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
 use my_onnx::transform::Pass;

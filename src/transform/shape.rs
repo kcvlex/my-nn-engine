@@ -223,9 +223,6 @@ pub fn infer_node_output(
         Operator::Conv(ref conv) => {
             let x = &inputs[args::CONV_DATA];
             let w = &inputs[args::CONV_WEIGHT];
-            if matches!(mode, UnifyMode::CheckStrides) {
-                assert!(x.is_contiguous(), "Conv input must be contiguous");
-            }
             let dims = conv.output_shape(&x.dims, &w.dims);
             res.push(ResolvedTensorType::new(x.elem_type, dims));
         }
@@ -265,9 +262,6 @@ pub fn infer_node_output(
         }
         Operator::MaxPool(ref pooling) => {
             let x = &inputs[args::MAXPOOL_DATA];
-            if matches!(mode, UnifyMode::CheckStrides) {
-                assert!(x.is_contiguous(), "MaxPool input must be contiguous");
-            }
             let dims = pooling.output_shape(&x.dims);
             res.push(ResolvedTensorType::new(x.elem_type, dims));
         }
@@ -584,13 +578,6 @@ pub fn infer_node_output(
                     }
                 };
             }
-            res.push(ty);
-        }
-        Operator::NHWC2NCHW => {
-            let data = &inputs[0];
-            let perm = vec![0, 3, 1, 2];
-            let t = Transpose { perm: Some(perm) };
-            let ty = transpose(data, &t, mode)?.contiguous();
             res.push(ty);
         }
         Operator::Input(_) |

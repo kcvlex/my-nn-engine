@@ -20,13 +20,7 @@ impl<T: GraphOp> Pass<T> for InsertContiguous {
             .nodes
             .iter()
             .filter(|(_, node)| {
-                matches!(
-                    node.op,
-                    Operator::BatchedGemm(_) |
-                        Operator::Attention(_) |
-                        Operator::Conv(_) |
-                        Operator::MaxPool(_)
-                )
+                matches!(node.op, Operator::BatchedGemm(_) | Operator::Attention(_))
             })
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
@@ -35,9 +29,6 @@ impl<T: GraphOp> Pass<T> for InsertContiguous {
             match graph.nodes[id].op {
                 Operator::BatchedGemm(_) => self.handle_batched_gemm(graph, modifier, id),
                 Operator::Attention(_) => self.handle_attention(graph, modifier, id),
-                Operator::Conv(_) | Operator::MaxPool(_) => {
-                    self.handle_conv_pool(graph, modifier, id)
-                }
                 _ => unreachable!(),
             }
         }
@@ -86,6 +77,11 @@ impl InsertContiguous {
 
         let node_name = node.name.clone();
         for (i, input) in node.inputs.clone().iter().enumerate() {
+            let input_type = graph.get_resolved_tensor_type(*input).unwrap().clone();
+            if input_type.is_contiguous() {
+                continue;
+            }
+
             // TODO: Last two dimensions can be handled by transpose parameter of Gemm.
             let new_value = find_or_create_contiguous(
                 graph,
@@ -103,18 +99,6 @@ impl InsertContiguous {
         }
     }
 
-    fn handle_conv_pool<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
-        let node = &graph.nodes[id];
-        let node_name = node.name.clone();
-        let input = node.inputs[0];
-
-        let new_value =
-            find_or_create_contiguous(graph, modifier, input, &format!("{}_input_0", node_name));
-
-        modifier
-            .replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| id == id2);
-    }
-
     fn handle_attention<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
         let node = &graph.nodes[id];
         let name = node.name.clone();
@@ -126,6 +110,10 @@ impl InsertContiguous {
         }
         for arg in inputs {
             let input = graph.nodes[id].inputs[arg];
+            let input_type = &graph.get_resolved_tensor_type(input).unwrap();
+            if input_type.is_contiguous() {
+                continue;
+            }
 
             let new_value = find_or_create_contiguous(
                 graph,

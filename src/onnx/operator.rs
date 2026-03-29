@@ -13,12 +13,6 @@ use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Layout {
-    NCHW,
-    NHWC,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TensorIndex(isize);
 
 impl TensorIndex {
@@ -88,7 +82,6 @@ pub enum Operator {
     // Custom
     Contiguous(Contiguous),
     Im2Col(Im2Col),
-    NHWC2NCHW,
     ReduceMatrix(ReduceOp),
     Reinterpret(Reinterpret),
 
@@ -168,7 +161,6 @@ pub struct Conv {
     pub groups: usize,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
-    pub layout: Layout,
 }
 
 #[derive(Debug)]
@@ -588,7 +580,6 @@ pub struct Im2Col {
     pub one_kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
     pub pad_val: PadVal,
-    pub layout: Layout,
 }
 
 impl Im2Col {
@@ -761,7 +752,6 @@ impl Operator {
             // Custom
             Operator::Contiguous(_) => "Contiguous",
             Operator::Im2Col(_) => "Im2Col",
-            Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
             Operator::Reinterpret(_) => "Reinterpret",
 
@@ -792,7 +782,6 @@ impl Operator {
             Operator::Tanh => OperatorType::Elementwise,
 
             Operator::Contiguous(_) |
-            Operator::NHWC2NCHW |
             Operator::Reshape |
             Operator::Squeeze(_) |
             Operator::Transpose(_) |

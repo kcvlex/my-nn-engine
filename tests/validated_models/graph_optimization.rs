@@ -2,18 +2,12 @@ use std::path::PathBuf;
 
 use my_onnx::onnx::load::LoadProto;
 use my_onnx::onnx::model::Model;
-use my_onnx::onnx::operator::Layout;
 use my_onnx::onnx::operator::Operator;
 use my_onnx::options::*;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::transform_graph;
 
-fn load_and_transform_with_target(
-    model_dir: &str,
-    model_file: &str,
-    num_inputs: usize,
-    target: Target,
-) -> Model {
+fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> Model {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model_dir);
@@ -29,12 +23,11 @@ fn load_and_transform_with_target(
         .collect();
     model.graph.resolve_input_types(&input_types).unwrap();
 
-    transform_graph(&mut model.graph, &Options::builder().target(target).build());
+    transform_graph(
+        &mut model.graph,
+        &Options::builder().target(Target::CUDA).build(),
+    );
     model
-}
-
-fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> Model {
-    load_and_transform_with_target(model_dir, model_file, num_inputs, Target::CUDA)
 }
 
 fn count_op(model: &Model, pred: fn(&Operator) -> bool) -> usize {
@@ -86,29 +79,4 @@ fn test_gpt2_graph_optimization() {
     assert_eq!(gelu, 12);
     assert_eq!(tanh, 0);
     assert_eq!(reduce_mean, 0);
-}
-
-#[test]
-fn test_resnet18_nhwc_layout_cpu() {
-    let model =
-        load_and_transform_with_target("resnet18-v2-7", "resnet18-v2-7.onnx", 1, Target::CPU);
-
-    // All NHWC2NCHW should be lowered away
-    let nhwc2nchw = count_op(&model, |op| matches!(op, Operator::NHWC2NCHW));
-    assert_eq!(nhwc2nchw, 0);
-
-    // Currently SinkNHWC2NCHW cannot pass through multi-input ops (BN, Add),
-    // so no Im2Col gets NHWC layout yet in ResNet v2 (BN -> Relu -> Conv).
-    // This test documents the current state.
-    let nhwc_im2col = model
-        .graph
-        .nodes
-        .iter()
-        .filter(|(_, node)| match &node.op {
-            Operator::Im2Col(im2col) => im2col.layout == Layout::NHWC,
-            _ => false,
-        })
-        .count();
-    let total_im2col = count_op(&model, |op| matches!(op, Operator::Im2Col(_)));
-    eprintln!("Im2Col: {nhwc_im2col}/{total_im2col} NHWC");
 }

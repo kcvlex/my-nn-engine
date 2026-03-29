@@ -14,7 +14,8 @@ pub use lower::create_lower_passes;
 use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
-pub use optimize::create_optimize_passes;
+pub use optimize::create_optimize_passes0;
+pub use optimize::create_optimize_passes1;
 pub use shape::create_infer_passes;
 
 use crate::onnx::model::Graph;
@@ -76,13 +77,12 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 }
 
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
-    let enable_nhwc = layout::should_enable_nhwc(graph, options);
-
     let managers = [
         create_infer_passes(options),
-        create_optimize_passes(),
+        create_optimize_passes0(options),
         create_lower_passes(options),
-        create_layout_passes(options, enable_nhwc),
+        create_optimize_passes1(options),
+        create_layout_passes(options),
         create_epilog_passes(options),
     ];
 
