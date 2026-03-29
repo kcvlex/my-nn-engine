@@ -16,6 +16,7 @@ pub use optimize::create_optimize_passes;
 pub use shape::create_infer_passes;
 
 use crate::onnx::model::Graph;
+use crate::onnx::operator::Operator;
 use crate::options::*;
 
 pub trait Pass<T: GraphOp> {
@@ -74,10 +75,27 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 }
 
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
+    let enable_nhwc = options.enable_nhwc_optimization.unwrap_or_else(|| {
+        let has_conv = graph
+            .nodes
+            .iter()
+            .any(|(_, node)| matches!(node.op, Operator::Conv(_)));
+        let all_inputs_4d = graph.inputs.iter().all(|&id| {
+            let crate::onnx::operator::Operator::Input(value_id) = graph.nodes[id].op else {
+                return false;
+            };
+            graph
+                .get_resolved_tensor_type(value_id)
+                .map(|ty| ty.dims.ndim() == 4)
+                .unwrap_or(false)
+        });
+        has_conv && all_inputs_4d
+    });
+
     let managers = [
         create_infer_passes(options),
         create_optimize_passes(),
-        create_lower_passes(options),
+        create_lower_passes(options, enable_nhwc),
         create_epilog_passes(options),
     ];
 

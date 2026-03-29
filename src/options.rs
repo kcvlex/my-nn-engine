@@ -29,6 +29,9 @@ pub struct Options {
     #[builder(default = 16)]
     pub num_cuda_streams: usize,
 
+    #[builder(default)]
+    pub enable_nhwc_optimization: Option<bool>,
+
     #[builder(default = false)]
     pub profile: bool,
 

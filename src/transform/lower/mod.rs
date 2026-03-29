@@ -1,5 +1,8 @@
+mod detect_nhwc2nchw;
+mod fold_nhwc2nchw;
 pub mod im2col;
 pub mod insert_cont;
+mod insert_nhwc2nchw;
 pub mod strides;
 
 use crate::onnx::model::Graph;
@@ -15,6 +18,7 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::shape::verify;
 use crate::transform::utils::*;
 use crate::transform::Pass;
 use crate::transform::PassManager;
@@ -206,26 +210,34 @@ impl<T: GraphOp> Pass<T> for Reduce2ReduceMatrix {
     }
 }
 
-pub fn create_lower_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
-    if matches!(opt.target, Target::CPU) {
-        passes.add_pass(Box::new(DecomposeAttention::default()));
-    }
-
     // Layout
-    passes.add_pass(Box::new(strides::AssignStrides { target: opt.target }));
     passes.add_pass(Box::new(insert_cont::InsertContiguous::default()));
+    if enable_nhwc && matches!(opt.target, Target::CUDA) {
+        passes.add_pass(Box::new(
+            insert_nhwc2nchw::InsertNHWC2NCHWAfterConv::default(),
+        ));
+    }
+    passes.add_pass(Box::new(strides::AssignStrides { target: opt.target }));
     if opt.verify_after_strides {
-        passes.add_pass(Box::new(crate::transform::shape::verify::VerifyShape {
+        passes.add_pass(Box::new(verify::VerifyShape {
             target: opt.target,
             check_strides: true,
         }));
     }
 
-    // Decompose Conv/MaxPool after layout
+    // NHWC optimization
+    if enable_nhwc {
+        passes.add_pass(Box::new(detect_nhwc2nchw::DetectNHWC2NCHW::default()));
+        passes.add_pass(Box::new(fold_nhwc2nchw::FoldNHWC2NCHW::default()));
+    }
+
+    // Decompose after layout
     if matches!(opt.target, Target::CPU) {
+        passes.add_pass(Box::new(DecomposeAttention::default()));
         passes.add_pass(Box::new(im2col::DecomposeConv::default()));
         passes.add_pass(Box::new(im2col::DecomposeMaxPool::default()));
     }

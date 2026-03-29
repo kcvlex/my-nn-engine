@@ -76,6 +76,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     let node = &graph.nodes[id];
     match &node.op {
         Operator::Conv(ref conv) => {
+            let conv = conv.clone();
             let data_value = node.inputs[args::CONV_DATA];
             let kernel_value = node.inputs[args::CONV_WEIGHT];
             let bias_value = node.inputs.get(args::CONV_BIAS).copied();
@@ -85,13 +86,17 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 .unwrap()
                 .clone();
             let kernel_shape = &kernel.dims;
-            let output_shape = &graph
+            let output_dims = graph
                 .get_resolved_tensor_type(old_output_value)
                 .unwrap()
                 .dims
                 .clone();
+            let nchw_output_shape = match conv.output_layout {
+                Layout::NCHW => output_dims,
+                Layout::NHWC => output_dims.transpose(&[0, 3, 1, 2]),
+            };
             let (im2col, im2col_output_shape) =
-                gen_im2col_from_conv(conv, kernel_shape, output_shape);
+                gen_im2col_from_conv(&conv, kernel_shape, &nchw_output_shape);
             let nbatch = im2col.nbatch;
             let one_fm_shape = im2col.one_fm_shape.clone();
             let feature_map_count = kernel_shape[0];
@@ -147,7 +152,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 im2col_output_shape[0],
                 kernel_shape.size() / im2col_output_shape[1],
             ]);
-            assert_eq!(dims.size(), output_shape.size());
+            assert_eq!(dims.size(), nchw_output_shape.size());
             // Gemm
             let gemm_output = modifier.register_new_value(
                 graph,

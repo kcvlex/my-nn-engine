@@ -314,33 +314,18 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
-    fn infer_format(ty: &ResolvedTensorType) -> Option<Layout> {
-        assert!(ty.dims.ndim() == 4);
-        if ty.is_contiguous() {
-            return Some(Layout::NCHW);
-        }
-
-        let ty = ty.transpose(&[0, 2, 3, 1]);
-        if ty.is_contiguous() {
-            return Some(Layout::NHWC);
-        }
-
-        None
-    }
-
     fn generate(&self) -> Result<CudnnCode, BuildError> {
         let mut stmts = Vec::new();
         let setting = CudnnSettingName::DefaultName;
 
         let kernel = &self.schedule.kernels[self.kernel_id];
-        // TODO: Support NHWC input/output layout
-        if let KernelBody::Opaque(Opaque {
+        let KernelBody::Opaque(Opaque {
             op: Operator::Conv(ref conv),
         }) = kernel.body
-        {
-            assert!(conv.input_layout == Layout::NCHW);
-            assert!(conv.output_layout == Layout::NCHW);
-        }
+        else {
+            unreachable!();
+        };
+
         let input_ty = self
             .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
             .clone();
@@ -352,6 +337,16 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         assert!(input_ty.dims.ndim() == 4);
         assert!(weight_ty.dims.ndim() == 4);
         assert!(output_ty.dims.ndim() == 4);
+
+        let (in_n, in_c, in_h, in_w) = match conv.input_layout {
+            Layout::NCHW => (0, 1, 2, 3),
+            Layout::NHWC => (0, 3, 1, 2),
+        };
+        let (out_n, out_c, out_h, out_w) = match conv.output_layout {
+            Layout::NCHW => (0, 1, 2, 3),
+            Layout::NHWC => (0, 3, 1, 2),
+        };
+
         let input_desc = TensorDescriptor {
             id: setting,
             role: TensorRole::Input,
@@ -365,11 +360,11 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetTensor4dDescriptor {
                 desc: input_desc,
                 data_type: input_ty.elem_type,
-                format: Self::infer_format(&input_ty).unwrap(),
-                nbatch: input_ty.dims[0],
-                channels: input_ty.dims[1],
-                height: input_ty.dims[2],
-                width: input_ty.dims[3],
+                format: conv.input_layout,
+                nbatch: input_ty.dims[in_n],
+                channels: input_ty.dims[in_c],
+                height: input_ty.dims[in_h],
+                width: input_ty.dims[in_w],
             }
             .into(),
         );
@@ -378,11 +373,11 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetTensor4dDescriptor {
                 desc: output_desc,
                 data_type: output_ty.elem_type,
-                format: Self::infer_format(&output_ty).unwrap(),
-                nbatch: output_ty.dims[0],
-                channels: output_ty.dims[1],
-                height: output_ty.dims[2],
-                width: output_ty.dims[3],
+                format: conv.output_layout,
+                nbatch: output_ty.dims[out_n],
+                channels: output_ty.dims[out_c],
+                height: output_ty.dims[out_h],
+                width: output_ty.dims[out_w],
             }
             .into(),
         );
@@ -392,7 +387,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             CudnnOps::SetFilter4dDescriptor {
                 id: setting,
                 data_type: weight_ty.elem_type,
-                format: Self::infer_format(&weight_ty).unwrap(),
+                format: Layout::NCHW,
                 out_feature_maps: weight_ty.dims[0],
                 in_feature_maps: weight_ty.dims[1],
                 height: weight_ty.dims[2],
