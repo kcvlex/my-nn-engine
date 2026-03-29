@@ -399,6 +399,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
 
         // Custom Operators.
         Operator::Contiguous(_) => vec![],
+        Operator::NHWC2NCHW => vec![],
 
         // TODO
         Operator::Im2Col(_) => vec![],

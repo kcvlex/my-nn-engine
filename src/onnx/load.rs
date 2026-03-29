@@ -659,6 +659,8 @@ impl Conv {
             groups: groups as usize,
             kernel_shape,
             strides,
+            input_layout: Layout::NCHW,
+            output_layout: Layout::NCHW,
         })
     }
 }

@@ -13,6 +13,12 @@ use crate::tensor::Tensor;
 //use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    NCHW,
+    NHWC,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TensorIndex(isize);
 
 impl TensorIndex {
@@ -82,6 +88,7 @@ pub enum Operator {
     // Custom
     Contiguous(Contiguous),
     Im2Col(Im2Col),
+    NHWC2NCHW,
     ReduceMatrix(ReduceOp),
     Reinterpret(Reinterpret),
 
@@ -161,6 +168,8 @@ pub struct Conv {
     pub groups: usize,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+    pub input_layout: Layout,
+    pub output_layout: Layout,
 }
 
 #[derive(Debug)]
@@ -192,10 +201,24 @@ impl Conv {
         // TODO: Check kernel_shape
 
         assert!(input_shape.ndim() == weight_shape.ndim());
-        let batch_size = input_shape[0];
-        let channels = input_shape[1];
-        let ndim = input_shape.ndim() - 2;
-        let input = &input_shape[2..];
+
+        let nchw_input = match self.input_layout {
+            Layout::NCHW => input_shape.clone(),
+            Layout::NHWC => {
+                assert!(input_shape.ndim() == 4);
+                ResolvedTensorDims::new(&[
+                    input_shape[0],
+                    input_shape[3],
+                    input_shape[1],
+                    input_shape[2],
+                ])
+            }
+        };
+
+        let batch_size = nchw_input[0];
+        let channels = nchw_input[1];
+        let ndim = nchw_input.ndim() - 2;
+        let input = &nchw_input[2..];
 
         let feature_map_size = weight_shape[0];
 
@@ -233,7 +256,19 @@ impl Conv {
             };
             dims.push(dim);
         }
-        ResolvedTensorDims::new(&dims)
+        let nchw_output = ResolvedTensorDims::new(&dims);
+        match self.output_layout {
+            Layout::NCHW => nchw_output,
+            Layout::NHWC => {
+                assert!(nchw_output.ndim() == 4);
+                ResolvedTensorDims::new(&[
+                    nchw_output[0],
+                    nchw_output[2],
+                    nchw_output[3],
+                    nchw_output[1],
+                ])
+            }
+        }
     }
 }
 
@@ -752,6 +787,7 @@ impl Operator {
             // Custom
             Operator::Contiguous(_) => "Contiguous",
             Operator::Im2Col(_) => "Im2Col",
+            Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
             Operator::Reinterpret(_) => "Reinterpret",
 
@@ -782,6 +818,7 @@ impl Operator {
             Operator::Tanh => OperatorType::Elementwise,
 
             Operator::Contiguous(_) |
+            Operator::NHWC2NCHW |
             Operator::Reshape |
             Operator::Squeeze(_) |
             Operator::Transpose(_) |

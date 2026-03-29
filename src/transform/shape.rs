@@ -558,6 +558,15 @@ pub fn infer_node_output(
             ));
         }
 
+        Operator::NHWC2NCHW => {
+            let data = &inputs[0];
+            let t = Transpose {
+                perm: Some(vec![0, 3, 1, 2]),
+            };
+            let ty = transpose(data, &t, mode)?;
+            res.push(ty.contiguous());
+        }
+
         // Custom
         Operator::Contiguous(_) => {
             let input = &inputs[0];

@@ -314,15 +314,15 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
-    fn infer_format(ty: &ResolvedTensorType) -> Option<CudnnTensorFormat> {
+    fn infer_format(ty: &ResolvedTensorType) -> Option<Layout> {
         assert!(ty.dims.ndim() == 4);
         if ty.is_contiguous() {
-            return Some(CudnnTensorFormat::NCHW);
+            return Some(Layout::NCHW);
         }
 
         let ty = ty.transpose(&[0, 2, 3, 1]);
         if ty.is_contiguous() {
-            return Some(CudnnTensorFormat::NHWC);
+            return Some(Layout::NHWC);
         }
 
         None
@@ -333,6 +333,14 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         let setting = CudnnSettingName::DefaultName;
 
         let kernel = &self.schedule.kernels[self.kernel_id];
+        // TODO: Support NHWC input/output layout
+        if let KernelBody::Opaque(Opaque {
+            op: Operator::Conv(ref conv),
+        }) = kernel.body
+        {
+            assert!(conv.input_layout == Layout::NCHW);
+            assert!(conv.output_layout == Layout::NCHW);
+        }
         let input_ty = self
             .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
             .clone();
@@ -405,7 +413,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
                 CudnnOps::SetTensor4dDescriptor {
                     desc: bias_desc,
                     data_type: bias_ty.elem_type,
-                    format: CudnnTensorFormat::NCHW,
+                    format: Layout::NCHW,
                     nbatch: 1,
                     channels: bias_ty.dims[0],
                     height: 1,
