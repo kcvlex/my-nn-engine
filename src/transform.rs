@@ -1,5 +1,4 @@
 pub mod epilog;
-pub mod layout;
 pub mod lower;
 pub mod modify;
 pub mod optimize;
@@ -8,14 +7,12 @@ pub mod shape;
 mod utils;
 
 pub use epilog::create_epilog_passes;
-pub use layout::create_layout_passes;
 use log::info;
 pub use lower::create_lower_passes;
 use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
-pub use optimize::create_optimize_passes0;
-pub use optimize::create_optimize_passes1;
+pub use optimize::create_optimize_passes;
 pub use shape::create_infer_passes;
 
 use crate::onnx::model::Graph;
@@ -79,10 +76,8 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
 pub fn transform_graph(graph: &mut Graph, options: &Options) {
     let managers = [
         create_infer_passes(options),
-        create_optimize_passes0(options),
+        create_optimize_passes(),
         create_lower_passes(options),
-        create_optimize_passes1(options),
-        create_layout_passes(options),
         create_epilog_passes(options),
     ];
 

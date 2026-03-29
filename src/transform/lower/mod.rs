@@ -1,4 +1,6 @@
 pub mod im2col;
+pub mod insert_cont;
+pub mod strides;
 
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
@@ -209,9 +211,23 @@ pub fn create_lower_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     passes.add_pass(Box::new(Reduce2ReduceMatrix::default()));
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
     if matches!(opt.target, Target::CPU) {
+        passes.add_pass(Box::new(DecomposeAttention::default()));
+    }
+
+    // Layout
+    passes.add_pass(Box::new(strides::AssignStrides { target: opt.target }));
+    passes.add_pass(Box::new(insert_cont::InsertContiguous::default()));
+    if opt.verify_after_strides {
+        passes.add_pass(Box::new(crate::transform::shape::verify::VerifyShape {
+            target: opt.target,
+            check_strides: true,
+        }));
+    }
+
+    // Decompose Conv/MaxPool after layout
+    if matches!(opt.target, Target::CPU) {
         passes.add_pass(Box::new(im2col::DecomposeConv::default()));
         passes.add_pass(Box::new(im2col::DecomposeMaxPool::default()));
-        passes.add_pass(Box::new(DecomposeAttention::default()));
     }
     passes
 }

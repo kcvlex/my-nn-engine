@@ -354,7 +354,7 @@ mod test {
     use crate::onnx::load::*;
     use crate::onnx::model::Model;
     use crate::options::Target;
-    use crate::transform::layout::strides;
+    use crate::transform::lower::strides;
     use crate::transform::modify::SimpleGraphOp;
     use crate::transform::shape::*;
     use crate::transform::*;
