@@ -575,6 +575,16 @@ impl Model {
     }
 }
 
+pub fn save_graph<P: AsRef<Path>>(graph: &Graph, path: P) {
+    let proto = ModelProto {
+        ir_version: 7,
+        graph: Some(graph_to_proto(graph)),
+        ..Default::default()
+    };
+    let bytes = proto.encode_to_vec();
+    std::fs::write(path, bytes).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use my_onnx::onnx::load::LoadProto;
 use my_onnx::onnx::model::Model;
+use my_onnx::onnx::operator::Layout;
 use my_onnx::onnx::operator::Operator;
 use my_onnx::options::*;
 use my_onnx::tensor::Tensor;
@@ -79,4 +80,61 @@ fn test_gpt2_graph_optimization() {
     assert_eq!(gelu, 12);
     assert_eq!(tanh, 0);
     assert_eq!(reduce_mean, 0);
+}
+
+fn load_and_transform_with_target(
+    model_dir: &str,
+    model_file: &str,
+    num_inputs: usize,
+    target: Target,
+) -> Model {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("models/validated")
+        .join(model_dir);
+    let mut model = Model::load_from_path(root.join(model_file)).unwrap();
+
+    let data_dir = root.join("test_data_set_0");
+    let input_types: Vec<_> = (0..num_inputs)
+        .map(|i| {
+            Tensor::load_from_path(data_dir.join(format!("input_{i}.pb")))
+                .unwrap()
+                .tensor_type()
+        })
+        .collect();
+    model.graph.resolve_input_types(&input_types).unwrap();
+
+    transform_graph(&mut model.graph, &Options::builder().target(target).build());
+    model
+}
+
+#[test]
+fn test_resnet18_nhwc_sink_cuda() {
+    let model =
+        load_and_transform_with_target("resnet18-v2-7", "resnet18-v2-7.onnx", 1, Target::CUDA);
+
+    let total_conv = count_op(&model, |op| matches!(op, Operator::Conv(_)));
+    let nhwc_input_conv = model
+        .graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| match &node.op {
+            Operator::Conv(conv) => conv.input_layout == Layout::NHWC,
+            _ => false,
+        })
+        .count();
+    let nhwc_output_conv = model
+        .graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| match &node.op {
+            Operator::Conv(conv) => conv.output_layout == Layout::NHWC,
+            _ => false,
+        })
+        .count();
+    let nhwc2nchw = count_op(&model, |op| matches!(op, Operator::NHWC2NCHW));
+
+    assert_eq!(total_conv, 20);
+    assert_eq!(nhwc_input_conv, 17);
+    assert_eq!(nhwc_output_conv, 16);
+    assert_eq!(nhwc2nchw, 0);
 }

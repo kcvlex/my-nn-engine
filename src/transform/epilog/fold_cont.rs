@@ -18,8 +18,23 @@ fn extract_ops(node: &Node) -> &[ReinterpretType] {
     }
 }
 
-#[derive(Default)]
-pub struct FoldContiguous {}
+pub struct FoldContiguous {
+    pub fold_forward: bool,
+}
+
+impl Default for FoldContiguous {
+    fn default() -> Self {
+        Self { fold_forward: true }
+    }
+}
+
+impl FoldContiguous {
+    pub fn backward_only() -> Self {
+        Self {
+            fold_forward: false,
+        }
+    }
+}
 
 impl<T: GraphOp> Pass<T> for FoldContiguous {
     fn summary(&self) -> &'static str {
@@ -48,11 +63,17 @@ impl<T: GraphOp> Pass<T> for FoldContiguous {
             .collect();
 
         for start_id in chain_starts {
-            let start_output = graph.nodes[start_id].outputs[0];
-            let (final_output, forward_chain) =
-                modifier.walk_chain_forward(graph, start_output, is_reinterpret_or_contiguous);
-
-            let all_nodes: Vec<NodeId> = std::iter::once(start_id).chain(forward_chain).collect();
+            let (all_nodes, final_output) = if self.fold_forward {
+                let start_output = graph.nodes[start_id].outputs[0];
+                let (final_output, forward_chain) =
+                    modifier.walk_chain_forward(graph, start_output, is_reinterpret_or_contiguous);
+                let all_nodes: Vec<NodeId> =
+                    std::iter::once(start_id).chain(forward_chain).collect();
+                (all_nodes, final_output)
+            } else {
+                let output = graph.nodes[start_id].outputs[0];
+                (vec![start_id], output)
+            };
 
             let has_contiguous = all_nodes
                 .iter()

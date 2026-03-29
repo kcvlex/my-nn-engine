@@ -1,8 +1,8 @@
 mod detect_nhwc2nchw;
-mod fold_nhwc2nchw;
 pub mod im2col;
 pub mod insert_cont;
 mod insert_nhwc2nchw;
+mod sink_and_fold_nhwc2nchw;
 pub mod strides;
 
 use crate::onnx::model::Graph;
@@ -231,8 +231,29 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
 
     // NHWC optimization
     if enable_nhwc {
+        passes.add_pass(Box::new(
+            crate::transform::epilog::Ops2Reinterpret::default(),
+        ));
+        passes.add_pass(Box::new(
+            crate::transform::epilog::fold_cont::FoldContiguous::backward_only(),
+        ));
+        passes.add_pass(Box::new(crate::transform::epilog::ElimCont::default()));
+        passes.add_pass(Box::new(verify::VerifyShape {
+            target: opt.target,
+            check_strides: true,
+        }));
         passes.add_pass(Box::new(detect_nhwc2nchw::DetectNHWC2NCHW::default()));
-        passes.add_pass(Box::new(fold_nhwc2nchw::FoldNHWC2NCHW::default()));
+        passes.add_pass(Box::new(verify::VerifyShape {
+            target: opt.target,
+            check_strides: true,
+        }));
+        passes.add_pass(Box::new(
+            sink_and_fold_nhwc2nchw::SinkAndFoldNHWC2NCHW::default(),
+        ));
+        passes.add_pass(Box::new(verify::VerifyShape {
+            target: opt.target,
+            check_strides: true,
+        }));
     }
 
     // Decompose after layout
