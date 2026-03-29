@@ -123,8 +123,9 @@ impl<T: GraphOp> Pass<T> for ElimCont {
             .iter()
             .filter(|(_, node)| match node.op {
                 Operator::Contiguous(_) => {
-                    let input_shape = graph.get_resolved_tensor_type(node.inputs[0]).unwrap();
-                    input_shape.is_contiguous()
+                    let input_ty = graph.get_resolved_tensor_type(node.inputs[0]).unwrap();
+                    let output_ty = graph.get_resolved_tensor_type(node.outputs[0]).unwrap();
+                    input_ty.is_contiguous() && input_ty.dims == output_ty.dims
                 }
                 _ => false,
             })
