@@ -1,3 +1,5 @@
+#[path = "../common/mod.rs"]
+mod common;
 mod cpu;
 #[cfg(feature = "cuda")]
 mod cuda;

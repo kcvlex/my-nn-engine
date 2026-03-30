@@ -3,9 +3,11 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
+use common::find_nodes;
+use common::make_1d_tensor;
+use common::make_tensor;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::NodeId;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::onnx::operator::args;
@@ -15,40 +17,10 @@ use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
 use my_onnx::tensor::types::TensorType;
-use my_onnx::tensor::Tensor;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
 use my_onnx::transform::optimize::conv_bn_fusion::ConvBNFusion;
 use my_onnx::transform::Pass;
-
-fn find_nodes<F>(graph: &Graph, predicate: F) -> Vec<NodeId>
-where
-    F: Fn(&Node) -> bool,
-{
-    graph
-        .nodes
-        .iter()
-        .filter(|(_, node)| predicate(node))
-        .map(|(id, _)| id)
-        .collect()
-}
-
-fn make_1d_tensor(data: Vec<f64>) -> Tensor {
-    let len = data.len();
-    Tensor::new(
-        ResolvedTensorDims::new(&[len]),
-        TensorData::Float(FloatType::F32, data),
-    )
-    .unwrap()
-}
-
-fn make_tensor(dims: &[usize], data: Vec<f64>) -> Tensor {
-    Tensor::new(
-        ResolvedTensorDims::new(dims),
-        TensorData::Float(FloatType::F32, data),
-    )
-    .unwrap()
-}
 
 // Conv(3 input channels, 2 output channels, 1x1 kernel) -> BatchNorm
 fn build_conv_bn_graph_no_conv_bias() -> Graph {

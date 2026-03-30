@@ -3,9 +3,9 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
+use common::find_nodes;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::NodeId;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::onnx::operator::*;
@@ -19,18 +19,6 @@ use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
 use my_onnx::transform::optimize::fast_gelu_fusion::FastGeLUFusion;
 use my_onnx::transform::Pass;
-
-fn find_nodes<F>(graph: &Graph, predicate: F) -> Vec<NodeId>
-where
-    F: Fn(&Node) -> bool,
-{
-    graph
-        .nodes
-        .iter()
-        .filter(|(_, node)| predicate(node))
-        .map(|(id, _)| id)
-        .collect()
-}
 
 fn make_scalar(val: f64) -> Tensor {
     let data = ScalarData::Float(FloatType::F32, val).to_tensor_data(1);

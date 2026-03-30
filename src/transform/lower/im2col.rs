@@ -234,9 +234,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                         .generate(graph, modifier)
                         .unwrap()
                 }
-                Layout::NHWC => {
-                    reshaped_output
-                }
+                Layout::NHWC => reshaped_output,
             };
 
             modifier.replace_input_value(graph, old_output_value, final_output);

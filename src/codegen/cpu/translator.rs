@@ -60,13 +60,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let i64_ty = self.context.i64_type();
         let ind = phi.as_basic_value().into_int_value();
         self.builder.position_at_end(latch);
-        let next = self.builder.build_int_add(ind, i64_ty.const_int(1, false), "next")?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            next,
-            bound,
-            "ec",
-        )?;
+        let next = self
+            .builder
+            .build_int_add(ind, i64_ty.const_int(1, false), "next")?;
+        let ec = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, next, bound, "ec")?;
         self.builder.build_conditional_branch(ec, exit, header)?;
         phi.add_incoming(&[(&i64_ty.const_zero(), entry), (&next, latch)]);
         Ok(())
@@ -603,7 +602,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     };
                     let pad_len = padded_len - src_dim;
                     let pad_left = pad_len / 2;
-                    let add_left = pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
+                    let add_left =
+                        pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
                     pad_left + add_left as u64
                 }
             }
@@ -669,23 +669,53 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(body);
 
         let ih = {
-            let a = self.builder.build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
-            let b = self.builder.build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
+            let a =
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
             let c = self.builder.build_int_add(a, b, "ih_raw")?;
-            self.builder.build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
         };
         let iw = {
-            let a = self.builder.build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
-            let b = self.builder.build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
+            let a =
+                self.builder
+                    .build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
             let c = self.builder.build_int_add(a, b, "iw_raw")?;
-            self.builder.build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
         };
 
         let oob = {
-            let ih_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, ih, i64_ty.const_zero(), "ih_neg")?;
-            let ih_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, ih, i64_ty.const_int(h_in, false), "ih_big")?;
-            let iw_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, iw, i64_ty.const_zero(), "iw_neg")?;
-            let iw_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, iw, i64_ty.const_int(w_in, false), "iw_big")?;
+            let ih_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ih,
+                i64_ty.const_zero(),
+                "ih_neg",
+            )?;
+            let ih_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ih,
+                i64_ty.const_int(h_in, false),
+                "ih_big",
+            )?;
+            let iw_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                iw,
+                i64_ty.const_zero(),
+                "iw_neg",
+            )?;
+            let iw_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                iw,
+                i64_ty.const_int(w_in, false),
+                "iw_big",
+            )?;
             let a = self.builder.build_or(ih_neg, ih_big, "oob_h")?;
             let b = self.builder.build_or(iw_neg, iw_big, "oob_w")?;
             self.builder.build_or(a, b, "oob")?
@@ -694,24 +724,58 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let bb_load = bb("nhwc.load");
         let bb_pad = bb("nhwc.pad");
         let bb_store = bb("nhwc.store");
-        self.builder.build_conditional_branch(oob, bb_pad, bb_load)?;
+        self.builder
+            .build_conditional_branch(oob, bb_pad, bb_load)?;
 
         self.builder.position_at_end(bb_load);
         let src_offset = match layout {
             operator::Layout::NCHW => {
-                let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_in * w_in, false), "so_n")?;
-                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_in * w_in, false), "so_c")?, "so_nc")?;
-                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?, "so_nch")?;
+                let o = self.builder.build_int_mul(
+                    ind_n,
+                    i64_ty.const_int(c_in * h_in * w_in, false),
+                    "so_n",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder.build_int_mul(
+                        ind_c,
+                        i64_ty.const_int(h_in * w_in, false),
+                        "so_c",
+                    )?,
+                    "so_nc",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?,
+                    "so_nch",
+                )?;
                 self.builder.build_int_add(o, iw, "src_off")?
             }
             operator::Layout::NHWC => {
-                let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(h_in * w_in * c_in, false), "so_n")?;
-                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?, "so_nh")?;
-                let o = self.builder.build_int_add(o, self.builder.build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?, "so_nhw")?;
+                let o = self.builder.build_int_mul(
+                    ind_n,
+                    i64_ty.const_int(h_in * w_in * c_in, false),
+                    "so_n",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?,
+                    "so_nh",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?,
+                    "so_nhw",
+                )?;
                 self.builder.build_int_add(o, ind_c, "src_off")?
             }
         };
-        let src_val = self.build_load(&src.clone().set_offset(src_offset))?.into_float_value();
+        let src_val = self
+            .build_load(&src.clone().set_offset(src_offset))?
+            .into_float_value();
         self.builder.build_unconditional_branch(bb_store)?;
 
         self.builder.position_at_end(bb_pad);
@@ -722,17 +786,35 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         val.add_incoming(&[(&src_val, bb_load), (&pad_val, bb_pad)]);
 
         let dst_row = {
-            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(h_out * w_out, false), "dr_n")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?, "dr_noh")?;
+            let o = self.builder.build_int_mul(
+                ind_n,
+                i64_ty.const_int(h_out * w_out, false),
+                "dr_n",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?,
+                "dr_noh",
+            )?;
             self.builder.build_int_add(o, ind_ow, "dst_row")?
         };
         let dst_col = {
-            let o = self.builder.build_int_mul(ind_c, i64_ty.const_int(kh * kw, false), "dc_c")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?, "dc_ckh")?;
+            let o = self
+                .builder
+                .build_int_mul(ind_c, i64_ty.const_int(kh * kw, false), "dc_c")?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?,
+                "dc_ckh",
+            )?;
             self.builder.build_int_add(o, ind_kw, "dst_col")?
         };
         let dst_offset = {
-            let o = self.builder.build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
+            let o =
+                self.builder
+                    .build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
             self.builder.build_int_add(o, dst_col, "dst_off")?
         };
         self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
@@ -802,7 +884,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     let src_dim = src.ty.dims[dim + 2] as u64;
                     let pad_len = padded_len - src_dim;
                     let pad_left = pad_len / 2;
-                    let add_left = pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
+                    let add_left =
+                        pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
                     pad_left + add_left as u64
                 }
             }
@@ -866,23 +949,53 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(body);
 
         let ih = {
-            let a = self.builder.build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
-            let b = self.builder.build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
+            let a =
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
             let c = self.builder.build_int_add(a, b, "ih_raw")?;
-            self.builder.build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
         };
         let iw = {
-            let a = self.builder.build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
-            let b = self.builder.build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
+            let a =
+                self.builder
+                    .build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
+            let b =
+                self.builder
+                    .build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
             let c = self.builder.build_int_add(a, b, "iw_raw")?;
-            self.builder.build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
+            self.builder
+                .build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
         };
 
         let oob = {
-            let ih_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, ih, i64_ty.const_zero(), "ih_neg")?;
-            let ih_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, ih, i64_ty.const_int(h_in, false), "ih_big")?;
-            let iw_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, iw, i64_ty.const_zero(), "iw_neg")?;
-            let iw_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, iw, i64_ty.const_int(w_in, false), "iw_big")?;
+            let ih_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ih,
+                i64_ty.const_zero(),
+                "ih_neg",
+            )?;
+            let ih_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ih,
+                i64_ty.const_int(h_in, false),
+                "ih_big",
+            )?;
+            let iw_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                iw,
+                i64_ty.const_zero(),
+                "iw_neg",
+            )?;
+            let iw_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                iw,
+                i64_ty.const_int(w_in, false),
+                "iw_big",
+            )?;
             let a = self.builder.build_or(ih_neg, ih_big, "oob_h")?;
             let b = self.builder.build_or(iw_neg, iw_big, "oob_w")?;
             self.builder.build_or(a, b, "oob")?
@@ -891,16 +1004,33 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let bb_load = bb("split.load");
         let bb_pad = bb("split.pad");
         let bb_store = bb("split.store");
-        self.builder.build_conditional_branch(oob, bb_pad, bb_load)?;
+        self.builder
+            .build_conditional_branch(oob, bb_pad, bb_load)?;
 
         self.builder.position_at_end(bb_load);
         let src_offset = {
-            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_in * w_in, false), "so_n")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_in * w_in, false), "so_c")?, "so_nc")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?, "so_nch")?;
+            let o = self.builder.build_int_mul(
+                ind_n,
+                i64_ty.const_int(c_in * h_in * w_in, false),
+                "so_n",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_c, i64_ty.const_int(h_in * w_in, false), "so_c")?,
+                "so_nc",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?,
+                "so_nch",
+            )?;
             self.builder.build_int_add(o, iw, "src_off")?
         };
-        let src_val = self.build_load(&src.clone().set_offset(src_offset))?.into_float_value();
+        let src_val = self
+            .build_load(&src.clone().set_offset(src_offset))?
+            .into_float_value();
         self.builder.build_unconditional_branch(bb_store)?;
 
         self.builder.position_at_end(bb_pad);
@@ -911,17 +1041,38 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         val.add_incoming(&[(&src_val, bb_load), (&pad_val, bb_pad)]);
 
         let dst_row = {
-            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_out * w_out, false), "dr_n")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_out * w_out, false), "dr_c")?, "dr_nc")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?, "dr_ncoh")?;
+            let o = self.builder.build_int_mul(
+                ind_n,
+                i64_ty.const_int(c_in * h_out * w_out, false),
+                "dr_n",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder.build_int_mul(
+                    ind_c,
+                    i64_ty.const_int(h_out * w_out, false),
+                    "dr_c",
+                )?,
+                "dr_nc",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?,
+                "dr_ncoh",
+            )?;
             self.builder.build_int_add(o, ind_ow, "dst_row")?
         };
         let dst_col = {
-            let o = self.builder.build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?;
+            let o = self
+                .builder
+                .build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?;
             self.builder.build_int_add(o, ind_kw, "dst_col")?
         };
         let dst_offset = {
-            let o = self.builder.build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
+            let o =
+                self.builder
+                    .build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
             self.builder.build_int_add(o, dst_col, "dst_off")?
         };
         self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
@@ -1087,7 +1238,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder,
             )?;
 
-            self.finalize_counted_loop(ind, entry, i64_ty.const_int(batch_count as u64, false), body, exit, body)?;
+            self.finalize_counted_loop(
+                ind,
+                entry,
+                i64_ty.const_int(batch_count as u64, false),
+                body,
+                exit,
+                body,
+            )?;
 
             self.builder.position_at_end(exit);
             return Ok(exit);
@@ -1197,7 +1355,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_gemm(&dst, &a, &b, c.as_ref(), header, &gemm)?;
         self.builder.build_unconditional_branch(latch)?;
 
-        self.finalize_counted_loop(ind, entry, self.context.i64_type().const_int(bound as u64, false), header, exit, latch)?;
+        self.finalize_counted_loop(
+            ind,
+            entry,
+            self.context.i64_type().const_int(bound as u64, false),
+            header,
+            exit,
+            latch,
+        )?;
 
         self.builder.position_at_end(exit);
         Ok(exit)
@@ -2052,21 +2217,22 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let val = self
             .builder
             .build_select(is_on, on_value, off_value, "val")?;
-        let offset = self.builder.build_int_mul(
-            outer_i_val,
-            depth,
-            "offset",
-        )?;
-        let offset = self.builder.build_int_add(
-            offset,
-            inner_i_val,
-            "offset",
-        )?;
+        let offset = self.builder.build_int_mul(outer_i_val, depth, "offset")?;
+        let offset = self.builder.build_int_add(offset, inner_i_val, "offset")?;
         let dst = dst.set_offset(offset);
         self.build_store(&dst, val)?;
 
         self.finalize_counted_loop(inner_i, outer_header, depth, inner, outer_latch, inner)?;
-        self.finalize_counted_loop(outer_i, entry, self.context.i64_type().const_int(src.ty.dims.size() as u64, false), outer_header, exit, outer_latch)?;
+        self.finalize_counted_loop(
+            outer_i,
+            entry,
+            self.context
+                .i64_type()
+                .const_int(src.ty.dims.size() as u64, false),
+            outer_header,
+            exit,
+            outer_latch,
+        )?;
         self.builder.position_at_end(exit);
 
         Ok(exit)
@@ -2333,7 +2499,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             (&inner_i_next, div_inner),
         ]);
 
-        self.finalize_counted_loop(middle_i, outer_header, i64_type.const_int(middle_bound, false), middle_header, outer_latch, middle_latch)?;
+        self.finalize_counted_loop(
+            middle_i,
+            outer_header,
+            i64_type.const_int(middle_bound, false),
+            middle_header,
+            outer_latch,
+            middle_latch,
+        )?;
 
         self.builder.position_at_end(outer_latch);
         let outer_i_next = self.builder.build_int_add(
@@ -2633,7 +2806,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_unconditional_branch(header)?;
 
         let (ind, ind_val) = self.init_counted_loop(header)?;
-        let bound = self.context.i64_type().const_int(src.ty.dims[depth as usize] as u64, false);
+        let bound = self
+            .context
+            .i64_type()
+            .const_int(src.ty.dims[depth as usize] as u64, false);
         let src_offset = self.builder.build_int_mul(
             ind_val,
             self.context
@@ -2732,7 +2908,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let header = self.context.append_basic_block(*self.func, "header");
         let latch = self.context.append_basic_block(*self.func, "latch");
         let indices_idx = depth as usize - axis;
-        let bound = self.context.i64_type().const_int(indicies.ty.dims[indices_idx] as u64, false);
+        let bound = self
+            .context
+            .i64_type()
+            .const_int(indicies.ty.dims[indices_idx] as u64, false);
 
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(header)?;
@@ -2797,7 +2976,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let latch = self.context.append_basic_block(*self.func, "latch");
         let src_idx = depth as usize - indicies.ty.dims.ndim() + 1;
         assert!(src.ty.dims[src_idx] == dst.ty.dims[depth as usize]);
-        let bound = self.context.i64_type().const_int(dst.ty.dims[depth as usize] as u64, false);
+        let bound = self
+            .context
+            .i64_type()
+            .const_int(dst.ty.dims[depth as usize] as u64, false);
         self.builder.build_unconditional_branch(header)?;
 
         let (ind, ind_val) = self.init_counted_loop(header)?;
@@ -3132,14 +3314,21 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(src.offset, offset, "src.offset")?;
         let src = src.set_offset(src_offset);
         let src_val = self.build_load(&src)?;
-        let dst_offset = self.builder.build_int_add(
-            dst.offset,
-            ind_val,
-            "dst.offset",
-        )?;
+        let dst_offset = self
+            .builder
+            .build_int_add(dst.offset, ind_val, "dst.offset")?;
         self.build_raw_store(elem_type, dst.ptr, dst_offset, src_val)?;
 
-        self.finalize_counted_loop(ind, entry, self.context.i64_type().const_int(dst.ty.dims.size().max(1) as u64, false), body, exit, body)?;
+        self.finalize_counted_loop(
+            ind,
+            entry,
+            self.context
+                .i64_type()
+                .const_int(dst.ty.dims.size().max(1) as u64, false),
+            body,
+            exit,
+            body,
+        )?;
 
         self.builder.position_at_end(exit);
         Ok(exit)

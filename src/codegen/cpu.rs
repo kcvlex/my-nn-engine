@@ -822,8 +822,10 @@ impl<'ll> CodeGen<'ll, '_> {
                 }
                 Operator::Im2Col(ref im2col) => match im2col.channel {
                     Channel::Meld(_) => translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry),
-                    Channel::Split(_) => translator.build_im2col_split(&ptrs[0], &ptrs[1], im2col, entry),
-                }
+                    Channel::Split(_) => {
+                        translator.build_im2col_split(&ptrs[0], &ptrs[1], im2col, entry)
+                    }
+                },
                 Operator::OneHot(ref one_hot) => {
                     translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
                 }

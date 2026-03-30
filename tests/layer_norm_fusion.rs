@@ -3,9 +3,9 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
+use common::find_nodes;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::NodeId;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::onnx::operator::args;
@@ -21,18 +21,6 @@ use my_onnx::transform::modify::SimpleGraphOp;
 use my_onnx::transform::optimize::canonicalize::Canonicalize;
 use my_onnx::transform::optimize::layer_norm_fusion::LayerNormFusion;
 use my_onnx::transform::Pass;
-
-fn find_nodes<F>(graph: &Graph, predicate: F) -> Vec<NodeId>
-where
-    F: Fn(&Node) -> bool,
-{
-    graph
-        .nodes
-        .iter()
-        .filter(|(_, node)| predicate(node))
-        .map(|(id, _)| id)
-        .collect()
-}
 
 // Extracted from GPT-2
 //

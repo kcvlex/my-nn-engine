@@ -92,7 +92,7 @@ impl VerifyShape {
 mod test {
     use std::path::PathBuf;
 
-    use super::*;
+    
     use crate::onnx::load::*;
     use crate::onnx::model::*;
     use crate::options::Options;

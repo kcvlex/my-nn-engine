@@ -126,14 +126,20 @@ fn bench_resnet18_cpu_nhwc_comparison() {
         "resnet18-v2-7.onnx",
         1,
         "ResNet18 CPU (NHWC off)",
-        &Options::builder().target(Target::CPU).enable_nhwc_optimization(Some(false)).build(),
+        &Options::builder()
+            .target(Target::CPU)
+            .enable_nhwc_optimization(Some(false))
+            .build(),
     );
     bench_with_options(
         "resnet18-v2-7",
         "resnet18-v2-7.onnx",
         1,
         "ResNet18 CPU (NHWC on)",
-        &Options::builder().target(Target::CPU).enable_nhwc_optimization(Some(true)).build(),
+        &Options::builder()
+            .target(Target::CPU)
+            .enable_nhwc_optimization(Some(true))
+            .build(),
     );
 }
 
