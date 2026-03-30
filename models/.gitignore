@@ -1,3 +1,4 @@
 validated/*
 !validated/Makefile
+!validated/manifest.json
 extracted/*
