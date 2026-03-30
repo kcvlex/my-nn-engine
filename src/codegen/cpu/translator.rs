@@ -39,6 +39,39 @@ pub struct FunctionTranslator<'a, 'ctx> {
 }
 
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
+    fn init_counted_loop(
+        &self,
+        header: BasicBlock<'ctx>,
+    ) -> Result<(PhiValue<'ctx>, IntValue<'ctx>), BuilderError> {
+        self.builder.position_at_end(header);
+        let phi = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        Ok((phi, phi.as_basic_value().into_int_value()))
+    }
+
+    fn finalize_counted_loop(
+        &self,
+        phi: PhiValue<'ctx>,
+        entry: BasicBlock<'ctx>,
+        bound: IntValue<'ctx>,
+        header: BasicBlock<'ctx>,
+        exit: BasicBlock<'ctx>,
+        latch: BasicBlock<'ctx>,
+    ) -> Result<(), BuilderError> {
+        let i64_ty = self.context.i64_type();
+        let ind = phi.as_basic_value().into_int_value();
+        self.builder.position_at_end(latch);
+        let next = self.builder.build_int_add(ind, i64_ty.const_int(1, false), "next")?;
+        let ec = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            next,
+            bound,
+            "ec",
+        )?;
+        self.builder.build_conditional_branch(ec, exit, header)?;
+        phi.add_incoming(&[(&i64_ty.const_zero(), entry), (&next, latch)]);
+        Ok(())
+    }
+
     fn build_gep(&self, ptr: &TensorPtr<'ctx>) -> Result<PointerValue<'ctx>, BuilderError> {
         unsafe {
             self.builder.build_in_bounds_gep(
@@ -542,7 +575,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         assert_eq!(im2col.one_fm_shape.ndim(), 2);
 
         let layout = im2col.layout;
-        let i64_ty = self.context.i64_type();
         let elem_ty = src.ty.elem_type.llvm_type(self.context);
 
         let nbatch = im2col.nbatch as u64;
@@ -611,49 +643,27 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let latch_n = bb("nhwc.n.latch");
         let exit = bb("nhwc.exit");
 
-        macro_rules! phi {
-            ($bb:expr) => {{
-                self.builder.position_at_end($bb);
-                let p = self.builder.build_phi(i64_ty, "ind")?;
-                (p, p.as_basic_value().into_int_value())
-            }};
-        }
-        macro_rules! latch {
-            ($phi:expr, $prev_bb:expr, $val:expr, $bound:expr, $next:expr, $exit:expr, $latch_bb:expr) => {{
-                self.builder.position_at_end($latch_bb);
-                let next_val =
-                    self.builder
-                        .build_int_add($val, i64_ty.const_int(1, false), "next")?;
-                let ec = self.builder.build_int_compare(
-                    inkwell::IntPredicate::EQ,
-                    next_val,
-                    i64_ty.const_int($bound, false),
-                    "ec",
-                )?;
-                self.builder.build_conditional_branch(ec, $exit, $next)?;
-                $phi.add_incoming(&[(&i64_ty.const_zero(), $prev_bb), (&next_val, $latch_bb)]);
-            }};
-        }
+        let i64_ty = self.context.i64_type();
 
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(hdr_n)?;
 
-        let (phi_n, ind_n) = phi!(hdr_n);
+        let (phi_n, ind_n) = self.init_counted_loop(hdr_n)?;
         self.builder.build_unconditional_branch(hdr_oh)?;
 
-        let (phi_oh, ind_oh) = phi!(hdr_oh);
+        let (phi_oh, ind_oh) = self.init_counted_loop(hdr_oh)?;
         self.builder.build_unconditional_branch(hdr_ow)?;
 
-        let (phi_ow, ind_ow) = phi!(hdr_ow);
+        let (phi_ow, ind_ow) = self.init_counted_loop(hdr_ow)?;
         self.builder.build_unconditional_branch(hdr_kh)?;
 
-        let (phi_kh, ind_kh) = phi!(hdr_kh);
+        let (phi_kh, ind_kh) = self.init_counted_loop(hdr_kh)?;
         self.builder.build_unconditional_branch(hdr_kw)?;
 
-        let (phi_kw, ind_kw) = phi!(hdr_kw);
+        let (phi_kw, ind_kw) = self.init_counted_loop(hdr_kw)?;
         self.builder.build_unconditional_branch(hdr_c)?;
 
-        let (phi_c, ind_c) = phi!(hdr_c);
+        let (phi_c, ind_c) = self.init_counted_loop(hdr_c)?;
         self.builder.build_unconditional_branch(body)?;
 
         self.builder.position_at_end(body);
@@ -728,12 +738,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
         self.builder.build_unconditional_branch(latch_c)?;
 
-        latch!(phi_c, hdr_kw, ind_c, c_in, hdr_c, latch_kw, latch_c);
-        latch!(phi_kw, hdr_kh, ind_kw, kw, hdr_kw, latch_kh, latch_kw);
-        latch!(phi_kh, hdr_ow, ind_kh, kh, hdr_kh, latch_ow, latch_kh);
-        latch!(phi_ow, hdr_oh, ind_ow, w_out, hdr_ow, latch_oh, latch_ow);
-        latch!(phi_oh, hdr_n, ind_oh, h_out, hdr_oh, latch_n, latch_oh);
-        latch!(phi_n, entry, ind_n, nbatch, hdr_n, exit, latch_n);
+        let c = |v: u64| i64_ty.const_int(v, false);
+        self.finalize_counted_loop(phi_c, hdr_kw, c(c_in), hdr_c, latch_kw, latch_c)?;
+        self.finalize_counted_loop(phi_kw, hdr_kh, c(kw), hdr_kw, latch_kh, latch_kw)?;
+        self.finalize_counted_loop(phi_kh, hdr_ow, c(kh), hdr_kh, latch_ow, latch_kh)?;
+        self.finalize_counted_loop(phi_ow, hdr_oh, c(w_out), hdr_ow, latch_oh, latch_ow)?;
+        self.finalize_counted_loop(phi_oh, hdr_n, c(h_out), hdr_oh, latch_n, latch_oh)?;
+        self.finalize_counted_loop(phi_n, entry, c(nbatch), hdr_n, exit, latch_n)?;
 
         self.builder.position_at_end(exit);
         Ok(exit)
@@ -831,49 +842,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let latch_n = bb("split.n.latch");
         let exit = bb("split.exit");
 
-        macro_rules! phi {
-            ($bb:expr) => {{
-                self.builder.position_at_end($bb);
-                let p = self.builder.build_phi(i64_ty, "ind")?;
-                (p, p.as_basic_value().into_int_value())
-            }};
-        }
-        macro_rules! latch {
-            ($phi:expr, $prev_bb:expr, $val:expr, $bound:expr, $next:expr, $exit:expr, $latch_bb:expr) => {{
-                self.builder.position_at_end($latch_bb);
-                let next_val =
-                    self.builder
-                        .build_int_add($val, i64_ty.const_int(1, false), "next")?;
-                let ec = self.builder.build_int_compare(
-                    inkwell::IntPredicate::EQ,
-                    next_val,
-                    i64_ty.const_int($bound, false),
-                    "ec",
-                )?;
-                self.builder.build_conditional_branch(ec, $exit, $next)?;
-                $phi.add_incoming(&[(&i64_ty.const_zero(), $prev_bb), (&next_val, $latch_bb)]);
-            }};
-        }
-
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(hdr_n)?;
 
-        let (phi_n, ind_n) = phi!(hdr_n);
+        let (phi_n, ind_n) = self.init_counted_loop(hdr_n)?;
         self.builder.build_unconditional_branch(hdr_c)?;
 
-        let (phi_c, ind_c) = phi!(hdr_c);
+        let (phi_c, ind_c) = self.init_counted_loop(hdr_c)?;
         self.builder.build_unconditional_branch(hdr_oh)?;
 
-        let (phi_oh, ind_oh) = phi!(hdr_oh);
+        let (phi_oh, ind_oh) = self.init_counted_loop(hdr_oh)?;
         self.builder.build_unconditional_branch(hdr_ow)?;
 
-        let (phi_ow, ind_ow) = phi!(hdr_ow);
+        let (phi_ow, ind_ow) = self.init_counted_loop(hdr_ow)?;
         self.builder.build_unconditional_branch(hdr_kh)?;
 
-        let (phi_kh, ind_kh) = phi!(hdr_kh);
+        let (phi_kh, ind_kh) = self.init_counted_loop(hdr_kh)?;
         self.builder.build_unconditional_branch(hdr_kw)?;
 
-        let (phi_kw, ind_kw) = phi!(hdr_kw);
+        let (phi_kw, ind_kw) = self.init_counted_loop(hdr_kw)?;
         self.builder.build_unconditional_branch(body)?;
 
         self.builder.position_at_end(body);
@@ -940,12 +927,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
         self.builder.build_unconditional_branch(latch_kw)?;
 
-        latch!(phi_kw, hdr_kh, ind_kw, kw, hdr_kw, latch_kh, latch_kw);
-        latch!(phi_kh, hdr_ow, ind_kh, kh, hdr_kh, latch_ow, latch_kh);
-        latch!(phi_ow, hdr_oh, ind_ow, w_out, hdr_ow, latch_oh, latch_ow);
-        latch!(phi_oh, hdr_c, ind_oh, h_out, hdr_oh, latch_c, latch_oh);
-        latch!(phi_c, hdr_n, ind_c, c_in, hdr_c, latch_n, latch_c);
-        latch!(phi_n, entry, ind_n, nbatch, hdr_n, exit, latch_n);
+        let c = |v: u64| i64_ty.const_int(v, false);
+        self.finalize_counted_loop(phi_kw, hdr_kh, c(kw), hdr_kw, latch_kh, latch_kw)?;
+        self.finalize_counted_loop(phi_kh, hdr_ow, c(kh), hdr_kh, latch_ow, latch_kh)?;
+        self.finalize_counted_loop(phi_ow, hdr_oh, c(w_out), hdr_ow, latch_oh, latch_ow)?;
+        self.finalize_counted_loop(phi_oh, hdr_c, c(h_out), hdr_oh, latch_c, latch_oh)?;
+        self.finalize_counted_loop(phi_c, hdr_n, c(c_in), hdr_c, latch_n, latch_c)?;
+        self.finalize_counted_loop(phi_n, entry, c(nbatch), hdr_n, exit, latch_n)?;
 
         self.builder.position_at_end(exit);
         Ok(exit)
@@ -1065,9 +1053,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 "bgemm.guard",
             )?;
             self.builder.build_conditional_branch(guard, exit, body)?;
-            self.builder.position_at_end(body);
-            let ind = self.builder.build_phi(i64_ty, "bgemm.i")?;
-            let idx = ind.as_basic_value().into_int_value();
+            let (ind, idx) = self.init_counted_loop(body)?;
 
             let a_off =
                 self.builder
@@ -1101,17 +1087,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder,
             )?;
 
-            let ind_next =
-                self.builder
-                    .build_int_add(idx, i64_ty.const_int(1, false), "bgemm.next")?;
-            let ec = self.builder.build_int_compare(
-                inkwell::IntPredicate::EQ,
-                ind_next,
-                i64_ty.const_int(batch_count as u64, false),
-                "bgemm.ec",
-            )?;
-            self.builder.build_conditional_branch(ec, exit, body)?;
-            ind.add_incoming(&[(&i64_ty.const_zero(), entry), (&ind_next, body)]);
+            self.finalize_counted_loop(ind, entry, i64_ty.const_int(batch_count as u64, false), body, exit, body)?;
 
             self.builder.position_at_end(exit);
             return Ok(exit);
@@ -1155,11 +1131,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
         self.builder.build_unconditional_branch(header)?;
 
-        self.builder.position_at_end(header);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let (ind, ind_val) = self.init_counted_loop(header)?;
         let a = {
             let offset = self.builder.build_int_mul(
-                ind.as_basic_value().into_int_value(),
+                ind_val,
                 self.context.i64_type().const_int((m * k) as u64, false),
                 "offset.a",
             )?;
@@ -1174,7 +1149,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let b = {
             let offset = self.builder.build_int_mul(
-                ind.as_basic_value().into_int_value(),
+                ind_val,
                 self.context.i64_type().const_int((k * n) as u64, false),
                 "offset.b",
             )?;
@@ -1189,7 +1164,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let c = if let Some(c) = c {
             let offset = self.builder.build_int_mul(
-                ind.as_basic_value().into_int_value(),
+                ind_val,
                 self.context.i64_type().const_int((m * n) as u64, false),
                 "offset.c",
             )?;
@@ -1206,7 +1181,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         let dst = {
             let offset = self.builder.build_int_mul(
-                ind.as_basic_value().into_int_value(),
+                ind_val,
                 self.context.i64_type().const_int((m * n) as u64, false),
                 "offset.dst",
             )?;
@@ -1222,23 +1197,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_gemm(&dst, &a, &b, c.as_ref(), header, &gemm)?;
         self.builder.build_unconditional_branch(latch)?;
 
-        self.builder.position_at_end(latch);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_next,
-            self.context.i64_type().const_int(bound as u64, false),
-            "ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, header)?;
-        ind.add_incoming(&[
-            (&ind_next, latch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
+        self.finalize_counted_loop(ind, entry, self.context.i64_type().const_int(bound as u64, false), header, exit, latch)?;
 
         self.builder.position_at_end(exit);
         Ok(exit)
@@ -2066,9 +2025,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(outer_header)?;
 
-        self.builder.position_at_end(outer_header);
-        let outer_i = self.builder.build_phi(self.context.i64_type(), "i.outer")?;
-        let src = src.set_offset(outer_i.as_basic_value().into_int_value());
+        let (outer_i, outer_i_val) = self.init_counted_loop(outer_header)?;
+        let src = src.set_offset(outer_i_val);
         let index = self.build_load(&src)?.into_int_value();
         let index = {
             let add = self.builder.build_int_add(index, depth, "index.add")?;
@@ -2084,11 +2042,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
         self.builder.build_unconditional_branch(inner)?;
 
-        self.builder.position_at_end(inner);
-        let inner_i = self.builder.build_phi(self.context.i64_type(), "i.inner")?;
+        let (inner_i, inner_i_val) = self.init_counted_loop(inner)?;
         let is_on = self.builder.build_int_compare(
             inkwell::IntPredicate::EQ,
-            inner_i.as_basic_value().into_int_value(),
+            inner_i_val,
             index,
             "is_on",
         )?;
@@ -2096,55 +2053,20 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .builder
             .build_select(is_on, on_value, off_value, "val")?;
         let offset = self.builder.build_int_mul(
-            outer_i.as_basic_value().into_int_value(),
+            outer_i_val,
             depth,
             "offset",
         )?;
         let offset = self.builder.build_int_add(
             offset,
-            inner_i.as_basic_value().into_int_value(),
+            inner_i_val,
             "offset",
         )?;
         let dst = dst.set_offset(offset);
         self.build_store(&dst, val)?;
-        let inner_i_next = self.builder.build_int_add(
-            inner_i.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "inner.i.next",
-        )?;
-        let inner_ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            inner_i_next,
-            depth,
-            "ec.inner",
-        )?;
-        self.builder
-            .build_conditional_branch(inner_ec, outer_latch, inner)?;
-        inner_i.add_incoming(&[
-            (&self.context.i64_type().const_zero(), outer_header),
-            (&inner_i_next, inner),
-        ]);
 
-        self.builder.position_at_end(outer_latch);
-        let outer_i_next = self.builder.build_int_add(
-            outer_i.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "outer.i.next",
-        )?;
-        let outer_ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            outer_i_next,
-            self.context
-                .i64_type()
-                .const_int(src.ty.dims.size() as u64, false),
-            "ec.outer",
-        )?;
-        self.builder
-            .build_conditional_branch(outer_ec, exit, outer_header)?;
-        outer_i.add_incoming(&[
-            (&self.context.i64_type().const_zero(), entry),
-            (&outer_i_next, outer_latch),
-        ]);
+        self.finalize_counted_loop(inner_i, outer_header, depth, inner, outer_latch, inner)?;
+        self.finalize_counted_loop(outer_i, entry, self.context.i64_type().const_int(src.ty.dims.size() as u64, false), outer_header, exit, outer_latch)?;
         self.builder.position_at_end(exit);
 
         Ok(exit)
@@ -2411,24 +2333,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             (&inner_i_next, div_inner),
         ]);
 
-        self.builder.position_at_end(middle_latch);
-        let middle_i_next = self.builder.build_int_add(
-            middle_i.as_basic_value().into_int_value(),
-            i64_type.const_int(1, false),
-            "middle.i.next",
-        )?;
-        let middle_ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            middle_i_next,
-            i64_type.const_int(middle_bound, false),
-            "ec.middle",
-        )?;
-        self.builder
-            .build_conditional_branch(middle_ec, outer_latch, middle_header)?;
-        middle_i.add_incoming(&[
-            (&i64_type.const_zero(), outer_header),
-            (&middle_i_next, middle_latch),
-        ]);
+        self.finalize_counted_loop(middle_i, outer_header, i64_type.const_int(middle_bound, false), middle_header, outer_latch, middle_latch)?;
 
         self.builder.position_at_end(outer_latch);
         let outer_i_next = self.builder.build_int_add(
@@ -2727,11 +2632,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(header)?;
 
-        self.builder.position_at_end(header);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
-        let bound = src.ty.dims[depth as usize] as u64;
+        let (ind, ind_val) = self.init_counted_loop(header)?;
+        let bound = self.context.i64_type().const_int(src.ty.dims[depth as usize] as u64, false);
         let src_offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(src.ty.stride(depth as usize).try_into().unwrap(), false),
@@ -2742,7 +2646,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(src.offset, src_offset, "src.offset")?;
         let src = src.set_offset(src_offset);
         let dst_offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
@@ -2753,23 +2657,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(dst.offset, dst_offset, "dst.offset")?;
         let dst = dst.set_offset(dst_offset);
 
-        self.builder.position_at_end(latch);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_next,
-            self.context.i64_type().const_int(bound, false),
-            "ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, header)?;
-        ind.add_incoming(&[
-            (&ind_next, latch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
+        self.finalize_counted_loop(ind, entry, bound, header, exit, latch)?;
 
         self.build_gather_outer(Gather {
             dst,
@@ -2844,15 +2732,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let header = self.context.append_basic_block(*self.func, "header");
         let latch = self.context.append_basic_block(*self.func, "latch");
         let indices_idx = depth as usize - axis;
-        let bound = indicies.ty.dims[indices_idx] as u64;
+        let bound = self.context.i64_type().const_int(indicies.ty.dims[indices_idx] as u64, false);
 
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(header)?;
 
-        self.builder.position_at_end(header);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let (ind, ind_val) = self.init_counted_loop(header)?;
         let offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(indicies.ty.stride(indices_idx).try_into().unwrap(), false),
@@ -2863,7 +2750,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(indicies.offset, offset, "ind.offset")?;
         let indicies = indicies.set_offset(offset);
         let dst_offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
@@ -2874,23 +2761,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(dst.offset, dst_offset, "dst.offset")?;
         let dst = dst.set_offset(dst_offset);
 
-        self.builder.position_at_end(latch);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_next,
-            self.context.i64_type().const_int(bound, false),
-            "ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, header)?;
-        ind.add_incoming(&[
-            (&ind_next, latch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
+        self.finalize_counted_loop(ind, entry, bound, header, exit, latch)?;
 
         self.build_gather_middle(Gather {
             dst,
@@ -2925,14 +2796,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let header = self.context.append_basic_block(*self.func, "header");
         let latch = self.context.append_basic_block(*self.func, "latch");
         let src_idx = depth as usize - indicies.ty.dims.ndim() + 1;
-        let bound = dst.ty.dims[depth as usize];
-        assert!(src.ty.dims[src_idx] == bound);
+        assert!(src.ty.dims[src_idx] == dst.ty.dims[depth as usize]);
+        let bound = self.context.i64_type().const_int(dst.ty.dims[depth as usize] as u64, false);
         self.builder.build_unconditional_branch(header)?;
 
-        self.builder.position_at_end(header);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let (ind, ind_val) = self.init_counted_loop(header)?;
         let src_offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(src.ty.stride(src_idx).try_into().unwrap(), false),
@@ -2943,7 +2813,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(src.offset, src_offset, "src.offset")?;
         let src = src.set_offset(src_offset);
         let dst_offset = self.builder.build_int_mul(
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             self.context
                 .i64_type()
                 .const_int(dst.ty.stride(depth as usize).try_into().unwrap(), false),
@@ -2954,23 +2824,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(dst.offset, dst_offset, "dst.offset")?;
         let dst = dst.set_offset(dst_offset);
 
-        self.builder.position_at_end(latch);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_next,
-            self.context.i64_type().const_int(bound as u64, false),
-            "ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, header)?;
-        ind.add_incoming(&[
-            (&ind_next, latch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
+        self.finalize_counted_loop(ind, entry, bound, header, exit, latch)?;
 
         self.build_gather_inner(Gather {
             dst,
@@ -3132,13 +2986,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(body)?;
 
-        self.builder.position_at_end(body);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
+        let (ind, ind_val) = self.init_counted_loop(body)?;
         let mut offset = {
             let mut indexes = Vec::new();
             for (d, s) in izip!(dst.ty.dims.iter(), dst.ty.strides().iter()) {
                 let idx = self.builder.build_int_unsigned_div(
-                    ind.as_basic_value().into_int_value(),
+                    ind_val,
                     self.context.i64_type().const_int((*s as u64).max(1), false),
                     "index",
                 )?;
@@ -3281,29 +3134,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let src_val = self.build_load(&src)?;
         let dst_offset = self.builder.build_int_add(
             dst.offset,
-            ind.as_basic_value().into_int_value(),
+            ind_val,
             "dst.offset",
         )?;
         self.build_raw_store(elem_type, dst.ptr, dst_offset, src_val)?;
 
-        let ind_inc = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let ec = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ind_inc,
-            self.context
-                .i64_type()
-                .const_int(dst.ty.dims.size().max(1) as u64, false),
-            "ec",
-        )?;
-        self.builder.build_conditional_branch(ec, exit, body)?;
-        ind.add_incoming(&[
-            (&self.context.i64_type().const_zero(), entry),
-            (&ind_inc, body),
-        ]);
+        self.finalize_counted_loop(ind, entry, self.context.i64_type().const_int(dst.ty.dims.size().max(1) as u64, false), body, exit, body)?;
 
         self.builder.position_at_end(exit);
         Ok(exit)
