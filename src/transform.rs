@@ -4,7 +4,7 @@ pub mod modify;
 pub mod optimize;
 mod pattern;
 pub mod shape;
-mod utils;
+pub mod utils;
 
 pub use epilog::create_epilog_passes;
 use log::info;

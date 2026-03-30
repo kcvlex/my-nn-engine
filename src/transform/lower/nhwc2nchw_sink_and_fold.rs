@@ -12,9 +12,9 @@ use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct SinkAndFoldNHWC2NCHW {}
+pub struct NHWC2NCHWSinkAndFold {}
 
-impl<T: GraphOp> Pass<T> for SinkAndFoldNHWC2NCHW {
+impl<T: GraphOp> Pass<T> for NHWC2NCHWSinkAndFold {
     fn summary(&self) -> &'static str {
         "Sink NHWC2NCHW through elementwise, fold into Conv, revert unfoldable"
     }
@@ -32,7 +32,7 @@ impl<T: GraphOp> Pass<T> for SinkAndFoldNHWC2NCHW {
     }
 }
 
-impl SinkAndFoldNHWC2NCHW {
+impl NHWC2NCHWSinkAndFold {
     fn sink<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T) {
         let nodes_ids = simple_topological_order(graph);
         let mut marked = {

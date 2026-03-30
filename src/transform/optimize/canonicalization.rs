@@ -11,9 +11,9 @@ use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct Canonicalize {}
+pub struct Canonicalization {}
 
-impl<T: GraphOp> Pass<T> for Canonicalize {
+impl<T: GraphOp> Pass<T> for Canonicalization {
     fn summary(&self) -> &'static str {
         "Canonicalize some patterns"
     }
@@ -28,7 +28,7 @@ impl<T: GraphOp> Pass<T> for Canonicalize {
     }
 }
 
-impl Canonicalize {
+impl Canonicalization {
     fn rewrite<T: GraphOp>(&self, id: NodeId, graph: &mut Graph, modifier: &mut T) {
         let op = graph.nodes[id].op.clone();
         let inputs = graph.nodes[id].inputs.clone();

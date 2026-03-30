@@ -12,7 +12,7 @@ use crate::transform::GraphOp;
 use crate::transform::Pass;
 use crate::transform::Target;
 
-pub struct VerifyShape {
+pub struct ShapeVerification {
     pub check_strides: bool,
     pub target: Target,
 }
@@ -27,7 +27,7 @@ pub enum VerifyShapeError {
     Other(String),
 }
 
-impl<T: GraphOp> Pass<T> for VerifyShape {
+impl<T: GraphOp> Pass<T> for ShapeVerification {
     fn summary(&self) -> &'static str {
         "Verify shapes"
     }
@@ -37,7 +37,7 @@ impl<T: GraphOp> Pass<T> for VerifyShape {
     }
 }
 
-impl VerifyShape {
+impl ShapeVerification {
     fn run_impl(&self, graph: &Graph) -> Result<(), VerifyShapeError> {
         for (node_id, node) in graph.nodes.iter() {
             match node.op {

@@ -10,14 +10,14 @@ use my_onnx::onnx::operator::*;
 use my_onnx::onnx::utils::compare_graphs_structural;
 use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
-use my_onnx::transform::epilog::fold_cont::FoldContiguous;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
+use my_onnx::transform::utils::ContiguousFolding;
 use my_onnx::transform::Pass;
 
 fn run_pass(graph: &mut Graph) {
     let mut modifier = SimpleGraphOp::new(graph);
-    let pass = FoldContiguous::default();
+    let pass = ContiguousFolding::default();
     pass.run(graph, &mut modifier);
     modifier.update_deleted_nodes(graph);
 }

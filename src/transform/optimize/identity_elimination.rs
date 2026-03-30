@@ -4,9 +4,9 @@ use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct EliminateIdentity {}
+pub struct IdentityElimination {}
 
-impl<T: GraphOp> Pass<T> for EliminateIdentity {
+impl<T: GraphOp> Pass<T> for IdentityElimination {
     fn summary(&self) -> &'static str {
         "Eliminate Identity nodes"
     }

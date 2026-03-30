@@ -1,4 +1,4 @@
-pub mod early_broadcast;
+mod early_broadcast;
 pub mod infer;
 pub mod verify;
 
@@ -19,6 +19,9 @@ use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::shape::early_broadcast::EarlyBroadcast;
+use crate::transform::shape::infer::ShapeInference;
+use crate::transform::shape::verify::ShapeVerification;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 use crate::transform::Target;
@@ -614,13 +617,11 @@ pub fn infer_node_output(
 pub fn create_infer_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Shape inference".to_string());
     let target = opt.target;
-    manager.add_pass(Box::new(infer::ShapeInference { target }));
-    if opt.verify_after_inference {
-        manager.add_pass(Box::new(verify::VerifyShape {
-            target,
-            check_strides: false,
-        }));
-    }
-    manager.add_pass(Box::new(early_broadcast::EarlyBroadcast::default()));
+    manager.add_pass(Box::new(ShapeInference { target }));
+    manager.add_pass(Box::new(ShapeVerification {
+        target,
+        check_strides: false,
+    }));
+    manager.add_pass(Box::new(EarlyBroadcast::default()));
     manager
 }

@@ -10,9 +10,9 @@ use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct InsertNHWC2NCHWAfterConv {}
+pub struct NHWC2NCHWInsertion {}
 
-impl<T: GraphOp> Pass<T> for InsertNHWC2NCHWAfterConv {
+impl<T: GraphOp> Pass<T> for NHWC2NCHWInsertion {
     fn summary(&self) -> &'static str {
         "Set Conv output_layout=NHWC and insert NHWC2NCHW after Conv"
     }

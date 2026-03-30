@@ -8,9 +8,9 @@ use crate::transform::GraphOp;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct InsertContiguous {}
+pub struct ContiguousInsertion {}
 
-impl<T: GraphOp> Pass<T> for InsertContiguous {
+impl<T: GraphOp> Pass<T> for ContiguousInsertion {
     fn summary(&self) -> &'static str {
         "Insert Contiguous nodes where needed"
     }
@@ -78,7 +78,7 @@ fn find_or_create_contiguous<T: GraphOp>(
     new_value
 }
 
-impl InsertContiguous {
+impl ContiguousInsertion {
     fn handle_batched_gemm<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
         let node = &graph.nodes[id];
         assert!(matches!(node.op, Operator::BatchedGemm(_)));

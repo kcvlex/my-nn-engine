@@ -6,9 +6,9 @@ use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct LowerNHWC2NCHW {}
+pub struct NHWC2NCHWLowering {}
 
-impl<T: GraphOp> Pass<T> for LowerNHWC2NCHW {
+impl<T: GraphOp> Pass<T> for NHWC2NCHWLowering {
     fn summary(&self) -> &'static str {
         "Lower NHWC2NCHW nodes to Contiguous with Transpose"
     }
@@ -35,7 +35,7 @@ impl<T: GraphOp> Pass<T> for LowerNHWC2NCHW {
                 Node {
                     inputs: vec![input],
                     outputs: vec![cont_output],
-                    name: format!("LowerNHWC2NCHW_{}", id.index()),
+                    name: format!("NHWC2NCHWLowering_{}", id.index()),
                     op: Operator::Contiguous(Contiguous {
                         ops: vec![ReinterpretType::Transpose(Transpose {
                             perm: Some(vec![0, 3, 1, 2]),

@@ -6,11 +6,10 @@ use crate::onnx::operator::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
-/// Detect Contiguous nodes with Transpose [0,3,1,2] and replace with NHWC2NCHW.
 #[derive(Default)]
-pub struct DetectNHWC2NCHW {}
+pub struct NHWC2NCHWDetection {}
 
-impl<T: GraphOp> Pass<T> for DetectNHWC2NCHW {
+impl<T: GraphOp> Pass<T> for NHWC2NCHWDetection {
     fn summary(&self) -> &'static str {
         "Detect Contiguous(Transpose[0,3,1,2]) and convert to NHWC2NCHW"
     }
@@ -43,7 +42,7 @@ impl<T: GraphOp> Pass<T> for DetectNHWC2NCHW {
             let output_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
             let new_output = modifier.register_new_value(
                 graph,
-                format!("DetectNHWC2NCHW_{}", id.index()),
+                format!("NHWC2NCHWDetection_{}", id.index()),
                 output_ty,
             );
             modifier.register_new_node(
@@ -51,7 +50,7 @@ impl<T: GraphOp> Pass<T> for DetectNHWC2NCHW {
                 Node {
                     inputs: vec![input],
                     outputs: vec![new_output],
-                    name: format!("DetectNHWC2NCHW_{}", id.index()),
+                    name: format!("NHWC2NCHWDetection_{}", id.index()),
                     op: Operator::NHWC2NCHW,
                     meta: NodeMeta::default(),
                 },

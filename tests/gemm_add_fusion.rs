@@ -18,7 +18,7 @@ use my_onnx::tensor::types::TensorType;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
-use my_onnx::transform::optimize::const_fold::ConstantFold;
+use my_onnx::transform::optimize::const_folding::ConstantFolding;
 use my_onnx::transform::optimize::gemm_add_fusion::GemmAddFusion;
 use my_onnx::transform::Pass;
 
@@ -94,7 +94,7 @@ fn run_gemm_add_fusion(graph: &mut Graph) {
 
 fn run_const_fold(graph: &mut Graph) {
     let mut modifier = SimpleGraphOp::new(graph);
-    ConstantFold {
+    ConstantFolding {
         check_strides: true,
     }
     .run(graph, &mut modifier);

@@ -21,8 +21,8 @@ use my_onnx::tensor::Tensor;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
 use my_onnx::transform::optimize::attention_fusion::AttentionFusion;
-use my_onnx::transform::optimize::canonicalize::Canonicalize;
-use my_onnx::transform::optimize::const_fold::ConstantFold;
+use my_onnx::transform::optimize::canonicalization::Canonicalization;
+use my_onnx::transform::optimize::const_folding::ConstantFolding;
 use my_onnx::transform::Pass;
 
 fn build_unfused_attention_graph(scale: f64) -> Graph {
@@ -139,7 +139,7 @@ fn test_no_causal_is_fused() {
     let mut graph = build_unfused_attention_graph(scale);
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
+    let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
     let pass = AttentionFusion::default();
@@ -175,7 +175,7 @@ fn test_causal_is_fused() {
     let mut graph = build_unfused_causal_attention_graph(scale, penalty);
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
+    let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
     let pass = AttentionFusion::default();
@@ -305,10 +305,10 @@ fn test_gpt2_attention_is_fused() {
     let mut graph = build_gpt2_attention_subgraph();
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
+    let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
-    let const_fold = ConstantFold {
+    let const_fold = ConstantFolding {
         check_strides: false,
     };
     const_fold.run(&mut graph, &mut modifier);
@@ -412,10 +412,10 @@ fn test_bert_attention_is_fused() {
     let mut graph = build_bert_attention_subgraph();
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
+    let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
-    let const_fold = ConstantFold {
+    let const_fold = ConstantFolding {
         check_strides: false,
     };
     const_fold.run(&mut graph, &mut modifier);

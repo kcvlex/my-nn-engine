@@ -3,16 +3,174 @@ use crate::onnx::model::Node;
 use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
+use crate::tensor::data::TensorData;
+use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
+use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct DecomposeConv {}
+pub struct AttentionDecomposition {}
 #[derive(Default)]
-pub struct DecomposeMaxPool {}
+pub struct ConvDecomposition {}
+#[derive(Default)]
+pub struct MaxPoolDecomposition {}
+#[derive(Default)]
+pub struct ReduceDecomposition {}
+
+impl<T: GraphOp> Pass<T> for AttentionDecomposition {
+    fn summary(&self) -> &'static str {
+        "Decompose Attention into BatchedGemm + Softmax (CPU)"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let attn_ids: Vec<NodeId> = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| matches!(&node.op, Operator::Attention(_)))
+            .map(|(id, _)| id)
+            .collect();
+
+        for attn_id in attn_ids {
+            let node = &graph.nodes[attn_id];
+            let Operator::Attention(attn) = &node.op else {
+                unreachable!()
+            };
+            let attn = *attn;
+            let q = node.inputs[args::ATTENTION_Q];
+            let k = node.inputs[args::ATTENTION_K];
+            let v = node.inputs[args::ATTENTION_V];
+            let mask = node.inputs.get(args::ATTENTION_MASK).copied();
+            let old_output = node.outputs[0];
+
+            let q_ty = graph.get_resolved_tensor_type(q).unwrap().clone();
+            let k_ty = graph.get_resolved_tensor_type(k).unwrap().clone();
+            let out_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+
+            // Q: [b, h, seq_q, d], K: [b, h, seq_k, d]
+            // BatchedGemm(Q, K, trans_b=true, alpha=scale) → [b, h, seq_q, seq_k]
+            let ndim = q_ty.dims.ndim();
+            let seq_q = q_ty.dims[ndim - 2];
+            let seq_k = k_ty.dims[ndim - 2];
+            let mut qk_dims: Vec<usize> = q_ty.dims.iter().copied().collect();
+            qk_dims[ndim - 2] = seq_q;
+            qk_dims[ndim - 1] = seq_k;
+            let qk_ty = ResolvedTensorType::new(q_ty.elem_type, ResolvedTensorDims::new(&qk_dims));
+
+            let qk = modifier.register_new_value(
+                graph,
+                format!("DecompAttn_QK_{:?}", attn_id),
+                qk_ty.clone(),
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![q, k],
+                    outputs: vec![qk],
+                    name: format!("DecompAttn_QK_{:?}", attn_id),
+                    op: Operator::BatchedGemm(BatchedGemm {
+                        alpha: attn.scale as f64,
+                        beta: 0.0,
+                        trans_a: false,
+                        trans_b: true,
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            // Apply mask
+            let mut qk_masked = qk;
+            let mask = if let Some(mask) = mask {
+                Some(mask)
+            } else if attn.is_causal {
+                let mut data = vec![0.0f64; seq_q * seq_k];
+                for r in 0..seq_q {
+                    for c in 0..seq_k {
+                        if c > r {
+                            data[r * seq_k + c] = f64::NEG_INFINITY;
+                        }
+                    }
+                }
+                let DataType::Float(float_ty) = q_ty.elem_type else {
+                    panic!("Attention requires float type");
+                };
+                let mask_tensor = Tensor::new(
+                    ResolvedTensorDims::new(&[seq_q, seq_k]),
+                    TensorData::Float(float_ty, data),
+                )
+                .unwrap();
+                Some(modifier.register_new_tensor(
+                    graph,
+                    mask_tensor,
+                    format!("DecompAttn_CausalMask_{:?}", attn_id),
+                ))
+            } else {
+                None
+            };
+            if let Some(mask) = mask {
+                let qk_with_mask = modifier.register_new_value(
+                    graph,
+                    format!("DecompAttn_QKMask_{:?}", attn_id),
+                    qk_ty.clone(),
+                );
+                modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![qk_masked, mask],
+                        outputs: vec![qk_with_mask],
+                        name: format!("DecompAttn_QKMask_{:?}", attn_id),
+                        op: Operator::Add,
+                        meta: NodeMeta::default(),
+                    },
+                );
+                qk_masked = qk_with_mask;
+            }
+
+            // Softmax(QK, axis=-1)
+            let qk_softmax = modifier.register_new_value(
+                graph,
+                format!("DecompAttn_Softmax_{:?}", attn_id),
+                qk_ty,
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![qk_masked],
+                    outputs: vec![qk_softmax],
+                    name: format!("DecompAttn_Softmax_{:?}", attn_id),
+                    op: Operator::Softmax(Softmax {
+                        axis: TensorIndex::new(-1),
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            // Output = BatchedGemm(Softmax(QK), V)
+            let new_output =
+                modifier.register_new_value(graph, format!("DecompAttn_Out_{:?}", attn_id), out_ty);
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![qk_softmax, v],
+                    outputs: vec![new_output],
+                    name: format!("DecompAttn_Out_{:?}", attn_id),
+                    op: Operator::BatchedGemm(BatchedGemm {
+                        alpha: 1.0,
+                        beta: 0.0,
+                        trans_a: false,
+                        trans_b: false,
+                    }),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            modifier.replace_input_value(graph, old_output, new_output);
+        }
+    }
+}
 
 fn gen_im2col_from_conv(
     conv: &Conv,
@@ -306,7 +464,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     }
 }
 
-impl<T: GraphOp> Pass<T> for DecomposeConv {
+impl<T: GraphOp> Pass<T> for ConvDecomposition {
     fn summary(&self) -> &'static str {
         "Decompose Conv into Im2Col + Gemm"
     }
@@ -330,7 +488,7 @@ impl<T: GraphOp> Pass<T> for DecomposeConv {
     }
 }
 
-impl<T: GraphOp> Pass<T> for DecomposeMaxPool {
+impl<T: GraphOp> Pass<T> for MaxPoolDecomposition {
     fn summary(&self) -> &'static str {
         "Decompose MaxPool into Im2Col + Reduce"
     }
@@ -350,6 +508,105 @@ impl<T: GraphOp> Pass<T> for DecomposeMaxPool {
 
         for id in res.into_iter() {
             im2col_core(graph, modifier, id);
+        }
+    }
+}
+
+struct ReduceInfo {
+    axes: Vec<usize>,
+    op: ReduceOp,
+}
+
+impl<T: GraphOp> Pass<T> for ReduceDecomposition {
+    fn summary(&self) -> &'static str {
+        "Convert ReduceXXX nodes to Transpose + ReduceMatrix"
+    }
+
+    fn run(&self, graph: &mut Graph, modifier: &mut T) {
+        let res = graph
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| match node.op {
+                Operator::ReduceMax(ref reduce) |
+                Operator::ReduceMean(ref reduce) |
+                Operator::ReduceSum(ref reduce) => {
+                    let input_value = node.inputs[0];
+                    let input_ty = graph.get_resolved_tensor_type(input_value).unwrap();
+                    let input_rank = input_ty.dims.ndim();
+                    let axes = reduce.normalize_axes(input_rank).unwrap();
+                    let op = match node.op {
+                        Operator::ReduceMax(_) => ReduceOp::Max,
+                        Operator::ReduceMean(_) => ReduceOp::Mean,
+                        Operator::ReduceSum(_) => ReduceOp::Sum,
+                        _ => unreachable!(),
+                    };
+                    Some((id, ReduceInfo { axes, op }))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for (i, (id, info)) in res.iter().enumerate() {
+            let input_value = &graph.nodes[*id].inputs[0].clone();
+            let input_ty = &graph
+                .get_resolved_tensor_type(*input_value)
+                .unwrap()
+                .clone();
+            let rank = input_ty.dims.ndim();
+            let mut drop = vec![false; rank];
+            for &axis in info.axes.iter() {
+                drop[axis] = true;
+            }
+            let perms = (0..rank)
+                .filter(|&i| !drop[i])
+                .chain(info.axes.iter().copied())
+                .collect();
+
+            let input_v = TransposeGenerator::default()
+                .set_input(*input_value)
+                .set_perm(perms)
+                .set_node_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
+
+            let old_output = graph.nodes[*id].outputs[0];
+            let output_ty = &graph.get_resolved_tensor_type(old_output).unwrap().clone();
+            let row = output_ty.dims.size();
+            let col = input_ty.dims.size() / row;
+
+            let reshaped_output = ReshapeGenerator::default()
+                .set_input(input_v)
+                .set_dims(&[row, col])
+                .set_node_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_Reshape_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
+
+            let reduce_matrix_output = modifier.register_new_value(
+                graph,
+                format!("Reduce2ReduceMatrix_Output_{i}"),
+                ResolvedTensorType::new(input_ty.elem_type, ResolvedTensorDims::new(&[row])),
+            );
+            modifier.register_new_node(
+                graph,
+                Node {
+                    inputs: vec![reshaped_output],
+                    outputs: vec![reduce_matrix_output],
+                    name: format!("Reduce2ReduceMatrix_{i}"),
+                    op: Operator::ReduceMatrix(info.op),
+                    meta: NodeMeta::default(),
+                },
+            );
+
+            let reshaped_output = ReshapeGenerator::default()
+                .set_input(reduce_matrix_output)
+                .set_dims(&output_ty.dims[..])
+                .set_node_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
+                .set_value_name(format!("Reduce2ReduceMatrix_ReshapeBack_{i}"))
+                .generate(graph, modifier)
+                .unwrap();
+            modifier.replace_input_value(graph, old_output, reshaped_output);
         }
     }
 }

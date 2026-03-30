@@ -357,11 +357,11 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
 }
 
 #[derive(Default)]
-pub struct ConstantFold {
+pub struct ConstantFolding {
     pub check_strides: bool,
 }
 
-impl<T: GraphOp> Pass<T> for ConstantFold {
+impl<T: GraphOp> Pass<T> for ConstantFolding {
     fn summary(&self) -> &'static str {
         "Constant Fold"
     }

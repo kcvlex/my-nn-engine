@@ -17,7 +17,7 @@ use my_onnx::tensor::types::TensorType;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::modify::NodeDelete;
 use my_onnx::transform::modify::SimpleGraphOp;
-use my_onnx::transform::optimize::canonicalize::Canonicalize;
+use my_onnx::transform::optimize::canonicalization::Canonicalization;
 use my_onnx::transform::optimize::layer_norm_fusion::LayerNormFusion;
 use my_onnx::transform::Pass;
 
@@ -142,7 +142,7 @@ fn test_gpt2_layer_norm_is_fused() {
     let mut graph = build_gpt2_layer_norm_subgraph(epsilon);
 
     let mut modifier = SimpleGraphOp::new(&graph);
-    let canonicalize = Canonicalize::default();
+    let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
     let pass = LayerNormFusion::default();

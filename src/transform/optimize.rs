@@ -1,42 +1,52 @@
 pub mod attention_fusion;
-pub mod canonicalize;
-pub mod const_fold;
+pub mod canonicalization;
+pub mod const_folding;
 pub mod conv_bn_fusion;
-pub mod elim_identity;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
+pub mod identity_elimination;
 pub mod layer_norm_fusion;
-pub mod reorder_nodes;
+pub mod nodes_reorder;
 pub mod transpose_fusion;
 
 use crate::transform::modify::SimpleGraphOp;
+use crate::transform::optimize::attention_fusion::AttentionFusion;
+use crate::transform::optimize::canonicalization::Canonicalization;
+use crate::transform::optimize::canonicalization::MatMul2BatchedGemm;
+use crate::transform::optimize::const_folding::ConstantFolding;
+use crate::transform::optimize::conv_bn_fusion::ConvBNFusion;
+use crate::transform::optimize::fast_gelu_fusion::FastGeLUFusion;
+use crate::transform::optimize::gemm_add_fusion::GemmAddFusion;
+use crate::transform::optimize::gemm_transpose_fusion::GemmTransposeFusion;
+use crate::transform::optimize::identity_elimination::IdentityElimination;
+use crate::transform::optimize::layer_norm_fusion::LayerNormFusion;
+use crate::transform::optimize::nodes_reorder::ReorderNodes;
+use crate::transform::optimize::transpose_fusion::TransposeFusion;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
 pub fn create_optimize_passes() -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager = SimplePassManager::new("Optimization".to_string());
-    pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
-    pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
-    pass_manager.add_pass(Box::new(const_fold::ConstantFold {
+    pass_manager.add_pass(Box::new(IdentityElimination::default()));
+    pass_manager.add_pass(Box::new(Canonicalization::default()));
+    pass_manager.add_pass(Box::new(ConstantFolding {
         check_strides: false,
     }));
-    pass_manager.add_pass(Box::new(conv_bn_fusion::ConvBNFusion::default()));
-    pass_manager.add_pass(Box::new(fast_gelu_fusion::FastGeLUFusion::default()));
-    pass_manager.add_pass(Box::new(layer_norm_fusion::LayerNormFusion::default()));
-    pass_manager.add_pass(Box::new(attention_fusion::AttentionFusion::default()));
-    pass_manager.add_pass(Box::new(canonicalize::MatMul2BatchedGemm::default()));
-    pass_manager.add_pass(Box::new(reorder_nodes::ReorderNodes::default()));
-    pass_manager.add_pass(Box::new(transpose_fusion::TransposeFusion {
+    pass_manager.add_pass(Box::new(ConvBNFusion::default()));
+    pass_manager.add_pass(Box::new(FastGeLUFusion::default()));
+    pass_manager.add_pass(Box::new(LayerNormFusion::default()));
+    pass_manager.add_pass(Box::new(AttentionFusion::default()));
+    pass_manager.add_pass(Box::new(MatMul2BatchedGemm::default()));
+    pass_manager.add_pass(Box::new(ReorderNodes::default()));
+    pass_manager.add_pass(Box::new(TransposeFusion {
         check_strides: false,
     }));
-    pass_manager.add_pass(Box::new(canonicalize::Canonicalize::default()));
-    pass_manager.add_pass(Box::new(elim_identity::EliminateIdentity::default()));
-    pass_manager.add_pass(Box::new(
-        gemm_transpose_fusion::GemmTransposeFusion::default(),
-    ));
-    pass_manager.add_pass(Box::new(gemm_add_fusion::GemmAddFusion::default()));
-    pass_manager.add_pass(Box::new(const_fold::ConstantFold {
+    pass_manager.add_pass(Box::new(Canonicalization::default()));
+    pass_manager.add_pass(Box::new(IdentityElimination::default()));
+    pass_manager.add_pass(Box::new(GemmTransposeFusion::default()));
+    pass_manager.add_pass(Box::new(GemmAddFusion::default()));
+    pass_manager.add_pass(Box::new(ConstantFolding {
         check_strides: true,
     }));
     pass_manager

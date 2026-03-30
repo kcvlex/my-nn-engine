@@ -17,12 +17,6 @@ pub struct Options {
     #[builder(default = true)]
     pub enable_fuse_ops: bool,
 
-    #[builder(default = true)]
-    pub verify_after_inference: bool,
-
-    #[builder(default = true)]
-    pub verify_after_strides: bool,
-
     #[builder(default = Target::CPU)]
     pub target: Target,
 
