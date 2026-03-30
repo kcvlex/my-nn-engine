@@ -20,7 +20,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
           models: >-
             mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
@@ -64,7 +65,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
           models: >-
             mnist-12|${{ env.ONNX_MODELS_REPO }}/raw/${{ env.ONNX_MODELS_HASH }}/validated/vision/classification/mnist/model/mnist-12.tar.gz|a53a59dcaca8804a0f6dfda9a3cf2e082979589391dbde73640b60684f1d24e9
