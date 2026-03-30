@@ -361,7 +361,7 @@ mod test {
 
     fn load_model(path: &str) -> Result<Model> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("models/test/plan")
+            .join("models/test/schedule")
             .join(path);
         let mut model =
             Model::load_from_path(path).map_err(|e| Error::other(format!("{:?}", e)))?;

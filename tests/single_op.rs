@@ -102,7 +102,7 @@ where
 {
     use std::path::PathBuf;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models/test/operator")
+        .join("models/test/single_op")
         .join(p);
     for target in targets.iter().copied() {
         let opt = match target {
@@ -130,7 +130,7 @@ where
 {
     use std::path::PathBuf;
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models/test/operator")
+        .join("models/test/single_op")
         .join(dir);
     let (input_num, output_num) = nums;
     let inputs = (0..input_num)

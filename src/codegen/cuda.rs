@@ -1635,7 +1635,7 @@ mod test {
         use std::path::PathBuf;
 
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("models/test/operator")
+            .join("models/test/single_op")
             .join("conv.onnx");
         let model = Model::load_from_path(path).unwrap();
         let options = Options::builder().target(Target::CUDA).build();

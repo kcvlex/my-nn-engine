@@ -11,7 +11,7 @@ type Result = std::result::Result<(), SessionError>;
 
 fn run_test(dir: &str, epsilon: f64, options: &Options, nums: (usize, usize)) -> Result {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("models/it")
+        .join("models/test/multi_op")
         .join(dir);
     let model_path = dir.join("model.onnx");
     let (num_inputs, num_outputs) = nums;
