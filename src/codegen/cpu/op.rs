@@ -53,11 +53,6 @@ impl<'ctx> TensorPtr<'ctx> {
         self
     }
 
-    pub fn set_name(mut self, name: String) -> Self {
-        self.name = name;
-        self
-    }
-
     // TODO: Remove
     pub fn stride(&self, i: usize) -> usize {
         self.ty.stride(i)
