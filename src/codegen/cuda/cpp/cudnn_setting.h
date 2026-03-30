@@ -31,8 +31,27 @@ struct CudnnConvSetting {
     void *bias = nullptr;
     cudnnActivationDescriptor_t activation_desc = nullptr;
 
+    void find_best_algo(CudnnHandlerContext *ctx) {
+        cudnnConvolutionFwdAlgoPerf_t perf[8];
+        int count = 0;
+        cudnnFindConvolutionForwardAlgorithmEx(
+            ctx->handle,
+            x_desc, x,
+            w_desc, w,
+            conv_desc,
+            y_desc, y,
+            8, &count, perf,
+            ctx->workspace, ctx->workspace_max_size_in_bytes
+        );
+        if (count > 0 && perf[0].status == CUDNN_STATUS_SUCCESS) {
+            algo = perf[0].algo;
+            workspace_size_in_bytes = perf[0].memory;
+        }
+    }
+
     template <typename Float>
     cudnnStatus_t call_conv_forward(CudnnHandlerContext *ctx) {
+        find_best_algo(ctx);
         Float alpha = static_cast<Float>(alpha_);
         Float beta = static_cast<Float>(beta_);
         return cudnnConvolutionForward(
@@ -54,6 +73,7 @@ struct CudnnConvSetting {
 
     template <typename Float>
     cudnnStatus_t call_conv_bias_activation_forward(CudnnHandlerContext *ctx) {
+        find_best_algo(ctx);
         Float alpha1 = static_cast<Float>(alpha_);
         Float alpha2 = static_cast<Float>(alpha2_);
 
