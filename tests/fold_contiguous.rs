@@ -3,11 +3,11 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
-use common::find_nodes;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::operator::*;
+use my_onnx::onnx::utils::compare_graphs_structural;
 use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::transform::epilog::fold_cont::FoldContiguous;
@@ -30,21 +30,15 @@ fn reshape_ops(before: Vec<usize>, after: Vec<usize>) -> Vec<ReinterpretType> {
     vec![ReinterpretType::single_reshape(before, after)]
 }
 
-// Reinterpret -> Contiguous
-// =>
-// Contiguous
+// Reinterpret -> Contiguous => Contiguous(reinterpret_ops)
 #[test]
 fn test_reinterpret_then_contiguous() {
     let re_ops = transpose_ops(vec![0, 2, 1, 3]);
 
     let mut graph = build_graph! {
         name: "reinterpret_cont",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 8, 4, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 8, 4, 16]) },
         initializers: {},
         nodes: [
             { "Reinterpret", Operator::Reinterpret(Reinterpret { ops: re_ops.clone() }),
@@ -56,31 +50,29 @@ fn test_reinterpret_then_contiguous() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1, "should have exactly one Contiguous");
-
-    let cont = &graph.nodes[cont_nodes[0]];
-    let Operator::Contiguous(Contiguous { ops }) = &cont.op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 8, 4, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: re_ops }),
+              [x] => out: &[2, 8, 4, 16] },
+        ]
     };
-    assert_eq!(ops, &re_ops, "Contiguous should absorb the Reinterpret ops");
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Contiguous -> Reinterpret
-// =>
-// Contiguous
+// Contiguous -> Reinterpret => Contiguous(reinterpret_ops)
 #[test]
 fn test_contiguous_then_reinterpret() {
     let re_ops = reshape_ops(vec![2, 4, 8, 16], vec![2, 32, 16]);
 
     let mut graph = build_graph! {
         name: "cont_reinterpret",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 32, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
         initializers: {},
         nodes: [
             { "Contiguous", Operator::Contiguous(Contiguous { ops: vec![] }),
@@ -92,22 +84,21 @@ fn test_contiguous_then_reinterpret() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1);
-
-    let cont = &graph.nodes[cont_nodes[0]];
-    let Operator::Contiguous(Contiguous { ops }) = &cont.op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: re_ops }),
+              [x] => out: &[2, 32, 16] },
+        ]
     };
-    assert_eq!(
-        ops, &re_ops,
-        "Contiguous should absorb the trailing Reinterpret ops"
-    );
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Reinterpret -> Contiguous -> Reinterpret
-// =>
-// Contiguous
+// Reinterpret -> Contiguous -> Reinterpret => Contiguous(before + after)
 #[test]
 fn test_reinterpret_contiguous_reinterpret() {
     let before_ops = transpose_ops(vec![0, 2, 1, 3]);
@@ -115,12 +106,8 @@ fn test_reinterpret_contiguous_reinterpret() {
 
     let mut graph = build_graph! {
         name: "re_cont_re",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 32, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
         initializers: {},
         nodes: [
             { "Reinterpret1", Operator::Reinterpret(Reinterpret { ops: before_ops.clone() }),
@@ -134,33 +121,32 @@ fn test_reinterpret_contiguous_reinterpret() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1);
+    let mut combined_ops = before_ops;
+    combined_ops.extend(after_ops);
 
-    let cont = &graph.nodes[cont_nodes[0]];
-    let Operator::Contiguous(Contiguous { ops }) = &cont.op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: combined_ops }),
+              [x] => out: &[2, 32, 16] },
+        ]
     };
-    let mut expected = before_ops;
-    expected.extend(after_ops);
-    assert_eq!(ops, &expected, "should combine before and after ops");
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Contiguous -> Reinterpret -> Contiguous
-// =>
-// Contiguous
+// Contiguous -> Reinterpret -> Contiguous => Contiguous(reinterpret_ops)
 #[test]
 fn test_contiguous_reinterpret_contiguous() {
     let re_ops = transpose_ops(vec![0, 2, 1, 3]);
 
     let mut graph = build_graph! {
         name: "cont_re_cont",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 8, 4, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 8, 4, 16]) },
         initializers: {},
         nodes: [
             { "Contiguous1", Operator::Contiguous(Contiguous { ops: vec![] }),
@@ -174,33 +160,27 @@ fn test_contiguous_reinterpret_contiguous() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(
-        cont_nodes.len(),
-        1,
-        "two Contiguous should be folded into one"
-    );
-
-    let cont = &graph.nodes[cont_nodes[0]];
-    let Operator::Contiguous(Contiguous { ops }) = &cont.op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 8, 4, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: re_ops }),
+              [x] => out: &[2, 8, 4, 16] },
+        ]
     };
-    assert_eq!(ops, &re_ops, "should have the Reinterpret ops");
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Contiguous (standalone, no adjacent Reinterpret)
-// =>
-// Contiguous (unchanged)
+// Standalone Contiguous => unchanged
 #[test]
 fn test_no_fold_standalone() {
     let mut graph = build_graph! {
         name: "standalone",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 4, 8, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 4, 8, 16]) },
         initializers: {},
         nodes: [
             { "Contiguous", Operator::Contiguous(Contiguous { ops: vec![] }),
@@ -210,30 +190,28 @@ fn test_no_fold_standalone() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1);
-
-    let Operator::Contiguous(Contiguous { ops }) = &graph.nodes[cont_nodes[0]].op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 4, 8, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: vec![] }),
+              [x] => out: &[2, 4, 8, 16] },
+        ]
     };
-    assert!(
-        ops.is_empty(),
-        "standalone Contiguous should remain unchanged"
-    );
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Reinterpret (multiple users) -> Contiguous
-// =>
-// Reinterpret -> Contiguous (unchanged)
+// Reinterpret (multiple users) -> Contiguous => unchanged
 #[test]
 fn test_no_fold_multi_user() {
     let re_ops = transpose_ops(vec![0, 2, 1, 3]);
 
     let mut graph = build_graph! {
         name: "multi_user",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
         outputs: {
             out1: (FloatType::F32, &[2, 8, 4, 16]),
             out2: (FloatType::F32, &[2, 8, 4, 16]),
@@ -249,23 +227,30 @@ fn test_no_fold_multi_user() {
         ]
     };
 
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: {
+            out1: (FloatType::F32, &[2, 8, 4, 16]),
+            out2: (FloatType::F32, &[2, 8, 4, 16]),
+        },
+        initializers: {},
+        nodes: [
+            { "Reinterpret", Operator::Reinterpret(Reinterpret { ops: re_ops }),
+              [x] => reinterpreted: &[2, 8, 4, 16] },
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: vec![] }),
+              [reinterpreted] => out1: &[2, 8, 4, 16] },
+            { "Add", Operator::Add,
+              [reinterpreted, reinterpreted] => out2: &[2, 8, 4, 16] },
+        ]
+    };
+
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1);
-
-    let Operator::Contiguous(Contiguous { ops }) = &graph.nodes[cont_nodes[0]].op else {
-        panic!("expected Contiguous");
-    };
-    assert!(
-        ops.is_empty(),
-        "should not fold when Reinterpret has multiple users"
-    );
+    compare_graphs_structural(&graph, &expected).unwrap();
 }
 
-// Contiguous(existing_ops) -> Reinterpret
-// =>
-// Contiguous(existing_ops + trailing_ops)
+// Contiguous(existing_ops) -> Reinterpret => Contiguous(existing + trailing)
 #[test]
 fn test_contiguous_with_existing_ops_and_trailing_reinterpret() {
     let existing_ops = transpose_ops(vec![0, 2, 1, 3]);
@@ -273,12 +258,8 @@ fn test_contiguous_with_existing_ops_and_trailing_reinterpret() {
 
     let mut graph = build_graph! {
         name: "existing_ops",
-        inputs: {
-            x: (FloatType::F32, &[2, 4, 8, 16]),
-        },
-        outputs: {
-            out: (FloatType::F32, &[2, 32, 16]),
-        },
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
         initializers: {},
         nodes: [
             { "Contiguous", Operator::Contiguous(Contiguous { ops: existing_ops.clone() }),
@@ -290,16 +271,19 @@ fn test_contiguous_with_existing_ops_and_trailing_reinterpret() {
 
     run_pass(&mut graph);
 
-    let cont_nodes = find_nodes(&graph, |node| matches!(&node.op, Operator::Contiguous(_)));
-    assert_eq!(cont_nodes.len(), 1);
+    let mut combined_ops = existing_ops;
+    combined_ops.extend(trailing_ops);
 
-    let Operator::Contiguous(Contiguous { ops }) = &graph.nodes[cont_nodes[0]].op else {
-        panic!("expected Contiguous");
+    let expected = build_graph! {
+        name: "expected",
+        inputs: { x: (FloatType::F32, &[2, 4, 8, 16]) },
+        outputs: { out: (FloatType::F32, &[2, 32, 16]) },
+        initializers: {},
+        nodes: [
+            { "Contiguous", Operator::Contiguous(Contiguous { ops: combined_ops }),
+              [x] => out: &[2, 32, 16] },
+        ]
     };
-    let mut expected = existing_ops;
-    expected.extend(trailing_ops);
-    assert_eq!(
-        ops, &expected,
-        "should concatenate existing and trailing ops"
-    );
+
+    compare_graphs_structural(&graph, &expected).unwrap();
 }

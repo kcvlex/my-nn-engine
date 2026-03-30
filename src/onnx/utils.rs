@@ -74,7 +74,15 @@ pub fn compare_graphs(left: &Graph, right: &Graph) -> Result<(), InequalityError
 }
 
 pub fn compare_graphs_structural(left: &Graph, right: &Graph) -> Result<(), InequalityError> {
-    comp_structural::GraphStructuralEquiv::new(left, right).check()
+    comp_structural::GraphStructuralEquiv::new(left, right, None).check()
+}
+
+pub fn compare_graphs_structural_with_epsilon(
+    left: &Graph,
+    right: &Graph,
+    epsilon: f64,
+) -> Result<(), InequalityError> {
+    comp_structural::GraphStructuralEquiv::new(left, right, Some(epsilon)).check()
 }
 
 mod comp {
@@ -390,13 +398,15 @@ mod comp_structural {
     pub struct GraphStructuralEquiv<'graph> {
         left: GraphInfo<'graph>,
         right: GraphInfo<'graph>,
+        epsilon: Option<f64>,
     }
 
     impl<'graph> GraphStructuralEquiv<'graph> {
-        pub fn new(left: &'graph Graph, right: &'graph Graph) -> Self {
+        pub fn new(left: &'graph Graph, right: &'graph Graph, epsilon: Option<f64>) -> Self {
             GraphStructuralEquiv {
                 left: GraphInfo::new(left),
                 right: GraphInfo::new(right),
+                epsilon,
             }
         }
 
@@ -421,8 +431,17 @@ mod comp_structural {
             // Both initializers
             let left_init = self.left.graph.initializer.get(&left_id);
             let right_init = self.right.graph.initializer.get(&right_id);
+            let inits_equal = match (left_init, right_init) {
+                (Some(lv), Some(rv)) => match self.epsilon {
+                    Some(eps) => {
+                        lv.eq_with_epsilon(rv, eps, crate::tensor::data::CompPolicy::Either)
+                    }
+                    None => lv == rv,
+                },
+                _ => false,
+            };
             match (left_init, right_init) {
-                (Some(lv), Some(rv)) if lv == rv => {
+                (Some(_), Some(_)) if inits_equal => {
                     value_eq.add(left_id, right_id).map_err(|_| {
                         Self::make_err(
                             &self.left.graph.values[left_id].name,
