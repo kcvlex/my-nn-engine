@@ -3,12 +3,10 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
-use common::find_nodes;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
-use my_onnx::onnx::operator::args;
 use my_onnx::onnx::operator::*;
 use my_onnx::onnx::utils::compare_graphs_structural;
 use my_onnx::tensor::data::ScalarData;
