@@ -615,6 +615,7 @@ pub struct Im2Col {
     pub one_kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
     pub pad_val: PadVal,
+    pub layout: Layout,
 }
 
 impl Im2Col {

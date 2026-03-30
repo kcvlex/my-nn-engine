@@ -40,6 +40,7 @@ fn gen_im2col_from_conv(
         one_kernel_shape,
         strides: conv.strides.clone(),
         pad_val: PadVal::Zero,
+        layout: conv.input_layout,
     };
     (im2col, im2col_output_shape)
 }
@@ -67,6 +68,7 @@ fn gen_im2col_from_pooling(
         one_kernel_shape: kernel_shape.clone(),
         strides: pooling.strides.clone(),
         pad_val: PadVal::NInf,
+        layout: Layout::NCHW,
     };
     (im2col, im2col_output_shape)
 }
@@ -214,27 +216,30 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 .generate(graph, modifier)
                 .unwrap();
 
-            // Transpose the output.
-            let perm = {
-                let mut vec = Vec::with_capacity(one_fm_shape.ndim() + 2);
-                vec.push(0);
-                vec.push(one_fm_shape.ndim() + 1);
-                vec.extend((0..one_fm_shape.ndim()).map(|x| x + 1));
-                vec
+            let final_output = match conv.output_layout {
+                Layout::NCHW => {
+                    let perm = {
+                        let mut vec = Vec::with_capacity(one_fm_shape.ndim() + 2);
+                        vec.push(0);
+                        vec.push(one_fm_shape.ndim() + 1);
+                        vec.extend((0..one_fm_shape.ndim()).map(|x| x + 1));
+                        vec
+                    };
+                    TransposeGenerator::default()
+                        .set_contiguous(true)
+                        .set_input(reshaped_output)
+                        .set_perm(perm)
+                        .set_node_name(format!("Im2Col_{index}_TransposeOutput"))
+                        .set_value_name(format!("Im2Col_{index}_TransposeOutput"))
+                        .generate(graph, modifier)
+                        .unwrap()
+                }
+                Layout::NHWC => {
+                    reshaped_output
+                }
             };
 
-            // TODO: Avoid to force contiguous after the feature for the replacement with a
-            // different shape (strides) is supported.
-            let transposed_output = TransposeGenerator::default()
-                .set_contiguous(true)
-                .set_input(reshaped_output)
-                .set_perm(perm)
-                .set_node_name(format!("Im2Col_{index}_TransposeOutput"))
-                .set_value_name(format!("Im2Col_{index}_TransposeOutput"))
-                .generate(graph, modifier)
-                .unwrap();
-
-            modifier.replace_input_value(graph, old_output_value, transposed_output);
+            modifier.replace_input_value(graph, old_output_value, final_output);
         }
 
         Operator::MaxPool(ref pooling) => {

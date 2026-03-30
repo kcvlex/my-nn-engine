@@ -6,7 +6,13 @@ use my_onnx::options::*;
 use my_onnx::session::Session;
 use my_onnx::tensor::Tensor;
 
-fn bench(model_name: &str, model_file: &str, num_inputs: usize, label: &str, target: Target) {
+fn bench_with_options(
+    model_name: &str,
+    model_file: &str,
+    num_inputs: usize,
+    label: &str,
+    options: &Options,
+) {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model_name);
@@ -18,12 +24,7 @@ fn bench(model_name: &str, model_file: &str, num_inputs: usize, label: &str, tar
         .collect();
     let input_types: Vec<_> = inputs.iter().map(|t| t.tensor_type()).collect();
 
-    let session = Session::new(
-        &model_path,
-        Some(&input_types),
-        &Options::builder().target(target).build(),
-    )
-    .unwrap();
+    let session = Session::new(&model_path, Some(&input_types), options).unwrap();
 
     let _ = session.run(&inputs).unwrap();
 
@@ -37,6 +38,16 @@ fn bench(model_name: &str, model_file: &str, num_inputs: usize, label: &str, tar
         "[{label}] {n} runs in {:.2?}, avg {:.2?}/run",
         elapsed,
         elapsed / n,
+    );
+}
+
+fn bench(model_name: &str, model_file: &str, num_inputs: usize, label: &str, target: Target) {
+    bench_with_options(
+        model_name,
+        model_file,
+        num_inputs,
+        label,
+        &Options::builder().target(target).build(),
     );
 }
 
@@ -109,6 +120,25 @@ fn bench_resnet18_cpu() {
 
 #[test]
 #[ignore]
+fn bench_resnet18_cpu_nhwc_comparison() {
+    bench_with_options(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18 CPU (NHWC off)",
+        &Options::builder().target(Target::CPU).enable_nhwc_optimization(Some(false)).build(),
+    );
+    bench_with_options(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18 CPU (NHWC on)",
+        &Options::builder().target(Target::CPU).enable_nhwc_optimization(Some(true)).build(),
+    );
+}
+
+#[test]
+#[ignore]
 #[cfg(feature = "cuda")]
 fn bench_gpt2_cuda() {
     bench("GPT2", "model.onnx", 1, "GPT-2 CUDA", Target::CUDA);
@@ -137,5 +167,57 @@ fn bench_resnet18_cuda() {
         1,
         "ResNet18 CUDA",
         Target::CUDA,
+    );
+}
+
+#[test]
+#[ignore]
+#[cfg(feature = "cuda")]
+fn bench_resnet18_cuda_nhwc_comparison() {
+    bench_with_options(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18 CUDA (NHWC off)",
+        &Options::builder()
+            .target(Target::CUDA)
+            .enable_nhwc_optimization(Some(false))
+            .build(),
+    );
+    bench_with_options(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        "ResNet18 CUDA (NHWC on)",
+        &Options::builder()
+            .target(Target::CUDA)
+            .enable_nhwc_optimization(Some(true))
+            .build(),
+    );
+}
+
+#[test]
+#[ignore]
+#[cfg(feature = "cuda")]
+fn bench_resnet152_cuda_nhwc_comparison() {
+    bench_with_options(
+        "resnet152-v2-7",
+        "resnet152-v2-7.onnx",
+        1,
+        "ResNet152 CUDA (NHWC off)",
+        &Options::builder()
+            .target(Target::CUDA)
+            .enable_nhwc_optimization(Some(false))
+            .build(),
+    );
+    bench_with_options(
+        "resnet152-v2-7",
+        "resnet152-v2-7.onnx",
+        1,
+        "ResNet152 CUDA (NHWC on)",
+        &Options::builder()
+            .target(Target::CUDA)
+            .enable_nhwc_optimization(Some(true))
+            .build(),
     );
 }

@@ -216,7 +216,7 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
     passes.add_pass(Box::new(EliminateGlobalAvgPool::default()));
     // Layout
     passes.add_pass(Box::new(insert_cont::InsertContiguous::default()));
-    if enable_nhwc && matches!(opt.target, Target::CUDA) {
+    if enable_nhwc {
         passes.add_pass(Box::new(
             insert_nhwc2nchw::InsertNHWC2NCHWAfterConv::default(),
         ));
