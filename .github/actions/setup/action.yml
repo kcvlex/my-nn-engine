@@ -3,7 +3,7 @@ description: 'Shared setup: submodules, Rust, system deps, and model downloads'
 
 inputs:
   models:
-    description: 'Space-separated list of model specs: name|url|sha256'
+    description: 'Space-separated list of model names defined in models/validated/manifest.json'
     required: true
 
 runs:
@@ -47,7 +47,7 @@ runs:
     - name: Hash requested models
       id: model-hash
       shell: bash
-      run: echo "hash=$(echo '${{ inputs.models }}' | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+      run: echo "hash=$(echo '${{ inputs.models }}' | cat - models/validated/manifest.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
     - name: Cache validated model archives
       uses: actions/cache@v4
@@ -61,10 +61,21 @@ runs:
       shell: bash
       working-directory: models/validated
       run: |
+        MANIFEST="manifest.json"
+        REPO=$(jq -r '.repository' "$MANIFEST")
+        COMMIT=$(jq -r '.commit' "$MANIFEST")
+
         download_model() {
           local name=$1
-          local url=$2
-          local expected_sha256=$3
+          local path=$(jq -r --arg n "$name" '.models[$n].path' "$MANIFEST")
+          local expected_sha256=$(jq -r --arg n "$name" '.models[$n].sha256' "$MANIFEST")
+
+          if [ "$path" = "null" ] || [ "$expected_sha256" = "null" ]; then
+            echo "ERROR: Model '$name' not found in $MANIFEST"
+            exit 1
+          fi
+
+          local url="${REPO}/raw/${COMMIT}/${path}"
 
           if [ ! -f "${name}.tar.gz" ]; then
             echo "Downloading $name..."
@@ -88,8 +99,6 @@ runs:
           fi
         }
 
-        MODELS="${{ inputs.models }}"
-        for spec in $MODELS; do
-          IFS='|' read -r name url sha256 <<< "$spec"
-          download_model "$name" "$url" "$sha256"
+        for name in ${{ inputs.models }}; do
+          download_model "$name"
         done
