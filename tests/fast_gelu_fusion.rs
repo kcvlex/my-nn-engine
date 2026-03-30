@@ -3,12 +3,12 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
-use common::find_nodes;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::onnx::operator::*;
+use my_onnx::onnx::utils::compare_graphs_structural;
 use my_onnx::tensor::data::ScalarData;
 use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
@@ -94,32 +94,25 @@ fn build_unfused_fast_gelu_graph() -> Graph {
 #[test]
 fn test_fast_gelu_is_fused() {
     let mut graph = build_unfused_fast_gelu_graph();
-    let inputs = graph.inputs.clone();
-    let outputs = graph.outputs.clone();
 
     let mut modifier = SimpleGraphOp::new(&graph);
     let pass = FastGeLUFusion::default();
     pass.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
 
-    let gelu_nodes = find_nodes(&graph, |node| {
-        let Operator::GeLU(GeLU { approximate }) = &node.op else {
-            return false;
-        };
-        if !approximate {
-            return false;
-        }
-        let x_input = node.inputs[0];
-        let x_node_id = inputs[0];
-        matches!(graph.nodes[x_node_id].op, Operator::Input(id) if id == x_input)
-    });
-    assert_eq!(gelu_nodes.len(), 1, "expected exactly one fused GeLU node");
-
-    let gelu_node = &graph.nodes[gelu_nodes[0]];
-    let gelu_output = gelu_node.outputs[0];
-    let out_node_id = outputs[0];
-    assert!(
-        matches!(graph.nodes[out_node_id].op, Operator::Output(id) if id == gelu_output),
-        "GeLU output should feed into the graph output"
-    );
+    let expected = build_graph! {
+        name: "expected",
+        inputs: {
+            x: (FloatType::F32, &[2, 10, 768]),
+        },
+        outputs: {
+            y: (FloatType::F32, &[2, 10, 768]),
+        },
+        initializers: {},
+        nodes: [
+            { "GeLU", Operator::GeLU(GeLU { approximate: true }),
+              [x] => y: &[2, 10, 768] },
+        ]
+    };
+    compare_graphs_structural(&graph, &expected).unwrap();
 }

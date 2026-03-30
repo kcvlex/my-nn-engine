@@ -73,6 +73,10 @@ pub fn compare_graphs(left: &Graph, right: &Graph) -> Result<(), InequalityError
     comp::GraphEquiv::new(left, right).check()
 }
 
+pub fn compare_graphs_structural(left: &Graph, right: &Graph) -> Result<(), InequalityError> {
+    comp_structural::GraphStructuralEquiv::new(left, right).check()
+}
+
 mod comp {
 
     use std::hash::Hash;
@@ -303,6 +307,249 @@ mod comp {
     }
 }
 
+mod comp_structural {
+    use std::hash::Hash;
+
+    use super::*;
+
+    struct Bijective<T: Eq + Hash + Clone> {
+        left2right: HashMap<T, T>,
+        right2left: HashMap<T, T>,
+    }
+
+    impl<T: Eq + Hash + Clone> Bijective<T> {
+        fn new() -> Self {
+            Bijective {
+                left2right: HashMap::new(),
+                right2left: HashMap::new(),
+            }
+        }
+
+        fn add(&mut self, left: T, right: T) -> Result<(), ()> {
+            if let Some(existing) = self.left2right.get(&left) {
+                return if *existing == right { Ok(()) } else { Err(()) };
+            }
+            if self.right2left.contains_key(&right) {
+                return Err(());
+            }
+            self.left2right.insert(left.clone(), right.clone());
+            self.right2left.insert(right, left);
+            Ok(())
+        }
+
+        fn get(&self, left: &T) -> Option<&T> {
+            self.left2right.get(left)
+        }
+    }
+
+    struct GraphInfo<'graph> {
+        graph: &'graph Graph,
+        inputs: Vec<ValueId>,
+        outputs: Vec<ValueId>,
+        defined: HashMap<ValueId, (NodeId, usize)>,
+    }
+
+    impl<'graph> GraphInfo<'graph> {
+        fn new(graph: &'graph Graph) -> Self {
+            let inputs = graph
+                .inputs
+                .iter()
+                .map(|n| match graph.nodes[*n].op {
+                    Operator::Input(v) => v,
+                    _ => panic!("Expected input operator"),
+                })
+                .collect();
+            let outputs = graph
+                .outputs
+                .iter()
+                .map(|n| match graph.nodes[*n].op {
+                    Operator::Output(v) => v,
+                    _ => panic!("Expected output operator"),
+                })
+                .collect();
+            let defined = graph
+                .nodes
+                .iter()
+                .filter(|(_, node)| !node.is_dummy())
+                .flat_map(|(id, node)| {
+                    node.outputs
+                        .iter()
+                        .enumerate()
+                        .map(move |(i, v)| (*v, (id, i)))
+                })
+                .collect();
+            GraphInfo {
+                graph,
+                inputs,
+                outputs,
+                defined,
+            }
+        }
+    }
+
+    pub struct GraphStructuralEquiv<'graph> {
+        left: GraphInfo<'graph>,
+        right: GraphInfo<'graph>,
+    }
+
+    impl<'graph> GraphStructuralEquiv<'graph> {
+        pub fn new(left: &'graph Graph, right: &'graph Graph) -> Self {
+            GraphStructuralEquiv {
+                left: GraphInfo::new(left),
+                right: GraphInfo::new(right),
+            }
+        }
+
+        fn make_err(left_node: &str, right_node: &str) -> InequalityError {
+            InequalityError::DifferentComputations(
+                vec![left_node.to_string()],
+                vec![right_node.to_string()],
+            )
+        }
+
+        fn comp_value(
+            &self,
+            left_id: ValueId,
+            right_id: ValueId,
+            value_eq: &mut Bijective<ValueId>,
+            node_eq: &mut Bijective<NodeId>,
+        ) -> Result<(), InequalityError> {
+            if value_eq.get(&left_id) == Some(&right_id) {
+                return Ok(());
+            }
+
+            // Both initializers
+            let left_init = self.left.graph.initializer.get(&left_id);
+            let right_init = self.right.graph.initializer.get(&right_id);
+            match (left_init, right_init) {
+                (Some(lv), Some(rv)) if lv == rv => {
+                    value_eq.add(left_id, right_id).map_err(|_| {
+                        Self::make_err(
+                            &self.left.graph.values[left_id].name,
+                            &self.right.graph.values[right_id].name,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                (Some(_), None) | (None, Some(_)) | (Some(_), Some(_)) => {
+                    return Err(Self::make_err(
+                        &self.left.graph.values[left_id].name,
+                        &self.right.graph.values[right_id].name,
+                    ));
+                }
+                (None, None) => (),
+            }
+
+            // Both graph inputs (matched by position)
+            let left_input_pos = self.left.inputs.iter().position(|v| *v == left_id);
+            let right_input_pos = self.right.inputs.iter().position(|v| *v == right_id);
+            match (left_input_pos, right_input_pos) {
+                (Some(l), Some(r)) if l == r => {
+                    value_eq.add(left_id, right_id).map_err(|_| {
+                        Self::make_err(
+                            &self.left.graph.values[left_id].name,
+                            &self.right.graph.values[right_id].name,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => {
+                    return Err(Self::make_err(
+                        &self.left.graph.values[left_id].name,
+                        &self.right.graph.values[right_id].name,
+                    ));
+                }
+                (None, None) => (),
+            }
+
+            // Defined by nodes — compare defining nodes
+            let (left_node_id, left_idx) = *self.left.defined.get(&left_id).unwrap();
+            let (right_node_id, right_idx) = *self.right.defined.get(&right_id).unwrap();
+            let left_node = &self.left.graph.nodes[left_node_id];
+            let right_node = &self.right.graph.nodes[right_node_id];
+
+            if left_idx != right_idx {
+                return Err(Self::make_err(&left_node.name, &right_node.name));
+            }
+
+            if let Some(correspond) = node_eq.get(&left_node_id) {
+                if *correspond == right_node_id {
+                    value_eq
+                        .add(left_id, right_id)
+                        .map_err(|_| Self::make_err(&left_node.name, &right_node.name))?;
+                    return Ok(());
+                } else {
+                    return Err(Self::make_err(&left_node.name, &right_node.name));
+                }
+            }
+
+            if left_node.op != right_node.op {
+                return Err(Self::make_err(&left_node.name, &right_node.name));
+            }
+
+            if left_node.inputs.len() != right_node.inputs.len() {
+                return Err(Self::make_err(&left_node.name, &right_node.name));
+            }
+
+            for (left_input, right_input) in left_node.inputs.iter().zip(right_node.inputs.iter()) {
+                self.comp_value(*left_input, *right_input, value_eq, node_eq)?;
+            }
+
+            node_eq
+                .add(left_node_id, right_node_id)
+                .map_err(|_| Self::make_err(&left_node.name, &right_node.name))?;
+            value_eq
+                .add(left_id, right_id)
+                .map_err(|_| Self::make_err(&left_node.name, &right_node.name))?;
+            Ok(())
+        }
+
+        pub fn check(&self) -> Result<(), InequalityError> {
+            if self.left.inputs.len() != self.right.inputs.len() {
+                return Err(InequalityError::DifferentComputations(
+                    vec!["input count mismatch".to_string()],
+                    vec![],
+                ));
+            }
+            if self.left.outputs.len() != self.right.outputs.len() {
+                return Err(InequalityError::DifferentComputations(
+                    vec!["output count mismatch".to_string()],
+                    vec![],
+                ));
+            }
+
+            // Check input/output types match
+            for (l, r) in self.left.inputs.iter().zip(self.right.inputs.iter()) {
+                let lt = &self.left.graph.values[*l].ty;
+                let rt = &self.right.graph.values[*r].ty;
+                if lt != rt {
+                    return Err(Self::make_err(
+                        &self.left.graph.values[*l].name,
+                        &self.right.graph.values[*r].name,
+                    ));
+                }
+            }
+            for (l, r) in self.left.outputs.iter().zip(self.right.outputs.iter()) {
+                let lt = &self.left.graph.values[*l].ty;
+                let rt = &self.right.graph.values[*r].ty;
+                if lt != rt {
+                    return Err(Self::make_err(
+                        &self.left.graph.values[*l].name,
+                        &self.right.graph.values[*r].name,
+                    ));
+                }
+            }
+
+            let mut value_eq = Bijective::new();
+            let mut node_eq = Bijective::new();
+            for (left_id, right_id) in self.left.outputs.iter().zip(self.right.outputs.iter()) {
+                self.comp_value(*left_id, *right_id, &mut value_eq, &mut node_eq)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::path::Path;
@@ -368,5 +615,192 @@ mod test {
     fn test_different_const() {
         let err = compare_models("add_const0.onnx", "add_const1.onnx");
         assert!(err.is_err());
+    }
+
+    use crate::onnx::model::Node;
+    use crate::onnx::model::ValueInfo;
+    use crate::tensor::types::FloatType;
+    use crate::tensor::types::ResolvedTensorDims;
+    use crate::tensor::types::ResolvedTensorType;
+    use crate::tensor::types::TensorType;
+
+    fn make_value(graph: &mut Graph, name: &str, dims: &[usize]) -> ValueId {
+        graph.values.alloc(ValueInfo {
+            name: name.to_string(),
+            ty: Some(TensorType::Resolved(ResolvedTensorType::new(
+                FloatType::F32.into(),
+                ResolvedTensorDims::new(dims),
+            ))),
+        })
+    }
+
+    fn make_graph(name_prefix: &str) -> Graph {
+        // x -> Sigmoid -> Add(a,a) -> y
+        let mut graph = Graph::empty_graph("test".to_string());
+        let x = make_value(&mut graph, &format!("{name_prefix}_x"), &[2, 3]);
+        let a = make_value(&mut graph, &format!("{name_prefix}_a"), &[2, 3]);
+        let y = make_value(&mut graph, &format!("{name_prefix}_y"), &[2, 3]);
+
+        let input_node = graph.nodes.alloc(Node::create_node(
+            vec![],
+            vec![x],
+            format!("{name_prefix}_Input"),
+            Operator::Input(x),
+        ));
+        graph.inputs.push(input_node);
+
+        graph.nodes.alloc(Node::create_node(
+            vec![x],
+            vec![a],
+            format!("{name_prefix}_Sigmoid"),
+            Operator::Sigmoid,
+        ));
+
+        graph.nodes.alloc(Node::create_node(
+            vec![a, a],
+            vec![y],
+            format!("{name_prefix}_Add"),
+            Operator::Add,
+        ));
+
+        let output_node = graph.nodes.alloc(Node::create_node(
+            vec![y],
+            vec![],
+            format!("{name_prefix}_Output"),
+            Operator::Output(y),
+        ));
+        graph.outputs.push(output_node);
+
+        graph
+    }
+
+    #[test]
+    fn test_structural_same_graph() {
+        let g1 = make_graph("left");
+        let g2 = make_graph("right");
+        assert!(compare_graphs_structural(&g1, &g2).is_ok());
+    }
+
+    #[test]
+    fn test_structural_self() {
+        let g = make_graph("g");
+        assert!(compare_graphs_structural(&g, &g).is_ok());
+    }
+
+    #[test]
+    fn test_structural_different_op() {
+        // x -> Sigmoid -> Add(a,a) -> y  vs  x -> Tanh -> Add(a,a) -> y
+        let g1 = make_graph("left");
+
+        let mut g2 = Graph::empty_graph("test".to_string());
+        let x = make_value(&mut g2, "x", &[2, 3]);
+        let a = make_value(&mut g2, "a", &[2, 3]);
+        let y = make_value(&mut g2, "y", &[2, 3]);
+        let input_node = g2.nodes.alloc(Node::create_node(
+            vec![],
+            vec![x],
+            "Input".to_string(),
+            Operator::Input(x),
+        ));
+        g2.inputs.push(input_node);
+        g2.nodes.alloc(Node::create_node(
+            vec![x],
+            vec![a],
+            "Tanh".to_string(),
+            Operator::Tanh,
+        ));
+        g2.nodes.alloc(Node::create_node(
+            vec![a, a],
+            vec![y],
+            "Add".to_string(),
+            Operator::Add,
+        ));
+        let output_node = g2.nodes.alloc(Node::create_node(
+            vec![y],
+            vec![],
+            "Output".to_string(),
+            Operator::Output(y),
+        ));
+        g2.outputs.push(output_node);
+
+        assert!(compare_graphs_structural(&g1, &g2).is_err());
+    }
+
+    #[test]
+    fn test_structural_different_type() {
+        // Same structure but different dims
+        let g1 = make_graph("left");
+
+        let mut g2 = Graph::empty_graph("test".to_string());
+        let x = make_value(&mut g2, "x", &[4, 5]); // different dims
+        let a = make_value(&mut g2, "a", &[4, 5]);
+        let y = make_value(&mut g2, "y", &[4, 5]);
+        let input_node = g2.nodes.alloc(Node::create_node(
+            vec![],
+            vec![x],
+            "Input".to_string(),
+            Operator::Input(x),
+        ));
+        g2.inputs.push(input_node);
+        g2.nodes.alloc(Node::create_node(
+            vec![x],
+            vec![a],
+            "Sigmoid".to_string(),
+            Operator::Sigmoid,
+        ));
+        g2.nodes.alloc(Node::create_node(
+            vec![a, a],
+            vec![y],
+            "Add".to_string(),
+            Operator::Add,
+        ));
+        let output_node = g2.nodes.alloc(Node::create_node(
+            vec![y],
+            vec![],
+            "Output".to_string(),
+            Operator::Output(y),
+        ));
+        g2.outputs.push(output_node);
+
+        assert!(compare_graphs_structural(&g1, &g2).is_err());
+    }
+
+    #[test]
+    fn test_structural_different_connectivity() {
+        // x -> Sigmoid -> Add(a,a) -> y  vs  x -> Sigmoid -> Add(x,a) -> y
+        let g1 = make_graph("left");
+
+        let mut g2 = Graph::empty_graph("test".to_string());
+        let x = make_value(&mut g2, "x", &[2, 3]);
+        let a = make_value(&mut g2, "a", &[2, 3]);
+        let y = make_value(&mut g2, "y", &[2, 3]);
+        let input_node = g2.nodes.alloc(Node::create_node(
+            vec![],
+            vec![x],
+            "Input".to_string(),
+            Operator::Input(x),
+        ));
+        g2.inputs.push(input_node);
+        g2.nodes.alloc(Node::create_node(
+            vec![x],
+            vec![a],
+            "Sigmoid".to_string(),
+            Operator::Sigmoid,
+        ));
+        g2.nodes.alloc(Node::create_node(
+            vec![x, a],
+            vec![y], // Add(x,a) instead of Add(a,a)
+            "Add".to_string(),
+            Operator::Add,
+        ));
+        let output_node = g2.nodes.alloc(Node::create_node(
+            vec![y],
+            vec![],
+            "Output".to_string(),
+            Operator::Output(y),
+        ));
+        g2.outputs.push(output_node);
+
+        assert!(compare_graphs_structural(&g1, &g2).is_err());
     }
 }
