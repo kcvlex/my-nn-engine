@@ -100,462 +100,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(call)
     }
 
-    fn build_im2col_by_channel_inner(
-        &self,
-        inner_loops: Im2ColsInnerLoop<'_, 'ctx>,
-        im2col: &operator::Im2Col,
-    ) -> Result<IntValue<'ctx>, BuilderError> {
-        if inner_loops.nest as usize == inner_loops.outer_offsets.len() {
-            // dbg!(&inner_loops);
-            let prolog = self.context.append_basic_block(*self.func, "inner.prolog");
-            let normal = self.context.append_basic_block(*self.func, "inner.normal");
-            let pad = self.context.append_basic_block(*self.func, "inner.pad");
-            let epilog = self.context.append_basic_block(*self.func, "inner.epilog");
-
-            self.builder.build_unconditional_branch(prolog)?;
-            self.builder.position_at_end(prolog);
-            self.builder
-                .build_conditional_branch(inner_loops.is_pad, pad, normal)?;
-
-            self.builder.position_at_end(pad);
-            self.builder.build_unconditional_branch(epilog)?;
-
-            self.builder.position_at_end(normal);
-            let load_v = self.build_load(&inner_loops.src_ptr)?;
-            self.builder.build_unconditional_branch(epilog)?;
-
-            self.builder.position_at_end(epilog);
-            let ty = inner_loops.src_ptr.ty.elem_type;
-            let (ty, id_v) = match (ty, im2col.pad_val) {
-                (ty, operator::PadVal::Zero) => {
-                    let ty = ty.llvm_type(self.context);
-                    (ty, ty.const_zero())
-                }
-                (DataType::Float(ty), operator::PadVal::NInf) => {
-                    let id_v = match ty {
-                        FloatType::F32 => f32::NEG_INFINITY as f64,
-                        FloatType::F64 => f64::NEG_INFINITY,
-                    };
-                    let ty = ty.llvm_type(self.context);
-                    let id_v = ty.const_float(id_v).as_basic_value_enum();
-                    (ty.as_basic_type_enum(), id_v)
-                }
-                _ => unreachable!(),
-            };
-            let store_v = self.builder.build_phi(ty, "store.v")?;
-            store_v.add_incoming(&[(&load_v, normal), (&id_v, pad)]);
-            self.build_raw_store(
-                ty,
-                inner_loops.dst_ptr,
-                inner_loops.dst_offset,
-                store_v.as_basic_value(),
-            )?;
-            let next_dst_offset = self.builder.build_int_add(
-                inner_loops.dst_offset,
-                self.context.i64_type().const_int(1, false),
-                "next.dst.offset",
-            )?;
-            self.builder.build_unconditional_branch(inner_loops.exit)?;
-            return Ok(next_dst_offset);
-        }
-
-        let head = self.context.append_basic_block(*self.func, "inner.head");
-        let exit = self.context.append_basic_block(*self.func, "inner.exit");
-        let nest = inner_loops.nest;
-
-        self.builder.position_at_end(inner_loops.preheader);
-        self.builder.build_unconditional_branch(head)?;
-
-        self.builder.position_at_end(head);
-        let ind = self.builder.build_phi(self.context.i64_type(), "ind")?;
-        let dst_offset = self
-            .builder
-            .build_phi(self.context.i64_type(), "dst.offset")?;
-        let src_inner_offset = self
-            .builder
-            .build_phi(self.context.i64_type(), "src.inner.offset")?;
-        let dst_offset_int = dst_offset.as_basic_value().into_int_value();
-        let src_inner_offset_int = src_inner_offset.as_basic_value().into_int_value();
-        let src_offset = self.builder.build_int_add(
-            inner_loops.outer_offsets[nest as usize],
-            src_inner_offset_int,
-            "src.offset",
-        )?;
-        let is_pad_left = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            src_offset,
-            self.context
-                .i64_type()
-                .const_int(inner_loops.pads[nest as usize], false),
-            "is.pad.left",
-        )?;
-        let is_pad_right = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLE,
-            self.context.i64_type().const_int(
-                u64::try_from(inner_loops.src_ptr.ty.dims[nest as usize + 2]).unwrap() +
-                    inner_loops.pads[nest as usize],
-                false,
-            ),
-            src_offset,
-            "is.pad.right",
-        )?;
-        let is_pad_i = self
-            .builder
-            .build_or(is_pad_left, is_pad_right, "is.pad.i")?;
-        let is_pad = self
-            .builder
-            .build_or(inner_loops.is_pad, is_pad_i, "is.pad")?;
-
-        let src_offset = self.builder.build_int_sub(
-            src_offset,
-            self.context
-                .i64_type()
-                .const_int(inner_loops.pads[nest as usize], false),
-            "src.offset",
-        )?;
-        let src_offset = self.builder.build_int_mul(
-            src_offset,
-            self.context.i64_type().const_int(
-                inner_loops
-                    .src_ptr
-                    .stride(nest as usize + 2)
-                    .try_into()
-                    .unwrap(),
-                false,
-            ),
-            "src.inner.offset.mul",
-        )?;
-        let src_offset =
-            self.builder
-                .build_int_add(inner_loops.src_ptr.offset, src_offset, "src.offset")?;
-        let src_ptr = inner_loops
-            .src_ptr
-            .set_offset(src_offset)
-            .set_name(format!("src.{}", nest));
-        let next_inner_loops = Im2ColsInnerLoop {
-            preheader: head,
-            exit,
-            dst_ptr: inner_loops.dst_ptr,
-            dst_offset: dst_offset_int,
-            src_ptr,
-            is_pad,
-            pads: inner_loops.pads,
-            outer_offsets: inner_loops.outer_offsets,
-            nest: nest + 1,
-        };
-
-        let next_dst_offset = self.build_im2col_by_channel_inner(next_inner_loops, im2col)?;
-
-        self.builder.position_at_end(exit);
-        let ind_next = self.builder.build_int_add(
-            ind.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.next",
-        )?;
-        let dilation = self
-            .context
-            .i64_type()
-            .const_int(im2col.dilations[nest as usize].try_into().unwrap(), false);
-        let src_inner_offset_next = self.builder.build_int_add(
-            src_inner_offset.as_basic_value().into_int_value(),
-            dilation,
-            "src.inner.offset.next",
-        )?;
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            ind_next,
-            self.context.i64_type().const_int(
-                im2col.one_kernel_shape[nest as usize].try_into().unwrap(),
-                false,
-            ),
-            "cond",
-        )?;
-        self.builder
-            .build_conditional_branch(cond, head, inner_loops.exit)?;
-        ind.add_incoming(&[
-            (&ind_next, exit),
-            (&self.context.i64_type().const_zero(), inner_loops.preheader),
-        ]);
-        src_inner_offset.add_incoming(&[
-            (&src_inner_offset_next, exit),
-            (&self.context.i64_type().const_zero(), inner_loops.preheader),
-        ]);
-        dst_offset.add_incoming(&[
-            (&next_dst_offset, exit),
-            (&inner_loops.dst_offset, inner_loops.preheader),
-        ]);
-        Ok(next_dst_offset)
-    }
-
-    fn build_im2col_by_channel_outer(
-        &self,
-        dst_info: (PointerValue<'ctx>, IntValue<'ctx>),
-        src_ptr: TensorPtr<'ctx>,
-        offsets: Vec<IntValue<'ctx>>,
-        nest: usize,
-        blocks: (BasicBlock<'ctx>, BasicBlock<'ctx>),
-        im2col: &operator::Im2Col,
-    ) -> Result<IntValue<'ctx>, BuilderError> {
-        let (dst_ptr, dst_offset) = dst_info;
-        let (preheader, exit) = blocks;
-        let max_nest = im2col.one_fm_shape.ndim();
-        if nest == max_nest {
-            let is_pad = self.context.bool_type().const_int(0, false);
-            let pads = (0..max_nest)
-                .map(|i| match &im2col.pad {
-                    operator::ConvPad::NotSet(pad) => pad[i].0,
-                    operator::ConvPad::Valid => 0,
-                    operator::ConvPad::SameLower | operator::ConvPad::SameUpper => {
-                        let padded_len = im2col.padded_len(i);
-                        let pad_len = padded_len - src_ptr.ty.dims[i + 2];
-                        let pad_left = pad_len / 2;
-                        let add_left =
-                            pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
-                        pad_left + add_left as usize
-                    }
-                })
-                .map(|x| x.try_into().unwrap())
-                .collect::<Vec<u64>>();
-
-            let inner_loops = Im2ColsInnerLoop {
-                preheader,
-                exit,
-
-                dst_ptr,
-                dst_offset,
-
-                src_ptr,
-                is_pad,
-                pads: &pads,
-                outer_offsets: &offsets,
-
-                nest: 0,
-            };
-
-            return self.build_im2col_by_channel_inner(inner_loops, im2col);
-        }
-
-        let head = self.context.append_basic_block(*self.func, "outer.head");
-        let exiting = self.context.append_basic_block(*self.func, "outer.exit");
-
-        self.builder.build_unconditional_branch(head)?;
-
-        self.builder.position_at_end(head);
-        let dst_offset_init = dst_offset;
-        let src_offset = self
-            .builder
-            .build_phi(self.context.i64_type(), "src.offset")?;
-        let dst_offset = self
-            .builder
-            .build_phi(self.context.i64_type(), "dst.offset")?;
-        let src_offset_int = src_offset.as_basic_value().into_int_value();
-        let dst_offset_int = dst_offset.as_basic_value().into_int_value();
-        let mut offsets = offsets;
-        offsets.push(src_offset_int);
-        let next_dst_offset = self.build_im2col_by_channel_outer(
-            (dst_ptr, dst_offset_int),
-            src_ptr,
-            offsets,
-            nest + 1,
-            (head, exiting),
-            im2col,
-        )?;
-
-        self.builder.position_at_end(exiting);
-        let next_dst_offset = if nest + 1 == max_nest {
-            match im2col.channel {
-                operator::Channel::Meld(channel) => self.builder.build_int_add(
-                    next_dst_offset,
-                    self.context.i64_type().const_int(
-                        ((channel - 1) * im2col.one_kernel_shape.size())
-                            .try_into()
-                            .unwrap(),
-                        false,
-                    ),
-                    "next.dst.offset",
-                )?,
-                operator::Channel::Split(_) => next_dst_offset,
-            }
-        } else {
-            next_dst_offset
-        };
-        let padded_img_size: i64 = im2col.padded_len(nest).try_into().unwrap();
-        let kernel_size: i64 = im2col.one_kernel_shape[nest].try_into().unwrap();
-        let dilation: i64 = im2col.dilations[nest].try_into().unwrap();
-        let next_src_offset = self.builder.build_int_add(
-            src_offset_int,
-            self.context
-                .i64_type()
-                .const_int(im2col.strides[nest].try_into().unwrap(), false),
-            "src.offset.next",
-        )?;
-        let bound = padded_img_size - (kernel_size - 1) * dilation;
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            next_src_offset,
-            self.context
-                .i64_type()
-                .const_int(bound.try_into().unwrap(), false),
-            "cond",
-        )?;
-        self.builder.build_conditional_branch(cond, head, exit)?;
-        dst_offset.add_incoming(&[(&next_dst_offset, exiting), (&dst_offset_init, preheader)]);
-        src_offset.add_incoming(&[
-            (&next_src_offset, exiting),
-            (&self.context.i64_type().const_zero(), preheader),
-        ]);
-        Ok(next_dst_offset)
-    }
-
-    // We assume that `dst` is contiguous.
-    pub fn build_im2col(
-        &self,
-        dst: &TensorPtr<'ctx>,
-        src: &TensorPtr<'ctx>,
-        im2col: &operator::Im2Col,
-        entry: BasicBlock<'ctx>,
-    ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        let header_nbatch = self
-            .context
-            .append_basic_block(*self.func, "im2col.header.nbatch");
-        let exiting_nbatch = self
-            .context
-            .append_basic_block(*self.func, "im2col.exit.nbatch");
-        let header_channel = self
-            .context
-            .append_basic_block(*self.func, "im2col.header.channel");
-        let exiting_channel = self
-            .context
-            .append_basic_block(*self.func, "im2col.exit.channel");
-        let exit = self.context.append_basic_block(*self.func, "im2col.exit");
-
-        self.builder.build_unconditional_branch(header_nbatch)?;
-
-        self.builder.position_at_end(header_nbatch);
-        let ind_nbatch = self
-            .builder
-            .build_phi(self.context.i64_type(), "ind.nbatch")?;
-        let offset_dst_nbatch = self
-            .builder
-            .build_phi(self.context.i64_type(), "offset.dst.nbatch")?;
-        self.builder.build_unconditional_branch(header_channel)?;
-
-        self.builder.position_at_end(header_channel);
-        let ind_channel = self
-            .builder
-            .build_phi(self.context.i64_type(), "ind.channel")?;
-        let offset_dst_channel = self
-            .builder
-            .build_phi(self.context.i64_type(), "offset.dst.channel")?;
-        let offset_dst = self.builder.build_int_add(
-            offset_dst_nbatch.as_basic_value().into_int_value(),
-            offset_dst_channel.as_basic_value().into_int_value(),
-            "offset.dst",
-        )?;
-        let offset_src_nbatch = self.builder.build_int_mul(
-            ind_nbatch.as_basic_value().into_int_value(),
-            self.context
-                .i64_type()
-                .const_int(src.ty.stride(0).try_into().unwrap(), false),
-            "offset.src.nbatch",
-        )?;
-        let offset_src_channel = self.builder.build_int_mul(
-            ind_channel.as_basic_value().into_int_value(),
-            self.context
-                .i64_type()
-                .const_int(src.ty.stride(1).try_into().unwrap(), false),
-            "offset.src.channel",
-        )?;
-        let offset_src =
-            self.builder
-                .build_int_add(offset_src_nbatch, offset_src_channel, "offset.src")?;
-
-        let src = src.clone().set_offset(offset_src);
-
-        self.build_im2col_by_channel_outer(
-            (dst.ptr, offset_dst),
-            src,
-            vec![],
-            0,
-            (header_channel, exiting_channel),
-            im2col,
-        )?;
-
-        self.builder.position_at_end(exiting_channel);
-        let next_ind_channel = self.builder.build_int_add(
-            ind_channel.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.channel.next",
-        )?;
-        let next_offset_dst_channel = match im2col.channel {
-            operator::Channel::Meld(_) => im2col.one_kernel_shape.size(),
-            operator::Channel::Split(_) => {
-                im2col.one_fm_shape.size() * im2col.one_kernel_shape.size()
-            }
-        };
-        let next_offset_dst_channel = self.builder.build_int_add(
-            offset_dst_channel.as_basic_value().into_int_value(),
-            self.context
-                .i64_type()
-                .const_int(next_offset_dst_channel.try_into().unwrap(), false),
-            "offset.dst.channel.next",
-        )?;
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            next_ind_channel,
-            self.context
-                .i64_type()
-                .const_int(im2col.channel.inner().try_into().unwrap(), false),
-            "cond",
-        )?;
-        self.builder
-            .build_conditional_branch(cond, header_channel, exiting_nbatch)?;
-        ind_channel.add_incoming(&[
-            (&next_ind_channel, exiting_channel),
-            (&self.context.i64_type().const_int(0, false), header_nbatch),
-        ]);
-        offset_dst_channel.add_incoming(&[
-            (&next_offset_dst_channel, exiting_channel),
-            (&self.context.i64_type().const_zero(), header_nbatch),
-        ]);
-
-        self.builder.position_at_end(exiting_nbatch);
-        let next_ind_nbatch = self.builder.build_int_add(
-            ind_nbatch.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(1, false),
-            "ind.nbatch.next",
-        )?;
-        let next_offset_dst_nbatch = self.builder.build_int_add(
-            offset_dst_nbatch.as_basic_value().into_int_value(),
-            self.context.i64_type().const_int(
-                (dst.ty.dims.size() / im2col.nbatch).try_into().unwrap(),
-                false,
-            ),
-            "offset.dst.nbatch.next",
-        )?;
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            next_ind_nbatch,
-            self.context
-                .i64_type()
-                .const_int(im2col.nbatch.try_into().unwrap(), false),
-            "cond",
-        )?;
-        self.builder
-            .build_conditional_branch(cond, header_nbatch, exit)?;
-        ind_nbatch.add_incoming(&[
-            (&next_ind_nbatch, exiting_nbatch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
-        offset_dst_nbatch.add_incoming(&[
-            (&next_offset_dst_nbatch, exiting_nbatch),
-            (&self.context.i64_type().const_zero(), entry),
-        ]);
-
-        self.builder.position_at_end(exit);
-        Ok(exit)
-    }
-
     fn build_single_op(
         &self,
         opcode: SingleOpcode,
@@ -970,14 +514,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_store(op.dst_operand(), res)
     }
 
-    pub fn build_im2col_nhwc(
+    pub fn build_im2col(
         &self,
         dst: &TensorPtr<'ctx>,
         src: &TensorPtr<'ctx>,
         im2col: &operator::Im2Col,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
-        // Input:  src[N, H_in, W_in, C_in]  (NHWC, contiguous)
+        // NCHW: src[N, C_in, H_in, W_in], NHWC: src[N, H_in, W_in, C_in]
         // Output: dst[N * H_out * W_out, C_in * kH * kW]
         //
         // for n in 0..N:
@@ -993,9 +537,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         //             if oob(ih, iw):
         //               dst[row, col] = pad_val
         //             else:
-        //               dst[row, col] = src[n, ih, iw, c]
+        //               dst[row, col] = src[n, c, ih, iw]  (NCHW)
+        //                            or src[n, ih, iw, c]  (NHWC)
         assert_eq!(im2col.one_fm_shape.ndim(), 2);
 
+        let layout = im2col.layout;
         let i64_ty = self.context.i64_type();
         let elem_ty = src.ty.elem_type.llvm_type(self.context);
 
@@ -1005,20 +551,33 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let kh = im2col.one_kernel_shape[0] as u64;
         let kw = im2col.one_kernel_shape[1] as u64;
         let c_in = im2col.channel.inner() as u64;
-        let h_in = src.ty.dims[1] as u64;
-        let w_in = src.ty.dims[2] as u64;
+        let (h_in, w_in) = match layout {
+            operator::Layout::NCHW => (src.ty.dims[2] as u64, src.ty.dims[3] as u64),
+            operator::Layout::NHWC => (src.ty.dims[1] as u64, src.ty.dims[2] as u64),
+        };
         let stride_h = im2col.strides[0] as u64;
         let stride_w = im2col.strides[1] as u64;
         let dilation_h = im2col.dilations[0] as u64;
         let dilation_w = im2col.dilations[1] as u64;
-        let default_pad = operator::OptionalVec::new(None, (0, 0));
-        let pad = match &im2col.pad {
-            operator::ConvPad::NotSet(ref pad) => pad,
-            operator::ConvPad::Valid => &default_pad,
-            _ => unimplemented!(),
+        let calc_pad = |dim: usize| -> u64 {
+            match &im2col.pad {
+                operator::ConvPad::NotSet(pad) => pad[dim].0 as u64,
+                operator::ConvPad::Valid => 0,
+                operator::ConvPad::SameLower | operator::ConvPad::SameUpper => {
+                    let padded_len = im2col.padded_len(dim) as u64;
+                    let src_dim = match layout {
+                        operator::Layout::NCHW => src.ty.dims[dim + 2] as u64,
+                        operator::Layout::NHWC => src.ty.dims[dim + 1] as u64,
+                    };
+                    let pad_len = padded_len - src_dim;
+                    let pad_left = pad_len / 2;
+                    let add_left = pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
+                    pad_left + add_left as u64
+                }
+            }
         };
-        let pad_h = pad[0].0 as u64;
-        let pad_w = pad[1].0 as u64;
+        let pad_h = calc_pad(0);
+        let pad_w = calc_pad(1);
 
         let pad_val = match (src.ty.elem_type, im2col.pad_val) {
             (_, operator::PadVal::Zero) => elem_ty.const_zero(),
@@ -1128,11 +687,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_conditional_branch(oob, bb_pad, bb_load)?;
 
         self.builder.position_at_end(bb_load);
-        let src_offset = {
-            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(h_in * w_in * c_in, false), "so_n")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?, "so_nh")?;
-            let o = self.builder.build_int_add(o, self.builder.build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?, "so_nhw")?;
-            self.builder.build_int_add(o, ind_c, "src_off")?
+        let src_offset = match layout {
+            operator::Layout::NCHW => {
+                let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_in * w_in, false), "so_n")?;
+                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_in * w_in, false), "so_c")?, "so_nc")?;
+                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?, "so_nch")?;
+                self.builder.build_int_add(o, iw, "src_off")?
+            }
+            operator::Layout::NHWC => {
+                let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(h_in * w_in * c_in, false), "so_n")?;
+                let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?, "so_nh")?;
+                let o = self.builder.build_int_add(o, self.builder.build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?, "so_nhw")?;
+                self.builder.build_int_add(o, ind_c, "src_off")?
+            }
         };
         let src_val = self.build_load(&src.clone().set_offset(src_offset))?.into_float_value();
         self.builder.build_unconditional_branch(bb_store)?;
@@ -1166,6 +733,218 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         latch!(phi_kh, hdr_ow, ind_kh, kh, hdr_kh, latch_ow, latch_kh);
         latch!(phi_ow, hdr_oh, ind_ow, w_out, hdr_ow, latch_oh, latch_ow);
         latch!(phi_oh, hdr_n, ind_oh, h_out, hdr_oh, latch_n, latch_oh);
+        latch!(phi_n, entry, ind_n, nbatch, hdr_n, exit, latch_n);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
+    pub fn build_im2col_split(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        im2col: &operator::Im2Col,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        // src[N, C, H_in, W_in] (NCHW, Channel::Split)
+        // dst[N * C * H_out * W_out, kH * kW]
+        //
+        // for n in 0..N:
+        //   for c in 0..C:
+        //     for oh in 0..H_out:
+        //       for ow in 0..W_out:
+        //         for kh in 0..kH:
+        //           for kw in 0..kW:
+        //             ih = oh * stride_h + kh * dilation_h - pad_h
+        //             iw = ow * stride_w + kw * dilation_w - pad_w
+        //             row = n*C*H_out*W_out + c*H_out*W_out + oh*W_out + ow
+        //             col = kh * kW + kw
+        //             if oob(ih, iw):
+        //               dst[row, col] = pad_val
+        //             else:
+        //               dst[row, col] = src[n, c, ih, iw]
+        assert_eq!(im2col.one_fm_shape.ndim(), 2);
+        assert!(matches!(im2col.channel, operator::Channel::Split(_)));
+        assert!(matches!(im2col.layout, operator::Layout::NCHW));
+
+        let i64_ty = self.context.i64_type();
+        let elem_ty = src.ty.elem_type.llvm_type(self.context);
+
+        let nbatch = im2col.nbatch as u64;
+        let h_out = im2col.one_fm_shape[0] as u64;
+        let w_out = im2col.one_fm_shape[1] as u64;
+        let kh = im2col.one_kernel_shape[0] as u64;
+        let kw = im2col.one_kernel_shape[1] as u64;
+        let c_in = im2col.channel.inner() as u64;
+        let h_in = src.ty.dims[2] as u64;
+        let w_in = src.ty.dims[3] as u64;
+        let stride_h = im2col.strides[0] as u64;
+        let stride_w = im2col.strides[1] as u64;
+        let dilation_h = im2col.dilations[0] as u64;
+        let dilation_w = im2col.dilations[1] as u64;
+        let calc_pad = |dim: usize| -> u64 {
+            match &im2col.pad {
+                operator::ConvPad::NotSet(pad) => pad[dim].0 as u64,
+                operator::ConvPad::Valid => 0,
+                operator::ConvPad::SameLower | operator::ConvPad::SameUpper => {
+                    let padded_len = im2col.padded_len(dim) as u64;
+                    let src_dim = src.ty.dims[dim + 2] as u64;
+                    let pad_len = padded_len - src_dim;
+                    let pad_left = pad_len / 2;
+                    let add_left = pad_len % 2 == 1 && matches!(im2col.pad, operator::ConvPad::SameLower);
+                    pad_left + add_left as u64
+                }
+            }
+        };
+        let pad_h = calc_pad(0);
+        let pad_w = calc_pad(1);
+
+        let pad_val = match (src.ty.elem_type, im2col.pad_val) {
+            (_, operator::PadVal::Zero) => elem_ty.const_zero(),
+            (DataType::Float(ft), operator::PadVal::NInf) => {
+                let v = match ft {
+                    FloatType::F32 => f32::NEG_INFINITY as f64,
+                    FloatType::F64 => f64::NEG_INFINITY,
+                };
+                ft.llvm_type(self.context)
+                    .const_float(v)
+                    .as_basic_value_enum()
+            }
+            _ => unimplemented!(),
+        };
+
+        let dst_cols = kh * kw;
+
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+        let hdr_n = bb("split.n.hdr");
+        let hdr_c = bb("split.c.hdr");
+        let hdr_oh = bb("split.oh.hdr");
+        let hdr_ow = bb("split.ow.hdr");
+        let hdr_kh = bb("split.kh.hdr");
+        let hdr_kw = bb("split.kw.hdr");
+        let body = bb("split.body");
+        let latch_kw = bb("split.kw.latch");
+        let latch_kh = bb("split.kh.latch");
+        let latch_ow = bb("split.ow.latch");
+        let latch_oh = bb("split.oh.latch");
+        let latch_c = bb("split.c.latch");
+        let latch_n = bb("split.n.latch");
+        let exit = bb("split.exit");
+
+        macro_rules! phi {
+            ($bb:expr) => {{
+                self.builder.position_at_end($bb);
+                let p = self.builder.build_phi(i64_ty, "ind")?;
+                (p, p.as_basic_value().into_int_value())
+            }};
+        }
+        macro_rules! latch {
+            ($phi:expr, $prev_bb:expr, $val:expr, $bound:expr, $next:expr, $exit:expr, $latch_bb:expr) => {{
+                self.builder.position_at_end($latch_bb);
+                let next_val =
+                    self.builder
+                        .build_int_add($val, i64_ty.const_int(1, false), "next")?;
+                let ec = self.builder.build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    next_val,
+                    i64_ty.const_int($bound, false),
+                    "ec",
+                )?;
+                self.builder.build_conditional_branch(ec, $exit, $next)?;
+                $phi.add_incoming(&[(&i64_ty.const_zero(), $prev_bb), (&next_val, $latch_bb)]);
+            }};
+        }
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(hdr_n)?;
+
+        let (phi_n, ind_n) = phi!(hdr_n);
+        self.builder.build_unconditional_branch(hdr_c)?;
+
+        let (phi_c, ind_c) = phi!(hdr_c);
+        self.builder.build_unconditional_branch(hdr_oh)?;
+
+        let (phi_oh, ind_oh) = phi!(hdr_oh);
+        self.builder.build_unconditional_branch(hdr_ow)?;
+
+        let (phi_ow, ind_ow) = phi!(hdr_ow);
+        self.builder.build_unconditional_branch(hdr_kh)?;
+
+        let (phi_kh, ind_kh) = phi!(hdr_kh);
+        self.builder.build_unconditional_branch(hdr_kw)?;
+
+        let (phi_kw, ind_kw) = phi!(hdr_kw);
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+
+        let ih = {
+            let a = self.builder.build_int_mul(ind_oh, i64_ty.const_int(stride_h, false), "oh_s")?;
+            let b = self.builder.build_int_mul(ind_kh, i64_ty.const_int(dilation_h, false), "kh_d")?;
+            let c = self.builder.build_int_add(a, b, "ih_raw")?;
+            self.builder.build_int_sub(c, i64_ty.const_int(pad_h, false), "ih")?
+        };
+        let iw = {
+            let a = self.builder.build_int_mul(ind_ow, i64_ty.const_int(stride_w, false), "ow_s")?;
+            let b = self.builder.build_int_mul(ind_kw, i64_ty.const_int(dilation_w, false), "kw_d")?;
+            let c = self.builder.build_int_add(a, b, "iw_raw")?;
+            self.builder.build_int_sub(c, i64_ty.const_int(pad_w, false), "iw")?
+        };
+
+        let oob = {
+            let ih_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, ih, i64_ty.const_zero(), "ih_neg")?;
+            let ih_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, ih, i64_ty.const_int(h_in, false), "ih_big")?;
+            let iw_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, iw, i64_ty.const_zero(), "iw_neg")?;
+            let iw_big = self.builder.build_int_compare(inkwell::IntPredicate::SGE, iw, i64_ty.const_int(w_in, false), "iw_big")?;
+            let a = self.builder.build_or(ih_neg, ih_big, "oob_h")?;
+            let b = self.builder.build_or(iw_neg, iw_big, "oob_w")?;
+            self.builder.build_or(a, b, "oob")?
+        };
+
+        let bb_load = bb("split.load");
+        let bb_pad = bb("split.pad");
+        let bb_store = bb("split.store");
+        self.builder.build_conditional_branch(oob, bb_pad, bb_load)?;
+
+        self.builder.position_at_end(bb_load);
+        let src_offset = {
+            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_in * w_in, false), "so_n")?;
+            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_in * w_in, false), "so_c")?, "so_nc")?;
+            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ih, i64_ty.const_int(w_in, false), "so_h")?, "so_nch")?;
+            self.builder.build_int_add(o, iw, "src_off")?
+        };
+        let src_val = self.build_load(&src.clone().set_offset(src_offset))?.into_float_value();
+        self.builder.build_unconditional_branch(bb_store)?;
+
+        self.builder.position_at_end(bb_pad);
+        self.builder.build_unconditional_branch(bb_store)?;
+
+        self.builder.position_at_end(bb_store);
+        let val = self.builder.build_phi(elem_ty, "val")?;
+        val.add_incoming(&[(&src_val, bb_load), (&pad_val, bb_pad)]);
+
+        let dst_row = {
+            let o = self.builder.build_int_mul(ind_n, i64_ty.const_int(c_in * h_out * w_out, false), "dr_n")?;
+            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_c, i64_ty.const_int(h_out * w_out, false), "dr_c")?, "dr_nc")?;
+            let o = self.builder.build_int_add(o, self.builder.build_int_mul(ind_oh, i64_ty.const_int(w_out, false), "dr_oh")?, "dr_ncoh")?;
+            self.builder.build_int_add(o, ind_ow, "dst_row")?
+        };
+        let dst_col = {
+            let o = self.builder.build_int_mul(ind_kh, i64_ty.const_int(kw, false), "dc_kh")?;
+            self.builder.build_int_add(o, ind_kw, "dst_col")?
+        };
+        let dst_offset = {
+            let o = self.builder.build_int_mul(dst_row, i64_ty.const_int(dst_cols, false), "do_row")?;
+            self.builder.build_int_add(o, dst_col, "dst_off")?
+        };
+        self.build_store(&dst.clone().set_offset(dst_offset), val.as_basic_value())?;
+        self.builder.build_unconditional_branch(latch_kw)?;
+
+        latch!(phi_kw, hdr_kh, ind_kw, kw, hdr_kw, latch_kh, latch_kw);
+        latch!(phi_kh, hdr_ow, ind_kh, kh, hdr_kh, latch_ow, latch_kh);
+        latch!(phi_ow, hdr_oh, ind_ow, w_out, hdr_ow, latch_oh, latch_ow);
+        latch!(phi_oh, hdr_c, ind_oh, h_out, hdr_oh, latch_c, latch_oh);
+        latch!(phi_c, hdr_n, ind_c, c_in, hdr_c, latch_n, latch_c);
         latch!(phi_n, entry, ind_n, nbatch, hdr_n, exit, latch_n);
 
         self.builder.position_at_end(exit);
@@ -3552,22 +3331,6 @@ struct LoopBB<'ctx> {
     preheader: BasicBlock<'ctx>,
     header: BasicBlock<'ctx>,
     exit: BasicBlock<'ctx>,
-}
-
-#[derive(Debug)]
-struct Im2ColsInnerLoop<'a, 'ctx: 'a> {
-    preheader: BasicBlock<'ctx>,
-    exit: BasicBlock<'ctx>,
-
-    dst_ptr: PointerValue<'ctx>,
-    dst_offset: IntValue<'ctx>,
-
-    src_ptr: TensorPtr<'ctx>,
-    is_pad: IntValue<'ctx>,
-    pads: &'a [u64],
-    outer_offsets: &'a [IntValue<'ctx>],
-
-    nest: u64,
 }
 
 #[derive(Debug)]
