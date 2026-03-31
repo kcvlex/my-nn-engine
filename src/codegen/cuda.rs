@@ -4,6 +4,7 @@ mod kernel;
 mod runtime_api;
 
 use std::cmp::min;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -213,7 +214,7 @@ impl std::fmt::Display for Statement {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Include {
     System(&'static str),
     Local(&'static str),
@@ -237,7 +238,7 @@ pub struct HostCodeGenerator<'sched> {
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
     separated_codes: Vec<SeparatedCode>,
-    includes: HashSet<Include>,
+    includes: BTreeSet<Include>,
 
     host_memcpy: Vec<(String, String, ValueId)>,
 }
@@ -249,7 +250,7 @@ pub struct HostCode {
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
 
-    includes: HashSet<Include>,
+    includes: BTreeSet<Include>,
     profile: bool,
 }
 
@@ -542,7 +543,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
-            includes: HashSet::from([Include::Local("common.cuh"), Include::System("cuda.h")]),
+            includes: BTreeSet::from([Include::Local("common.cuh"), Include::System("cuda.h")]),
             host_memcpy: Vec::new(),
         }
     }
@@ -1657,5 +1658,30 @@ mod test {
         let code = host_gen.generate(&Options::builder().build()).unwrap();
         code.write(&mut file).unwrap();
         println!("Generated CUDA code written to {:?}", path);
+    }
+
+    fn generate_cuda_code(model_path: &str) -> String {
+        use std::path::PathBuf;
+
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(model_path);
+        let model = Model::load_from_path(path).unwrap();
+        let options = Options::builder().target(Target::CUDA).build();
+        let mut graph = model.graph;
+        crate::transform::transform_graph(&mut graph, &options);
+        let mut schedule = Schedule::new(graph, options.clone());
+        let schedule_passes = crate::schedule::create_schedule_passes(&options);
+        schedule_passes.run(&mut schedule);
+
+        let mut host_gen = HostCodeGenerator::new(&schedule);
+        let code = host_gen.generate(&options).unwrap();
+        let mut buf = Vec::new();
+        code.write(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn test_cuda_two_conv_codegen() {
+        let code = generate_cuda_code("models/test/single_op/two_conv.onnx");
+        insta::assert_snapshot!(code);
     }
 }
