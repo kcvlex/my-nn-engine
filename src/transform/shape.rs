@@ -189,7 +189,8 @@ pub fn infer_node_output(
         Operator::Sigmoid |
         Operator::Softmax(_) |
         Operator::Sqrt |
-        Operator::Tanh => {
+        Operator::Tanh |
+        Operator::Transfer(_) => {
             res.push(inputs[0].clone());
         }
         Operator::Cast(Cast { to }) => {

@@ -87,6 +87,7 @@ pub enum Operator {
 
     // Custom
     Contiguous(Contiguous),
+    Transfer(TransferKind),
     Im2Col(Im2Col),
     NHWC2NCHW,
     ReduceMatrix(ReduceOp),
@@ -95,6 +96,12 @@ pub enum Operator {
     // Dummy
     Input(ValueId),
     Output(ValueId),
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum TransferKind {
+    HostToDevice,
+    DeviceToHost,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -787,6 +794,7 @@ impl Operator {
 
             // Custom
             Operator::Contiguous(_) => "Contiguous",
+            Operator::Transfer(_) => "Transfer",
             Operator::Im2Col(_) => "Im2Col",
             Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
@@ -849,7 +857,8 @@ impl Operator {
             Operator::Shape(_) |
             Operator::Slice |
             Operator::Softmax(_) |
-            Operator::Split(_) => OperatorType::Opaque,
+            Operator::Split(_) |
+            Operator::Transfer(_) => OperatorType::Opaque,
 
             Operator::Input(_) | Operator::Output(_) => OperatorType::Dummy,
         }
