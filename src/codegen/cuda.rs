@@ -6,7 +6,6 @@ mod runtime_api;
 use std::cmp::min;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use delegate::delegate;
 use derive_more::From;
@@ -232,15 +231,11 @@ pub struct HostCodeGenerator<'sched> {
     hostmem2identifier: HashMap<ValueId, String>,
     devicemem2identifier: Vec<String>,
 
-    to_transfer: HashSet<ValueId>,
-
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
 
     separated_codes: Vec<SeparatedCode>,
     includes: BTreeSet<Include>,
-
-    host_memcpy: Vec<(String, String, ValueId)>,
 }
 
 pub struct HostCode {
@@ -540,17 +535,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             value2chunk: HashMap::new(),
             hostmem2identifier: HashMap::new(),
             devicemem2identifier: Vec::new(),
-            to_transfer: schedule
-                .inputs
-                .iter()
-                .chain(schedule.initializers.iter())
-                .copied()
-                .collect(),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
             includes: BTreeSet::from([Include::Local("common.cuh"), Include::System("cuda.h")]),
-            host_memcpy: Vec::new(),
         }
     }
 
@@ -563,10 +551,10 @@ impl<'sched> HostCodeGenerator<'sched> {
     fn gen_decl_values(&mut self) -> Result<Vec<Statement>, BuildError> {
         use std::collections::hash_map::Entry;
 
-        for (arg_name, value_ids, is_output) in &[
-            (ARG_INPUT, &self.schedule.inputs[..], false),
-            (ARG_INITIALIZER, &self.schedule.initializers[..], false),
-            (ARG_OUTPUT, &self.schedule.outputs[..], true),
+        for (arg_name, value_ids) in &[
+            (ARG_INPUT, &self.schedule.inputs[..]),
+            (ARG_INITIALIZER, &self.schedule.initializers[..]),
+            (ARG_OUTPUT, &self.schedule.outputs[..]),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
                 let ty = self.get_resolved_tensor_type(*value)?.elem_type.to_string();
@@ -574,10 +562,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                 let stmt = format!("{ty} *{value_name} = ({ty} *)({arg_name}[{idx}]);",);
                 self.stmts.push(Statement::Raw(stmt));
                 match self.hostmem2identifier.entry(*value) {
-                    Entry::Occupied(entry) => {
-                        assert!(is_output);
-                        let old_value_name = entry.get().clone();
-                        self.host_memcpy.push((value_name, old_value_name, *value));
+                    Entry::Occupied(_) => {
+                        unreachable!("duplicate host value");
                     }
                     Entry::Vacant(entry) => {
                         entry.insert(value_name);
@@ -660,7 +646,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(EventCreate { event_id }.into());
         }
 
-        for stream_id in self.streams.values().map(|s| s.stream_id).unique() {
+        for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
             self.stmts
                 .push(Statement::Raw(format!("cudaStream_t {stream_id};")));
             self.stmts.push(StreamCreate { stream_id }.into());
@@ -722,19 +708,12 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
-        for (dst, src, value_id) in self.host_memcpy.iter() {
-            let mem_size = self.single_mem_size(*value_id)?;
-            self.stmts.push(Statement::Raw(format!(
-                "std::memcpy({dst}, {src}, {mem_size});"
-            )));
-        }
-
         for chunk_id in 0..self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0) {
             let name = &self.devicemem2identifier[chunk_id];
             self.stmts.push(Free(Expr::Identifier(name.clone())).into());
         }
 
-        for stream_id in self.streams.values().map(|s| s.stream_id).unique() {
+        for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
             self.stmts.push(StreamDestroy(stream_id).into());
         }
 
@@ -825,18 +804,6 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
         let kernel = &self.schedule.kernels[kernel_id];
-        let mem_alloc_result = self.schedule.analysis.get::<mem_alloc::MemAllocResult>();
-        let mem_alloc = mem_alloc_result
-            .0
-            .get(&kernel_id)
-            .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
-        let copy = mem_alloc
-            .iter()
-            .cloned()
-            .filter(|info| kernel.inputs.contains(&info.value_id))
-            .filter(|info| self.to_transfer.remove(&info.value_id))
-            .collect::<Vec<_>>();
-
         let KernelStreamAssignment {
             stream_id,
             event_id,
@@ -850,27 +817,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                 WaitEvent {
                     stream_id,
                     event_id: *event,
-                }
-                .into(),
-            );
-        }
-
-        for trans in copy.iter() {
-            let value_id = trans.value_id;
-            let chunk_id = trans
-                .ty
-                .chunk_id()
-                .ok_or(BuildError::UnexpectedMemAlloc(value_id))?;
-            let mem_size = MemSize::Single(self.single_mem_size(value_id)?);
-            let dst = Expr::Identifier(self.devicemem2identifier[chunk_id].clone());
-            let src = Expr::Identifier(self.hostmem2identifier[&value_id].clone());
-            self.stmts.push(
-                Memcpy {
-                    dst,
-                    src,
-                    mem_size,
-                    kind: CudaMemcpyKind::HostToDevice,
-                    stream: stream_id,
                 }
                 .into(),
             );
@@ -891,6 +837,43 @@ impl<'sched> HostCodeGenerator<'sched> {
         // Launch the kernel
         match kernel.body {
             KernelBody::Opaque(Opaque { ref op }) => match op {
+                Operator::Transfer(kind) => {
+                    let value_id = kernel.inputs[0];
+                    let mem_size = MemSize::Single(self.single_mem_size(kernel.outputs[0])?);
+                    match kind {
+                        TransferKind::HostToDevice => {
+                            let src = Expr::Identifier(self.hostmem2identifier[&value_id].clone());
+                            let dst = self.device_identifier(kernel.outputs[0])?;
+                            self.stmts.push(
+                                Memcpy {
+                                    dst,
+                                    src,
+                                    mem_size,
+                                    kind: CudaMemcpyKind::HostToDevice,
+                                    stream: stream_id,
+                                }
+                                .into(),
+                            );
+                        }
+                        TransferKind::DeviceToHost => {
+                            let src = self.device_identifier(value_id)?;
+                            let dst = Expr::Identifier(
+                                self.hostmem2identifier[&kernel.outputs[0]].clone(),
+                            );
+                            self.stmts.push(
+                                Memcpy {
+                                    dst,
+                                    src,
+                                    mem_size,
+                                    kind: CudaMemcpyKind::DeviceToHost,
+                                    stream: stream_id,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+
                 Operator::Identity | Operator::Reinterpret(_) => {
                     let input_chunk = self
                         .value2chunk
@@ -1456,29 +1439,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                     .into(),
                 );
             }
-        }
-
-        for output in kernel
-            .outputs
-            .iter()
-            .filter(|v| self.schedule.outputs.contains(v))
-        {
-            let dst = self
-                .hostmem2identifier
-                .get(output)
-                .ok_or(BuildError::NoHostVariable(*output))?;
-            let src = self.device_identifier(*output)?;
-            let mem_size = MemSize::Single(self.single_mem_size(*output)?);
-            self.stmts.push(
-                Memcpy {
-                    dst: Expr::Identifier(dst.clone()),
-                    src,
-                    mem_size,
-                    kind: CudaMemcpyKind::DeviceToHost,
-                    stream: stream_id,
-                }
-                .into(),
-            );
         }
 
         if self.to_record_events.contains(&event_id) {

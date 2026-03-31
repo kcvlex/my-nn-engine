@@ -24,7 +24,7 @@ impl SchedulePass for StreamAllocPass {
     }
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug, Ord, PartialOrd)]
 pub struct StreamId(usize);
 
 impl StreamId {
