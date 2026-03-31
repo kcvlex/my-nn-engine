@@ -226,7 +226,7 @@ pub struct HostCodeGenerator<'sched> {
     stmts: Vec<Statement>,
 
     streams: &'sched HashMap<KernelId, KernelStreamAssignment>,
-    to_record_events: HashSet<EventId>,
+    to_record_events: BTreeSet<EventId>,
 
     value2chunk: HashMap<ValueId, ChunkId>,
     hostmem2identifier: HashMap<ValueId, String>,

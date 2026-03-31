@@ -1,5 +1,5 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use indexmap::IndexMap;
 use indexmap::IndexSet;
@@ -35,8 +35,8 @@ impl SchedulePass for MemAllocPass {
 struct DependencyGraph {
     value2defined: IndexMap<ValueId, KernelId>,
     value2used: IndexMap<ValueId, IndexSet<(KernelId, usize)>>,
-    inputs_set: HashSet<ValueId>,
-    outputs_set: HashSet<ValueId>,
+    inputs_set: BTreeSet<ValueId>,
+    outputs_set: BTreeSet<ValueId>,
 }
 
 impl DependencyGraph {
@@ -50,11 +50,11 @@ impl DependencyGraph {
                     .iter()
                     .chain(schedule.initializers.iter())
                     .copied()
-                    .collect::<HashSet<_>>();
-                let outputs_set = schedule.outputs.iter().copied().collect::<HashSet<_>>();
+                    .collect::<BTreeSet<_>>();
+                let outputs_set = schedule.outputs.iter().copied().collect::<BTreeSet<_>>();
                 (inputs_set, outputs_set)
             }
-            Target::CUDA => (HashSet::new(), HashSet::new()),
+            Target::CUDA => (BTreeSet::new(), BTreeSet::new()),
         };
         let ignore = |x| inputs_set.contains(x) || outputs_set.contains(x);
         for (kernel_id, kernel) in schedule.kernels.0.iter() {
