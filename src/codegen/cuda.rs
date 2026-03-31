@@ -244,6 +244,8 @@ pub struct HostCodeGenerator<'sched> {
 }
 
 pub struct HostCode {
+    state_fields: Vec<String>,
+    destroy_body: Vec<Statement>,
     decl_values: Vec<Statement>,
     decl_cuda_objs: Vec<Statement>,
     computes: Vec<Statement>,
@@ -476,7 +478,11 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         );
 
         let ctx = CudnnContext::DefaultContext;
-        stmts.push(CudnnOps::GetConvolutionForwardWorkspaceSize { ctx, id: setting }.into());
+        stmts.push(Statement::Raw(format!(
+            "{}.find_best_algo(&{});",
+            setting.setting(),
+            ctx.ctx(),
+        )));
 
         let init_fn = format!("init_cudnn_{}", self.kernel_id.index());
         let init_fn_decl = format!(
@@ -678,27 +684,31 @@ impl<'sched> HostCodeGenerator<'sched> {
 
             self.stmts.push(CudnnOps::Create(ctx).into());
             self.stmts.push(CudnnOps::SetStream(*stream_id).into());
+
+            self.stmts
+                .push(Statement::Raw("if (!state->initialized) {".to_string()));
             for kernel_id in kernels.iter().copied() {
                 let setting = CudnnSettingName::KernelId(kernel_id);
-                self.stmts.push(Statement::Raw(format!(
-                    "CudnnConvSetting {setting};",
-                    setting = setting.setting()
-                )));
                 let code = CudnnCodeGenerator::new(self.schedule, kernel_id).generate()?;
                 self.stmts.push(Statement::Raw(format!(
-                    "{init_fn}({setting}, {ctx});",
+                    "  {init_fn}({ss}, {ctx});",
                     init_fn = code.init_fn,
-                    setting = setting.setting(),
-                    ctx = CudnnContext::StreamContext(*stream_id).ctx(),
-                )));
-                self.stmts.push(Statement::Raw(format!(
-                    "{workspace_size_max} = std::max({workspace_size_max}, {workspace_size});",
-                    workspace_size_max = ctx.workspace_max_size(),
-                    workspace_size = setting.workspace_size(),
+                    ss = setting.state_setting(),
+                    ctx = ctx.ctx(),
                 )));
                 self.separated_codes.push(SeparatedCode::Cudnn(code));
             }
+            self.stmts.push(Statement::Raw("}".to_string()));
 
+            // Compute workspace max from state settings (valid on all runs)
+            for kernel_id in kernels.iter().copied() {
+                let setting = CudnnSettingName::KernelId(kernel_id);
+                self.stmts.push(Statement::Raw(format!(
+                    "{ws_max} = std::max({ws_max}, {ss}.workspace_size_in_bytes);",
+                    ws_max = ctx.workspace_max_size(),
+                    ss = setting.state_setting(),
+                )));
+            }
             self.stmts.push(
                 Malloc {
                     dst: Expr::Identifier(ctx.workspace_ptr()),
@@ -736,50 +746,17 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.stmts.push(CublasApi::Destroy(*handler).into());
         }
 
-        for (stream_id, kernels) in self.cudnn_ctxs.iter() {
-            for kernel_id in kernels.iter().copied() {
-                let setting = CudnnSettingName::KernelId(kernel_id);
-                self.stmts.push(
-                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                        id: setting,
-                        role: TensorRole::Input,
-                    })
-                    .into(),
-                );
-                self.stmts.push(
-                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                        id: setting,
-                        role: TensorRole::Output,
-                    })
-                    .into(),
-                );
-                if self.schedule.kernels[kernel_id]
-                    .inputs
-                    .get(args::CONV_BIAS)
-                    .is_some()
-                {
-                    self.stmts.push(
-                        CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                            id: setting,
-                            role: TensorRole::Bias,
-                        })
-                        .into(),
-                    );
-                }
-                self.stmts
-                    .push(CudnnOps::DestroyFilterDescriptor(setting).into());
-                self.stmts
-                    .push(CudnnOps::DestroyConvolutionDescriptor(setting).into());
-                self.stmts
-                    .push(CudnnOps::DestroyActivationDescriptor(setting).into());
-            }
-
+        for (stream_id, _) in self.cudnn_ctxs.iter() {
             let ctx = CudnnContext::StreamContext(*stream_id);
             self.stmts
                 .push(Free(Expr::Identifier(ctx.workspace_ptr())).into());
             self.stmts.push(CudnnOps::Destroy(ctx).into());
         }
 
+        if !self.cudnn_ctxs.is_empty() {
+            self.stmts
+                .push(Statement::Raw("state->initialized = true;".to_string()));
+        }
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
@@ -1104,34 +1081,24 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let template_ty = input_ty.elem_type.to_string();
                     let setting = CudnnSettingName::KernelId(kernel_id);
 
-                    self.stmts.push(Statement::Raw(format!(
-                        "{setting}.x = {input};",
-                        setting = setting.setting(),
-                        input = input,
-                    )));
-                    self.stmts.push(Statement::Raw(format!(
-                        "{setting}.w = {weights};",
-                        setting = setting.setting(),
-                        weights = weights,
-                    )));
-                    self.stmts.push(Statement::Raw(format!(
-                        "{setting}.y = {output};",
-                        setting = setting.setting(),
-                        output = output,
-                    )));
+                    let ss = setting.state_setting();
+                    self.stmts
+                        .push(Statement::Raw(format!("{ss}.x = {input};")));
+                    self.stmts
+                        .push(Statement::Raw(format!("{ss}.w = {weights};")));
+                    self.stmts
+                        .push(Statement::Raw(format!("{ss}.y = {output};")));
                     let func = if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
                         self.stmts.push(Statement::Raw(format!(
-                            "{setting}.bias = {bias};",
-                            setting = setting.setting(),
-                            bias = self.device_identifier(bias)?,
+                            "{ss}.bias = {};",
+                            self.device_identifier(bias)?,
                         )));
                         "call_conv_bias_activation_forward"
                     } else {
                         "call_conv_forward"
                     };
                     self.stmts.push(Statement::Raw(format!(
-                        "{setting}.{func}<{ty}>(&{ctx});",
-                        setting = setting.setting(),
+                        "{ss}.{func}<{ty}>(&{ctx});",
                         func = func,
                         ty = template_ty,
                         ctx = cudnn_handler.ctx()
@@ -1545,7 +1512,49 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.includes.insert(Include::Local("cudnn_setting.h"));
         }
 
+        let mut state_fields = Vec::new();
+        let mut destroy_body = Vec::new();
+        for (_, kernels) in self.cudnn_ctxs.iter() {
+            for kernel_id in kernels.iter().copied() {
+                let setting = CudnnSettingName::KernelId(kernel_id);
+                state_fields.push(format!("CudnnConvSetting {};", setting.setting()));
+                let ss = CudnnSettingName::StateKernelId(kernel_id);
+                destroy_body.push(
+                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                        id: ss,
+                        role: TensorRole::Input,
+                    })
+                    .into(),
+                );
+                destroy_body.push(
+                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                        id: ss,
+                        role: TensorRole::Output,
+                    })
+                    .into(),
+                );
+                destroy_body.push(CudnnOps::DestroyFilterDescriptor(ss).into());
+                destroy_body.push(CudnnOps::DestroyConvolutionDescriptor(ss).into());
+                if self.schedule.kernels[kernel_id]
+                    .inputs
+                    .get(args::CONV_BIAS)
+                    .is_some()
+                {
+                    destroy_body.push(
+                        CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
+                            id: ss,
+                            role: TensorRole::Bias,
+                        })
+                        .into(),
+                    );
+                }
+                destroy_body.push(CudnnOps::DestroyActivationDescriptor(ss).into());
+            }
+        }
+
         Ok(HostCode {
+            state_fields,
+            destroy_body,
             decl_values,
             decl_cuda_objs,
             computes,
@@ -1586,7 +1595,37 @@ impl HostCode {
             }
         }
 
-        writeln!(writer, "extern \"C\" void model(void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{")?;
+        // ModelState struct
+        writeln!(writer, "struct ModelState {{")?;
+        writeln!(writer, "  bool initialized = false;")?;
+        for field in &self.state_fields {
+            writeln!(writer, "  {field}")?;
+        }
+        writeln!(writer, "}};\n")?;
+
+        let destroy_body = self
+            .destroy_body
+            .iter()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        write!(
+            writer,
+            r#"extern "C" void* model_init() {{
+  return new ModelState;
+}}
+
+extern "C" void model_destroy(void *ptr) {{
+  [[maybe_unused]] auto *state = static_cast<ModelState*>(ptr);
+{destroy_body}
+  delete state;
+}}
+
+extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
+  [[maybe_unused]] auto *state = static_cast<ModelState*>(state_ptr);
+"#
+        )?;
 
         if self.profile {
             writeln!(

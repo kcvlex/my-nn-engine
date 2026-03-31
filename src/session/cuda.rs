@@ -17,7 +17,10 @@ use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
+type InitType = unsafe extern "C" fn() -> *mut std::ffi::c_void;
+type RunType =
+    unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8, *const *const u8);
+type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
 pub struct SessionCUDA {
     #[allow(dead_code)]
@@ -27,7 +30,9 @@ pub struct SessionCUDA {
 
     #[allow(dead_code)]
     lib: libloading::Library,
-    func: CodeType,
+    run_func: RunType,
+    destroy_func: DestroyType,
+    state: *mut std::ffi::c_void,
 }
 
 impl SessionCUDA {
@@ -125,9 +130,17 @@ impl SessionCUDA {
 
         let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-        let func: libloading::Symbol<CodeType> = unsafe { lib.get(b"model") }
+
+        let init_func: libloading::Symbol<InitType> = unsafe { lib.get(b"model_init") }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-        let func = *func;
+        let run_func: libloading::Symbol<RunType> = unsafe { lib.get(b"model") }
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        let destroy_func: libloading::Symbol<DestroyType> = unsafe { lib.get(b"model_destroy") }
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
+        let run_func = *run_func;
+        let destroy_func = *destroy_func;
+        let state = unsafe { init_func() };
 
         info!("Loaded");
 
@@ -135,7 +148,9 @@ impl SessionCUDA {
             input_ty,
             output_ty,
             lib,
-            func,
+            run_func,
+            destroy_func,
+            state,
             initializer,
         })
     }
@@ -158,7 +173,8 @@ impl SessionCUDA {
             .map(|t| t.as_ptr())
             .collect::<Vec<_>>();
         unsafe {
-            (self.func)(
+            (self.run_func)(
+                self.state,
                 output_ptrs.as_ptr(),
                 input_ptrs.as_ptr(),
                 initializer_ptrs.as_ptr(),
@@ -168,5 +184,15 @@ impl SessionCUDA {
             .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
             .collect::<Vec<_>>();
         Ok(outputs)
+    }
+}
+
+unsafe impl Send for SessionCUDA {}
+
+impl Drop for SessionCUDA {
+    fn drop(&mut self) {
+        unsafe {
+            (self.destroy_func)(self.state);
+        }
     }
 }

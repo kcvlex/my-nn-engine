@@ -92,6 +92,10 @@ pub enum CudnnNanPropagation {
 pub trait CudnnIdentifier {
     fn setting(&self) -> String;
 
+    fn state_setting(&self) -> String {
+        format!("state->{}", self.setting())
+    }
+
     fn input_descriptor(&self) -> String {
         format!("{}.x_desc", self.setting())
     }
@@ -115,20 +119,13 @@ pub trait CudnnIdentifier {
     fn activation_descriptor(&self) -> String {
         format!("{}.activation_desc", self.setting())
     }
-
-    fn workspace_size(&self) -> String {
-        format!("{}.workspace_size_in_bytes", self.setting())
-    }
-
-    fn fwd_algo(&self) -> String {
-        format!("{}.algo", self.setting())
-    }
 }
 
 #[derive(Clone, Copy)]
 pub enum CudnnSettingName {
     DefaultName,
     KernelId(KernelId),
+    StateKernelId(KernelId),
 }
 
 impl CudnnIdentifier for CudnnSettingName {
@@ -136,6 +133,9 @@ impl CudnnIdentifier for CudnnSettingName {
         match self {
             CudnnSettingName::DefaultName => "setting".to_string(),
             CudnnSettingName::KernelId(id) => format!("cudnn_setting{}", id.index()),
+            CudnnSettingName::StateKernelId(id) => {
+                format!("state->cudnn_setting{}", id.index())
+            }
         }
     }
 }
@@ -246,11 +246,6 @@ pub enum CudnnOps {
         coef: f64,
     },
     SetStream(StreamId),
-
-    GetConvolutionForwardWorkspaceSize {
-        ctx: CudnnContext,
-        id: CudnnSettingName,
-    },
 }
 
 impl std::fmt::Display for CudnnOps {
@@ -392,19 +387,6 @@ impl std::fmt::Display for CudnnOps {
                     "cudnnSetStream({}, {})",
                     CudnnContext::StreamContext(*stream_id).handler(),
                     stream_id
-                )
-            }
-            Self::GetConvolutionForwardWorkspaceSize { ctx: handler, id } => {
-                write!(
-                    f,
-                    "cudnnGetConvolutionForwardWorkspaceSize({}, {}, {}, {}, {}, {}, &{})",
-                    handler.handler(),
-                    id.input_descriptor(),
-                    id.filter_descriptor(),
-                    id.convolution_descriptor(),
-                    id.output_descriptor(),
-                    id.fwd_algo(),
-                    id.workspace_size(),
                 )
             }
         }

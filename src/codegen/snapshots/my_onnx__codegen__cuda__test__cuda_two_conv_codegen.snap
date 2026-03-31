@@ -29,7 +29,7 @@ void init_cudnn_0(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
   cudnnCheckErr(cudnnSetFilter4dDescriptor(setting.w_desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, 8, 3, 3, 3));
   cudnnCheckErr(cudnnCreateConvolutionDescriptor(&setting.conv_desc));
   cudnnCheckErr(cudnnSetConvolution2dDescriptor(setting.conv_desc, 1, 1, 1, 1, 1, 1, CUDNN_CROSS_CORRELATION, CUDNN_DATA_FLOAT));
-  cudnnCheckErr(cudnnGetConvolutionForwardWorkspaceSize(cudnn_handler_ctx.handle, setting.x_desc, setting.w_desc, setting.conv_desc, setting.y_desc, setting.algo, &setting.workspace_size_in_bytes));
+  setting.find_best_algo(&cudnn_handler_ctx);
 }
 void init_cudnn_2(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
   cudnnCheckErr(cudnnCreateTensorDescriptor(&setting.x_desc));
@@ -40,9 +40,36 @@ void init_cudnn_2(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
   cudnnCheckErr(cudnnSetFilter4dDescriptor(setting.w_desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, 16, 8, 3, 3));
   cudnnCheckErr(cudnnCreateConvolutionDescriptor(&setting.conv_desc));
   cudnnCheckErr(cudnnSetConvolution2dDescriptor(setting.conv_desc, 1, 1, 1, 1, 1, 1, CUDNN_CROSS_CORRELATION, CUDNN_DATA_FLOAT));
-  cudnnCheckErr(cudnnGetConvolutionForwardWorkspaceSize(cudnn_handler_ctx.handle, setting.x_desc, setting.w_desc, setting.conv_desc, setting.y_desc, setting.algo, &setting.workspace_size_in_bytes));
+  setting.find_best_algo(&cudnn_handler_ctx);
 }
-extern "C" void model(void **output, void **input, void **initializer) {
+struct ModelState {
+  bool initialized = false;
+  CudnnConvSetting cudnn_setting0;
+  CudnnConvSetting cudnn_setting2;
+};
+
+extern "C" void* model_init() {
+  return new ModelState;
+}
+
+extern "C" void model_destroy(void *ptr) {
+  auto *state = static_cast<ModelState*>(ptr);
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting0.x_desc));
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting0.y_desc));
+  cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting0.w_desc));
+  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(state->cudnn_setting0.conv_desc));
+  cudnnCheckErr(cudnnDestroyActivationDescriptor(state->cudnn_setting0.activation_desc));
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.x_desc));
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.y_desc));
+  cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting2.w_desc));
+  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(state->cudnn_setting2.conv_desc));
+  cudnnCheckErr(cudnnDestroyActivationDescriptor(state->cudnn_setting2.activation_desc));
+  delete state;
+}
+
+extern "C" void model(void *state_ptr, void **output, void **input, void **initializer) {
+  auto *state = static_cast<ModelState*>(state_ptr);
+  (void)state;
   float *h_input_2 = (float *)(input[0]);
   float *h_initializer_0 = (float *)(initializer[0]);
   float *h_initializer_1 = (float *)(initializer[1]);
@@ -58,41 +85,32 @@ extern "C" void model(void **output, void **input, void **initializer) {
   CudnnHandlerContext cudnn_handler_ctx0;
   cudnnCheckErr(cudnnCreate(&cudnn_handler_ctx0.handle));
   cudnnCheckErr(cudnnSetStream(cudnn_handler_ctx0.handle, stream_0));
-  CudnnConvSetting cudnn_setting0;
-  init_cudnn_0(cudnn_setting0, cudnn_handler_ctx0);
-  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, cudnn_setting0.workspace_size_in_bytes);
-  CudnnConvSetting cudnn_setting2;
-  init_cudnn_2(cudnn_setting2, cudnn_handler_ctx0);
-  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, cudnn_setting2.workspace_size_in_bytes);
+  if (!state->initialized) {
+    init_cudnn_0(state->cudnn_setting0, cudnn_handler_ctx0);
+    init_cudnn_2(state->cudnn_setting2, cudnn_handler_ctx0);
+  }
+  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting0.workspace_size_in_bytes);
+  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting2.workspace_size_in_bytes);
   cudaCheckErr(cudaMalloc(&cudnn_handler_ctx0.workspace, cudnn_handler_ctx0.workspace_max_size_in_bytes));
   cudaCheckErr(cudaMemcpyAsync(d_chunk_0, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
   cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
-  cudnn_setting0.x = d_chunk_0;
-  cudnn_setting0.w = d_chunk_1;
-  cudnn_setting0.y = d_chunk_2;
-  cudnn_setting0.call_conv_forward<float>(&cudnn_handler_ctx0);
+  state->cudnn_setting0.x = d_chunk_0;
+  state->cudnn_setting0.w = d_chunk_1;
+  state->cudnn_setting0.y = d_chunk_2;
+  state->cudnn_setting0.call_conv_forward<float>(&cudnn_handler_ctx0);
   kernel_1_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_2, (float*)d_chunk_2);
   cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_initializer_1, 1152 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
-  cudnn_setting2.x = d_chunk_2;
-  cudnn_setting2.w = d_chunk_1;
-  cudnn_setting2.y = d_chunk_0;
-  cudnn_setting2.call_conv_forward<float>(&cudnn_handler_ctx0);
+  state->cudnn_setting2.x = d_chunk_2;
+  state->cudnn_setting2.w = d_chunk_1;
+  state->cudnn_setting2.y = d_chunk_0;
+  state->cudnn_setting2.call_conv_forward<float>(&cudnn_handler_ctx0);
   cudaCheckErr(cudaMemcpyAsync(h_output_3, d_chunk_0, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
   cudaCheckErr(cudaFree(d_chunk_0));
   cudaCheckErr(cudaFree(d_chunk_1));
   cudaCheckErr(cudaFree(d_chunk_2));
   cudaCheckErr(cudaStreamDestroy(stream_0));
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(cudnn_setting0.x_desc));
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(cudnn_setting0.y_desc));
-  cudnnCheckErr(cudnnDestroyFilterDescriptor(cudnn_setting0.w_desc));
-  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(cudnn_setting0.conv_desc));
-  cudnnCheckErr(cudnnDestroyActivationDescriptor(cudnn_setting0.activation_desc));
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(cudnn_setting2.x_desc));
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(cudnn_setting2.y_desc));
-  cudnnCheckErr(cudnnDestroyFilterDescriptor(cudnn_setting2.w_desc));
-  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(cudnn_setting2.conv_desc));
-  cudnnCheckErr(cudnnDestroyActivationDescriptor(cudnn_setting2.activation_desc));
   cudaCheckErr(cudaFree(cudnn_handler_ctx0.workspace));
   cudnnCheckErr(cudnnDestroy(cudnn_handler_ctx0.handle));
+  state->initialized = true;
   cudaCheckErr(cudaDeviceSynchronize());
 }
