@@ -11,16 +11,16 @@ expression: code
 #include "common.cuh"
 #include "cudnn_setting.h"
 
-__device__ float kernel_4_device(float value_4) {
+__device__ float kernel_3_device(float value_4) {
     float local_0 = ((0 <= value_4) ? value_4 : 0);
 return local_0;
 };
-__global__ void kernel_4_global(float* value_5, float* value_4) {
+__global__ void kernel_3_global(float* value_5, float* value_4) {
     int gid = blockIdx.x * blockDim.x + threadIdx.x;
     if (2048 <= gid) return;
-    value_5[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)] = kernel_4_device(value_4[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)]);
+    value_5[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)] = kernel_3_device(value_4[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)]);
 }
-void init_cudnn_3(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
+void init_cudnn_2(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
   cudnnCheckErr(cudnnCreateTensorDescriptor(&setting.x_desc));
   cudnnCheckErr(cudnnSetTensor4dDescriptor(setting.x_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, 3, 16, 16));
   cudnnCheckErr(cudnnCreateTensorDescriptor(&setting.y_desc));
@@ -44,7 +44,7 @@ void init_cudnn_5(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
 }
 struct ModelState {
   bool initialized = false;
-  CudnnConvSetting cudnn_setting3;
+  CudnnConvSetting cudnn_setting2;
   CudnnConvSetting cudnn_setting5;
 };
 
@@ -54,11 +54,11 @@ extern "C" void* model_init() {
 
 extern "C" void model_destroy(void *ptr) {
   [[maybe_unused]] auto *state = static_cast<ModelState*>(ptr);
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting3.x_desc));
-  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting3.y_desc));
-  cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting3.w_desc));
-  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(state->cudnn_setting3.conv_desc));
-  cudnnCheckErr(cudnnDestroyActivationDescriptor(state->cudnn_setting3.activation_desc));
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.x_desc));
+  cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.y_desc));
+  cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting2.w_desc));
+  cudnnCheckErr(cudnnDestroyConvolutionDescriptor(state->cudnn_setting2.conv_desc));
+  cudnnCheckErr(cudnnDestroyActivationDescriptor(state->cudnn_setting2.activation_desc));
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting5.x_desc));
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting5.y_desc));
   cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting5.w_desc));
@@ -76,61 +76,40 @@ extern "C" void model(void *state_ptr, void **output, void **input, void **initi
   void *d_chunk_0;
   void *d_chunk_1;
   void *d_chunk_2;
-  void *d_chunk_3;
   cudaCheckErr(cudaMalloc(&d_chunk_0, std::max({ 2048 * sizeof(float) })));
   cudaCheckErr(cudaMalloc(&d_chunk_1, std::max({ 4096 * sizeof(float) })));
   cudaCheckErr(cudaMalloc(&d_chunk_2, std::max({ 4096 * sizeof(float) })));
-  cudaCheckErr(cudaMalloc(&d_chunk_3, std::max({ 768 * sizeof(float) })));
-  cudaEvent_t event_0;
-  cudaCheckErr(cudaEventCreate(&event_0));
-  cudaEvent_t event_1;
-  cudaCheckErr(cudaEventCreate(&event_1));
   cudaStream_t stream_0;
   cudaCheckErr(cudaStreamCreate(&stream_0));
-  cudaStream_t stream_1;
-  cudaCheckErr(cudaStreamCreate(&stream_1));
-  cudaStream_t stream_2;
-  cudaCheckErr(cudaStreamCreate(&stream_2));
-  CudnnHandlerContext cudnn_handler_ctx2;
-  cudnnCheckErr(cudnnCreate(&cudnn_handler_ctx2.handle));
-  cudnnCheckErr(cudnnSetStream(cudnn_handler_ctx2.handle, stream_2));
+  CudnnHandlerContext cudnn_handler_ctx0;
+  cudnnCheckErr(cudnnCreate(&cudnn_handler_ctx0.handle));
+  cudnnCheckErr(cudnnSetStream(cudnn_handler_ctx0.handle, stream_0));
   if (!state->initialized) {
-    init_cudnn_3(state->cudnn_setting3, cudnn_handler_ctx2);
-    init_cudnn_5(state->cudnn_setting5, cudnn_handler_ctx2);
+    init_cudnn_2(state->cudnn_setting2, cudnn_handler_ctx0);
+    init_cudnn_5(state->cudnn_setting5, cudnn_handler_ctx0);
   }
-  cudnn_handler_ctx2.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx2.workspace_max_size_in_bytes, state->cudnn_setting3.workspace_size_in_bytes);
-  cudnn_handler_ctx2.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx2.workspace_max_size_in_bytes, state->cudnn_setting5.workspace_size_in_bytes);
-  cudaCheckErr(cudaMalloc(&cudnn_handler_ctx2.workspace, cudnn_handler_ctx2.workspace_max_size_in_bytes));
+  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting2.workspace_size_in_bytes);
+  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting5.workspace_size_in_bytes);
+  cudaCheckErr(cudaMalloc(&cudnn_handler_ctx0.workspace, cudnn_handler_ctx0.workspace_max_size_in_bytes));
+  cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
+  cudaCheckErr(cudaMemcpyAsync(d_chunk_2, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
+  state->cudnn_setting2.x = d_chunk_1;
+  state->cudnn_setting2.w = d_chunk_2;
+  state->cudnn_setting2.y = d_chunk_0;
+  state->cudnn_setting2.call_conv_forward<float>(&cudnn_handler_ctx0);
+  kernel_3_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_0, (float*)d_chunk_0);
   cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_initializer_1, 1152 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
-  cudaCheckErr(cudaEventRecord(event_0, stream_0));
-  cudaCheckErr(cudaStreamWaitEvent(stream_1, event_0));
-  cudaCheckErr(cudaMemcpyAsync(d_chunk_2, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice, stream_1));
-  cudaCheckErr(cudaEventRecord(event_1, stream_1));
-  cudaCheckErr(cudaStreamWaitEvent(stream_2, event_1));
-  cudaCheckErr(cudaMemcpyAsync(d_chunk_3, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_2));
-  cudaCheckErr(cudaStreamWaitEvent(stream_2, event_1));
-  state->cudnn_setting3.x = d_chunk_3;
-  state->cudnn_setting3.w = d_chunk_2;
-  state->cudnn_setting3.y = d_chunk_0;
-  state->cudnn_setting3.call_conv_forward<float>(&cudnn_handler_ctx2);
-  kernel_4_global<<<8, 256, 0, stream_2>>>((float*)d_chunk_0, (float*)d_chunk_0);
-  cudaCheckErr(cudaStreamWaitEvent(stream_2, event_0));
   state->cudnn_setting5.x = d_chunk_0;
   state->cudnn_setting5.w = d_chunk_1;
   state->cudnn_setting5.y = d_chunk_2;
-  state->cudnn_setting5.call_conv_forward<float>(&cudnn_handler_ctx2);
-  cudaCheckErr(cudaMemcpyAsync(h_output_15, d_chunk_2, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_2));
+  state->cudnn_setting5.call_conv_forward<float>(&cudnn_handler_ctx0);
+  cudaCheckErr(cudaMemcpyAsync(h_output_15, d_chunk_2, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
   cudaCheckErr(cudaFree(d_chunk_0));
   cudaCheckErr(cudaFree(d_chunk_1));
   cudaCheckErr(cudaFree(d_chunk_2));
-  cudaCheckErr(cudaFree(d_chunk_3));
   cudaCheckErr(cudaStreamDestroy(stream_0));
-  cudaCheckErr(cudaStreamDestroy(stream_1));
-  cudaCheckErr(cudaStreamDestroy(stream_2));
-  cudaCheckErr(cudaEventDestroy(event_0));
-  cudaCheckErr(cudaEventDestroy(event_1));
-  cudaCheckErr(cudaFree(cudnn_handler_ctx2.workspace));
-  cudnnCheckErr(cudnnDestroy(cudnn_handler_ctx2.handle));
+  cudaCheckErr(cudaFree(cudnn_handler_ctx0.workspace));
+  cudnnCheckErr(cudnnDestroy(cudnn_handler_ctx0.handle));
   state->initialized = true;
   cudaCheckErr(cudaDeviceSynchronize());
 }

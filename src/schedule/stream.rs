@@ -1,10 +1,8 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::collections::HashSet;
-
-use indexmap::IndexSet;
 
 use crate::onnx::model::ValueId;
+use crate::onnx::operator::Operator;
+use crate::onnx::operator::TransferKind;
 use crate::schedule::*;
 
 pub struct StreamAllocResult(pub HashMap<KernelId, KernelStreamAssignment>);
@@ -19,8 +17,24 @@ impl SchedulePass for StreamAllocPass {
     }
 
     fn run(&self, schedule: &mut Schedule) {
-        let result = StreamAllocator::new(schedule, self.num_streams).run();
-        schedule.analysis.insert(StreamAllocResult(result));
+        let (result, execution_order) = StreamAllocator::new(schedule, self.num_streams).run();
+
+        let old_kernels = std::mem::take(&mut schedule.kernels);
+        let kernel_map: HashMap<KernelId, Kernel> =
+            old_kernels.iter().map(|(id, k)| (id, k.clone())).collect();
+        let mut new_kernels = Kernels::default();
+        let mut id_remap: HashMap<KernelId, KernelId> = HashMap::new();
+        for old_kid in &execution_order {
+            let new_kid = new_kernels.0.alloc(kernel_map[old_kid].clone());
+            id_remap.insert(*old_kid, new_kid);
+        }
+        schedule.kernels = new_kernels;
+
+        let remapped_result = result
+            .into_iter()
+            .map(|(old_kid, assign)| (id_remap[&old_kid], assign))
+            .collect();
+        schedule.analysis.insert(StreamAllocResult(remapped_result));
     }
 }
 
@@ -54,136 +68,16 @@ impl std::fmt::Display for EventId {
     }
 }
 
-fn build_chunk_deps(sched: &Schedule) -> HashMap<KernelId, Vec<KernelId>> {
-    let value2used = {
-        let mut res: HashMap<ValueId, Vec<KernelId>> = HashMap::new();
-        let outputs = sched.outputs.iter().collect::<HashSet<_>>();
-        for (kernel_id, kernel) in sched.kernels.iter() {
-            for v in kernel
-                .inputs
-                .iter()
-                .chain(kernel.outputs.iter().filter(|o| outputs.contains(o)))
-            {
-                res.entry(*v).or_default().push(kernel_id);
-            }
-        }
-        res
-    };
-
-    let mut value2defined = {
-        let mut res: HashMap<ValueId, KernelId> = HashMap::new();
-        for (kernel_id, kernel) in sched.kernels.iter() {
-            for output in kernel.outputs.iter() {
-                match res.entry(*output) {
-                    Entry::Occupied(_) => {
-                        panic!("value defined multiple times");
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(kernel_id);
-                    }
-                }
-            }
-        }
-        res
-    };
-
-    let value2chunk = {
-        // TODO: Consolidate with the implementation in HostCodeGenerator.
-        let mem_alloc_result = sched.analysis.get::<super::mem_alloc::MemAllocResult>();
-        let mut res = HashMap::new();
-        for mem in mem_alloc_result.0.values().flatten() {
-            let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
-                chunk_id
-            } else {
-                unreachable!("non chunk");
-            };
-
-            match res.entry(mem.value_id) {
-                Entry::Occupied(entry) => {
-                    assert!(*entry.get() == chunk_id);
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(chunk_id);
-                }
-            }
-        }
-        res
-    };
-
-    let mut from_host = sched
-        .inputs
-        .iter()
-        .chain(sched.initializers.iter())
-        .copied()
-        .collect::<HashSet<_>>();
-    let mut chunk2current_value: HashMap<ChunkId, ValueId> = HashMap::new();
-    let mut res: HashMap<KernelId, Vec<KernelId>> = HashMap::new();
-
-    for (kernel_id, kernel) in sched.kernels.iter() {
-        let mut deps = Vec::new();
-
-        for input in kernel.inputs.iter() {
-            let chunk = value2chunk[input];
-            if from_host.contains(input) {
-                match chunk2current_value.entry(chunk) {
-                    Entry::Occupied(mut entry) => {
-                        let value_id = entry.get();
-                        assert!(*input != *value_id);
-                        if let Some(users) = value2used.get(value_id) {
-                            for user in users.iter() {
-                                deps.push(*user);
-                            }
-                        }
-                        entry.insert(*input);
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(*input);
-                    }
-                }
-                from_host.remove(input);
-                value2defined.insert(*input, kernel_id);
-            } else {
-                assert!(chunk2current_value[&chunk] == *input);
-                deps.push(value2defined[input]);
-            }
-        }
-
-        for output in kernel.outputs.iter() {
-            let chunk = value2chunk[output];
-
-            if let Some(cur) = chunk2current_value.get(&chunk) {
-                for user in value2used[cur].iter().filter(|u| **u != kernel_id) {
-                    deps.push(*user);
-                }
-            }
-
-            chunk2current_value.insert(chunk, *output);
-        }
-
-        // Assert.
-        for dep in deps.iter() {
-            assert!(*dep != kernel_id);
-        }
-
-        res.insert(kernel_id, deps);
-    }
-
-    res
-}
-
 struct EventTracker {
     num_streams: usize,
-
     event2stream: Vec<StreamId>,
     kernel2event: HashMap<KernelId, EventId>,
-
     waiting_events: Vec<Vec<Option<EventId>>>,
-
     event_slot: usize,
 }
 
 impl EventTracker {
-    pub fn new(num_streams: usize) -> Self {
+    fn new(num_streams: usize) -> Self {
         Self {
             num_streams,
             event2stream: Vec::new(),
@@ -219,90 +113,167 @@ impl EventTracker {
     }
 }
 
-struct StreamAllocator<'sched> {
-    schedule: &'sched Schedule,
-
-    streams: IndexSet<StreamId>,
-    running: Vec<Option<KernelId>>,
-    event_tracker: EventTracker,
-    chunk_deps: HashMap<KernelId, Vec<KernelId>>,
-}
-
 pub struct KernelStreamAssignment {
     pub stream_id: StreamId,
     pub event_id: EventId,
     pub to_wait: Vec<EventId>,
 }
 
+struct StreamAllocator<'sched> {
+    schedule: &'sched Schedule,
+    num_streams: usize,
+    event_tracker: EventTracker,
+    kernel2order: HashMap<KernelId, usize>,
+    kernel2stream: HashMap<KernelId, StreamId>,
+    stream_load: Vec<usize>,
+    value2defined: HashMap<ValueId, KernelId>,
+}
+
 impl<'sched> StreamAllocator<'sched> {
     fn new(schedule: &'sched Schedule, num_streams: usize) -> Self {
-        let streams = (0..num_streams).map(StreamId).collect();
+        let mut value2defined = HashMap::new();
+        for (kernel_id, kernel) in schedule.kernels.iter() {
+            for output in &kernel.outputs {
+                value2defined.insert(*output, kernel_id);
+            }
+        }
         Self {
             schedule,
-            streams,
-            running: vec![None; num_streams],
+            num_streams,
             event_tracker: EventTracker::new(num_streams),
-            chunk_deps: build_chunk_deps(schedule),
+            kernel2order: HashMap::new(),
+            kernel2stream: HashMap::new(),
+            stream_load: vec![0; num_streams],
+            value2defined,
         }
     }
 
-    fn select_stream(&self, kernel_id: KernelId) -> StreamId {
-        let kernel = &self.schedule.kernels[kernel_id];
-        for stream_id in self.streams.iter().rev() {
-            let Some(running) = self.running[stream_id.index()] else {
-                continue;
+    fn find_h2d_producer(&self, value: ValueId) -> Option<KernelId> {
+        let kid = self.value2defined.get(&value)?;
+        let kernel = &self.schedule.kernels[*kid];
+        if matches_opaque!(kernel, Operator::Transfer(TransferKind::HostToDevice)) {
+            Some(*kid)
+        } else {
+            None
+        }
+    }
+
+    fn select_least_loaded_stream(&self) -> StreamId {
+        let (idx, _) = self
+            .stream_load
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, load)| **load)
+            .unwrap();
+        StreamId(idx)
+    }
+
+    fn assign(&mut self, kernel_id: KernelId, stream_id: StreamId, order: usize) {
+        self.kernel2order.insert(kernel_id, order);
+        self.kernel2stream.insert(kernel_id, stream_id);
+        self.stream_load[stream_id.index()] += 1;
+    }
+
+    // for kernel in non_h2d_kernels (topological order):
+    //     to_allocate = []
+    //     depends_on = []
+    //     for input in kernel.inputs:
+    //         if input is produced by H2D (and not yet allocated):
+    //             to_allocate.append(h2d_kernel)
+    //         else:
+    //             depends_on.append(producing_kernel)
+    //     to_allocate.append(kernel)
+    //
+    //     if depends_on is not empty:
+    //         stream = stream of the latest dependency (by topo order)
+    //     else:
+    //         stream = least loaded stream
+    //
+    //     for k in to_allocate:
+    //         assign k to stream
+    //
+    // This places each H2D transfer on the same stream as its consumer, just before it, enabling H2D/compute overlap across streams.
+    fn run(&mut self) -> (HashMap<KernelId, KernelStreamAssignment>, Vec<KernelId>) {
+        let compute_kernels: Vec<KernelId> = self
+            .schedule
+            .kernels
+            .iter()
+            .filter(|(_, k)| !matches_opaque!(k, Operator::Transfer(TransferKind::HostToDevice)))
+            .map(|(id, _)| id)
+            .collect();
+
+        let mut order_counter = 0;
+        let mut execution_order: Vec<KernelId> = Vec::new();
+
+        for &kernel_id in &compute_kernels {
+            let kernel = &self.schedule.kernels[kernel_id];
+
+            let mut to_allocate = Vec::new();
+            let mut depends_on = Vec::new();
+
+            for input in &kernel.inputs {
+                if let Some(h2d_kid) = self.find_h2d_producer(*input) {
+                    if !self.kernel2order.contains_key(&h2d_kid) {
+                        to_allocate.push(h2d_kid);
+                    }
+                } else if let Some(&dep_kid) = self.value2defined.get(input) {
+                    if dep_kid != kernel_id {
+                        depends_on.push(dep_kid);
+                    }
+                }
+            }
+            to_allocate.push(kernel_id);
+
+            let stream = if !depends_on.is_empty() {
+                let latest = depends_on
+                    .iter()
+                    .filter_map(|kid| self.kernel2order.get(kid).map(|order| (*order, *kid)))
+                    .max_by_key(|(order, _)| *order);
+                if let Some((_, latest_kid)) = latest {
+                    self.kernel2stream[&latest_kid]
+                } else {
+                    self.select_least_loaded_stream()
+                }
+            } else {
+                self.select_least_loaded_stream()
             };
-            let running = &self.schedule.kernels[running];
-            if running
-                .outputs
-                .iter()
-                .any(|output| kernel.inputs.contains(output))
-            {
-                return *stream_id;
+
+            for kid in &to_allocate {
+                self.assign(*kid, stream, order_counter);
+                order_counter += 1;
+                execution_order.push(*kid);
             }
         }
 
-        *self.streams.first().unwrap()
-    }
+        let mut result = HashMap::new();
+        for &kernel_id in &execution_order {
+            let stream_id = self.kernel2stream[&kernel_id];
+            let event_id = self.event_tracker.new_event(kernel_id, stream_id);
 
-    fn assign_stream(&mut self, kernel_id: KernelId, stream_id: StreamId) -> EventId {
-        let event_id = self.event_tracker.new_event(kernel_id, stream_id);
-        for dep in self.chunk_deps[&kernel_id].iter() {
-            self.event_tracker.wait_kernel(event_id, *dep);
-        }
-        self.running[stream_id.index()] = Some(kernel_id);
-        self.streams.shift_remove(&stream_id);
-        self.streams.insert(stream_id);
-        event_id
-    }
+            let kernel = &self.schedule.kernels[kernel_id];
+            for input in &kernel.inputs {
+                if let Some(&dep_kid) = self.value2defined.get(input) {
+                    if dep_kid != kernel_id && self.kernel2order.contains_key(&dep_kid) {
+                        self.event_tracker.wait_kernel(event_id, dep_kid);
+                    }
+                }
+            }
 
-    fn run(&mut self) -> HashMap<KernelId, KernelStreamAssignment> {
-        self.schedule
-            .kernels
-            .iter()
-            .map(|(kernel_id, _)| {
-                let stream_id = self.select_stream(kernel_id);
-                let event_id = self.assign_stream(kernel_id, stream_id);
+            let to_wait = self.event_tracker.waiting_events[event_id.index()]
+                .iter()
+                .filter_map(|x| *x)
+                .collect::<Vec<_>>();
 
-                let to_wait = self.event_tracker.waiting_events[event_id.index()]
-                    .iter()
-                    .filter_map(|x| *x)
-                    .collect::<Vec<_>>();
-
-                let assign = KernelStreamAssignment {
+            result.insert(
+                kernel_id,
+                KernelStreamAssignment {
                     stream_id,
                     event_id,
                     to_wait,
-                };
-                (kernel_id, assign)
-            })
-            .collect()
-    }
-}
+                },
+            );
+        }
 
-pub fn allocate_streams(
-    schedule: &Schedule,
-    num_streams: usize,
-) -> HashMap<KernelId, KernelStreamAssignment> {
-    StreamAllocator::new(schedule, num_streams).run()
+        (result, execution_order)
+    }
 }

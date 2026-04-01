@@ -75,16 +75,16 @@ impl SchedulePassManager {
 
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
+    if options.target == Target::CUDA {
+        manager.add_pass(Box::new(stream::StreamAllocPass {
+            num_streams: options.num_cuda_streams,
+        }));
+    }
     manager.add_pass(Box::new(mem_alloc::MemAllocPass));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
             softmax_threshold: options.omp_softmax_threshold,
-        }));
-    }
-    if options.target == Target::CUDA {
-        manager.add_pass(Box::new(stream::StreamAllocPass {
-            num_streams: options.num_cuda_streams,
         }));
     }
     manager
@@ -106,7 +106,7 @@ pub struct Schedule {
     graph: Graph,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Kernel {
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,

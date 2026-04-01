@@ -81,25 +81,33 @@ impl DependencyGraph {
     }
 }
 
-#[derive(Default)]
 struct Chunks {
-    free_list: Vec<ChunkId>,
+    free_lists: Vec<Vec<ChunkId>>,
     slot: usize,
 }
 
 impl Chunks {
+    fn new(num_streams: usize) -> Self {
+        Self {
+            free_lists: vec![Vec::new(); num_streams.max(1)],
+            slot: 0,
+        }
+    }
+
     fn allocate(&mut self) -> ChunkId {
         let id = self.slot;
         self.slot += 1;
         id
     }
 
-    fn free(&mut self, id: ChunkId) {
-        self.free_list.push(id);
+    fn free(&mut self, id: ChunkId, stream: usize) {
+        self.free_lists[stream].push(id);
     }
 
-    fn reuse_or_new(&mut self) -> ChunkId {
-        self.free_list.pop().unwrap_or_else(|| self.allocate())
+    fn reuse_or_new(&mut self, stream: usize) -> ChunkId {
+        self.free_lists[stream]
+            .pop()
+            .unwrap_or_else(|| self.allocate())
     }
 }
 
@@ -109,18 +117,38 @@ pub(super) struct MemoryPlanner<'sched> {
     liveness_counter: IndexMap<ChunkId, usize>,
     chunks: Chunks,
     allocations: HashMap<ValueId, AllocateType>,
+    kernel2stream: HashMap<KernelId, usize>,
 }
 
 impl<'sched> MemoryPlanner<'sched> {
     pub(super) fn new(schedule: &'sched Schedule) -> Self {
         let deps = DependencyGraph::new(schedule);
 
+        let (num_streams, kernel2stream) = match schedule.options.target {
+            Target::CUDA => {
+                let stream_result = schedule.analysis.get::<super::stream::StreamAllocResult>();
+                let mut kernel2stream = HashMap::new();
+                let mut max_stream = 0;
+                for (kid, assign) in stream_result.0.iter() {
+                    let s = assign.stream_id.index();
+                    kernel2stream.insert(*kid, s);
+                    max_stream = max_stream.max(s);
+                }
+                (max_stream + 1, kernel2stream)
+            }
+            Target::CPU => {
+                let kernel2stream = schedule.kernels.iter().map(|(kid, _)| (kid, 0)).collect();
+                (1, kernel2stream)
+            }
+        };
+
         MemoryPlanner {
             schedule,
             deps,
             liveness_counter: IndexMap::new(),
-            chunks: Chunks::default(),
+            chunks: Chunks::new(num_streams),
             allocations: HashMap::new(),
+            kernel2stream,
         }
     }
 
@@ -201,6 +229,7 @@ impl<'sched> MemoryPlanner<'sched> {
     fn run_kernel(&mut self, kernel_id: KernelId) -> Vec<(ValueId, AllocateType)> {
         let mut res = Vec::new();
         let kernel = &self.schedule.kernels.0[kernel_id];
+        let stream = self.kernel2stream.get(&kernel_id).copied().unwrap_or(0);
 
         if self.schedule.options.target != Target::CPU {
             for input in kernel.inputs.iter() {
@@ -209,7 +238,7 @@ impl<'sched> MemoryPlanner<'sched> {
                         info.chunk_id().to_owned().expect("Input must be allocated");
                     }
                     None => {
-                        let chunk_id = self.chunks.reuse_or_new();
+                        let chunk_id = self.chunks.reuse_or_new(stream);
                         self.allocations
                             .insert(*input, AllocateType::Chunk(chunk_id));
                         *self.liveness_counter.entry(chunk_id).or_insert(0) +=
@@ -226,13 +255,11 @@ impl<'sched> MemoryPlanner<'sched> {
             } else {
                 match self.try_in_place(*output) {
                     Some(prev) => *self.allocations.get(&prev).unwrap(),
-                    None => AllocateType::Chunk(self.chunks.reuse_or_new()),
+                    None => AllocateType::Chunk(self.chunks.reuse_or_new(stream)),
                 }
             };
             res.push((*output, chunk));
             if let AllocateType::Chunk(chunk) = chunk {
-                // It is possible that the value is not used by any other kernels, e.g., the output
-                // of splitted one.
                 if let Some(used) = self.deps.value2used.get(output) {
                     *self.liveness_counter.entry(chunk).or_insert(0) += used.len();
                 }
@@ -251,7 +278,7 @@ impl<'sched> MemoryPlanner<'sched> {
             let counter = self.liveness_counter.get_mut(&chunk_id).unwrap();
             *counter -= 1;
             if *counter == 0 {
-                self.chunks.free(chunk_id);
+                self.chunks.free(chunk_id, stream);
             }
         }
         res
