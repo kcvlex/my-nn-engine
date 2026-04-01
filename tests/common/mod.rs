@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use my_onnx::onnx::load::*;
 use my_onnx::onnx::model::Graph;
@@ -79,6 +80,13 @@ pub fn run_validated_model(
         Some(&input_types),
         &Options::builder().target(target).build(),
     )?;
+
+    static CUDA_MUTEX: Mutex<()> = Mutex::new(());
+    let _guard = if matches!(target, Target::CUDA) {
+        Some(CUDA_MUTEX.lock().unwrap())
+    } else {
+        None
+    };
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)
         .map(|i| {

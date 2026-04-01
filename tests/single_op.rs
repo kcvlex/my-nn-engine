@@ -110,7 +110,10 @@ where
                 .target(target)
                 .omp_elementwise_threshold(10)
                 .build(),
-            Target::CUDA => Options::builder().target(target).build(),
+            Target::CUDA => Options::builder()
+                .target(target)
+                .num_cuda_streams(1)
+                .build(),
         };
         let session = Session::new(&path, None, &opt)?;
         f(session)?;
@@ -154,7 +157,10 @@ where
                 .target(target)
                 .omp_elementwise_threshold(10)
                 .build(),
-            Target::CUDA => Options::builder().target(target).build(),
+            Target::CUDA => Options::builder()
+                .target(target)
+                .num_cuda_streams(1)
+                .build(),
         };
         let session = Session::new(dir.join("model.onnx"), None, &opt)?;
         f(session, (&inputs, &outputs))?;
