@@ -51,3 +51,7 @@ Thumbs.db
 .env.*.local
 
 design.md
+
+# Profiler outputs
+*.nsys-rep
+*.ncu-rep
