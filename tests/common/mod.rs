@@ -2,6 +2,17 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
+
+static CUDA_MUTEX: Mutex<()> = Mutex::new(());
+
+pub fn cuda_lock(target: Target) -> Option<MutexGuard<'static, ()>> {
+    if matches!(target, Target::CUDA) {
+        Some(CUDA_MUTEX.lock().unwrap())
+    } else {
+        None
+    }
+}
 
 use my_onnx::onnx::load::*;
 use my_onnx::onnx::model::Graph;
@@ -81,12 +92,7 @@ pub fn run_validated_model(
         &Options::builder().target(target).build(),
     )?;
 
-    static CUDA_MUTEX: Mutex<()> = Mutex::new(());
-    let _guard = if matches!(target, Target::CUDA) {
-        Some(CUDA_MUTEX.lock().unwrap())
-    } else {
-        None
-    };
+    let _guard = cuda_lock(target);
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)
         .map(|i| {

@@ -1,3 +1,5 @@
+mod common;
+
 use itertools::izip;
 use my_onnx::onnx::load::*;
 use my_onnx::options::Options;
@@ -110,12 +112,10 @@ where
                 .target(target)
                 .omp_elementwise_threshold(10)
                 .build(),
-            Target::CUDA => Options::builder()
-                .target(target)
-                .num_cuda_streams(1)
-                .build(),
+            Target::CUDA => Options::builder().target(target).build(),
         };
         let session = Session::new(&path, None, &opt)?;
+        let _guard = common::cuda_lock(target);
         f(session)?;
     }
     Ok(())
@@ -157,12 +157,10 @@ where
                 .target(target)
                 .omp_elementwise_threshold(10)
                 .build(),
-            Target::CUDA => Options::builder()
-                .target(target)
-                .num_cuda_streams(1)
-                .build(),
+            Target::CUDA => Options::builder().target(target).build(),
         };
         let session = Session::new(dir.join("model.onnx"), None, &opt)?;
+        let _guard = common::cuda_lock(target);
         f(session, (&inputs, &outputs))?;
     }
     Ok(())
