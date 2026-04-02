@@ -51,7 +51,7 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
             target: opt.target,
             check_strides: true,
         }));
-        passes.add_pass(Box::new(NHWC2NCHWSinkAndFold::default()));
+        passes.add_pass(Box::new(NHWC2NCHWSinkAndFold::new(opt)));
         passes.add_pass(Box::new(ShapeVerification {
             target: opt.target,
             check_strides: true,

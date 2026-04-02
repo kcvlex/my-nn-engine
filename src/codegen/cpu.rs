@@ -824,7 +824,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     Layout::NCHW => {
                         translator.build_maxpool_nchw(&ptrs[0], &ptrs[1], pooling, entry)
                     }
-                    Layout::NHWC => unimplemented!("MaxPool NHWC"),
+                    Layout::NHWC => {
+                        translator.build_maxpool_nhwc(&ptrs[0], &ptrs[1], pooling, entry)
+                    }
                 },
                 Operator::Im2Col(ref im2col) => {
                     translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)

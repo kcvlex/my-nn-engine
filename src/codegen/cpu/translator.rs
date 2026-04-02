@@ -1090,6 +1090,244 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    // for n, oh, ow:
+    //   max_vals = [-inf; C]
+    //   for kh, kw:
+    //     ih = oh * stride_h + kh * dilation_h - pad_h
+    //     iw = ow * stride_w + kw * dilation_w - pad_w
+    //     if !oob(ih, iw):
+    //       for c in 0..C:
+    //         max_vals[c] = max(max_vals[c], src[n, ih, iw, c])
+    //   for c in 0..C:
+    //     dst[n, oh, ow, c] = max_vals[c]
+    pub fn build_maxpool_nhwc(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        pooling: &operator::Pooling,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert_eq!(pooling.kernel_shape.ndim(), 2);
+
+        let i64_ty = self.context.i64_type();
+        let ndim = src.ty.dims.ndim();
+        let nbatch = src.ty.dims[0] as u64;
+        let h_in = src.ty.dims[1] as u64;
+        let w_in = src.ty.dims[2] as u64;
+        let c_in = src.ty.dims[ndim - 1] as u64;
+        let h_out = dst.ty.dims[1] as u64;
+        let w_out = dst.ty.dims[2] as u64;
+        let kh = pooling.kernel_shape[0] as u64;
+        let kw = pooling.kernel_shape[1] as u64;
+        let stride_h = pooling.strides[0] as u64;
+        let stride_w = pooling.strides[1] as u64;
+        let dilation_h = pooling.dilations[0] as u64;
+        let dilation_w = pooling.dilations[1] as u64;
+        let calc_pad = |dim: usize| -> u64 {
+            match &pooling.pad {
+                operator::ConvPad::NotSet(pad) => pad[dim].0 as u64,
+                operator::ConvPad::Valid => 0,
+                operator::ConvPad::SameLower | operator::ConvPad::SameUpper => unimplemented!(),
+            }
+        };
+        let pad_h = calc_pad(0);
+        let pad_w = calc_pad(1);
+
+        let fp_ty = match src.ty.elem_type {
+            DataType::Float(t) => t,
+            _ => unimplemented!(),
+        };
+        let elem_ty = fp_ty.llvm_type(self.context);
+        let neg_inf_val = match fp_ty {
+            FloatType::F32 => f32::NEG_INFINITY as f64,
+            FloatType::F64 => f64::NEG_INFINITY,
+        };
+
+        let max_vals_ptr =
+            self.builder
+                .build_array_alloca(elem_ty, i64_ty.const_int(c_in, false), "max_vals")?;
+
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+        let hdr_n = bb("mp.n.hdr");
+        let hdr_oh = bb("mp.oh.hdr");
+        let hdr_ow = bb("mp.ow.hdr");
+        let init_loop = bb("mp.init");
+        let hdr_kh = bb("mp.kh.hdr");
+        let hdr_kw = bb("mp.kw.hdr");
+        let body = bb("mp.body");
+        let bb_update = bb("mp.update");
+        let update_loop = bb("mp.update_c");
+        let latch_kw = bb("mp.kw.latch");
+        let latch_kh = bb("mp.kh.latch");
+        let store_loop = bb("mp.store_c");
+        let latch_ow = bb("mp.ow.latch");
+        let latch_oh = bb("mp.oh.latch");
+        let latch_n = bb("mp.n.latch");
+        let exit = bb("mp.exit");
+
+        let c = |v: u64| i64_ty.const_int(v, false);
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(hdr_n)?;
+
+        let (phi_n, ind_n) = self.init_counted_loop(hdr_n)?;
+        self.builder.build_unconditional_branch(hdr_oh)?;
+
+        let (phi_oh, ind_oh) = self.init_counted_loop(hdr_oh)?;
+        self.builder.build_unconditional_branch(hdr_ow)?;
+
+        let (phi_ow, ind_ow) = self.init_counted_loop(hdr_ow)?;
+
+        self.builder.build_unconditional_branch(init_loop)?;
+        let (phi_init, ind_init) = self.init_counted_loop(init_loop)?;
+        let gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_init], "max_vals_gep")?
+        };
+        self.builder
+            .build_store(gep, elem_ty.const_float(neg_inf_val))?;
+        let init_done = bb("mp.init_done");
+        self.finalize_counted_loop(phi_init, hdr_ow, c(c_in), init_loop, init_done, init_loop)?;
+
+        self.builder.position_at_end(init_done);
+        self.builder.build_unconditional_branch(hdr_kh)?;
+
+        let (phi_kh, ind_kh) = self.init_counted_loop(hdr_kh)?;
+        self.builder.build_unconditional_branch(hdr_kw)?;
+
+        let (phi_kw, ind_kw) = self.init_counted_loop(hdr_kw)?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let ih = {
+            let a = self.builder.build_int_mul(ind_oh, c(stride_h), "oh_s")?;
+            let b = self.builder.build_int_mul(ind_kh, c(dilation_h), "kh_d")?;
+            let v = self.builder.build_int_add(a, b, "ih_raw")?;
+            self.builder.build_int_sub(v, c(pad_h), "ih")?
+        };
+        let iw = {
+            let a = self.builder.build_int_mul(ind_ow, c(stride_w), "ow_s")?;
+            let b = self.builder.build_int_mul(ind_kw, c(dilation_w), "kw_d")?;
+            let v = self.builder.build_int_add(a, b, "iw_raw")?;
+            self.builder.build_int_sub(v, c(pad_w), "iw")?
+        };
+        let oob = {
+            let ih_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ih,
+                i64_ty.const_zero(),
+                "ih_neg",
+            )?;
+            let ih_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ih,
+                c(h_in),
+                "ih_big",
+            )?;
+            let iw_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                iw,
+                i64_ty.const_zero(),
+                "iw_neg",
+            )?;
+            let iw_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                iw,
+                c(w_in),
+                "iw_big",
+            )?;
+            let a = self.builder.build_or(ih_neg, ih_big, "oob_h")?;
+            let b = self.builder.build_or(iw_neg, iw_big, "oob_w")?;
+            self.builder.build_or(a, b, "oob")?
+        };
+        self.builder
+            .build_conditional_branch(oob, latch_kw, bb_update)?;
+
+        self.builder.position_at_end(bb_update);
+        self.builder.build_unconditional_branch(update_loop)?;
+
+        let (phi_uc, ind_uc) = self.init_counted_loop(update_loop)?;
+        let src_offset = {
+            let o = self
+                .builder
+                .build_int_mul(ind_n, c(h_in * w_in * c_in), "so_n")?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder.build_int_mul(ih, c(w_in * c_in), "so_h")?,
+                "so_nh",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder.build_int_mul(iw, c(c_in), "so_w")?,
+                "so_nhw",
+            )?;
+            self.builder.build_int_add(o, ind_uc, "src_off")?
+        };
+        let src_val = self
+            .build_load(&src.clone().set_offset(src_offset))?
+            .into_float_value();
+        let gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_uc], "max_gep")?
+        };
+        let cur_max = self
+            .builder
+            .build_load(elem_ty, gep, "cur_max")?
+            .into_float_value();
+        let fmax = self.intrinsics.fmax.get(fp_ty);
+        let new_max = self
+            .build_tail_call(fmax, &[cur_max.into(), src_val.into()], "new_max")?
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+        self.builder.build_store(gep, new_max)?;
+        self.finalize_counted_loop(
+            phi_uc,
+            bb_update,
+            c(c_in),
+            update_loop,
+            latch_kw,
+            update_loop,
+        )?;
+
+        self.finalize_counted_loop(phi_kw, hdr_kh, c(kw), hdr_kw, latch_kh, latch_kw)?;
+        self.finalize_counted_loop(phi_kh, init_done, c(kh), hdr_kh, store_loop, latch_kh)?;
+
+        self.builder.position_at_end(store_loop);
+        let (phi_sc, ind_sc) = self.init_counted_loop(store_loop)?;
+        let gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_sc], "store_gep")?
+        };
+        let val = self.builder.build_load(elem_ty, gep, "val")?;
+        let dst_offset = {
+            let o = self
+                .builder
+                .build_int_mul(ind_n, c(h_out * w_out * c_in), "do_n")?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder
+                    .build_int_mul(ind_oh, c(w_out * c_in), "do_oh")?,
+                "do_noh",
+            )?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder.build_int_mul(ind_ow, c(c_in), "do_ow")?,
+                "do_nohow",
+            )?;
+            self.builder.build_int_add(o, ind_sc, "dst_off")?
+        };
+        self.build_store(&dst.clone().set_offset(dst_offset), val)?;
+        self.finalize_counted_loop(phi_sc, latch_kh, c(c_in), store_loop, latch_ow, store_loop)?;
+
+        self.finalize_counted_loop(phi_ow, hdr_oh, c(w_out), hdr_ow, latch_oh, latch_ow)?;
+        self.finalize_counted_loop(phi_oh, hdr_n, c(h_out), hdr_oh, latch_n, latch_oh)?;
+        self.finalize_counted_loop(phi_n, entry, c(nbatch), hdr_n, exit, latch_n)?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_gemm(
         &self,
         dst: &TensorPtr<'ctx>,

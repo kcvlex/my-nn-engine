@@ -7,12 +7,15 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::onnx::utils::simple_topological_order;
+use crate::options::Options;
+use crate::options::Target;
 use crate::tensor::types::TensorType;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
-#[derive(Default)]
-pub struct NHWC2NCHWSinkAndFold {}
+pub struct NHWC2NCHWSinkAndFold {
+    target: Target,
+}
 
 impl<T: GraphOp> Pass<T> for NHWC2NCHWSinkAndFold {
     fn summary(&self) -> &'static str {
@@ -33,19 +36,24 @@ impl<T: GraphOp> Pass<T> for NHWC2NCHWSinkAndFold {
 }
 
 impl NHWC2NCHWSinkAndFold {
+    pub fn new(opt: &Options) -> Self {
+        Self { target: opt.target }
+    }
+
     fn sink<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T) {
         let nodes_ids = simple_topological_order(graph);
         let mut marked = {
-            let mut marker = SinkMarker::new(graph, modifier);
+            let mut marker = SinkMarker::new(graph, modifier, self.target);
             marker.mark();
             marker.marked
         };
         for id in nodes_ids {
-            Self::do_sink(graph, modifier, &mut marked, id);
+            self.do_sink(graph, modifier, &mut marked, id);
         }
     }
 
     fn do_sink<T: GraphOp>(
+        &self,
         graph: &mut Graph,
         modifier: &mut T,
         marked: &mut HashSet<NodeId>,
@@ -87,6 +95,56 @@ impl NHWC2NCHWSinkAndFold {
                     cur_input,
                     new_input,
                     |id, _| id == node_id,
+                );
+            }
+
+            Operator::MaxPool(_) => {
+                assert!(matches!(
+                    graph.nodes[cands[0].unwrap()].op,
+                    Operator::NHWC2NCHW
+                ));
+                assert_eq!(self.target, Target::CPU);
+                let cur_input = graph.nodes[node_id].inputs[0];
+                let new_input = graph.nodes[cands[0].unwrap()].inputs[0];
+                let pooling = match &mut graph.nodes[node_id].op {
+                    Operator::MaxPool(ref mut pooling) => pooling,
+                    _ => unreachable!(),
+                };
+                assert!(pooling.layout == Layout::NCHW);
+                pooling.layout = Layout::NHWC;
+                modifier.replace_input_value_if_without_typecheck(
+                    graph,
+                    cur_input,
+                    new_input,
+                    |id, _| id == node_id,
+                );
+
+                let output = graph.nodes[node_id].outputs[0];
+                let old_ty = graph.get_resolved_tensor_type(output).unwrap().clone();
+                let nhwc_ty = old_ty.transpose(&[0, 2, 3, 1]).contiguous();
+                graph.values[output].ty = Some(TensorType::Resolved(nhwc_ty));
+
+                let nchw_output = modifier.register_new_value(
+                    graph,
+                    format!("MaxPool_NHWC2NCHW_{}", output.index()),
+                    old_ty,
+                );
+                let nhwc2nchw_id = modifier.register_new_node(
+                    graph,
+                    Node {
+                        inputs: vec![output],
+                        outputs: vec![nchw_output],
+                        name: format!("MaxPool_NHWC2NCHW_{}", output.index()),
+                        op: Operator::NHWC2NCHW,
+                        meta: NodeMeta::default(),
+                    },
+                );
+                marked.insert(nhwc2nchw_id);
+                modifier.replace_input_value_if_without_typecheck(
+                    graph,
+                    output,
+                    nchw_output,
+                    |id, _| id != nhwc2nchw_id && id != node_id,
                 );
             }
 
@@ -279,18 +337,38 @@ impl NHWC2NCHWSinkAndFold {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SinkScore {
+    Benefit,
+    Neutral,
+    Forbidden,
+}
+
+impl SinkScore {
+    fn merge(&self, other: Self) -> Self {
+        use SinkScore::*;
+        match (self, other) {
+            (Forbidden, _) | (_, Forbidden) => Forbidden,
+            (Benefit, _) | (_, Benefit) => Benefit,
+            (Neutral, Neutral) => Neutral,
+        }
+    }
+}
+
 struct SinkMarker<'a, T: GraphOp> {
     graph: &'a Graph,
     modifier: &'a T,
-    memo: HashMap<NodeId, bool>,
+    target: Target,
+    memo: HashMap<NodeId, SinkScore>,
     marked: HashSet<NodeId>,
 }
 
 impl<'a, T: GraphOp> SinkMarker<'a, T> {
-    fn new(graph: &'a Graph, modifier: &'a T) -> Self {
+    fn new(graph: &'a Graph, modifier: &'a T, target: Target) -> Self {
         Self {
             graph,
             modifier,
+            target,
             memo: HashMap::new(),
             marked: HashSet::new(),
         }
@@ -303,24 +381,31 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
 
         match &self.graph.nodes[node_id].op {
             Operator::Conv(_) => {
-                self.memo.insert(node_id, true);
+                self.memo.insert(node_id, SinkScore::Benefit);
             }
+
+            Operator::MaxPool(_) if self.target == Target::CPU => {
+                self.memo.insert(node_id, SinkScore::Benefit);
+            }
+
             Operator::NHWC2NCHW => {
                 let output = self.graph.nodes[node_id].outputs[0];
-                let ok = self
-                    .modifier
-                    .used_node(output)
-                    .unwrap()
-                    .iter()
-                    .all(|(user_id, _)| *self.memo.get(user_id).unwrap_or(&false));
-                self.memo.insert(node_id, ok);
-                if ok {
+                let score = self.modifier.used_node(output).unwrap().iter().fold(
+                    SinkScore::Neutral,
+                    |acc, (user_id, _)| {
+                        let rhs = *self.memo.get(user_id).unwrap_or(&SinkScore::Forbidden);
+                        acc.merge(rhs)
+                    },
+                );
+                self.memo.insert(node_id, score);
+                if score == SinkScore::Benefit {
                     self.marked.insert(node_id);
                 }
             }
+
             op => {
                 if !op.is_elementwise() {
-                    self.memo.insert(node_id, false);
+                    self.memo.insert(node_id, SinkScore::Forbidden);
                     return;
                 }
 
@@ -332,17 +417,23 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
                         .ndim() ==
                         4
                 }) {
-                    self.memo.insert(node_id, false);
+                    self.memo.insert(node_id, SinkScore::Forbidden);
                     return;
                 }
 
-                let ok = self.graph.nodes[node_id].outputs.iter().all(|output| {
-                    self.modifier
-                        .used_node(*output)
-                        .unwrap()
-                        .iter()
-                        .all(|(user_id, _)| *self.memo.get(user_id).unwrap_or(&false))
-                });
+                let ok = self.graph.nodes[node_id].outputs.iter().fold(
+                    SinkScore::Neutral,
+                    |acc, output| {
+                        let rhs = self.modifier.used_node(*output).unwrap().iter().fold(
+                            SinkScore::Neutral,
+                            |acc, (user_id, _)| {
+                                let rhs = *self.memo.get(user_id).unwrap_or(&SinkScore::Forbidden);
+                                acc.merge(rhs)
+                            },
+                        );
+                        acc.merge(rhs)
+                    },
+                );
                 self.memo.insert(node_id, ok);
             }
         }
