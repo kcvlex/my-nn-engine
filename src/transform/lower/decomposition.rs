@@ -18,8 +18,6 @@ pub struct AttentionDecomposition {}
 #[derive(Default)]
 pub struct ConvDecomposition {}
 #[derive(Default)]
-pub struct MaxPoolDecomposition {}
-#[derive(Default)]
 pub struct ReduceDecomposition {}
 #[derive(Default)]
 pub struct GlobalAvgPoolDecomposition {}
@@ -196,40 +194,12 @@ fn gen_im2col_from_conv(
         nbatch,
         one_fm_shape,
         pad: conv.pad.clone(),
-        channel: Channel::Meld(channel),
+        channel,
         dilations: conv.dilations.clone(),
         one_kernel_shape,
         strides: conv.strides.clone(),
         pad_val: PadVal::Zero,
         layout: conv.input_layout,
-    };
-    (im2col, im2col_output_shape)
-}
-
-fn gen_im2col_from_pooling(
-    pooling: &Pooling,
-    output_shape: &ResolvedTensorDims,
-) -> (Im2Col, ResolvedTensorDims) {
-    let kernel_shape = &pooling.kernel_shape;
-    let nbatch = output_shape[0];
-    let channel = output_shape[1];
-
-    // Drop nbatch and channel
-    let one_fm_shape: ResolvedTensorDims = output_shape.iter().skip(2).copied().collect();
-
-    let row = one_fm_shape.size() * channel * nbatch;
-    let col = kernel_shape.size();
-    let im2col_output_shape = ResolvedTensorDims::new(&[row, col]);
-    let im2col = Im2Col {
-        nbatch,
-        one_fm_shape,
-        pad: pooling.pad.clone(),
-        channel: Channel::Split(channel),
-        dilations: pooling.dilations.clone(),
-        one_kernel_shape: kernel_shape.clone(),
-        strides: pooling.strides.clone(),
-        pad_val: PadVal::NInf,
-        layout: Layout::NCHW,
     };
     (im2col, im2col_output_shape)
 }
@@ -401,68 +371,6 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             modifier.replace_input_value(graph, old_output_value, final_output);
         }
 
-        Operator::MaxPool(ref pooling) => {
-            let data_value = node.inputs[args::MAXPOOL_DATA];
-            let old_output_value = node.outputs[0];
-
-            let (elem_type, output_shape) = &graph
-                .get_resolved_tensor_type(old_output_value)
-                .map(|x| (x.elem_type, x.dims.clone()))
-                .unwrap();
-
-            let op = match &node.op {
-                Operator::MaxPool(_) => ReduceOp::Max,
-                _ => unreachable!(),
-            };
-
-            let (im2col, im2col_output_shape) = gen_im2col_from_pooling(pooling, output_shape);
-            let row = im2col_output_shape[0];
-
-            // Im2Col
-            let im2col_data = modifier.register_new_value(
-                graph,
-                format!("Im2Col_{index}_ExpandedData"),
-                ResolvedTensorType::new(*elem_type, im2col_output_shape),
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![data_value],
-                    outputs: vec![im2col_data],
-                    name: format!("Im2Col_{index}"),
-                    op: Operator::Im2Col(im2col),
-                    meta: NodeMeta::default(),
-                },
-            );
-
-            // Reduce
-            let dims = ResolvedTensorDims::new(&[row]);
-            assert_eq!(dims.size(), output_shape.size());
-            let reduced_data = modifier.register_new_value(
-                graph,
-                format!("Im2Col_{index}_ReducedData"),
-                ResolvedTensorType::new(*elem_type, dims),
-            );
-            let reduce_node = Node {
-                inputs: vec![im2col_data],
-                outputs: vec![reduced_data],
-                name: format!("Im2Col_{index}_Reduce"),
-                op: Operator::ReduceMatrix(op),
-                meta: NodeMeta::default(),
-            };
-            modifier.register_new_node(graph, reduce_node);
-
-            // Reshape
-            let reshaped_output = ReshapeGenerator::default()
-                .set_input(reduced_data)
-                .set_dims(&output_shape[..])
-                .set_node_name(format!("Im2Col_{index}_ReshapeOutput"))
-                .set_value_name(format!("Im2Col_{index}_ReshapeOutput"))
-                .generate(graph, modifier)
-                .unwrap();
-
-            modifier.replace_input_value(graph, old_output_value, reshaped_output);
-        }
         _ => unreachable!(),
     }
 }
@@ -478,30 +386,6 @@ impl<T: GraphOp> Pass<T> for ConvDecomposition {
             .iter()
             .filter_map(|(id, node)| {
                 if matches!(node.op, Operator::Conv(_)) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for id in res.into_iter() {
-            im2col_core(graph, modifier, id);
-        }
-    }
-}
-
-impl<T: GraphOp> Pass<T> for MaxPoolDecomposition {
-    fn summary(&self) -> &'static str {
-        "Decompose MaxPool into Im2Col + Reduce"
-    }
-
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let res = graph
-            .nodes
-            .iter()
-            .filter_map(|(id, node)| {
-                if matches!(node.op, Operator::MaxPool(_)) {
                     Some(id)
                 } else {
                     None

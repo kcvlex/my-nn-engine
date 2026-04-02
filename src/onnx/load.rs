@@ -787,6 +787,7 @@ impl Pooling {
             dilations,
             kernel_shape,
             strides,
+            layout: Layout::NCHW,
         })
     }
 }

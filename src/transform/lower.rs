@@ -10,7 +10,6 @@ use crate::transform::lower::contiguous_insertion::ContiguousInsertion;
 use crate::transform::lower::decomposition::AttentionDecomposition;
 use crate::transform::lower::decomposition::ConvDecomposition;
 use crate::transform::lower::decomposition::GlobalAvgPoolDecomposition;
-use crate::transform::lower::decomposition::MaxPoolDecomposition;
 use crate::transform::lower::decomposition::ReduceDecomposition;
 use crate::transform::lower::nhwc2nchw_detection::NHWC2NCHWDetection;
 use crate::transform::lower::nhwc2nchw_inertion::NHWC2NCHWInsertion;
@@ -63,7 +62,6 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
     if matches!(opt.target, Target::CPU) {
         passes.add_pass(Box::new(AttentionDecomposition::default()));
         passes.add_pass(Box::new(ConvDecomposition::default()));
-        passes.add_pass(Box::new(MaxPoolDecomposition::default()));
     }
     passes
 }

@@ -308,43 +308,60 @@ pub struct Pooling {
     pub dilations: OptionalVec<usize>,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
+    pub layout: Layout,
 }
 
 impl Pooling {
     pub fn output_shape(&self, input_shape: &ResolvedTensorDims) -> ResolvedTensorDims {
-        let mut dims = Vec::with_capacity(input_shape.ndim());
-        dims.push(input_shape[0]);
-        dims.push(input_shape[1]);
-        let input = &input_shape[2..];
+        let (nbatch, channel, spatial) = match self.layout {
+            Layout::NCHW => (input_shape[0], input_shape[1], &input_shape[2..]),
+            Layout::NHWC => {
+                let ndim = input_shape.ndim();
+                (
+                    input_shape[0],
+                    input_shape[ndim - 1],
+                    &input_shape[1..ndim - 1],
+                )
+            }
+        };
+
         let default_pad = OptionalVec::new(None, (0, 0));
         let pad = match self.pad {
             ConvPad::NotSet(ref pad) => pad,
             ConvPad::Valid => &default_pad,
-            // deprecated attributes
             ConvPad::SameUpper | ConvPad::SameLower => unimplemented!(),
         };
         let conv_shape = ConvShape {
             kernel_shape: &self.kernel_shape[..],
-            input_shape: input,
+            input_shape: spatial,
             pad,
             dilations: &self.dilations,
         };
-        for i in 0..input.len() {
+        let mut spatial_out = Vec::new();
+        for i in 0..spatial.len() {
             let stride = self.strides[i];
             let num = conv_shape.padded_input_size(i) - conv_shape.distance_per_conv(i);
             let dim = if !self.ceil_mode {
-                // Floor div
                 num / stride + 1
             } else {
-                // TODO: Correct?
-                //
-                // https://onnx.ai/onnx/operators/onnx__MaxPool.html#summary
-                //  > Sliding windows that would start in the right padded region are ignored.
                 num.div_ceil(stride) + 1
             };
-            dims.push(dim);
+            spatial_out.push(dim);
         }
-        ResolvedTensorDims::new(&dims)
+
+        match self.layout {
+            Layout::NCHW => {
+                let mut dims = vec![nbatch, channel];
+                dims.extend(spatial_out);
+                ResolvedTensorDims::new(&dims)
+            }
+            Layout::NHWC => {
+                let mut dims = vec![nbatch];
+                dims.extend(spatial_out);
+                dims.push(channel);
+                ResolvedTensorDims::new(&dims)
+            }
+        }
     }
 }
 
@@ -592,24 +609,9 @@ pub struct Contiguous {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Channel {
-    Meld(usize),  // Conv
-    Split(usize), // MaxPool
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PadVal {
     Zero,
     NInf,
-}
-
-impl Channel {
-    pub fn inner(&self) -> usize {
-        match self {
-            Channel::Meld(v) => *v,
-            Channel::Split(v) => *v,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -617,7 +619,7 @@ pub struct Im2Col {
     pub nbatch: usize,
     pub one_fm_shape: ResolvedTensorDims, // convolution of one image and one kernel (feature map)
     pub pad: ConvPad,
-    pub channel: Channel,
+    pub channel: usize,
     pub dilations: OptionalVec<usize>,
     pub one_kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
