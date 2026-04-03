@@ -73,12 +73,11 @@ extern "C" void model(void *state_ptr, void **output, void **input, void **initi
   float *h_initializer_0 = (float *)(initializer[0]);
   float *h_initializer_1 = (float *)(initializer[1]);
   float *h_output_15 = (float *)(output[0]);
-  void *d_chunk_0;
-  void *d_chunk_1;
-  void *d_chunk_2;
-  cudaCheckErr(cudaMalloc(&d_chunk_0, std::max({ 2048 * sizeof(float) })));
-  cudaCheckErr(cudaMalloc(&d_chunk_1, std::max({ 4096 * sizeof(float) })));
-  cudaCheckErr(cudaMalloc(&d_chunk_2, std::max({ 4096 * sizeof(float) })));
+  void *d_arena;
+  cudaCheckErr(cudaMalloc(&d_arena, 40960));
+  void *d_chunk_0 = (char*)d_arena + 0;
+  void *d_chunk_1 = (char*)d_arena + 8192;
+  void *d_chunk_2 = (char*)d_arena + 24576;
   cudaStream_t stream_0;
   cudaCheckErr(cudaStreamCreate(&stream_0));
   CudnnHandlerContext cudnn_handler_ctx0;
@@ -104,9 +103,7 @@ extern "C" void model(void *state_ptr, void **output, void **input, void **initi
   state->cudnn_setting5.y = d_chunk_2;
   state->cudnn_setting5.call_conv_forward<float>(&cudnn_handler_ctx0);
   cudaCheckErr(cudaMemcpyAsync(h_output_15, d_chunk_2, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
-  cudaCheckErr(cudaFree(d_chunk_0));
-  cudaCheckErr(cudaFree(d_chunk_1));
-  cudaCheckErr(cudaFree(d_chunk_2));
+  cudaCheckErr(cudaFree(d_arena));
   cudaCheckErr(cudaStreamDestroy(stream_0));
   cudaCheckErr(cudaFree(cudnn_handler_ctx0.workspace));
   cudnnCheckErr(cudnnDestroy(cudnn_handler_ctx0.handle));

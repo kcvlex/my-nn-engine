@@ -148,6 +148,22 @@ impl ChunkMemSize {
         }
         self.sizes.push(size);
     }
+
+    fn max_byte_size(&self) -> usize {
+        self.sizes
+            .iter()
+            .map(|s| {
+                let elem_size = match s.ty {
+                    DataType::Float(FloatType::F32) | DataType::SInt(SIntType::I32) => 4,
+                    DataType::Float(FloatType::F64) |
+                    DataType::SInt(SIntType::I64) |
+                    DataType::UInt(UIntType::U64) => 8,
+                };
+                s.elem_num * elem_size
+            })
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 impl std::fmt::Display for ChunkMemSize {
@@ -603,20 +619,33 @@ impl<'sched> HostCodeGenerator<'sched> {
             }
         }
 
-        for chunk_id in 0..mem_sizes.len() {
+        const ALIGNMENT: usize = 256;
+        let align_up = |size: usize| (size + ALIGNMENT - 1) & !(ALIGNMENT - 1);
+
+        let mut offsets = Vec::with_capacity(mem_sizes.len());
+        let mut arena_size: usize = 0;
+        for (chunk_id, mem_size) in mem_sizes.iter().enumerate() {
+            offsets.push(arena_size);
+            arena_size += align_up(mem_size.max_byte_size());
             let name = format!("d_chunk_{chunk_id}");
-            self.stmts.push(Statement::Raw(format!("void *{name};")));
             self.devicemem2identifier.push(name);
         }
-        for (chunk_id, mem_size) in mem_sizes.into_iter().enumerate() {
-            let name = &self.devicemem2identifier[chunk_id];
+
+        if arena_size > 0 {
+            self.stmts.push(Statement::Raw(format!("void *d_arena;")));
             self.stmts.push(
                 Malloc {
-                    dst: Expr::Identifier(name.clone()),
-                    mem_size: MemSize::Chunk(mem_size),
+                    dst: Expr::Identifier("d_arena".to_string()),
+                    mem_size: MemSize::Raw(Expr::Identifier(format!("{arena_size}"))),
                 }
                 .into(),
             );
+            for (chunk_id, offset) in offsets.iter().enumerate() {
+                let name = &self.devicemem2identifier[chunk_id];
+                self.stmts.push(Statement::Raw(format!(
+                    "void *{name} = (char*)d_arena + {offset};"
+                )));
+            }
         }
 
         Ok(self.move_statements())
@@ -708,9 +737,9 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
-        for chunk_id in 0..self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0) {
-            let name = &self.devicemem2identifier[chunk_id];
-            self.stmts.push(Free(Expr::Identifier(name.clone())).into());
+        if !self.devicemem2identifier.is_empty() {
+            self.stmts
+                .push(Free(Expr::Identifier("d_arena".to_string())).into());
         }
 
         for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
