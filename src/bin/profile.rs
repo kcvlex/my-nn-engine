@@ -5,6 +5,28 @@ use my_onnx::options::*;
 use my_onnx::session::Session;
 use my_onnx::tensor::Tensor;
 
+fn cuda_profiler_start() {
+    unsafe {
+        let lib = libloading::Library::new("libcudart.so").expect("failed to load libcudart.so");
+        let func: libloading::Symbol<unsafe extern "C" fn() -> i32> = lib
+            .get(b"cudaProfilerStart")
+            .expect("cudaProfilerStart not found");
+        func();
+        std::mem::forget(lib);
+    }
+}
+
+fn cuda_profiler_stop() {
+    unsafe {
+        let lib = libloading::Library::new("libcudart.so").expect("failed to load libcudart.so");
+        let func: libloading::Symbol<unsafe extern "C" fn() -> i32> = lib
+            .get(b"cudaProfilerStop")
+            .expect("cudaProfilerStop not found");
+        func();
+        std::mem::forget(lib);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
@@ -17,6 +39,7 @@ fn main() {
     }
 
     let enable_profile = args.iter().any(|a| a == "--profile");
+    let enable_nhwc = !args.iter().any(|a| a == "--no-nhwc");
     let target = match args[1].as_str() {
         "cpu" => Target::CPU,
         "cuda" => Target::CUDA,
@@ -41,6 +64,7 @@ fn main() {
                 num_runs,
                 num_streams,
                 enable_profile,
+                enable_nhwc,
             );
             return;
         }
@@ -54,6 +78,7 @@ fn main() {
         num_runs,
         num_streams,
         enable_profile,
+        enable_nhwc,
     );
 }
 
@@ -64,6 +89,7 @@ fn run(
     num_runs: usize,
     num_streams: usize,
     enable_profile: bool,
+    enable_nhwc: bool,
 ) {
     let data_dir = model_dir.join("test_data_set_0");
 
@@ -83,11 +109,13 @@ fn run(
         Target::CPU => Options::builder()
             .target(Target::CPU)
             .profile(enable_profile)
+            .enable_nhwc_optimization(Some(enable_nhwc))
             .build(),
         Target::CUDA => Options::builder()
             .target(Target::CUDA)
             .num_cuda_streams(num_streams)
             .profile(enable_profile)
+            .enable_nhwc_optimization(Some(enable_nhwc))
             .build(),
     };
 
@@ -95,12 +123,20 @@ fn run(
 
     let _ = session.run(&inputs).unwrap();
 
+    if matches!(target, Target::CUDA) {
+        cuda_profiler_start();
+    }
+
     eprintln!("Running {num_runs} iterations...");
     let start = std::time::Instant::now();
     for _ in 0..num_runs {
         let _ = session.run(&inputs).unwrap();
     }
     let elapsed = start.elapsed();
+
+    if matches!(target, Target::CUDA) {
+        cuda_profiler_stop();
+    }
     eprintln!(
         "{num_runs} runs in {:.2?}, avg {:.2?}/run",
         elapsed,
