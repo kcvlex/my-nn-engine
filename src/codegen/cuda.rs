@@ -239,6 +239,9 @@ pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
 
     stmts: Vec<Statement>,
+    init_stmts: Vec<Statement>,
+    destroy_stmts: Vec<Statement>,
+    state_fields: Vec<String>,
 
     streams: &'sched HashMap<KernelId, KernelStreamAssignment>,
     to_record_events: BTreeSet<EventId>,
@@ -256,6 +259,7 @@ pub struct HostCodeGenerator<'sched> {
 
 pub struct HostCode {
     state_fields: Vec<String>,
+    init_body: Vec<Statement>,
     destroy_body: Vec<Statement>,
     decl_values: Vec<Statement>,
     decl_cuda_objs: Vec<Statement>,
@@ -546,6 +550,9 @@ impl<'sched> HostCodeGenerator<'sched> {
         HostCodeGenerator {
             schedule,
             stmts: Vec::new(),
+            init_stmts: Vec::new(),
+            destroy_stmts: Vec::new(),
+            state_fields: Vec::new(),
             streams,
             to_record_events,
             value2chunk: HashMap::new(),
@@ -632,18 +639,21 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
 
         if arena_size > 0 {
-            self.stmts.push(Statement::Raw(format!("void *d_arena;")));
-            self.stmts.push(
+            self.state_fields
+                .push("void *d_arena = nullptr;".to_string());
+            self.init_stmts.push(
                 Malloc {
-                    dst: Expr::Identifier("d_arena".to_string()),
+                    dst: Expr::Identifier("state->d_arena".to_string()),
                     mem_size: MemSize::Raw(Expr::Identifier(format!("{arena_size}"))),
                 }
                 .into(),
             );
+            self.destroy_stmts
+                .push(Free(Expr::Identifier("state->d_arena".to_string())).into());
             for (chunk_id, offset) in offsets.iter().enumerate() {
                 let name = &self.devicemem2identifier[chunk_id];
                 self.stmts.push(Statement::Raw(format!(
-                    "void *{name} = (char*)d_arena + {offset};"
+                    "void *{name} = (char*)state->d_arena + {offset};"
                 )));
             }
         }
@@ -737,11 +747,6 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
-        if !self.devicemem2identifier.is_empty() {
-            self.stmts
-                .push(Free(Expr::Identifier("d_arena".to_string())).into());
-        }
-
         for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
             self.stmts.push(StreamDestroy(stream_id).into());
         }
@@ -1501,8 +1506,9 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.includes.insert(Include::Local("cudnn_setting.h"));
         }
 
-        let mut state_fields = Vec::new();
-        let mut destroy_body = Vec::new();
+        let mut state_fields = std::mem::take(&mut self.state_fields);
+        let mut destroy_body = std::mem::take(&mut self.destroy_stmts);
+        let init_body = std::mem::take(&mut self.init_stmts);
         for (_, kernels) in self.cudnn_ctxs.iter() {
             for kernel_id in kernels.iter().copied() {
                 let setting = CudnnSettingName::KernelId(kernel_id);
@@ -1543,6 +1549,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         Ok(HostCode {
             state_fields,
+            init_body,
             destroy_body,
             decl_values,
             decl_cuda_objs,
@@ -1592,6 +1599,12 @@ impl HostCode {
         }
         writeln!(writer, "}};\n")?;
 
+        let init_body = self
+            .init_body
+            .iter()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let destroy_body = self
             .destroy_body
             .iter()
@@ -1602,7 +1615,9 @@ impl HostCode {
         write!(
             writer,
             r#"extern "C" void* model_init() {{
-  return new ModelState;
+  auto *state = new ModelState;
+{init_body}
+  return state;
 }}
 
 extern "C" void model_destroy(void *ptr) {{
