@@ -1606,13 +1606,13 @@ impl HostCode {
 }}
 
 extern "C" void model_destroy(void *ptr) {{
-  [[maybe_unused]] auto *state = static_cast<ModelState*>(ptr);
+  auto *state = static_cast<ModelState*>(ptr);
 {destroy_body}
   delete state;
 }}
 
 extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
-  [[maybe_unused]] auto *state = static_cast<ModelState*>(state_ptr);
+  auto *state = static_cast<ModelState*>(state_ptr);
 "#
         )?;
 

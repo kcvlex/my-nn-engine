@@ -102,6 +102,7 @@ impl SessionCUDA {
                         "-arch",
                         cuda_arch.as_str(),
                         "--expt-relaxed-constexpr",
+                        "--diag-suppress=177", // unused variable
                     ])
                     .status()
                     .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;

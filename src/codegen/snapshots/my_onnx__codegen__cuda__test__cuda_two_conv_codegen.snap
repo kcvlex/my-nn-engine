@@ -53,7 +53,7 @@ extern "C" void* model_init() {
 }
 
 extern "C" void model_destroy(void *ptr) {
-  [[maybe_unused]] auto *state = static_cast<ModelState*>(ptr);
+  auto *state = static_cast<ModelState*>(ptr);
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.x_desc));
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.y_desc));
   cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting2.w_desc));
@@ -68,7 +68,7 @@ extern "C" void model_destroy(void *ptr) {
 }
 
 extern "C" void model(void *state_ptr, void **output, void **input, void **initializer) {
-  [[maybe_unused]] auto *state = static_cast<ModelState*>(state_ptr);
+  auto *state = static_cast<ModelState*>(state_ptr);
   float *h_input_2 = (float *)(input[0]);
   float *h_initializer_0 = (float *)(initializer[0]);
   float *h_initializer_1 = (float *)(initializer[1]);
