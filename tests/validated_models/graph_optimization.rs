@@ -134,7 +134,7 @@ fn test_resnet18_nhwc_sink_cuda() {
     let nhwc2nchw = count_op(&model, |op| matches!(op, Operator::NHWC2NCHW));
 
     assert_eq!(total_conv, 20);
-    assert_eq!(nhwc_input_conv, 17);
-    assert_eq!(nhwc_output_conv, 16);
+    assert_eq!(nhwc_input_conv, 18);
+    assert_eq!(nhwc_output_conv, 17);
     assert_eq!(nhwc2nchw, 0);
 }

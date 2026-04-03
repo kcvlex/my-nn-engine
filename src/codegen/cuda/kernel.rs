@@ -1279,18 +1279,9 @@ impl<'sched> MaxPoolBuilder<'sched> {
         }
     }
 
-    pub fn build(&mut self) -> Result<String, BuildError> {
+    fn build_nchw(&mut self, pool: &operator::Pooling) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::Opaque(Opaque {
-            op: Operator::MaxPool(pool),
-        }) = &kernel.body
-        else {
-            panic!("Expected MaxPool operator");
-        };
-
-        if pool.kernel_shape.ndim() != 2 {
-            unimplemented!("Only 2D max pooling is supported");
-        }
+        assert!(pool.layout == operator::Layout::NCHW);
 
         let input = kernel.inputs[0];
         let output = kernel.outputs[0];
@@ -1350,6 +1341,95 @@ impl<'sched> MaxPoolBuilder<'sched> {
                 in_idx += h;
                 in_idx *= {width};
                 in_idx += w;
+                max_val = max(max_val, {in_}[in_idx]);
+            }}
+        }}
+    }}
+
+    {out}[{gid}] = max_val;
+}}
+"
+        ))
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::Opaque(Opaque {
+            op: Operator::MaxPool(pool),
+        }) = &kernel.body
+        else {
+            panic!("Expected MaxPool operator");
+        };
+
+        if pool.kernel_shape.ndim() != 2 {
+            unimplemented!("Only 2D max pooling is supported");
+        }
+
+        match pool.layout {
+            operator::Layout::NCHW => self.build_nchw(pool),
+            operator::Layout::NHWC => self.build_nhwc(pool),
+        }
+    }
+
+    fn build_nhwc(&mut self, pool: &operator::Pooling) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        assert!(pool.layout == operator::Layout::NHWC);
+
+        let input = kernel.inputs[0];
+        let output = kernel.outputs[0];
+        let input_ty = self.ctx.get_resolved_tensor_type(input)?;
+        let output_ty = self.ctx.get_resolved_tensor_type(output)?;
+        assert!(kernel.inputs.len() == 1);
+        assert!(kernel.outputs.len() == 1);
+        assert!(input_ty.dims.ndim() == 4 && output_ty.dims.ndim() == 4);
+        assert!(input_ty.is_contiguous() && output_ty.is_contiguous());
+        let nbatch = input_ty.dims[0];
+        let height = input_ty.dims[1];
+        let width = input_ty.dims[2];
+        let channels = input_ty.dims[3];
+        let o_height = output_ty.dims[1];
+        let o_width = output_ty.dims[2];
+        assert!(channels == output_ty.dims[3]);
+        let kernel_h = pool.kernel_shape[0];
+        let kernel_w = pool.kernel_shape[1];
+        let stride_h = pool.strides[0];
+        let stride_w = pool.strides[1];
+        let (pad_h, pad_w) = match pool.pad {
+            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
+            _ => unimplemented!("Padding type not implemented"),
+        };
+
+        let size = nbatch * o_height * o_width * channels;
+        let gid = KernelVar::Gid;
+        let ty = TypeSymbol::Primitive(input_ty.elem_type);
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+
+    int o_c_idx = {gid} % {channels};
+    int o_w_idx = ({gid} / {channels}) % {o_width};
+    int o_h_idx = ({gid} / ({channels} * {o_width})) % {o_height};
+    int o_b_idx = {gid} / ({channels} * {o_width} * {o_height});
+
+    int i_w_begin = o_w_idx * {stride_w} - {pad_w};
+    int i_h_begin = o_h_idx * {stride_h} - {pad_h};
+    int i_w_end = i_w_begin + {kernel_w};
+    int i_h_end = i_h_begin + {kernel_h};
+
+    {ty} max_val = std::numeric_limits<{ty}>::min();
+    for (int h = i_h_begin; h < i_h_end; h++) {{
+        for (int w = i_w_begin; w < i_w_end; w++) {{
+            if (0 <= h && h < {height} && 0 <= w && w < {width}) {{
+                int in_idx = o_b_idx * ({height} * {width} * {channels})
+                           + h * ({width} * {channels})
+                           + w * {channels}
+                           + o_c_idx;
                 max_val = max(max_val, {in_}[in_idx]);
             }}
         }}

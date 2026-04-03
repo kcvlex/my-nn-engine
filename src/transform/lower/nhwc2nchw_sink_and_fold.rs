@@ -7,15 +7,12 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::onnx::utils::simple_topological_order;
-use crate::options::Options;
-use crate::options::Target;
 use crate::tensor::types::TensorType;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
-pub struct NHWC2NCHWSinkAndFold {
-    target: Target,
-}
+#[derive(Default)]
+pub struct NHWC2NCHWSinkAndFold {}
 
 impl<T: GraphOp> Pass<T> for NHWC2NCHWSinkAndFold {
     fn summary(&self) -> &'static str {
@@ -36,14 +33,10 @@ impl<T: GraphOp> Pass<T> for NHWC2NCHWSinkAndFold {
 }
 
 impl NHWC2NCHWSinkAndFold {
-    pub fn new(opt: &Options) -> Self {
-        Self { target: opt.target }
-    }
-
     fn sink<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T) {
         let nodes_ids = simple_topological_order(graph);
         let mut marked = {
-            let mut marker = SinkMarker::new(graph, modifier, self.target);
+            let mut marker = SinkMarker::new(graph, modifier);
             marker.mark();
             marker.marked
         };
@@ -103,7 +96,6 @@ impl NHWC2NCHWSinkAndFold {
                     graph.nodes[cands[0].unwrap()].op,
                     Operator::NHWC2NCHW
                 ));
-                assert_eq!(self.target, Target::CPU);
                 let cur_input = graph.nodes[node_id].inputs[0];
                 let new_input = graph.nodes[cands[0].unwrap()].inputs[0];
                 let pooling = match &mut graph.nodes[node_id].op {
@@ -358,17 +350,15 @@ impl SinkScore {
 struct SinkMarker<'a, T: GraphOp> {
     graph: &'a Graph,
     modifier: &'a T,
-    target: Target,
     memo: HashMap<NodeId, SinkScore>,
     marked: HashSet<NodeId>,
 }
 
 impl<'a, T: GraphOp> SinkMarker<'a, T> {
-    fn new(graph: &'a Graph, modifier: &'a T, target: Target) -> Self {
+    fn new(graph: &'a Graph, modifier: &'a T) -> Self {
         Self {
             graph,
             modifier,
-            target,
             memo: HashMap::new(),
             marked: HashSet::new(),
         }
@@ -384,7 +374,7 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
                 self.memo.insert(node_id, SinkScore::Benefit);
             }
 
-            Operator::MaxPool(_) if self.target == Target::CPU => {
+            Operator::MaxPool(_) => {
                 self.memo.insert(node_id, SinkScore::Benefit);
             }
 
