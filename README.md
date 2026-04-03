@@ -33,13 +33,3 @@ nsys profile target/release/profile models/validated/resnet152-v2-7 10 1
 ```
 
 Arguments: `<model_dir> [num_runs] [num_streams]`
-
-## ORT Benchmark (via Podman)
-
-Requires `nvidia-container-toolkit`.
-
-```sh
-bash bench/ort/run.sh                    # CUDA + CPU, all models
-bash bench/ort/run.sh --cpu-only         # CPU only
-bash bench/ort/run.sh --models resnet18  # specific model
-```
