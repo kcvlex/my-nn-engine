@@ -518,6 +518,41 @@ impl<'ll> CodeGen<'ll, '_> {
             None
         };
 
+        // Arena: allocate one big buffer, assign chunks at offsets
+        builder.position_at_end(self.unit.entry);
+        let i8_ty = self.ll_ctx.i8_type();
+        let i64_ty = self.ll_ctx.i64_type();
+        let alignment = 256u64;
+        let align_up = |size: u64| (size + alignment - 1) & !(alignment - 1);
+        {
+            let mut offset = 0u64;
+            for (chunk_id, &size) in self.gen_ctx.mem_size.iter().enumerate() {
+                let ptr = if offset == 0 && chunk_id == 0 {
+                    // first chunk: malloc the full arena
+                    let arena_size: u64 = self.gen_ctx.mem_size.iter().map(|&s| align_up(s)).sum();
+                    let arena = builder.build_array_malloc(
+                        i8_ty,
+                        i64_ty.const_int(arena_size, false),
+                        "arena",
+                    )?;
+                    chunk2ptr.insert(usize::MAX, arena); // store arena base
+                    arena
+                } else {
+                    let arena = *chunk2ptr.get(&usize::MAX).unwrap();
+                    unsafe {
+                        builder.build_in_bounds_gep(
+                            i8_ty,
+                            arena,
+                            &[i64_ty.const_int(offset, false)],
+                            &format!("chunk.{chunk_id}"),
+                        )?
+                    }
+                };
+                chunk2ptr.insert(chunk_id, ptr);
+                offset += align_up(size);
+            }
+        }
+
         for (kernel_id, kernel) in self.gen_ctx.schedule.kernels.iter() {
             let function = if !self.gen_ctx.need_to_generate(kernel_id) {
                 None
@@ -539,22 +574,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 .get::<mem_alloc::MemAllocResult>();
             for alloc in mem_alloc.0[&kernel_id].iter() {
                 let dst_ptr = match alloc.ty {
-                    AllocateType::Chunk(chunk) => {
-                        if alloc.is_first_use {
-                            // TODO: type
-                            let ptr = builder.build_array_malloc(
-                                self.ll_ctx.i128_type(),
-                                self.ll_ctx
-                                    .i64_type()
-                                    .const_int(self.gen_ctx.mem_size[chunk], false),
-                                format!("chunk.{}", chunk).as_str(),
-                            )?;
-                            chunk2ptr.insert(chunk, ptr);
-                            ptr
-                        } else {
-                            *chunk2ptr.get(&chunk).unwrap()
-                        }
-                    }
+                    AllocateType::Chunk(chunk) => *chunk2ptr.get(&chunk).unwrap(),
                     AllocateType::Input(v) | AllocateType::Output(v) => {
                         *ptr_values.get(&v).unwrap()
                     }
@@ -624,8 +644,8 @@ impl<'ll> CodeGen<'ll, '_> {
         }
         builder.position_at_end(self.unit.entry);
 
-        for ptr in chunk2ptr.values() {
-            builder.build_free(*ptr)?;
+        if let Some(arena) = chunk2ptr.get(&usize::MAX) {
+            builder.build_free(*arena)?;
         }
 
         builder.build_return(None)?;
