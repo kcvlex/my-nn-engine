@@ -52,6 +52,10 @@ Thumbs.db
 
 design.md
 
+# Claude Code
+.claude/
+
 # Profiler outputs
 *.nsys-rep
 *.ncu-rep
+*.sqlite
