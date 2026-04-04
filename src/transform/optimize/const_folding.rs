@@ -317,6 +317,54 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
             }
         }
 
+        Operator::Clip(_) => {
+            let inputs = &graph.nodes[node_id].inputs;
+
+            let extract_scalar_f64 = |idx: usize| -> Option<f64> {
+                inputs
+                    .get(idx)
+                    .and_then(|id| id.as_ref())
+                    .and_then(|id| graph.initializer.get(id))
+                    .and_then(|tensor| tensor.data.to_scalar_data())
+                    .map(|s| match s {
+                        ScalarData::SInt(_, v) => v as f64,
+                        ScalarData::UInt(_, v) => v as f64,
+                        ScalarData::Float(_, v) => v,
+                    })
+            };
+
+            let min_val = extract_scalar_f64(args::CLIP_MIN);
+            let max_val = extract_scalar_f64(args::CLIP_MAX);
+
+            let Operator::Clip(clip) = &mut graph.nodes[node_id].op else {
+                unreachable!();
+            };
+
+            let mut drop_min = false;
+            let mut drop_max = false;
+
+            if clip.min.is_none() && min_val.is_some() {
+                clip.min = min_val;
+                drop_min = true;
+            }
+            if clip.max.is_none() && max_val.is_some() {
+                clip.max = max_val;
+                drop_max = true;
+            }
+
+            for (arg, drop) in [(args::CLIP_MIN, drop_min), (args::CLIP_MAX, drop_max)] {
+                if drop &&
+                    graph.nodes[node_id]
+                        .inputs
+                        .get(arg)
+                        .and_then(|x| x.as_ref())
+                        .is_some()
+                {
+                    modifier.drop_node_input(graph, node_id, arg);
+                }
+            }
+        }
+
         Operator::Resize(resize) => {
             if resize.scale.is_some() {
                 return;

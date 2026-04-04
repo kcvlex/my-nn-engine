@@ -284,6 +284,17 @@ fn relu() -> TestResult {
 }
 
 #[test]
+fn clip() -> TestResult {
+    with_all_sessions("clip.onnx", |session| {
+        let (input, orig) =
+            make_tensor!(f32, [[-3.0, 0.0], [3.0, 7.0]], [[-1.0, 6.0], [6.5, -10.0]],)?;
+        let output = session.run(&[input])?;
+        tensor_assert_eq!(output[0], orig.mapv(|x| x.max(0.0).min(6.0)).into_dyn());
+        Ok(())
+    })
+}
+
+#[test]
 fn transpose() -> TestResult {
     with_all_sessions("transpose.onnx", |session| {
         let (input, orig) = make_range_tensor!(f32, 1, 7, 5, 1)?;

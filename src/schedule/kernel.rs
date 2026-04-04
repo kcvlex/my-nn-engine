@@ -130,8 +130,8 @@ impl KernelsBuilder {
             let args: Vec<_> = node
                 .inputs
                 .iter()
+                .filter_map(|input| *input)
                 .map(|input| {
-                    let input = input.unwrap();
                     if let Some(inter) = intermediates.get(&input) {
                         ElementwiseOpArg::NthResult(*inter)
                     } else {
@@ -208,8 +208,11 @@ impl KernelsBuilder {
                     let body = if op.is_elementwise() {
                         let ops = vec![(
                             op,
-                            (0..node.inputs.len())
-                                .map(ElementwiseOpArg::Input)
+                            node.inputs
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, v)| v.is_some())
+                                .map(|(i, _)| ElementwiseOpArg::Input(i))
                                 .collect(),
                         )];
                         KernelBody::ElementWises(ElementWises { ops })

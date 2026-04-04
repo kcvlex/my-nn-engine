@@ -46,6 +46,7 @@ pub enum Operator {
     BatchedGemm(BatchedGemm),
     BatchNormalization(BatchNormalization),
     Cast(Cast),
+    Clip(Clip),
     Concat(Concat),
     Constant(Constant),
     ConstantOfShape(ConstantOfShape),
@@ -301,6 +302,12 @@ pub struct GeLU {
 pub struct LayerNormalization {
     pub axis: TensorIndex,
     pub epsilon: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clip {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -773,6 +780,7 @@ impl Operator {
             Operator::BatchedGemm(_) => "BatchedGemm",
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
+            Operator::Clip(_) => "Clip",
             Operator::Concat(_) => "Concat",
             Operator::Constant(_) => "Constant",
             Operator::ConstantOfShape(_) => "ConstantOfShape",
@@ -831,6 +839,7 @@ impl Operator {
             Operator::Add |
             Operator::BatchNormalization(_) |
             Operator::Cast(_) |
+            Operator::Clip(_) |
             Operator::Div |
             Operator::Exp |
             Operator::GeLU(_) |
@@ -949,6 +958,10 @@ pub mod args {
     pub const ONEHOT_INDICES: usize = 0;
     pub const ONEHOT_DEPTH: usize = 1;
     pub const ONEHOT_VALUES: usize = 2;
+
+    pub const CLIP_DATA: usize = 0;
+    pub const CLIP_MIN: usize = 1;
+    pub const CLIP_MAX: usize = 2;
 }
 
 //#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]

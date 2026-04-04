@@ -176,6 +176,17 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             attr_float("momentum", bn.momentum),
         ],
 
+        Operator::Clip(c) => {
+            let mut attrs = vec![];
+            if let Some(min) = c.min {
+                attrs.push(attr_float("min", min as f32));
+            }
+            if let Some(max) = c.max {
+                attrs.push(attr_float("max", max as f32));
+            }
+            attrs
+        }
+
         Operator::Cast(c) => vec![attr_int("to", data_type_to_i32(c.to) as i64)],
 
         Operator::Concat(c) => vec![attr_int("axis", c.axis.raw() as i64)],

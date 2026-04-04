@@ -368,6 +368,33 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap()
             }
 
+            SingleOpcode::Clip(operator::Clip { min, max }) => {
+                let min = min.expect("Clip min must be constant-folded");
+                let max = max.expect("Clip max must be constant-folded");
+                let fp_ty = ty.float_type().unwrap();
+                let llvm_ty = fp_ty.llvm_type(self.context);
+                let src = unary_op!(operands).into_float_value();
+                let clamped_low = self
+                    .builder
+                    .build_call(
+                        self.intrinsics.fmax.get(fp_ty),
+                        &[src.into(), llvm_ty.const_float(min).into()],
+                        "clamped_low",
+                    )?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.intrinsics.fmin.get(fp_ty),
+                        &[clamped_low.into(), llvm_ty.const_float(max).into()],
+                        "res",
+                    )?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+
             SingleOpcode::LeakyReLU(operator::LeakyReLU { alpha }) => {
                 let ty = ty.float_type().unwrap().llvm_type(self.context);
                 let zero = ty.const_zero();

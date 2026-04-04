@@ -2,6 +2,7 @@ use inkwell::values::*;
 use smallvec::SmallVec;
 
 use crate::onnx::operator::BatchNormalization;
+use crate::onnx::operator::Clip;
 use crate::onnx::operator::GeLU;
 use crate::onnx::operator::LeakyReLU;
 use crate::schedule::ElementwiseOpArg;
@@ -69,6 +70,7 @@ pub enum SingleOpcode {
     Add,
     BatchNorm(BatchNormalization),
     Cast(DataType, DataType),
+    Clip(Clip),
     Div,
     Exp,
     GeLU(GeLU),

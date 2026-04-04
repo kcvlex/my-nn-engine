@@ -179,6 +179,7 @@ pub fn infer_node_output(
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
         Operator::BatchNormalization(_) |
+        Operator::Clip(_) |
         Operator::Exp |
         Operator::GeLU(_) |
         Operator::Identity |

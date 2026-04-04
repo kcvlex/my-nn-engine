@@ -995,6 +995,10 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             attributes,
         )?)),
         "Cast" => Ok(Operator::Cast(Cast::load(attributes)?)),
+        "Clip" => Ok(Operator::Clip(Clip {
+            min: None,
+            max: None,
+        })),
         "Concat" => Ok(Operator::Concat(Concat::load(attributes)?)),
         "Constant" => Ok(Operator::Constant(Constant::load(attributes)?)),
         "ConstantOfShape" => Ok(Operator::ConstantOfShape(ConstantOfShape::load(

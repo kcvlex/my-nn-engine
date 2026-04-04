@@ -32,6 +32,7 @@ pub struct Intrinsics<'ll> {
     pub exp: FloatIntrinsics<'ll>,
     pub fma: FloatIntrinsics<'ll>,
     pub fmax: FloatIntrinsics<'ll>,
+    pub fmin: FloatIntrinsics<'ll>,
     pub floor: FloatIntrinsics<'ll>,
     pub log: FloatIntrinsics<'ll>,
     pub pow: FloatIntrinsics<'ll>,

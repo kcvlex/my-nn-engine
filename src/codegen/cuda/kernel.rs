@@ -412,6 +412,11 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                     "({x} * (0.5 + 0.5 * tanh({x} * (0.7978845608028654 + 0.035677408136300125 * {x} * {x}))))"
                 )
             }
+            Operator::Clip(Clip { min, max }) => {
+                let min = min.expect("Clip min must be constant-folded");
+                let max = max.expect("Clip max must be constant-folded");
+                format!("fmaxf({}, fminf({}, {}))", min, max, x)
+            }
             Operator::Identity => format!("{}", x),
             Operator::LeakyReLU(LeakyReLU { alpha }) => {
                 format!("((0 <= {}) ? {} : {} * {})", x, x, alpha, x)
@@ -451,6 +456,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 ))
             }
             uop @ (Operator::Cast(_) |
+            Operator::Clip(_) |
             Operator::Exp |
             Operator::GeLU(_) |
             Operator::Identity |

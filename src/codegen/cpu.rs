@@ -271,6 +271,10 @@ impl CodeGenContext {
             f_f32: get_intrinsic!("llvm.maxnum", &[f32_ty, f32_ty])?,
             f_f64: get_intrinsic!("llvm.maxnum", &[f64_ty, f64_ty])?,
         };
+        let fmin = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.minnum", &[f32_ty, f32_ty])?,
+            f_f64: get_intrinsic!("llvm.minnum", &[f64_ty, f64_ty])?,
+        };
         let floor = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.floor", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.floor", &[f64_ty])?,
@@ -308,6 +312,7 @@ impl CodeGenContext {
             floor,
             fma,
             fmax,
+            fmin,
             log,
             pow,
             sqrt,
@@ -745,6 +750,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Contiguous(_) |
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
+                Operator::Clip(_) |
                 Operator::Exp |
                 Operator::GeLU(_) |
                 Operator::LeakyReLU(_) |
@@ -766,6 +772,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     let src = operands[0].0;
                     SingleOpcode::Cast(src, cast.to)
                 }
+                Operator::Clip(v) => SingleOpcode::Clip(*v),
                 Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
@@ -792,6 +799,7 @@ impl<'ll> CodeGen<'ll, '_> {
             KernelBody::Opaque(Opaque { op }) => match op {
                 Operator::Add |
                 Operator::BatchNormalization(_) |
+                Operator::Clip(_) |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
