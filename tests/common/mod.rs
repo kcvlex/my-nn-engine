@@ -167,7 +167,7 @@ macro_rules! build_graph {
             registry.insert(stringify!($output_name), $output_name);
 
             let node = graph.nodes.alloc(Node::create_node(
-                vec![$output_name],
+                vec![Some($output_name)],
                 vec![],
                 format!("Output_{}", stringify!($output_name)),
                 Operator::Output($output_name),
@@ -204,7 +204,7 @@ macro_rules! build_graph {
             };
 
             graph.nodes.alloc(Node::create_node(
-                vec![$( registry[stringify!($input)] ),*],
+                vec![$( Some(registry[stringify!($input)]) ),*],
                 vec![$output],
                 $node_name.to_string(),
                 $op,

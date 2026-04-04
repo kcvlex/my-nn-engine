@@ -58,7 +58,7 @@ impl<T: GraphOp> Pass<T> for NHWC2NCHWInsertion {
             let nhwc2nchw_id = modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![old_output],
+                    inputs: vec![Some(old_output)],
                     outputs: vec![nchw_output],
                     name: format!("Conv_NHWC2NCHW_{}", conv_id.index()),
                     op: Operator::NHWC2NCHW,

@@ -56,12 +56,12 @@ impl<T: GraphOp> Pass<T> for AttentionFusion {
                 .generate(graph, modifier)
                 .unwrap();
             let old_output = graph.nodes[last_node].outputs[0];
-            let mut inputs = vec![q; if mask.is_some() { 4 } else { 3 }];
-            inputs[args::ATTENTION_Q] = q;
-            inputs[args::ATTENTION_K] = k_transposed;
-            inputs[args::ATTENTION_V] = v;
+            let mut inputs = vec![Some(q); if mask.is_some() { 4 } else { 3 }];
+            inputs[args::ATTENTION_Q] = Some(q);
+            inputs[args::ATTENTION_K] = Some(k_transposed);
+            inputs[args::ATTENTION_V] = Some(v);
             if let Some(mask) = mask {
-                inputs[args::ATTENTION_MASK] = mask;
+                inputs[args::ATTENTION_MASK] = Some(mask);
             }
             let new_output = modifier.register_new_value(
                 graph,
@@ -129,7 +129,7 @@ fn build_causal_additive_mask(
     }
 
     let penalty = if let Some(mask_node) = mask_node {
-        let mask_val = &graph.nodes[mask_node].inputs[1];
+        let mask_val = &graph.nodes[mask_node].inputs[1].unwrap();
         let mask = graph.initializer.get(mask_val)?;
         let mty = &mask.tensor_type();
         let mndim = mty.dims.ndim();
@@ -198,8 +198,8 @@ fn match_attention_pattern<T: GraphOp>(
     matmul_node: NodeId,
 ) -> Option<AttentionPattern> {
     let matcher = PatternMatcher::new(graph, modifier, (matmul_node, 0));
-    let q = graph.nodes[matmul_node].inputs[0];
-    let k = graph.nodes[matmul_node].inputs[1];
+    let q = graph.nodes[matmul_node].inputs[0].unwrap();
+    let k = graph.nodes[matmul_node].inputs[1].unwrap();
 
     let mut qk = None;
     let mut qk_scaled = None;
@@ -222,7 +222,9 @@ fn match_attention_pattern<T: GraphOp>(
         .and_then(|matcher| {
             matcher
                 .capture_node(&mut causal_node)
-                .try_then(|(node, v)| matches!(&node.op, Operator::Sub) && node.inputs[0] == v)
+                .try_then(|(node, v)| {
+                    matches!(&node.op, Operator::Sub) && node.inputs[0].unwrap() == v
+                })
                 .map(|res| res.capture_node(&mut sub_node))
         })
         .unwrap_or_else(|matcher| matcher);
@@ -237,7 +239,7 @@ fn match_attention_pattern<T: GraphOp>(
             if causal_node.is_some() || sub_node.is_some() {
                 return false;
             }
-            node.inputs[0] == v || node.inputs[1] == v
+            node.inputs[0].unwrap() == v || node.inputs[1].unwrap() == v
         })
         .map(|res| res.capture_node(&mut add_node))
         .unwrap_or_else(|matcher| matcher);

@@ -81,7 +81,7 @@ impl TransposeGenerator {
         graph_op.register_new_node(
             graph,
             Node {
-                inputs: vec![input],
+                inputs: vec![Some(input)],
                 outputs: vec![transposed],
                 op: Operator::Transpose(Transpose { perm }),
                 name: node_name.clone(),
@@ -96,7 +96,7 @@ impl TransposeGenerator {
             graph_op.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![transposed],
+                    inputs: vec![Some(transposed)],
                     outputs: vec![new_value],
                     op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("{node_name}_Contiguous"),
@@ -191,7 +191,7 @@ impl ReshapeGenerator {
                     graph_op.register_new_node(
                         graph,
                         Node {
-                            inputs: vec![input],
+                            inputs: vec![Some(input)],
                             outputs: vec![new_value],
                             op: Operator::Contiguous(Contiguous { ops: vec![] }),
                             name: node_name,
@@ -209,7 +209,7 @@ impl ReshapeGenerator {
         graph_op.register_new_node(
             graph,
             Node {
-                inputs: vec![input_value, shape_input],
+                inputs: vec![Some(input_value), Some(shape_input)],
                 outputs: vec![new_value],
                 op: Operator::Reshape,
                 name: node_name,
@@ -233,7 +233,7 @@ impl<T: GraphOp> Pass<T> for ContiguousOutput {
     fn run(&self, graph: &mut Graph, graph_op: &mut T) {
         let ids = graph.outputs.clone();
         for id in ids.iter() {
-            let input = graph.nodes[*id].inputs[0];
+            let input = graph.nodes[*id].inputs[0].unwrap();
             let input_ty = graph.values[input].ty.clone();
             let new_value = graph.values.alloc(ValueInfo {
                 name: format!("Contiguous_Output_{}", id.index()),
@@ -242,7 +242,7 @@ impl<T: GraphOp> Pass<T> for ContiguousOutput {
             graph_op.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![input],
+                    inputs: vec![Some(input)],
                     outputs: vec![new_value],
                     op: Operator::Contiguous(Contiguous { ops: vec![] }),
                     name: format!("Contiguous_Output_{}", id.index()),
@@ -271,7 +271,7 @@ fn bundle_reshape_and_transpose<T: GraphOp>(
     node_id: NodeId,
     modifier: &T,
 ) -> (Reinterpret, ValueId) {
-    let input_value = graph.nodes[node_id].inputs[0];
+    let input_value = graph.nodes[node_id].inputs[0].unwrap();
     let (source, chain) = modifier.walk_chain_backward(graph, input_value, |node| {
         matches!(node.op, Operator::Reshape | Operator::Transpose(_))
     });
@@ -286,7 +286,7 @@ fn bundle_reshape_and_transpose<T: GraphOp>(
         .map(|&id| match &graph.nodes[id].op {
             Operator::Reshape => {
                 let input_shape = graph
-                    .get_resolved_tensor_type(graph.nodes[id].inputs[0])
+                    .get_resolved_tensor_type(graph.nodes[id].inputs[0].unwrap())
                     .unwrap();
                 let output_shape = graph
                     .get_resolved_tensor_type(graph.nodes[id].outputs[0])
@@ -345,7 +345,7 @@ impl<T: GraphOp> Pass<T> for ReinterpretConversion {
             modifier.register_new_node(
                 graph,
                 Node::create_node(
-                    vec![input],
+                    vec![Some(input)],
                     vec![new_output],
                     format!("Reinterpret_{:?}", id),
                     Operator::Reinterpret(re),
@@ -370,7 +370,9 @@ impl<T: GraphOp> Pass<T> for ContiguousElimination {
             .iter()
             .filter(|(_, node)| match node.op {
                 Operator::Contiguous(_) => {
-                    let input_ty = graph.get_resolved_tensor_type(node.inputs[0]).unwrap();
+                    let input_ty = graph
+                        .get_resolved_tensor_type(node.inputs[0].unwrap())
+                        .unwrap();
                     let output_ty = graph.get_resolved_tensor_type(node.outputs[0]).unwrap();
                     input_ty.is_contiguous() && input_ty.dims == output_ty.dims
                 }
@@ -381,7 +383,7 @@ impl<T: GraphOp> Pass<T> for ContiguousElimination {
 
         for id in ids.iter() {
             let node = &graph.nodes[*id];
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let output = node.outputs[0];
             modifier.replace_input_value(graph, output, input);
         }
@@ -433,7 +435,7 @@ impl<T: GraphOp> Pass<T> for ContiguousFolding {
                 if !is_reinterpret_or_contiguous(node) {
                     return false;
                 }
-                let input = node.inputs[0];
+                let input = node.inputs[0].unwrap();
                 let Some((def_id, _)) = modifier.defined_node(input) else {
                     return true;
                 };
@@ -473,7 +475,7 @@ impl<T: GraphOp> Pass<T> for ContiguousFolding {
                 .flat_map(|&id| extract_ops(&graph.nodes[id]).iter().cloned())
                 .collect();
 
-            let true_input = graph.nodes[start_id].inputs[0];
+            let true_input = graph.nodes[start_id].inputs[0].unwrap();
             let output_ty = graph
                 .get_resolved_tensor_type(final_output)
                 .unwrap()
@@ -486,7 +488,7 @@ impl<T: GraphOp> Pass<T> for ContiguousFolding {
             modifier.register_new_node(
                 graph,
                 Node::create_node(
-                    vec![true_input],
+                    vec![Some(true_input)],
                     vec![new_output],
                     format!("FoldedContiguous_{:?}", start_id),
                     Operator::Contiguous(Contiguous { ops: all_ops }),

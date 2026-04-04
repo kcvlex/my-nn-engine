@@ -56,15 +56,21 @@ impl DependencyGraph {
             }
             Target::CUDA => (BTreeSet::new(), BTreeSet::new()),
         };
-        let ignore = |x| inputs_set.contains(x) || outputs_set.contains(x);
+        let ignore = |x: &ValueId| inputs_set.contains(x) || outputs_set.contains(x);
         for (kernel_id, kernel) in schedule.kernels.0.iter() {
             // if node.is_dummy() {
             //     continue;
             // }
 
-            for (i, &input) in kernel.inputs.iter().enumerate().filter(|(_, x)| !ignore(x)) {
+            for (i, input) in kernel.inputs.iter().enumerate() {
+                let Some(input) = input else {
+                    continue;
+                };
+                if ignore(input) {
+                    continue;
+                }
                 value2used
-                    .entry(input)
+                    .entry(*input)
                     .or_insert_with(IndexSet::new)
                     .insert((kernel_id, i));
             }
@@ -199,6 +205,7 @@ impl<'sched> MemoryPlanner<'sched> {
                 Target::CUDA => kernel
                     .inputs
                     .iter()
+                    .flatten()
                     .chain(kernel.outputs.iter())
                     .map(|id| to_allocate_info(self, id))
                     .collect(),
@@ -219,7 +226,7 @@ impl<'sched> MemoryPlanner<'sched> {
                     if i == 0 &&
                         matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_))
                     {
-                        output_set.insert(kernel.inputs[0], *v);
+                        output_set.insert(kernel.inputs[0].unwrap(), *v);
                     }
                 }
             }
@@ -232,7 +239,7 @@ impl<'sched> MemoryPlanner<'sched> {
         let stream = self.kernel2stream.get(&kernel_id).copied().unwrap_or(0);
 
         if self.schedule.options.target != Target::CPU {
-            for input in kernel.inputs.iter() {
+            for input in kernel.inputs.iter().flatten() {
                 match self.allocations.get(input) {
                     Some(info) => {
                         info.chunk_id().to_owned().expect("Input must be allocated");
@@ -269,6 +276,7 @@ impl<'sched> MemoryPlanner<'sched> {
         for input in kernel
             .inputs
             .iter()
+            .flatten()
             .filter(|x| !self.deps.inputs_set.contains(x))
         {
             let chunk_id = match self.allocations.get(input).and_then(|x| x.chunk_id()) {
@@ -293,7 +301,7 @@ impl<'sched> MemoryPlanner<'sched> {
 
         let kernel_id = self.deps.value2defined[&value_id];
         let kernel = &self.schedule.kernels.0[kernel_id];
-        for input in kernel.inputs.iter() {
+        for input in kernel.inputs.iter().flatten() {
             let is_input = match self.allocations.get(input) {
                 Some(AllocateType::Input(_)) => true,
                 Some(AllocateType::Chunk(chunk_id)) => {
@@ -314,7 +322,8 @@ impl<'sched> MemoryPlanner<'sched> {
                             kernel
                                 .inputs
                                 .get(args::GEMM_C)
-                                .map(|x| x == input)
+                                .and_then(|x| *x)
+                                .map(|x| x == *input)
                                 .unwrap_or(false)
                         {
                             return Some(*input);

@@ -496,7 +496,10 @@ fn graph_to_proto(graph: &Graph) -> GraphProto {
                 input: node
                     .inputs
                     .iter()
-                    .map(|&v| graph.values[v].name.clone())
+                    .map(|v| match v {
+                        Some(v) => graph.values[*v].name.clone(),
+                        None => String::new(),
+                    })
                     .collect(),
                 output: node
                     .outputs
@@ -663,10 +666,16 @@ mod tests {
             assert_eq!(orig.inputs.len(), rel.inputs.len());
             assert_eq!(orig.outputs.len(), rel.outputs.len());
             for (oi, ri) in orig.inputs.iter().zip(rel.inputs.iter()) {
-                assert_eq!(
-                    original.graph.values[*oi].name,
-                    reloaded.graph.values[*ri].name,
-                );
+                match (oi, ri) {
+                    (Some(oi), Some(ri)) => {
+                        assert_eq!(
+                            original.graph.values[*oi].name,
+                            reloaded.graph.values[*ri].name,
+                        );
+                    }
+                    (None, None) => {}
+                    _ => panic!("input mismatch"),
+                }
             }
             for (oo, ro) in orig.outputs.iter().zip(rel.outputs.iter()) {
                 assert_eq!(

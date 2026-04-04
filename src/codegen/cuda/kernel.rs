@@ -495,7 +495,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 for input in args.iter() {
                     match input {
                         ElementwiseOpArg::Input(i) => {
-                            inputs.push(KernelVar::Value(kernel.inputs[*i]))
+                            inputs.push(KernelVar::Value(kernel.inputs[*i].unwrap()))
                         }
                         ElementwiseOpArg::NthResult(i) => inputs.push(outputs[*i]),
                     }
@@ -634,7 +634,7 @@ impl<'sched> SplitBuilder<'sched> {
 
         let axis_idx_var = self.ctx.new_local_var();
 
-        let input_id = kernel.inputs[0];
+        let input_id = kernel.inputs[0].unwrap();
         let input_ty = self.ctx.get_resolved_tensor_type(input_id)?;
         // if !input_ty.is_contiguous() {
         //     return Err(BuildError::NonContiguousTensor(input_id));
@@ -753,7 +753,7 @@ impl<'sched> ConcatBuilder<'sched> {
             .iter()
             .map(|id| {
                 self.ctx
-                    .get_resolved_tensor_type(*id)
+                    .get_resolved_tensor_type(id.unwrap())
                     .map(|ty| ty.dims.size())
             })
             .collect::<Result<Vec<_>, BuildError>>()?;
@@ -763,7 +763,7 @@ impl<'sched> ConcatBuilder<'sched> {
             .inputs
             .iter()
             .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
                 Ok(input_ty.dims[axis])
             })
             .collect::<Result<Vec<_>, BuildError>>()?;
@@ -772,7 +772,7 @@ impl<'sched> ConcatBuilder<'sched> {
             .inputs
             .iter()
             .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
                 Ok(format!(
                     "{{{}}}",
                     input_ty
@@ -789,7 +789,7 @@ impl<'sched> ConcatBuilder<'sched> {
             .inputs
             .iter()
             .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(*id)?;
+                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
                 Ok(format!(
                     "{{{}}}",
                     input_ty
@@ -814,7 +814,7 @@ impl<'sched> ConcatBuilder<'sched> {
         let ins = kernel
             .inputs
             .iter()
-            .map(|id| format!("{}", KernelVar::Value(*id)))
+            .map(|id| format!("{}", KernelVar::Value(id.unwrap())))
             .collect::<Vec<_>>()
             .join(", ");
         let input_tensor_sizes_acc = input_tensor_sizes_acc
@@ -881,7 +881,7 @@ impl<'sched> ContiguousBuilder<'sched> {
         };
 
         let gid = KernelVar::Gid;
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let output = kernel.outputs[0];
         let out_ty = self.ctx.get_resolved_tensor_type(output)?;
         let in_ty = self.ctx.get_resolved_tensor_type(input)?;
@@ -1058,7 +1058,7 @@ impl<'sched> ResizeBuilder<'sched> {
     pub fn build(&mut self) -> Result<String, BuildError> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         let output = kernel.outputs[0];
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let KernelBody::Opaque(Opaque {
             op: Operator::Resize(resize),
         }) = &kernel.body
@@ -1153,7 +1153,7 @@ impl<'sched> OneHotBuilder<'sched> {
             unimplemented!()
         };
 
-        let indexes = kernel.inputs[args::ONEHOT_INDICES];
+        let indexes = kernel.inputs[args::ONEHOT_INDICES].unwrap();
         let size = self.ctx.get_resolved_tensor_type(indexes)?.dims.size();
         let decl = self.ctx.decl.decl();
         let gid = KernelVar::Gid;
@@ -1201,13 +1201,17 @@ impl<'sched> GatherBuilder<'sched> {
             unimplemented!()
         }
 
-        let input_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[0])?;
-        let indices_ty = self.ctx.get_resolved_tensor_type(kernel.inputs[1])?;
+        let input_ty = self
+            .ctx
+            .get_resolved_tensor_type(kernel.inputs[0].unwrap())?;
+        let indices_ty = self
+            .ctx
+            .get_resolved_tensor_type(kernel.inputs[1].unwrap())?;
         let axis_dim = input_ty.dims[0];
         let repeat = input_ty.dims.size() / axis_dim;
 
-        let in_ = KernelVar::Value(kernel.inputs[0]);
-        let indices = KernelVar::Value(kernel.inputs[1]);
+        let in_ = KernelVar::Value(kernel.inputs[0].unwrap());
+        let indices = KernelVar::Value(kernel.inputs[1].unwrap());
         let out = KernelVar::Value(kernel.outputs[0]);
         let size = indices_ty.dims.size();
         let gid = KernelVar::Gid;
@@ -1249,7 +1253,7 @@ impl<'sched> CopyBuilder<'sched> {
         ));
 
         let gid = KernelVar::Gid;
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let output = kernel.outputs[0];
         let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
         let in_ = KernelVar::Value(input);
@@ -1283,7 +1287,7 @@ impl<'sched> MaxPoolBuilder<'sched> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         assert!(pool.layout == operator::Layout::NCHW);
 
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let output = kernel.outputs[0];
         let input_ty = self.ctx.get_resolved_tensor_type(input)?;
         let output_ty = self.ctx.get_resolved_tensor_type(output)?;
@@ -1375,7 +1379,7 @@ impl<'sched> MaxPoolBuilder<'sched> {
         let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
         assert!(pool.layout == operator::Layout::NHWC);
 
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let output = kernel.outputs[0];
         let input_ty = self.ctx.get_resolved_tensor_type(input)?;
         let output_ty = self.ctx.get_resolved_tensor_type(output)?;
@@ -1569,7 +1573,7 @@ impl<'sched> ReduceMatrixBuilder<'sched> {
         let row_id_var = self.ctx.new_local_var();
 
         let output = kernel.outputs[0];
-        let input = kernel.inputs[0];
+        let input = kernel.inputs[0].unwrap();
         let input_ty = self.ctx.get_resolved_tensor_type(input)?;
         assert!(input_ty.is_contiguous());
         let &[row, col] = &input_ty.dims[..] else {

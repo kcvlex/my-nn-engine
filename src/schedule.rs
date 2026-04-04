@@ -108,7 +108,7 @@ pub struct Schedule {
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
-    pub inputs: Vec<ValueId>,
+    pub inputs: Vec<Option<ValueId>>,
     pub outputs: Vec<ValueId>,
     pub body: KernelBody,
     pub name: String,

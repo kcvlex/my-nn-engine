@@ -27,8 +27,8 @@ use crate::transform::Pass;
 //             })
 //             .collect::<Vec<_>>();
 //         for (id, gemm) in res.iter() {
-//             let a = graph.nodes[*id].inputs[args::GEMM_A];
-//             let b = graph.nodes[*id].inputs[args::GEMM_B];
+//             let a = graph.nodes[*id].inputs[args::GEMM_A].unwrap();
+//             let b = graph.nodes[*id].inputs[args::GEMM_B].unwrap();
 //             let c_opt = graph.nodes[*id].inputs.get(args::GEMM_C).cloned();
 //             let old_output = graph.nodes[*id].outputs[0];
 //             let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
@@ -43,7 +43,7 @@ use crate::transform::Pass;
 //             modifier.register_new_node(
 //                 graph,
 //                 Node {
-//                     inputs: vec![a, b],
+//                     inputs: vec![Some(a), Some(b)],
 //                     outputs: vec![new_output],
 //                     name: format!("TransformBLASGemm_{:?}", id),
 //                     op: Operator::BLASGemm(blas_gemm),
@@ -60,7 +60,7 @@ use crate::transform::Pass;
 //                 modifier.register_new_node(
 //                     graph,
 //                     Node {
-//                         inputs: vec![new_output, c],
+//                         inputs: vec![Some(new_output), Some(c)],
 //                         outputs: vec![add],
 //                         name: format!("TransformBLASGemm_Add_{:?}", id),
 //                         op: Operator::Add,
@@ -103,14 +103,14 @@ impl<T: GraphOp> Pass<T> for GemmTransposeFusion {
                 let node_id = modifier.defined_node(id)?.0;
                 let node = &graph.nodes[node_id];
                 match node.op {
-                    Operator::Transpose(_) => Some(node.inputs[0]),
+                    Operator::Transpose(_) => Some(node.inputs[0].unwrap()),
                     _ => None,
                 }
             };
 
-            let a = graph.nodes[id].inputs[args::GEMM_A];
-            let b = graph.nodes[id].inputs[args::GEMM_B];
-            let c_opt = graph.nodes[id].inputs.get(args::GEMM_C).cloned();
+            let a = graph.nodes[id].inputs[args::GEMM_A].unwrap();
+            let b = graph.nodes[id].inputs[args::GEMM_B].unwrap();
+            let c_opt = graph.nodes[id].inputs.get(args::GEMM_C).and_then(|x| *x);
             let old_output = graph.nodes[id].outputs[0];
             let trans_a = is_transposed(a);
             let trans_b = is_transposed(b);
@@ -132,11 +132,11 @@ impl<T: GraphOp> Pass<T> for GemmTransposeFusion {
                     format!("GemmTransComposition_Output_{index}"),
                     ty,
                 );
-                let mut inputs = Vec::with_capacity(3);
-                inputs.push(trans_a.unwrap_or(a));
-                inputs.push(trans_b.unwrap_or(b));
+                let mut inputs: Vec<Option<_>> = Vec::with_capacity(3);
+                inputs.push(Some(trans_a.unwrap_or(a)));
+                inputs.push(Some(trans_b.unwrap_or(b)));
                 if let Some(c) = c_opt {
-                    inputs.push(c);
+                    inputs.push(Some(c));
                 }
                 let new_node = Node {
                     inputs,

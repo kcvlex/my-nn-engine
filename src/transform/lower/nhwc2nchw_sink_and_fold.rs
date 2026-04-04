@@ -54,6 +54,7 @@ impl NHWC2NCHWSinkAndFold {
     ) {
         let mut cands = vec![None; graph.nodes[node_id].inputs.len()];
         for (i, input) in graph.nodes[node_id].inputs.iter().enumerate() {
+            let Some(input) = input else { continue };
             if let Some((def_id, _)) = modifier.defined_node(*input) {
                 if matches!(graph.nodes[def_id].op, Operator::NHWC2NCHW) {
                     if marked.contains(&def_id) {
@@ -75,8 +76,8 @@ impl NHWC2NCHWSinkAndFold {
                     graph.nodes[cands[0].unwrap()].op,
                     Operator::NHWC2NCHW
                 ));
-                let cur_input = graph.nodes[node_id].inputs[0];
-                let new_input = graph.nodes[cands[0].unwrap()].inputs[0];
+                let cur_input = graph.nodes[node_id].inputs[0].unwrap();
+                let new_input = graph.nodes[cands[0].unwrap()].inputs[0].unwrap();
                 let conv = match &mut graph.nodes[node_id].op {
                     Operator::Conv(ref mut conv) => conv,
                     _ => unreachable!(),
@@ -96,8 +97,8 @@ impl NHWC2NCHWSinkAndFold {
                     graph.nodes[cands[0].unwrap()].op,
                     Operator::NHWC2NCHW
                 ));
-                let cur_input = graph.nodes[node_id].inputs[0];
-                let new_input = graph.nodes[cands[0].unwrap()].inputs[0];
+                let cur_input = graph.nodes[node_id].inputs[0].unwrap();
+                let new_input = graph.nodes[cands[0].unwrap()].inputs[0].unwrap();
                 let pooling = match &mut graph.nodes[node_id].op {
                     Operator::MaxPool(ref mut pooling) => pooling,
                     _ => unreachable!(),
@@ -124,7 +125,7 @@ impl NHWC2NCHWSinkAndFold {
                 let nhwc2nchw_id = modifier.register_new_node(
                     graph,
                     Node {
-                        inputs: vec![output],
+                        inputs: vec![Some(output)],
                         outputs: vec![nchw_output],
                         name: format!("MaxPool_NHWC2NCHW_{}", output.index()),
                         op: Operator::NHWC2NCHW,
@@ -149,15 +150,15 @@ impl NHWC2NCHWSinkAndFold {
                 for (i, c) in cands.iter().enumerate() {
                     if let Some(def_id) = c {
                         assert!(matches!(graph.nodes[*def_id].op, Operator::NHWC2NCHW));
-                        let nhwc_input = graph.nodes[*def_id].inputs[0];
+                        let nhwc_input = graph.nodes[*def_id].inputs[0].unwrap();
                         modifier.replace_input_value_if_without_typecheck(
                             graph,
-                            graph.nodes[node_id].inputs[i],
+                            graph.nodes[node_id].inputs[i].unwrap(),
                             nhwc_input,
                             |id, _| id == node_id,
                         );
                     } else {
-                        let v = graph.nodes[node_id].inputs[i];
+                        let v = graph.nodes[node_id].inputs[i].unwrap();
                         let nchw_ty = graph.get_resolved_tensor_type(v).unwrap();
                         let nhwc_ty = nchw_ty.transpose(&[0, 2, 3, 1]);
                         let reinterp_out = modifier.register_new_value(
@@ -168,7 +169,7 @@ impl NHWC2NCHWSinkAndFold {
                         modifier.register_new_node(
                             graph,
                             Node {
-                                inputs: vec![v],
+                                inputs: vec![Some(v)],
                                 outputs: vec![reinterp_out],
                                 name: format!("SinkNHWC2NCHW_Reinterp_{}", v.index()),
                                 op: Operator::Reinterpret(Reinterpret {
@@ -203,7 +204,7 @@ impl NHWC2NCHWSinkAndFold {
                     let nhwc2nchw_id = modifier.register_new_node(
                         graph,
                         Node {
-                            inputs: vec![old_output],
+                            inputs: vec![Some(old_output)],
                             outputs: vec![nchw_output],
                             name: format!("SinkNHWC2NCHW_NCHW_{}", old_output.index()),
                             op: Operator::NHWC2NCHW,
@@ -251,7 +252,7 @@ impl NHWC2NCHWSinkAndFold {
             .collect();
 
         for (nchw_id, user_ids) in targets {
-            let nchw_input = graph.nodes[nchw_id].inputs[0];
+            let nchw_input = graph.nodes[nchw_id].inputs[0].unwrap();
             let nchw_output = graph.nodes[nchw_id].outputs[0];
 
             for &conv_id in &user_ids {
@@ -401,7 +402,7 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
 
                 if !self.graph.nodes[node_id].inputs.iter().all(|input| {
                     self.graph
-                        .get_resolved_tensor_type(*input)
+                        .get_resolved_tensor_type(input.unwrap())
                         .unwrap()
                         .dims
                         .ndim() ==

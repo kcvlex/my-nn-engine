@@ -35,7 +35,7 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
                 if axes.len() != 1 || !keepdims {
                     return None;
                 }
-                let input = node.inputs[0];
+                let input = node.inputs[0].unwrap();
                 let ndim = graph.get_resolved_tensor_type(input)?.dims.ndim();
                 let axis = TensorIndex::new(axes[0] as isize).index(ndim);
                 (axis == ndim - 1).then_some(id)
@@ -48,9 +48,9 @@ impl<T: GraphOp> Pass<T> for LayerNormFusion {
             else {
                 continue;
             };
-            let mut inputs = [pattern.input; 3];
-            inputs[args::LAYER_NORM_SCALE] = pattern.scale;
-            inputs[args::LAYER_NORM_BIAS] = pattern.bias;
+            let mut inputs = [Some(pattern.input); 3];
+            inputs[args::LAYER_NORM_SCALE] = Some(pattern.scale);
+            inputs[args::LAYER_NORM_BIAS] = Some(pattern.bias);
 
             let old_output = graph.nodes[pattern.last_node].outputs[0];
             let new_output = modifier.register_new_value(
@@ -106,7 +106,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
     mean_node: NodeId,
 ) -> Option<LayerNormPattern> {
     let mean = graph.nodes[mean_node].outputs[0];
-    let x = graph.nodes[mean_node].inputs[0];
+    let x = graph.nodes[mean_node].inputs[0].unwrap();
     let ndim = graph.get_resolved_tensor_type(x)?.dims.ndim();
 
     let mut var: Option<ValueId> = None;
@@ -117,12 +117,16 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
     // Match: Mean → Sub → Mul(D,D) → ReduceMean → Add(eps) → Sqrt → Reciprocal → Mul(gamma)
     let _ = PatternMatcher::new(graph, modifier, (mean_node, 0))
         .then(|(node, mean)| {
-            matches!(&node.op, Operator::Sub) && node.inputs[0] == x && node.inputs[1] == mean
+            matches!(&node.op, Operator::Sub) &&
+                node.inputs[0].unwrap() == x &&
+                node.inputs[1].unwrap() == mean
         })?
         .then(|(node, d)| {
-            matches!(&node.op, Operator::Mul) && node.inputs[0] == d && node.inputs[1] == d
+            matches!(&node.op, Operator::Mul) &&
+                node.inputs[0].unwrap() == d &&
+                node.inputs[1].unwrap() == d
         })?
-        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0] == dd)?
+        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0].unwrap() == dd)?
         .capture_value(&mut var)
         .then(|(node, _)| matches!(&node.op, Operator::Add))?
         .capture_node(&mut var_eps_node)
@@ -153,14 +157,14 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
                 extract_other_binary_input(node, scale_inv) == Some(mean)
         })?
         .then(|(node, mean_scaled)| {
-            matches!(&node.op, Operator::Sub) && node.inputs[1] == mean_scaled
+            matches!(&node.op, Operator::Sub) && node.inputs[1].unwrap() == mean_scaled
         })?
         .capture_node(&mut eff_bias_node);
 
     let y_unbiased_node = y_unbiased_node?;
     let eff_bias_node = eff_bias_node?;
     let eff_bias = graph.nodes[eff_bias_node].outputs[0];
-    let beta = graph.nodes[eff_bias_node].inputs[0];
+    let beta = graph.nodes[eff_bias_node].inputs[0].unwrap();
 
     // Find Y = Add(YUnbiased, EffBias)
     let last_node = PatternMatcher::new(graph, modifier, (y_unbiased_node, 0))
@@ -207,7 +211,7 @@ fn match_layer_norm_pattern<T: GraphOp>(
     let matcher = PatternMatcher::new(graph, modifier, (mean_node, 0));
 
     // Get input X from the mean node
-    let x = graph.nodes[mean_node].inputs[0];
+    let x = graph.nodes[mean_node].inputs[0].unwrap();
     let ndim = graph.get_resolved_tensor_type(x)?.dims.ndim();
 
     let mut d: Option<ValueId> = None;
@@ -220,18 +224,20 @@ fn match_layer_norm_pattern<T: GraphOp>(
 
     let last_node = matcher
         .then(|(node, mean)| {
-            matches!(&node.op, Operator::Sub) && node.inputs[0] == x && node.inputs[1] == mean
+            matches!(&node.op, Operator::Sub) &&
+                node.inputs[0].unwrap() == x &&
+                node.inputs[1].unwrap() == mean
         })?
         .capture_value(&mut d)
         .then(|(node, d)| match &node.op {
             Operator::Mul => {
-                let lhs = node.inputs[0];
-                let rhs = node.inputs[1];
+                let lhs = node.inputs[0].unwrap();
+                let rhs = node.inputs[1].unwrap();
                 lhs == d && rhs == d
             }
             _ => false,
         })?
-        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0] == dd)?
+        .then(|(node, dd)| is_reduce_mean_last_axis(node, ndim) && node.inputs[0].unwrap() == dd)?
         .capture_value(&mut var)
         .then(|(node, _)| matches!(&node.op, Operator::Add))?
         .capture_node(&mut var_eps_node)
@@ -239,7 +245,9 @@ fn match_layer_norm_pattern<T: GraphOp>(
         .then(|(node, _)| matches!(&node.op, Operator::Reciprocal))?
         .then(|(node, inv_stddev)| {
             let d = d.unwrap();
-            matches!(&node.op, Operator::Mul) && node.inputs[0] == d && node.inputs[1] == inv_stddev
+            matches!(&node.op, Operator::Mul) &&
+                node.inputs[0].unwrap() == d &&
+                node.inputs[1].unwrap() == inv_stddev
         })?
         .capture_value(&mut normalized)
         .then(|(node, _)| matches!(&node.op, Operator::Mul))?

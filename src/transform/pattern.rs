@@ -69,10 +69,10 @@ pub(crate) fn extract_other_binary_input(node: &Node, known_input: ValueId) -> O
         return None;
     }
 
-    if node.inputs[0] == known_input {
-        Some(node.inputs[1])
-    } else if node.inputs[1] == known_input {
-        Some(node.inputs[0])
+    if node.inputs[0].unwrap() == known_input {
+        Some(node.inputs[1].unwrap())
+    } else if node.inputs[1].unwrap() == known_input {
+        Some(node.inputs[0].unwrap())
     } else {
         None
     }

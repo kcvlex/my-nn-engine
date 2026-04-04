@@ -41,8 +41,8 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
                     return None;
                 }
 
-                let lhs = used.inputs[0];
-                let rhs = used.inputs[1];
+                let lhs = used.inputs[0].unwrap();
+                let rhs = used.inputs[1].unwrap();
                 // TODO?: What happens when both two inputs of Add is the output of Gemm, i.e.,
                 //   Gemm ------> Add
                 //    \            ^
@@ -73,10 +73,10 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
             assert!(matches!(graph.nodes[add_id].op, Operator::Add));
 
             let gemm_output = graph.nodes[gemm_id].outputs[0];
-            let add_another = if graph.nodes[add_id].inputs[0] == gemm_output {
-                graph.nodes[add_id].inputs[1]
-            } else if graph.nodes[add_id].inputs[1] == gemm_output {
-                graph.nodes[add_id].inputs[0]
+            let add_another = if graph.nodes[add_id].inputs[0].unwrap() == gemm_output {
+                graph.nodes[add_id].inputs[1].unwrap()
+            } else if graph.nodes[add_id].inputs[1].unwrap() == gemm_output {
+                graph.nodes[add_id].inputs[0].unwrap()
             } else {
                 unreachable!()
             };
@@ -105,7 +105,7 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
                 modifier.register_new_node(
                     graph,
                     Node {
-                        inputs: vec![add_another],
+                        inputs: vec![Some(add_another)],
                         outputs: vec![cont_output],
                         name: format!(
                             "GemmAddFusion_BiasCont_{}_{}",
@@ -127,7 +127,7 @@ impl<T: GraphOp> Pass<T> for GemmAddFusion {
             let inputs = vec![
                 graph.nodes[gemm_id].inputs[args::GEMM_A],
                 graph.nodes[gemm_id].inputs[args::GEMM_B],
-                c_value,
+                Some(c_value),
             ];
             gemm.beta = 1.0;
 

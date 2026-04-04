@@ -110,7 +110,7 @@ pub trait GraphOp {
                 break;
             }
             chain.push(node_id);
-            cur = node.inputs[0];
+            cur = node.inputs[0].unwrap();
         }
 
         (cur, chain)
@@ -162,11 +162,13 @@ fn calc_value2xx(graph: &Graph) -> (Value2Defined, Value2Used) {
     let mut value2defined = HashMap::new();
     let mut value2used = HashMap::new();
     for (node_id, node) in graph.nodes.iter() {
-        for (index, &value) in node.inputs.iter().enumerate() {
-            value2used
-                .entry(value)
-                .or_insert_with(IndexSet::new)
-                .insert((node_id, index));
+        for (index, value) in node.inputs.iter().enumerate() {
+            if let Some(value) = value {
+                value2used
+                    .entry(*value)
+                    .or_insert_with(IndexSet::new)
+                    .insert((node_id, index));
+            }
         }
         for (index, &value) in node.outputs.iter().enumerate() {
             value2defined.insert(value, (node_id, index));
@@ -196,10 +198,12 @@ impl GraphOp for SimpleGraphOp {
         let outputs = v.outputs.clone();
         let res = graph.nodes.alloc(v);
         for (index, value) in inputs.iter().enumerate() {
-            self.value2used
-                .entry(*value)
-                .or_default()
-                .insert((res, index));
+            if let Some(value) = value {
+                self.value2used
+                    .entry(*value)
+                    .or_default()
+                    .insert((res, index));
+            }
         }
         for (index, value) in outputs.iter().enumerate() {
             self.value2defined.insert(*value, (res, index));
@@ -244,7 +248,7 @@ impl GraphOp for SimpleGraphOp {
                 assert!(v == old_value);
                 node.op = Operator::Output(new_value);
             }
-            node.inputs[*index] = new_value;
+            node.inputs[*index] = Some(new_value);
         }
 
         self.value2used
@@ -262,11 +266,10 @@ impl GraphOp for SimpleGraphOp {
     }
 
     fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize) {
-        if graph.nodes[node_id].inputs.len() != index + 1 {
-            panic!("Can only drop the last input");
-        }
-
-        let old_value = graph.nodes[node_id].inputs.pop().unwrap();
+        let Some(old_value) = graph.nodes[node_id].inputs[index] else {
+            return;
+        };
+        graph.nodes[node_id].inputs[index] = None;
         let Entry::Occupied(mut old) = self.value2used.entry(old_value) else {
             panic!("Inconsistent value2used");
         };
@@ -295,13 +298,15 @@ impl NodeDelete for SimpleGraphOp {
             }
             node.meta.mark_as_deleted = true;
             for (i, used) in node.inputs.iter().enumerate() {
-                if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
-                    e.get_mut().shift_remove(&(id, i));
-                    if e.get().is_empty() {
-                        e.remove();
+                if let Some(used) = used {
+                    if let Entry::Occupied(mut e) = self.value2used.entry(*used) {
+                        e.get_mut().shift_remove(&(id, i));
+                        if e.get().is_empty() {
+                            e.remove();
+                        }
+                    } else {
+                        unreachable!();
                     }
-                } else {
-                    unreachable!();
                 }
             }
         }
@@ -335,6 +340,7 @@ impl SimpleGraphOp {
         for value in graph.nodes[node_id]
             .inputs
             .iter()
+            .filter_map(|v| v.as_ref())
             .filter(|v| !graph.initializer.contains_key(v))
         {
             let (defined, _) = self.value2defined.get(value).unwrap();

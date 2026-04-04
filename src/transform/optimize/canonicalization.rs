@@ -35,7 +35,7 @@ impl Canonicalization {
         let outputs = graph.nodes[id].outputs.clone();
         match &op {
             Operator::Pow => {
-                let exponent = inputs[1];
+                let exponent = inputs[1].unwrap();
                 let Some(tensor) = graph.initializer.get(&exponent) else {
                     return;
                 };
@@ -69,8 +69,8 @@ impl Canonicalization {
             }
 
             Operator::Div => {
-                let lhs = inputs[0];
-                let rhs = inputs[1];
+                let lhs = inputs[0].unwrap();
+                let rhs = inputs[1].unwrap();
                 let output = outputs[0];
 
                 let reciprocal = modifier.register_new_value(
@@ -81,7 +81,7 @@ impl Canonicalization {
                 modifier.register_new_node(
                     graph,
                     Node::create_node(
-                        vec![rhs],
+                        vec![Some(rhs)],
                         vec![reciprocal],
                         format!("Canonicalize_Reciprocal_{:?}", id),
                         Operator::Reciprocal,
@@ -96,7 +96,7 @@ impl Canonicalization {
                 modifier.register_new_node(
                     graph,
                     Node::create_node(
-                        vec![lhs, reciprocal],
+                        vec![Some(lhs), Some(reciprocal)],
                         vec![new_output],
                         format!("Canonicalize_Mul_{:?}", id),
                         Operator::Mul,
@@ -107,8 +107,8 @@ impl Canonicalization {
             }
 
             Operator::MatMul => {
-                let lhs = inputs[args::MATMUL_LHS];
-                let rhs = inputs[args::MATMUL_RHS];
+                let lhs = inputs[args::MATMUL_LHS].unwrap();
+                let rhs = inputs[args::MATMUL_RHS].unwrap();
                 let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
                 let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
                 let old_output = outputs[0];
@@ -124,7 +124,7 @@ impl Canonicalization {
                 modifier.register_new_node(
                     graph,
                     Node {
-                        inputs: vec![lhs, rhs],
+                        inputs: vec![Some(lhs), Some(rhs)],
                         outputs: vec![new_output],
                         name,
                         op,
@@ -135,7 +135,7 @@ impl Canonicalization {
             }
 
             Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
-                let input = inputs[0];
+                let input = inputs[0].unwrap();
                 let old_output = outputs[0];
                 let node_name = graph.nodes[id].name.clone();
                 let output_dims = graph
@@ -175,8 +175,8 @@ impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
                 if !matches!(node.op, Operator::MatMul) {
                     return None;
                 }
-                let lhs = node.inputs[args::MATMUL_LHS];
-                let rhs = node.inputs[args::MATMUL_RHS];
+                let lhs = node.inputs[args::MATMUL_LHS].unwrap();
+                let rhs = node.inputs[args::MATMUL_RHS].unwrap();
                 let ldim = graph.get_resolved_tensor_type(lhs)?.dims.ndim();
                 let rdim = graph.get_resolved_tensor_type(rhs)?.dims.ndim();
                 if ldim < 3 || rdim < 3 {
@@ -195,8 +195,8 @@ impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
 
         for id in ids {
             let node = &graph.nodes[id];
-            let lhs = node.inputs[args::MATMUL_LHS];
-            let rhs = node.inputs[args::MATMUL_RHS];
+            let lhs = node.inputs[args::MATMUL_LHS].unwrap();
+            let rhs = node.inputs[args::MATMUL_RHS].unwrap();
             let old_output = node.outputs[0];
             let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
             let name = format!("MatMul2BatchedGemm_{:?}", id);
@@ -204,7 +204,7 @@ impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![lhs, rhs],
+                    inputs: vec![Some(lhs), Some(rhs)],
                     outputs: vec![new_output],
                     name,
                     op: Operator::BatchedGemm(BatchedGemm {

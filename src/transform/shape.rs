@@ -100,7 +100,8 @@ pub fn infer_node_output(
     let inputs: Vec<&ResolvedTensorType> = node
         .inputs
         .iter()
-        .flat_map(|&id| {
+        .filter_map(|id| *id)
+        .flat_map(|id| {
             graph.values[id].ty.as_ref().map(|x| match x {
                 TensorType::Resolved(x) => Some(x),
                 TensorType::Unresolved(_) => None,
@@ -207,7 +208,7 @@ pub fn infer_node_output(
             let a = &inputs[args::RESHAPE_DATA];
             let shape = &graph
                 .initializer
-                .get(&node.inputs[args::RESHAPE_SHAPE])
+                .get(&node.inputs[args::RESHAPE_SHAPE].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
             let shape = match shape {
@@ -485,7 +486,7 @@ pub fn infer_node_output(
         Operator::ConstantOfShape(ConstantOfShape { value }) => {
             let shape = graph
                 .initializer
-                .get(&node.inputs[0])
+                .get(&node.inputs[0].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?;
             let ty = match shape.data {
                 TensorData::SInt(SIntType::I64, ref v) => {
@@ -547,7 +548,7 @@ pub fn infer_node_output(
         Operator::NonZero => {
             let input = &graph
                 .initializer
-                .get(&node.inputs[0])
+                .get(&node.inputs[0].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
 

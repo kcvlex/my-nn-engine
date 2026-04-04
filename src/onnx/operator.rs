@@ -481,20 +481,21 @@ impl Slice {
     pub fn collect_slices(graph: &Graph, node_id: NodeId) -> Option<Vec<Self>> {
         let node = &graph.nodes[node_id];
         let dims = &graph
-            .get_resolved_tensor_type(node.inputs[args::SLICE_DATA])?
+            .get_resolved_tensor_type(node.inputs[args::SLICE_DATA].unwrap())?
             .dims;
         let starts = graph
             .initializer
-            .get(&node.inputs[args::SLICE_STARTS])?
+            .get(&node.inputs[args::SLICE_STARTS].unwrap())?
             .to_indices()?;
         let ends = graph
             .initializer
-            .get(&node.inputs[args::SLICE_ENDS])?
+            .get(&node.inputs[args::SLICE_ENDS].unwrap())?
             .to_indices()?;
         let axes = node
             .inputs
             .get(args::SLICE_AXES)
-            .and_then(|x| graph.initializer.get(x))
+            .and_then(|x| *x)
+            .and_then(|x| graph.initializer.get(&x))
             .and_then(|x| x.to_indices())
             .unwrap_or(
                 (0..(starts.len() as isize))
@@ -502,10 +503,15 @@ impl Slice {
                     .collect::<Vec<_>>(),
             );
 
-        if node.inputs.get(args::SLICE_STEPS).is_some() {
+        if node
+            .inputs
+            .get(args::SLICE_STEPS)
+            .and_then(|x| *x)
+            .is_some()
+        {
             let is_all_one = graph
                 .initializer
-                .get(&node.inputs[args::SLICE_STEPS])
+                .get(&node.inputs[args::SLICE_STEPS].unwrap())
                 .and_then(|x| x.to_1d_sints())
                 .unwrap()
                 .iter()
@@ -649,11 +655,15 @@ impl Resize {
             unreachable!()
         };
 
-        let mut dims = graph.get_resolved_tensor_type(node.inputs[0])?.dims.clone();
+        let mut dims = graph
+            .get_resolved_tensor_type(node.inputs[0].unwrap())?
+            .dims
+            .clone();
         if let Some(roi) = &node
             .inputs
             .get(args::RESIZE_ROI)
-            .and_then(|x| graph.initializer.get(x))
+            .and_then(|x| *x)
+            .and_then(|x| graph.initializer.get(&x))
         {
             if !roi.dims.is_scalar() {
                 unimplemented!()

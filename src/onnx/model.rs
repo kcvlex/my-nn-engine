@@ -234,7 +234,7 @@ pub(crate) struct NodeMeta {
 
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub inputs: Vec<ValueId>,
+    pub inputs: Vec<Option<ValueId>>,
     pub outputs: Vec<ValueId>,
     pub name: String,
     pub op: Operator,
@@ -248,7 +248,7 @@ impl Node {
     }
 
     pub fn create_node(
-        inputs: Vec<ValueId>,
+        inputs: Vec<Option<ValueId>>,
         outputs: Vec<ValueId>,
         name: String,
         op: Operator,
@@ -410,7 +410,8 @@ impl GraphvizGraph {
                 let inputs = node
                     .inputs
                     .iter()
-                    .map(|&v| {
+                    .filter_map(|v| *v)
+                    .map(|v| {
                         let value = &graph.values[v];
                         let from = value2node.get(&value.name).expect("not found").clone();
                         let ty = value.ty.clone();

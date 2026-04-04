@@ -29,7 +29,7 @@ impl<T: GraphOp> Pass<T> for FastGeLUFusion {
             let Some(pattern) = match_fast_gelu_pattern(graph, modifier, cube_node) else {
                 continue;
             };
-            let inputs = vec![pattern.input];
+            let inputs = vec![Some(pattern.input)];
 
             let old_output = graph.nodes[pattern.last_node].outputs[0];
             let new_output = modifier.register_new_value(
@@ -57,7 +57,7 @@ fn is_cube(node: &Node, graph: &Graph) -> bool {
     if !matches!(&node.op, Operator::Pow) {
         return false;
     }
-    let Some(exponent) = graph.initializer.get(&node.inputs[1]) else {
+    let Some(exponent) = graph.initializer.get(&node.inputs[1].unwrap()) else {
         return false;
     };
     let Some(exponent) = exponent.data.to_scalar_data() else {
@@ -91,7 +91,7 @@ fn match_fast_gelu_pattern<T: GraphOp>(
     cube_node: NodeId,
 ) -> Option<FastGeLUPattern> {
     let matcher = PatternMatcher::new(graph, modifier, (cube_node, 0));
-    let x = graph.nodes[cube_node].inputs[0];
+    let x = graph.nodes[cube_node].inputs[0].unwrap();
 
     let is_applied_constant = |node: &Node, known_input: ValueId, expected: f64| {
         let Some(other) = extract_other_binary_input(node, known_input) else {

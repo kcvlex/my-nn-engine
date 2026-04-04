@@ -129,6 +129,7 @@ impl AssignStridesImpl {
 
             let mut ok = true;
             for input in graph.nodes[id].inputs.iter() {
+                let Some(input) = input else { continue };
                 if !self.computed_values.contains(input) {
                     ok = false;
                     break;
@@ -155,7 +156,7 @@ impl AssignStridesImpl {
         modifier.register_new_node(
             graph,
             Node {
-                inputs: vec![input],
+                inputs: vec![Some(input)],
                 outputs: vec![new_output],
                 op: Operator::Contiguous(Contiguous { ops: vec![] }),
                 name: format!("Contiguous_{}", name),
@@ -172,7 +173,7 @@ impl AssignStridesImpl {
     ) -> Option<(NodeId, Vec<ResolvedTensorType>)> {
         let new_node_id = match &graph.nodes[node_id].op {
             Operator::Reshape => {
-                let input = graph.nodes[node_id].inputs[0];
+                let input = graph.nodes[node_id].inputs[0].unwrap();
                 let output = graph.nodes[node_id].outputs[0];
                 let input_shape = graph.get_resolved_tensor_type(input)?.clone();
                 let output_shape = graph.get_resolved_tensor_type(output)?.clone();
@@ -190,7 +191,7 @@ impl AssignStridesImpl {
                             .unwrap(),
                     );
                     let mut new_inputs = graph.nodes[node_id].inputs.clone();
-                    new_inputs[0] = cont_value;
+                    new_inputs[0] = Some(cont_value);
                     let new_node = modifier.register_new_node(
                         graph,
                         Node {

@@ -20,7 +20,7 @@ impl<T: GraphOp> Pass<T> for CleanupTensors {
             .iter()
             .filter(|(_, node)| !matches!(node.op, Operator::Input(_)))
             .flat_map(|(_, node)| node.inputs.iter())
-            .copied()
+            .filter_map(|v| *v)
             .collect();
 
         let mut tmp = BTreeMap::new();

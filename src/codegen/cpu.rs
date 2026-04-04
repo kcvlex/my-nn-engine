@@ -123,7 +123,10 @@ impl CodeGenContext {
         //     return false;
         // }
         if matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
-            let chunk_in = self.value2alloc.get(&kernel.inputs[0]).map(|info| &info.ty);
+            let chunk_in = self
+                .value2alloc
+                .get(&kernel.inputs[0].unwrap())
+                .map(|info| &info.ty);
             let chunk_out = self
                 .value2alloc
                 .get(&kernel.outputs[0])
@@ -347,7 +350,7 @@ impl CodeGenContext {
         let allocs = kernel
             .outputs
             .iter()
-            .chain(kernel.inputs.iter())
+            .chain(kernel.inputs.iter().flatten())
             .map(|&id| self.value2alloc.get(&id))
             .collect::<Vec<_>>();
         let mut is_noalias = vec![true; allocs.len()];
@@ -599,7 +602,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 let args = kernel
                     .outputs
                     .iter()
-                    .chain(kernel.inputs.iter())
+                    .chain(kernel.inputs.iter().flatten())
                     .map(|&id| ptr_values.get(&id).unwrap())
                     .map(|ptr| (*ptr).into())
                     .collect::<Vec<_>>();
@@ -658,7 +661,7 @@ impl<'ll> CodeGen<'ll, '_> {
         let args = kernel
             .outputs
             .iter()
-            .chain(kernel.inputs.iter())
+            .chain(kernel.inputs.iter().flatten())
             .collect::<Vec<_>>();
         let builder = self.ll_ctx.create_builder();
         let entry = self.unit.entry;

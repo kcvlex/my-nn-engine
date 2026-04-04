@@ -22,7 +22,7 @@ impl<T: GraphOp> Pass<T> for NHWC2NCHWLowering {
             .collect();
 
         for id in ids {
-            let input = graph.nodes[id].inputs[0];
+            let input = graph.nodes[id].inputs[0].unwrap();
             let old_output = graph.nodes[id].outputs[0];
             let output_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
             let cont_output = modifier.register_new_value(
@@ -33,7 +33,7 @@ impl<T: GraphOp> Pass<T> for NHWC2NCHWLowering {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![input],
+                    inputs: vec![Some(input)],
                     outputs: vec![cont_output],
                     name: format!("NHWC2NCHWLowering_{}", id.index()),
                     op: Operator::Contiguous(Contiguous {

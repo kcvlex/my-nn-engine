@@ -27,8 +27,8 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
     let node = &graph.nodes[node_id];
     match &node.op {
         op @ (Operator::Add | Operator::Mul | Operator::Div | Operator::Sub) => {
-            let left = graph.initializer.get(&node.inputs[0])?;
-            let right = graph.initializer.get(&node.inputs[1])?;
+            let left = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let right = graph.initializer.get(&node.inputs[1].unwrap())?;
 
             let ty = broadcast_shape(&left.dims, &right.dims).ok()?;
             let left = left.broadcast(&ty);
@@ -71,7 +71,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![tensor])
         }
         Operator::Cast(Cast { ref to }) => {
-            let Tensor { data, dims } = &graph.initializer.get(&node.inputs[0])?;
+            let Tensor { data, dims } = &graph.initializer.get(&node.inputs[0].unwrap())?;
             macro_rules! cast {
                 ($data: expr, $to: expr) => {{
                     match $to {
@@ -100,7 +100,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
         }
         Operator::Constant(Constant { ref value }) => Some(vec![value.clone()]),
         Operator::ConstantOfShape(ConstantOfShape { ref value }) => {
-            let dims = graph.initializer.get(&node.inputs[0])?;
+            let dims = graph.initializer.get(&node.inputs[0].unwrap())?;
             let dims = match &dims.data {
                 TensorData::SInt(SIntType::I64, data) => {
                     Some(data.iter().map(|x| *x as usize).collect_vec())
@@ -116,13 +116,13 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let tensors = node
                 .inputs
                 .iter()
-                .map(|x| graph.initializer.get(x))
+                .map(|x| graph.initializer.get(&x.unwrap()))
                 .collect::<Option<Vec<_>>>()?;
             let axis = axis.index(tensors[0].dims.ndim());
             Tensor::concat(&tensors, axis).map(|x| vec![x]).ok()
         }
         Operator::NonZero => {
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let input = &graph.initializer.get(&input)?;
             let dims = &input.dims;
 
@@ -153,7 +153,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![tensor])
         }
         Operator::Reciprocal => {
-            let v = graph.initializer.get(&node.inputs[0])?;
+            let v = graph.initializer.get(&node.inputs[0].unwrap())?;
             let data = match &v.data {
                 TensorData::Float(ty, data) => {
                     TensorData::Float(*ty, data.iter().map(|x| 1.0 / *x).collect_vec())
@@ -164,7 +164,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![tensor])
         }
         Operator::Shape(Shape { ref start, ref end }) => {
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let input = &graph.get_resolved_tensor_type(input)?.dims;
             let ndim = input.ndim();
             let start = start.index(ndim);
@@ -178,7 +178,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![shape])
         }
         Operator::Slice => {
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let input = &graph.initializer.get(&input)?;
             let slices = Slice::collect_slices(graph, node_id)?;
             let (mut starts, mut ends) = all_slice_indices(&input.dims);
@@ -198,7 +198,7 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(vec![input.slices(&starts, &ends)])
         }
         Operator::Split(ref split) => {
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let input = &graph.initializer.get(&input)?;
             let (mut starts, mut ends) = all_slice_indices(&input.dims);
             let axis = split.axis.index(input.dims.ndim());
@@ -214,23 +214,23 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             Some(res)
         }
         Operator::Gather(Gather { ref axis }) => {
-            let input = &graph.initializer.get(&node.inputs[0])?;
-            let indices = &graph.initializer.get(&node.inputs[1])?;
+            let input = &graph.initializer.get(&node.inputs[0].unwrap())?;
+            let indices = &graph.initializer.get(&node.inputs[1].unwrap())?;
             let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(indices, axis)])
         }
         Operator::Reshape | Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
-            let input = graph.initializer.get(&node.inputs[0])?;
+            let input = graph.initializer.get(&node.inputs[0].unwrap())?;
             let dims = &graph.get_resolved_tensor_type(node.outputs[0])?.dims;
             Some(vec![input.reshape(dims)])
         }
         Operator::Transpose(Transpose { ref perm }) => {
-            let input = graph.initializer.get(&node.inputs[0])?;
+            let input = graph.initializer.get(&node.inputs[0].unwrap())?;
             let perm = perm.as_ref()?;
             Some(vec![input.transpose(perm)])
         }
         Operator::Contiguous(Contiguous { ref ops }) => {
-            let mut tensor = graph.initializer.get(&node.inputs[0])?.clone();
+            let mut tensor = graph.initializer.get(&node.inputs[0].unwrap())?.clone();
             for op in ops {
                 match op {
                     ReinterpretType::Reshape { after, .. } => {
@@ -259,6 +259,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
 
             let depth = inputs
                 .get(args::ONEHOT_DEPTH)
+                .and_then(|id| id.as_ref())
                 .and_then(|id| graph.initializer.get(id))
                 .map(|tensor| {
                     let tensor = tensor
@@ -274,6 +275,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
 
             let values = inputs
                 .get(args::ONEHOT_VALUES)
+                .and_then(|id| id.as_ref())
                 .and_then(|id| graph.initializer.get(id))
                 .map(|values| {
                     let [off_value, on_value] = values.data.to_scalars()[..] else {
@@ -299,16 +301,18 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                 one_hot.on_value = values.map(|(_, on)| on);
             }
 
-            let mut args = [
+            for (arg, drop) in [
                 (args::ONEHOT_DEPTH, depth.is_some()),
                 (args::ONEHOT_VALUES, values.is_some()),
-            ];
-            args.sort();
-            for (arg, drop) in args.iter().rev() {
-                if *drop && graph.nodes[node_id].inputs.get(*arg).is_some() {
-                    modifier.drop_node_input(graph, node_id, *arg);
-                } else {
-                    break;
+            ] {
+                if drop &&
+                    graph.nodes[node_id]
+                        .inputs
+                        .get(arg)
+                        .and_then(|x| x.as_ref())
+                        .is_some()
+                {
+                    modifier.drop_node_input(graph, node_id, arg);
                 }
             }
         }
@@ -320,12 +324,14 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
             let scales = graph.nodes[node_id]
                 .inputs
                 .get(args::RESIZE_SCALES)
+                .and_then(|id| id.as_ref())
                 .and_then(|id| graph.initializer.get(id))
                 .and_then(|tensor| tensor.to_1d_floats());
 
             let sizes = graph.nodes[node_id]
                 .inputs
                 .get(args::RESIZE_SIZES)
+                .and_then(|id| id.as_ref())
                 .and_then(|id| graph.initializer.get(id))
                 .and_then(|tensor| tensor.to_1d_sints());
 
@@ -343,11 +349,14 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
             resize.scale = Some(scale);
 
             // TODO: Don't drop ROI.
-            let mut args = [args::RESIZE_ROI, args::RESIZE_SCALES, args::RESIZE_SIZES];
-            args.sort();
-            for arg in args.iter().rev() {
-                if graph.nodes[node_id].inputs.get(*arg).is_some() {
-                    modifier.drop_node_input(graph, node_id, *arg);
+            for arg in [args::RESIZE_ROI, args::RESIZE_SCALES, args::RESIZE_SIZES] {
+                if graph.nodes[node_id]
+                    .inputs
+                    .get(arg)
+                    .and_then(|x| x.as_ref())
+                    .is_some()
+                {
+                    modifier.drop_node_input(graph, node_id, arg);
                 }
             }
         }

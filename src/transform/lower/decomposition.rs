@@ -41,10 +41,10 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
                 unreachable!()
             };
             let attn = *attn;
-            let q = node.inputs[args::ATTENTION_Q];
-            let k = node.inputs[args::ATTENTION_K];
-            let v = node.inputs[args::ATTENTION_V];
-            let mask = node.inputs.get(args::ATTENTION_MASK).copied();
+            let q = node.inputs[args::ATTENTION_Q].unwrap();
+            let k = node.inputs[args::ATTENTION_K].unwrap();
+            let v = node.inputs[args::ATTENTION_V].unwrap();
+            let mask = node.inputs.get(args::ATTENTION_MASK).and_then(|x| *x);
             let old_output = node.outputs[0];
 
             let q_ty = graph.get_resolved_tensor_type(q).unwrap().clone();
@@ -69,7 +69,7 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![q, k],
+                    inputs: vec![Some(q), Some(k)],
                     outputs: vec![qk],
                     name: format!("DecompAttn_QK_{:?}", attn_id),
                     op: Operator::BatchedGemm(BatchedGemm {
@@ -120,7 +120,7 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
                 modifier.register_new_node(
                     graph,
                     Node {
-                        inputs: vec![qk_masked, mask],
+                        inputs: vec![Some(qk_masked), Some(mask)],
                         outputs: vec![qk_with_mask],
                         name: format!("DecompAttn_QKMask_{:?}", attn_id),
                         op: Operator::Add,
@@ -139,7 +139,7 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![qk_masked],
+                    inputs: vec![Some(qk_masked)],
                     outputs: vec![qk_softmax],
                     name: format!("DecompAttn_Softmax_{:?}", attn_id),
                     op: Operator::Softmax(Softmax {
@@ -155,7 +155,7 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![qk_softmax, v],
+                    inputs: vec![Some(qk_softmax), Some(v)],
                     outputs: vec![new_output],
                     name: format!("DecompAttn_Out_{:?}", attn_id),
                     op: Operator::BatchedGemm(BatchedGemm {
@@ -210,9 +210,9 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     match &node.op {
         Operator::Conv(ref conv) => {
             let conv = conv.clone();
-            let data_value = node.inputs[args::CONV_DATA];
-            let kernel_value = node.inputs[args::CONV_WEIGHT];
-            let bias_value = node.inputs.get(args::CONV_BIAS).copied();
+            let data_value = node.inputs[args::CONV_DATA].unwrap();
+            let kernel_value = node.inputs[args::CONV_WEIGHT].unwrap();
+            let bias_value = node.inputs.get(args::CONV_BIAS).and_then(|x| *x);
             let old_output_value = node.outputs[0];
             let kernel = graph
                 .get_resolved_tensor_type(kernel_value)
@@ -243,7 +243,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![data_value],
+                    inputs: vec![Some(data_value)],
                     outputs: vec![im2col_data],
                     name: format!("Im2Col_{index}"),
                     op: Operator::Im2Col(im2col),
@@ -264,7 +264,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             // modifier.register_new_node(
             //     graph,
             //     Node {
-            //         inputs: vec![im2col_data],
+            //         inputs: vec![Some(im2col_data)],
             //         outputs: vec![force_reshape_output],
             //         name: format!("Im2Col_{index}_ForceReshape"),
             //         op: Operator::ForceReshape,
@@ -295,7 +295,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![im2col_data, reshaped_kernel],
+                    inputs: vec![Some(im2col_data), Some(reshaped_kernel)],
                     outputs: vec![gemm_output],
                     name: format!("Im2Col_{index}_Gemm"),
                     op: Operator::Gemm(Gemm {
@@ -319,7 +319,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 modifier.register_new_node(
                     graph,
                     Node {
-                        inputs: vec![gemm_output, bias],
+                        inputs: vec![Some(gemm_output), Some(bias)],
                         outputs: vec![add_output],
                         name: format!("Im2Col_{index}_AddBias"),
                         op: Operator::Add,
@@ -380,7 +380,7 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                     modifier.register_new_node(
                         graph,
                         Node {
-                            inputs: vec![final_output],
+                            inputs: vec![Some(final_output)],
                             outputs: vec![relu_output],
                             name: format!("Im2Col_{index}_ReLU"),
                             op: Operator::ReLU,
@@ -440,7 +440,7 @@ impl<T: GraphOp> Pass<T> for ReduceDecomposition {
                 Operator::ReduceMax(ref reduce) |
                 Operator::ReduceMean(ref reduce) |
                 Operator::ReduceSum(ref reduce) => {
-                    let input_value = node.inputs[0];
+                    let input_value = node.inputs[0].unwrap();
                     let input_ty = graph.get_resolved_tensor_type(input_value).unwrap();
                     let input_rank = input_ty.dims.ndim();
                     let axes = reduce.normalize_axes(input_rank).unwrap();
@@ -457,11 +457,8 @@ impl<T: GraphOp> Pass<T> for ReduceDecomposition {
             .collect::<Vec<_>>();
 
         for (i, (id, info)) in res.iter().enumerate() {
-            let input_value = &graph.nodes[*id].inputs[0].clone();
-            let input_ty = &graph
-                .get_resolved_tensor_type(*input_value)
-                .unwrap()
-                .clone();
+            let input_value = graph.nodes[*id].inputs[0].unwrap();
+            let input_ty = &graph.get_resolved_tensor_type(input_value).unwrap().clone();
             let rank = input_ty.dims.ndim();
             let mut drop = vec![false; rank];
             for &axis in info.axes.iter() {
@@ -473,7 +470,7 @@ impl<T: GraphOp> Pass<T> for ReduceDecomposition {
                 .collect();
 
             let input_v = TransposeGenerator::default()
-                .set_input(*input_value)
+                .set_input(input_value)
                 .set_perm(perms)
                 .set_node_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
                 .set_value_name(format!("Reduce2ReduceMatrix_Transpose_{i}"))
@@ -501,7 +498,7 @@ impl<T: GraphOp> Pass<T> for ReduceDecomposition {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![reshaped_output],
+                    inputs: vec![Some(reshaped_output)],
                     outputs: vec![reduce_matrix_output],
                     name: format!("Reduce2ReduceMatrix_{i}"),
                     op: Operator::ReduceMatrix(info.op),
@@ -540,7 +537,7 @@ impl<T: GraphOp> Pass<T> for GlobalAvgPoolDecomposition {
             .collect::<Vec<_>>();
 
         for id in ids.iter() {
-            let input = graph.nodes[*id].inputs[0];
+            let input = graph.nodes[*id].inputs[0].unwrap();
             let old_output = graph.nodes[*id].outputs[0];
             let input_ty = graph.get_resolved_tensor_type(input).unwrap().clone();
             let nbatch = input_ty.dims[0];
@@ -565,7 +562,7 @@ impl<T: GraphOp> Pass<T> for GlobalAvgPoolDecomposition {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![reshaped],
+                    inputs: vec![Some(reshaped)],
                     outputs: vec![pool_output],
                     op: Operator::ReduceMatrix(ReduceOp::Mean),
                     name: format!("GlobalAveragePool_{}", id.index()),

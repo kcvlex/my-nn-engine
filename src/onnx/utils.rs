@@ -44,7 +44,7 @@ pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     }
     let mut adj = IndexMap::new();
     for (id, node) in graph.nodes.iter() {
-        for value in node.inputs.iter() {
+        for value in node.inputs.iter().filter_map(|v| v.as_ref()) {
             if let Some(defines) = defined.get(value) {
                 adj.entry(*defines).or_insert(IndexSet::new()).insert(id);
             } else {
@@ -282,16 +282,22 @@ mod comp {
             for (left_input, right_input) in
                 left_node.inputs.iter().zip_eq(right_node.inputs.iter())
             {
-                if let Err(err) = self.comp_value(*left_input, *right_input, node_eq) {
-                    let err = match err {
-                        InequalityError::DifferentComputations(mut err0, mut err1) => {
-                            err0.push(left_node.name.clone());
-                            err1.push(right_node.name.clone());
-                            InequalityError::DifferentComputations(err0, err1)
+                match (left_input, right_input) {
+                    (Some(li), Some(ri)) => {
+                        if let Err(err) = self.comp_value(*li, *ri, node_eq) {
+                            let err = match err {
+                                InequalityError::DifferentComputations(mut err0, mut err1) => {
+                                    err0.push(left_node.name.clone());
+                                    err1.push(right_node.name.clone());
+                                    InequalityError::DifferentComputations(err0, err1)
+                                }
+                                _ => unreachable!(),
+                            };
+                            return Err(err);
                         }
-                        _ => unreachable!(),
-                    };
-                    return Err(err);
+                    }
+                    (None, None) => {}
+                    _ => return make_err(),
                 }
             }
 
@@ -511,7 +517,15 @@ mod comp_structural {
             }
 
             for (left_input, right_input) in left_node.inputs.iter().zip(right_node.inputs.iter()) {
-                self.comp_value(*left_input, *right_input, value_eq, node_eq)?;
+                match (left_input, right_input) {
+                    (Some(li), Some(ri)) => {
+                        self.comp_value(*li, *ri, value_eq, node_eq)?;
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(Self::make_err(&left_node.name, &right_node.name));
+                    }
+                }
             }
 
             node_eq
@@ -669,21 +683,21 @@ mod test {
         graph.inputs.push(input_node);
 
         graph.nodes.alloc(Node::create_node(
-            vec![x],
+            vec![Some(x)],
             vec![a],
             format!("{name_prefix}_Sigmoid"),
             Operator::Sigmoid,
         ));
 
         graph.nodes.alloc(Node::create_node(
-            vec![a, a],
+            vec![Some(a), Some(a)],
             vec![y],
             format!("{name_prefix}_Add"),
             Operator::Add,
         ));
 
         let output_node = graph.nodes.alloc(Node::create_node(
-            vec![y],
+            vec![Some(y)],
             vec![],
             format!("{name_prefix}_Output"),
             Operator::Output(y),
@@ -723,19 +737,19 @@ mod test {
         ));
         g2.inputs.push(input_node);
         g2.nodes.alloc(Node::create_node(
-            vec![x],
+            vec![Some(x)],
             vec![a],
             "Tanh".to_string(),
             Operator::Tanh,
         ));
         g2.nodes.alloc(Node::create_node(
-            vec![a, a],
+            vec![Some(a), Some(a)],
             vec![y],
             "Add".to_string(),
             Operator::Add,
         ));
         let output_node = g2.nodes.alloc(Node::create_node(
-            vec![y],
+            vec![Some(y)],
             vec![],
             "Output".to_string(),
             Operator::Output(y),
@@ -762,19 +776,19 @@ mod test {
         ));
         g2.inputs.push(input_node);
         g2.nodes.alloc(Node::create_node(
-            vec![x],
+            vec![Some(x)],
             vec![a],
             "Sigmoid".to_string(),
             Operator::Sigmoid,
         ));
         g2.nodes.alloc(Node::create_node(
-            vec![a, a],
+            vec![Some(a), Some(a)],
             vec![y],
             "Add".to_string(),
             Operator::Add,
         ));
         let output_node = g2.nodes.alloc(Node::create_node(
-            vec![y],
+            vec![Some(y)],
             vec![],
             "Output".to_string(),
             Operator::Output(y),
@@ -801,19 +815,19 @@ mod test {
         ));
         g2.inputs.push(input_node);
         g2.nodes.alloc(Node::create_node(
-            vec![x],
+            vec![Some(x)],
             vec![a],
             "Sigmoid".to_string(),
             Operator::Sigmoid,
         ));
         g2.nodes.alloc(Node::create_node(
-            vec![x, a],
+            vec![Some(x), Some(a)],
             vec![y], // Add(x,a) instead of Add(a,a)
             "Add".to_string(),
             Operator::Add,
         ));
         let output_node = g2.nodes.alloc(Node::create_node(
-            vec![y],
+            vec![Some(y)],
             vec![],
             "Output".to_string(),
             Operator::Output(y),

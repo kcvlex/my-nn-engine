@@ -35,7 +35,7 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
             let h2d_id = modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![value_id],
+                    inputs: vec![Some(value_id)],
                     outputs: vec![device_value],
                     name: format!("Transfer_H2D_{}", value_id.index()),
                     op: Operator::Transfer(TransferKind::HostToDevice),
@@ -61,7 +61,7 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
             let h2d_id = modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![value_id],
+                    inputs: vec![Some(value_id)],
                     outputs: vec![device_value],
                     name: format!("Transfer_H2D_init_{}", value_id.index()),
                     op: Operator::Transfer(TransferKind::HostToDevice),
@@ -97,7 +97,7 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
             modifier.register_new_node(
                 graph,
                 Node {
-                    inputs: vec![value_id],
+                    inputs: vec![Some(value_id)],
                     outputs: vec![host_value],
                     name: format!("Transfer_D2H_{}", value_id.index()),
                     op: Operator::Transfer(TransferKind::DeviceToHost),
@@ -105,7 +105,7 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
                 },
             );
             graph.nodes[output_node_id].op = Operator::Output(host_value);
-            graph.nodes[output_node_id].inputs = vec![host_value];
+            graph.nodes[output_node_id].inputs = vec![Some(host_value)];
         }
     }
 }

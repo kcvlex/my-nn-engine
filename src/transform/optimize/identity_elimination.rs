@@ -22,7 +22,7 @@ impl<T: GraphOp> Pass<T> for IdentityElimination {
             .collect::<Vec<_>>();
         for id in ids.iter() {
             let node = &graph.nodes[*id];
-            let input = node.inputs[0];
+            let input = node.inputs[0].unwrap();
             let output = node.outputs[0];
             if graph.get_resolved_tensor_type(input) != graph.get_resolved_tensor_type(output) {
                 continue;

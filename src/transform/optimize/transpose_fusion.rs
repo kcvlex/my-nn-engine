@@ -31,7 +31,7 @@ impl<T: GraphOp> Pass<T> for TransposeFusion {
                 continue;
             }
             visited.insert(transpose_id);
-            let input_value = graph.nodes[transpose_id].inputs[0];
+            let input_value = graph.nodes[transpose_id].inputs[0].unwrap();
             let (input, mut defs) = modifier.walk_chain_backward(graph, input_value, |node| {
                 matches!(node.op, Operator::Transpose(_))
             });

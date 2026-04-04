@@ -233,7 +233,7 @@ impl GraphLoader {
             .map(|x| {
                 let node = Node {
                     name: self.values[x].name.clone(),
-                    inputs: vec![x],
+                    inputs: vec![Some(x)],
                     outputs: Vec::new(),
                     op: Operator::Output(x),
                     meta: NodeMeta::default(),
@@ -263,6 +263,7 @@ impl GraphLoader {
         for value_id in nodes
             .iter()
             .flat_map(|(_, node)| node.inputs.iter())
+            .filter_map(|x| x.as_ref())
             .filter(|&x| !defined.contains(x))
             .unique()
         {
@@ -315,25 +316,23 @@ impl GraphLoader {
     }
 
     fn load_nodes(&mut self, nodes: Vec<NodeProto>) -> LoadResult<Nodes> {
-        macro_rules! io {
-            ($v: expr) => {{
-                $v.into_iter()
-                    .map(|x| {
-                        *self.entries.entry(x.clone()).or_insert_with(|| {
-                            self.values.alloc(ValueInfo {
-                                name: x.clone(),
-                                ty: None,
-                            })
-                        })
-                    })
-                    .collect()
-            }};
-        }
+        let mut resolve = |x: String| -> ValueId {
+            *self.entries.entry(x.clone()).or_insert_with(|| {
+                self.values.alloc(ValueInfo {
+                    name: x.clone(),
+                    ty: None,
+                })
+            })
+        };
         let mut res = Nodes::default();
         for node in nodes.into_iter() {
             let name = node.name;
-            let inputs = io!(node.input);
-            let outputs = io!(node.output);
+            let inputs: Vec<Option<ValueId>> = node
+                .input
+                .into_iter()
+                .map(|x| if x.is_empty() { None } else { Some(resolve(x)) })
+                .collect();
+            let outputs: Vec<ValueId> = node.output.into_iter().map(|x| resolve(x)).collect();
             let attributes = load_attributes(node.attribute)?;
             let op = load_op(&node.op_type, &attributes)?;
             res.alloc(Node {

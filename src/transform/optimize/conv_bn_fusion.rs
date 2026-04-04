@@ -32,14 +32,14 @@ impl<T: GraphOp> Pass<T> for ConvBNFusion {
             let conv_node = &graph.nodes[conv_node_id];
             let bn_node = &graph.nodes[bn_node_id];
 
-            let conv_weight_id = conv_node.inputs[args::CONV_WEIGHT];
+            let conv_weight_id = conv_node.inputs[args::CONV_WEIGHT].unwrap();
             let has_conv_bias = conv_node.inputs.len() > args::CONV_BIAS;
-            let conv_bias_id = has_conv_bias.then(|| conv_node.inputs[args::CONV_BIAS]);
+            let conv_bias_id = has_conv_bias.then(|| conv_node.inputs[args::CONV_BIAS].unwrap());
 
-            let bn_scale_id = bn_node.inputs[args::BATCHNORM_SCALE];
-            let bn_bias_id = bn_node.inputs[args::BATCHNORM_BIAS];
-            let bn_mean_id = bn_node.inputs[args::BATCHNORM_MEAN];
-            let bn_var_id = bn_node.inputs[args::BATCHNORM_VAR];
+            let bn_scale_id = bn_node.inputs[args::BATCHNORM_SCALE].unwrap();
+            let bn_bias_id = bn_node.inputs[args::BATCHNORM_BIAS].unwrap();
+            let bn_mean_id = bn_node.inputs[args::BATCHNORM_MEAN].unwrap();
+            let bn_var_id = bn_node.inputs[args::BATCHNORM_VAR].unwrap();
             let Operator::BatchNormalization(BatchNormalization { epsilon, .. }) = &bn_node.op
             else {
                 unreachable!()
@@ -136,11 +136,11 @@ impl<T: GraphOp> Pass<T> for ConvBNFusion {
             // Build new Conv node with fused weight and bias
             let conv_node = &graph.nodes[conv_node_id];
             let mut new_inputs = conv_node.inputs.clone();
-            new_inputs[args::CONV_WEIGHT] = new_weight_id;
+            new_inputs[args::CONV_WEIGHT] = Some(new_weight_id);
             if has_conv_bias {
-                new_inputs[args::CONV_BIAS] = new_bias_id;
+                new_inputs[args::CONV_BIAS] = Some(new_bias_id);
             } else {
-                new_inputs.push(new_bias_id);
+                new_inputs.push(Some(new_bias_id));
             }
 
             let bn_output = graph.nodes[bn_node_id].outputs[0];

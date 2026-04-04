@@ -49,7 +49,7 @@ impl EarlyBroadcast {
             let channels = output_dims[1];
             for param in bn_params_idx
                 .iter()
-                .map(|i| node.inputs[*i])
+                .map(|i| node.inputs[*i].unwrap())
                 .collect_vec()
                 .iter()
                 .copied()
@@ -82,7 +82,7 @@ impl EarlyBroadcast {
 
         for id in ids {
             let node = &graph.nodes[id];
-            let bias = node.inputs[args::GEMM_C];
+            let bias = node.inputs[args::GEMM_C].unwrap();
             if !modifier
                 .used_node(bias)
                 .map(|s| s.len() == 1)

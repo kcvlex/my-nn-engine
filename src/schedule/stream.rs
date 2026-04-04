@@ -209,7 +209,7 @@ impl<'sched> StreamAllocator<'sched> {
             let mut to_allocate = Vec::new();
             let mut depends_on = Vec::new();
 
-            for input in &kernel.inputs {
+            for input in kernel.inputs.iter().flatten() {
                 if let Some(h2d_kid) = self.find_h2d_producer(*input) {
                     if !self.kernel2order.contains_key(&h2d_kid) {
                         to_allocate.push(h2d_kid);
@@ -249,7 +249,7 @@ impl<'sched> StreamAllocator<'sched> {
             let event_id = self.event_tracker.new_event(kernel_id, stream_id);
 
             let kernel = &self.schedule.kernels[kernel_id];
-            for input in &kernel.inputs {
+            for input in kernel.inputs.iter().flatten() {
                 if let Some(&dep_kid) = self.value2defined.get(input) {
                     if dep_kid != kernel_id && self.kernel2order.contains_key(&dep_kid) {
                         self.event_tracker.wait_kernel(event_id, dep_kid);

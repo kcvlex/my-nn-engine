@@ -58,7 +58,7 @@ impl Annotator {
                     let Operator::Softmax(softmax) = op else {
                         continue;
                     };
-                    let input = kernel.inputs[0];
+                    let input = kernel.inputs[0].unwrap();
                     let dims = &schedule.get_resolved_tensor_type(input).unwrap().dims;
                     let axis = softmax.axis.index(dims.ndim());
                     if axis != dims.ndim() - 1 {

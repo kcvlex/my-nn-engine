@@ -343,10 +343,10 @@ impl<'sched> CudnnCodeGenerator<'sched> {
         };
 
         let input_ty = self
-            .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA])?
+            .get_resolved_tensor_type(kernel.inputs[args::CONV_DATA].unwrap())?
             .clone();
         let weight_ty = self
-            .get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT])?
+            .get_resolved_tensor_type(kernel.inputs[args::CONV_WEIGHT].unwrap())?
             .clone();
         let output_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.clone();
 
@@ -411,7 +411,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             }
             .into(),
         );
-        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
+        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).and_then(|x| *x) {
             let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
             assert!(bias_ty.dims.ndim() == 1);
             assert!(bias_ty.is_contiguous());
@@ -803,14 +803,18 @@ impl<'sched> HostCodeGenerator<'sched> {
         F: Fn(&Schedule, KernelDecl) -> Result<String, BuildError>,
     {
         let params = chain(
-            self.schedule.kernels[kernel_id].outputs.iter(),
-            self.schedule.kernels[kernel_id].inputs.iter(),
+            self.schedule.kernels[kernel_id].outputs.iter().copied(),
+            self.schedule.kernels[kernel_id]
+                .inputs
+                .iter()
+                .flatten()
+                .copied(),
         )
         .map(|id| {
-            let ty = self.get_resolved_tensor_type(*id)?;
+            let ty = self.get_resolved_tensor_type(id)?;
             let type_symbol: TypeSymbol = ty.elem_type.into();
             let type_symbol = type_symbol.to_pointer();
-            Ok((KernelVar::Value(*id), type_symbol))
+            Ok((KernelVar::Value(id), type_symbol))
         })
         .collect::<Result<Vec<_>, BuildError>>()?;
 
@@ -872,7 +876,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         match kernel.body {
             KernelBody::Opaque(Opaque { ref op }) => match op {
                 Operator::Transfer(kind) => {
-                    let value_id = kernel.inputs[0];
+                    let value_id = kernel.inputs[0].unwrap();
                     let mem_size = MemSize::Single(self.single_mem_size(kernel.outputs[0])?);
                     match kind {
                         TransferKind::HostToDevice => {
@@ -911,8 +915,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Identity | Operator::Reinterpret(_) => {
                     let input_chunk = self
                         .value2chunk
-                        .get(&kernel.inputs[0])
-                        .ok_or(BuildError::ChunkNotFound(kernel.inputs[0]))?;
+                        .get(&kernel.inputs[0].unwrap())
+                        .ok_or(BuildError::ChunkNotFound(kernel.inputs[0].unwrap()))?;
                     let output_chunk = self
                         .value2chunk
                         .get(&kernel.outputs[0])
@@ -954,9 +958,9 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                 Operator::Attention(attn) => {
                     self.includes.insert(Include::Local("attention.cuh"));
-                    let q = kernel.inputs[args::ATTENTION_Q];
-                    let k = kernel.inputs[args::ATTENTION_K];
-                    let v = kernel.inputs[args::ATTENTION_V];
+                    let q = kernel.inputs[args::ATTENTION_Q].unwrap();
+                    let k = kernel.inputs[args::ATTENTION_K].unwrap();
+                    let v = kernel.inputs[args::ATTENTION_V].unwrap();
 
                     let q_ty = self.get_resolved_tensor_type(q)?;
                     let k_ty = self.get_resolved_tensor_type(k)?;
@@ -977,33 +981,34 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     let seq_q = q_dims[2];
 
-                    let (mask_expr, mask_outer_stride, mask_row_stride) =
-                        if let Some(mask_id) = kernel.inputs.get(args::ATTENTION_MASK).copied() {
-                            let mask_ty = self.get_resolved_tensor_type(mask_id)?;
-                            let md = &mask_ty.dims;
-                            let mndim = md.ndim();
-                            let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
-                            let mask_last_col = md[mndim - 1];
-                            let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
-                            let mask_slice_size = mask_last_row * mask_last_col;
-                            let mask_outer_size: usize = if mndim > 2 {
-                                md[..mndim - 2].iter().product()
-                            } else {
-                                1
-                            };
-                            let mask_outer_stride = if mask_outer_size > 1 {
-                                mask_slice_size
-                            } else {
-                                0
-                            };
-                            (
-                                Some(self.device_identifier(mask_id)?),
-                                mask_outer_stride,
-                                mask_row_stride,
-                            )
+                    let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
+                        kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
+                    {
+                        let mask_ty = self.get_resolved_tensor_type(mask_id)?;
+                        let md = &mask_ty.dims;
+                        let mndim = md.ndim();
+                        let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
+                        let mask_last_col = md[mndim - 1];
+                        let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
+                        let mask_slice_size = mask_last_row * mask_last_col;
+                        let mask_outer_size: usize = if mndim > 2 {
+                            md[..mndim - 2].iter().product()
                         } else {
-                            (None, 0, 0)
+                            1
                         };
+                        let mask_outer_stride = if mask_outer_size > 1 {
+                            mask_slice_size
+                        } else {
+                            0
+                        };
+                        (
+                            Some(self.device_identifier(mask_id)?),
+                            mask_outer_stride,
+                            mask_row_stride,
+                        )
+                    } else {
+                        (None, 0, 0)
+                    };
 
                     let batch_size = q_dims[0];
                     let num_heads = q_dims[1];
@@ -1091,10 +1096,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                         CudnnContext::new(stream_id)
                     };
 
-                    let input = self.device_identifier(kernel.inputs[args::CONV_DATA])?;
-                    let weights = self.device_identifier(kernel.inputs[args::CONV_WEIGHT])?;
+                    let input = self.device_identifier(kernel.inputs[args::CONV_DATA].unwrap())?;
+                    let weights =
+                        self.device_identifier(kernel.inputs[args::CONV_WEIGHT].unwrap())?;
                     let output = self.device_identifier(kernel.outputs[0])?;
-                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
+                    let input_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[0].unwrap())?
+                        .clone();
                     let template_ty = input_ty.elem_type.to_string();
                     let setting = CudnnSettingName::KernelId(kernel_id);
 
@@ -1105,15 +1113,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .push(Statement::Raw(format!("{ss}.w = {weights};")));
                     self.stmts
                         .push(Statement::Raw(format!("{ss}.y = {output};")));
-                    let func = if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).copied() {
-                        self.stmts.push(Statement::Raw(format!(
-                            "{ss}.bias = {};",
-                            self.device_identifier(bias)?,
-                        )));
-                        "call_conv_bias_activation_forward"
-                    } else {
-                        "call_conv_forward"
-                    };
+                    let func =
+                        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).and_then(|x| *x) {
+                            self.stmts.push(Statement::Raw(format!(
+                                "{ss}.bias = {};",
+                                self.device_identifier(bias)?,
+                            )));
+                            "call_conv_bias_activation_forward"
+                        } else {
+                            "call_conv_forward"
+                        };
                     self.stmts.push(Statement::Raw(format!(
                         "{ss}.{func}<{ty}>(&{ctx});",
                         func = func,
@@ -1123,7 +1132,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Gather(_) => {
-                    let indices_size = self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size();
+                    let indices_size = self
+                        .get_resolved_tensor_type(kernel.inputs[1].unwrap())?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         GatherBuilder::new(sched, decl).build()
                     })?;
@@ -1183,8 +1195,12 @@ impl<'sched> HostCodeGenerator<'sched> {
                     // cuBLAS is column-major!
                     // We have t(A) and t(B), and want t(C).
                     // t(C) = t(A * B) = t(B) * t(A).
-                    let a_ty = self.get_resolved_tensor_type(kernel.inputs[0])?.clone();
-                    let b_ty = self.get_resolved_tensor_type(kernel.inputs[1])?.clone();
+                    let a_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[0].unwrap())?
+                        .clone();
+                    let b_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[1].unwrap())?
+                        .clone();
                     let (m, k, n) = {
                         let [m, k] = &a_ty.dims.suffix(2)[..] else {
                             unreachable!();
@@ -1232,13 +1248,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                     // TODO: Copy bias into output chunk if bias_chunk != output_chunk.
                     if kernel.inputs.len() == 3 {
                         assert!(matches!(op, Operator::Gemm(_)));
-                        let bias_chunk = self.value2chunk.get(&kernel.inputs[2]).unwrap();
+                        let bias_chunk = self
+                            .value2chunk
+                            .get(&kernel.inputs[args::GEMM_C].unwrap())
+                            .unwrap();
                         let output_chunk = self.value2chunk.get(&kernel.outputs[0]).unwrap();
                         assert!(bias_chunk == output_chunk);
                     }
 
-                    let a = self.device_identifier(kernel.inputs[1])?.to_string();
-                    let b = self.device_identifier(kernel.inputs[0])?.to_string();
+                    let a = self
+                        .device_identifier(kernel.inputs[1].unwrap())?
+                        .to_string();
+                    let b = self
+                        .device_identifier(kernel.inputs[0].unwrap())?
+                        .to_string();
                     let c = self.device_identifier(kernel.outputs[0])?.to_string();
 
                     let gemm = GemmArgs {
@@ -1268,9 +1291,11 @@ impl<'sched> HostCodeGenerator<'sched> {
                             let stride_a = m * k; // cuBLAS A stride
                             let stride_b = k * n; // cuBLAS B stride
                             let stride_c = m * n;
-                            let batch_count =
-                                self.get_resolved_tensor_type(kernel.inputs[1])?.dims.size() /
-                                    stride_a;
+                            let batch_count = self
+                                .get_resolved_tensor_type(kernel.inputs[1].unwrap())?
+                                .dims
+                                .size() /
+                                stride_a;
 
                             let bgemm = BatchedGemmArgs {
                                 gemm,
@@ -1291,15 +1316,19 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                 Operator::LayerNormalization(LayerNormalization { axis, epsilon }) => {
                     self.includes.insert(Include::Local("layer_norm.cuh"));
-                    let input_ty = self
-                        .get_resolved_tensor_type(kernel.inputs[operator::args::LAYER_NORM_DATA])?;
+                    let input_ty = self.get_resolved_tensor_type(
+                        kernel.inputs[operator::args::LAYER_NORM_DATA].unwrap(),
+                    )?;
                     let out = self.device_identifier(kernel.outputs[0])?;
-                    let in_ =
-                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_DATA])?;
-                    let scale =
-                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_SCALE])?;
-                    let bias =
-                        self.device_identifier(kernel.inputs[operator::args::LAYER_NORM_BIAS])?;
+                    let in_ = self.device_identifier(
+                        kernel.inputs[operator::args::LAYER_NORM_DATA].unwrap(),
+                    )?;
+                    let scale = self.device_identifier(
+                        kernel.inputs[operator::args::LAYER_NORM_SCALE].unwrap(),
+                    )?;
+                    let bias = self.device_identifier(
+                        kernel.inputs[operator::args::LAYER_NORM_BIAS].unwrap(),
+                    )?;
                     let axis = axis.index(input_ty.dims.ndim());
                     let epsilon = *epsilon;
                     if input_ty.strides().last() != Some(&1) || axis != input_ty.dims.ndim() - 1 {
@@ -1352,7 +1381,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                 Operator::OneHot(_) => {
                     let size = self
-                        .get_resolved_tensor_type(kernel.inputs[args::ONEHOT_INDICES])?
+                        .get_resolved_tensor_type(kernel.inputs[args::ONEHOT_INDICES].unwrap())?
                         .dims
                         .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
@@ -1367,7 +1396,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::ReduceMatrix(_) => {
                     self.includes
                         .insert(Include::System("cooperative_groups.h"));
-                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
+                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0].unwrap())?;
                     let [row, col] = input_ty.dims[..] else {
                         panic!("Invalid ReduceMatrix output shape");
                     };
@@ -1390,9 +1419,9 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                 Operator::Softmax(Softmax { axis }) => {
                     self.includes.insert(Include::Local("softmax.cuh"));
-                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0])?;
+                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0].unwrap())?;
                     let out = self.device_identifier(kernel.outputs[0])?;
-                    let in_ = self.device_identifier(kernel.inputs[0])?;
+                    let in_ = self.device_identifier(kernel.inputs[0].unwrap())?;
                     let axis = axis.index(input_ty.dims.ndim());
                     let axis_dim = input_ty.dims[axis];
                     let axis_stride = input_ty.stride(axis);
@@ -1439,7 +1468,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Split(_) => {
-                    let input_size = self.get_resolved_tensor_type(kernel.inputs[0])?.dims.size();
+                    let input_size = self
+                        .get_resolved_tensor_type(kernel.inputs[0].unwrap())?
+                        .dims
+                        .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         SplitBuilder::new(sched, decl).build()
                     })?;

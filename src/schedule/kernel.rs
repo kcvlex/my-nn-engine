@@ -54,11 +54,11 @@ impl KernelsBuilder {
                 // Reject if the node requires broadcast.
                 // if 1 < node.inputs.len() {
                 //     let shape0 = &graph
-                //         .get_resolved_tensor_type(node.inputs[0])
+                //         .get_resolved_tensor_type(node.inputs[0].unwrap())
                 //         .as_ref()
                 //         .unwrap()
                 //         .dims;
-                //     for input in &node.inputs[1..] {
+                //     for input in &node.inputs[1..].unwrap() {
                 //         let shape = &graph
                 //             .get_resolved_tensor_type(*input)
                 //             .as_ref()
@@ -110,7 +110,11 @@ impl KernelsBuilder {
     }
 
     // ids must be sorted.
-    fn build_bundled_ops(&self, ord_ids: &[usize], graph: &Graph) -> (ElementWises, Vec<ValueId>) {
+    fn build_bundled_ops(
+        &self,
+        ord_ids: &[usize],
+        graph: &Graph,
+    ) -> (ElementWises, Vec<Option<ValueId>>) {
         use std::collections::hash_map::Entry;
 
         assert!(ord_ids.is_sorted());
@@ -127,14 +131,15 @@ impl KernelsBuilder {
                 .inputs
                 .iter()
                 .map(|input| {
-                    if let Some(inter) = intermediates.get(input) {
+                    let input = input.unwrap();
+                    if let Some(inter) = intermediates.get(&input) {
                         ElementwiseOpArg::NthResult(*inter)
                     } else {
                         let idx = match input2idx.entry(input) {
                             Entry::Occupied(entry) => *entry.get(),
                             Entry::Vacant(entry) => {
                                 let idx = inputs.len();
-                                inputs.push(*input);
+                                inputs.push(Some(input));
                                 entry.insert(idx);
                                 idx
                             }

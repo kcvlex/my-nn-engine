@@ -23,7 +23,7 @@ impl<T: GraphOp> Pass<T> for ReorderNodes {
             .collect_vec();
 
         while let Some(id) = ids.pop() {
-            let input = graph.nodes[id].inputs[0];
+            let input = graph.nodes[id].inputs[0].unwrap();
             let used = modifier.used_node(input).unwrap();
             if used.len() != 1 {
                 continue;
@@ -38,7 +38,7 @@ impl<T: GraphOp> Pass<T> for ReorderNodes {
                 continue;
             }
 
-            let input = graph.nodes[def].inputs[0];
+            let input = graph.nodes[def].inputs[0].unwrap();
             let old_output = graph.nodes[id].outputs[0];
 
             let new_intermediate_value = modifier.register_new_value(
@@ -49,7 +49,7 @@ impl<T: GraphOp> Pass<T> for ReorderNodes {
             let new_node = modifier.register_new_node(
                 graph,
                 Node::create_node(
-                    vec![input],
+                    vec![Some(input)],
                     vec![new_intermediate_value],
                     format!("{}_up", graph.nodes[id].name),
                     graph.nodes[id].op.clone(),
@@ -58,7 +58,7 @@ impl<T: GraphOp> Pass<T> for ReorderNodes {
 
             let mut inputs = graph.nodes[def].inputs.clone();
             // TODO: Is 0 always correct?
-            inputs[0] = new_intermediate_value;
+            inputs[0] = Some(new_intermediate_value);
             let new_output = modifier.register_new_value(
                 graph,
                 format!("{}_down", graph.values[old_output].name),
