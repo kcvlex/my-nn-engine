@@ -121,7 +121,6 @@ pub struct KernelStreamAssignment {
 
 struct StreamAllocator<'sched> {
     schedule: &'sched Schedule,
-    num_streams: usize,
     event_tracker: EventTracker,
     kernel2order: HashMap<KernelId, usize>,
     kernel2stream: HashMap<KernelId, StreamId>,
@@ -139,7 +138,6 @@ impl<'sched> StreamAllocator<'sched> {
         }
         Self {
             schedule,
-            num_streams,
             event_tracker: EventTracker::new(num_streams),
             kernel2order: HashMap::new(),
             kernel2stream: HashMap::new(),
