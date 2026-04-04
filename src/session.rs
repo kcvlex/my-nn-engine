@@ -206,7 +206,7 @@ impl Session {
     }
 
     // TODO: Type check
-    pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
+    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
         match self {
             Session::CPU(session) => session.run(inputs),
             Session::CUDA(session) => session.run(inputs),

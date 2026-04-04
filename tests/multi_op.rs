@@ -28,7 +28,7 @@ fn run_test(dir: &str, epsilon: f64, options: &Options, nums: (usize, usize)) ->
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let session = Session::new(&model_path, Some(&input_types), options)?;
+    let mut session = Session::new(&model_path, Some(&input_types), options)?;
     let _guard = common::cuda_lock(options.target);
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)

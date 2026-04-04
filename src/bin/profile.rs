@@ -119,7 +119,7 @@ fn run(
             .build(),
     };
 
-    let session = Session::new(model_path, Some(&input_types), &options).unwrap();
+    let mut session = Session::new(model_path, Some(&input_types), &options).unwrap();
 
     let _ = session.run(&inputs).unwrap();
 

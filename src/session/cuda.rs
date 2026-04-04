@@ -30,6 +30,7 @@ pub struct SessionCUDA {
 
     #[allow(dead_code)]
     lib: libloading::Library,
+    init_func: InitType,
     run_func: RunType,
     destroy_func: DestroyType,
     state: *mut std::ffi::c_void,
@@ -139,9 +140,9 @@ impl SessionCUDA {
         let destroy_func: libloading::Symbol<DestroyType> = unsafe { lib.get(b"model_destroy") }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
+        let init_func = *init_func;
         let run_func = *run_func;
         let destroy_func = *destroy_func;
-        let state = unsafe { init_func() };
 
         info!("Loaded");
 
@@ -149,14 +150,18 @@ impl SessionCUDA {
             input_ty,
             output_ty,
             lib,
+            init_func,
             run_func,
             destroy_func,
-            state,
+            state: std::ptr::null_mut(),
             initializer,
         })
     }
 
-    pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
+    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
+        if self.state.is_null() {
+            self.state = unsafe { (self.init_func)() };
+        }
         let mut output_bufs = self
             .output_ty
             .iter()
@@ -195,8 +200,10 @@ unsafe impl Sync for SessionCUDA {}
 
 impl Drop for SessionCUDA {
     fn drop(&mut self) {
-        unsafe {
-            (self.destroy_func)(self.state);
+        if !self.state.is_null() {
+            unsafe {
+                (self.destroy_func)(self.state);
+            }
         }
     }
 }

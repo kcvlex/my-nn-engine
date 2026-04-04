@@ -32,7 +32,7 @@ fn run_test(root_dir: &PathBuf, epsilon: f64, target: Target) -> Result {
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let session = Session::new(
+    let mut session = Session::new(
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),

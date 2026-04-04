@@ -54,17 +54,34 @@ pub struct BatchedGemmArgs {
 }
 
 #[derive(Clone, Copy)]
-pub struct CublasHandler(StreamId);
+pub struct CublasHandler {
+    stream_id: StreamId,
+    state_prefix: bool,
+}
 
 impl CublasHandler {
     pub fn new(id: StreamId) -> Self {
-        Self(id)
+        Self {
+            stream_id: id,
+            state_prefix: false,
+        }
+    }
+
+    pub fn with_state_prefix(self) -> Self {
+        Self {
+            state_prefix: true,
+            ..self
+        }
     }
 }
 
 impl Display for CublasHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cublas_handle_{}", self.0.index())
+        if self.state_prefix {
+            write!(f, "state->cublas_handle_{}", self.stream_id.index())
+        } else {
+            write!(f, "cublas_handle_{}", self.stream_id.index())
+        }
     }
 }
 
@@ -83,7 +100,12 @@ impl Display for CublasApi {
                 write!(f, "cublasCreate(&{})", handler)
             }
             Self::SetStream(handler) => {
-                write!(f, "cublasSetStream({}, {})", handler, handler.0)
+                let stream_id = handler.stream_id;
+                if handler.state_prefix {
+                    write!(f, "cublasSetStream({}, state->{})", handler, stream_id)
+                } else {
+                    write!(f, "cublasSetStream({}, {})", handler, stream_id)
+                }
             }
             Self::Destroy(handler) => {
                 write!(f, "cublasDestroy({})", handler)

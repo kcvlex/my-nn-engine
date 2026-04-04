@@ -168,17 +168,40 @@ impl std::fmt::Display for TensorDescriptor {
 }
 
 #[derive(Clone, Copy)]
-pub enum CudnnContext {
-    DefaultContext,
-    StreamContext(StreamId),
+pub struct CudnnContext {
+    stream_id: StreamId,
+    state_prefix: bool,
 }
 
 impl CudnnContext {
-    pub fn ctx(&self) -> String {
-        match self {
-            CudnnContext::DefaultContext => "cudnn_handler_ctx".to_string(),
-            CudnnContext::StreamContext(id) => format!("cudnn_handler_ctx{}", id.index()),
+    pub fn new(stream_id: StreamId) -> Self {
+        Self {
+            stream_id,
+            state_prefix: false,
         }
+    }
+
+    pub fn with_state_prefix(self) -> Self {
+        Self {
+            state_prefix: true,
+            ..self
+        }
+    }
+
+    fn prefix(&self) -> &'static str {
+        if self.state_prefix {
+            "state->"
+        } else {
+            ""
+        }
+    }
+
+    pub fn ctx(&self) -> String {
+        format!(
+            "{}cudnn_handler_ctx{}",
+            self.prefix(),
+            self.stream_id.index()
+        )
     }
 
     pub fn handler(&self) -> String {
@@ -245,7 +268,7 @@ pub enum CudnnOps {
         // ceiling for clipped RELU, alpha for ELU (copied from cudnn_ops.h)
         coef: f64,
     },
-    SetStream(StreamId),
+    SetStream(CudnnContext),
 }
 
 impl std::fmt::Display for CudnnOps {
@@ -381,11 +404,13 @@ impl std::fmt::Display for CudnnOps {
                     coef
                 )
             }
-            Self::SetStream(stream_id) => {
+            Self::SetStream(ctx) => {
+                let stream_id = ctx.stream_id;
                 write!(
                     f,
-                    "cudnnSetStream({}, {})",
-                    CudnnContext::StreamContext(*stream_id).handler(),
+                    "cudnnSetStream({}, {}{})",
+                    ctx.handler(),
+                    ctx.prefix(),
                     stream_id
                 )
             }

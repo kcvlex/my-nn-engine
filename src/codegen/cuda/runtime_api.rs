@@ -36,11 +36,19 @@ impl std::fmt::Display for CudaRuntimeApi {
     }
 }
 
-pub struct EventCreate {
-    pub event_id: EventId,
+pub struct StateRef<T: std::fmt::Display>(pub T);
+
+impl<T: std::fmt::Display> std::fmt::Display for StateRef<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "state->{}", self.0)
+    }
 }
 
-impl std::fmt::Display for EventCreate {
+pub struct EventCreate<T: std::fmt::Display = EventId> {
+    pub event_id: T,
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for EventCreate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cudaEventCreate(&{})", self.event_id)
     }
@@ -56,11 +64,11 @@ impl std::fmt::Display for EventSynchronize {
     }
 }
 
-pub struct StreamCreate {
-    pub stream_id: StreamId,
+pub struct StreamCreate<T: std::fmt::Display = StreamId> {
+    pub stream_id: T,
 }
 
-impl std::fmt::Display for StreamCreate {
+impl<T: std::fmt::Display> std::fmt::Display for StreamCreate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cudaStreamCreate(&{})", self.stream_id)
     }
@@ -147,19 +155,47 @@ impl std::fmt::Display for WaitEvent {
     }
 }
 
-pub struct EventDestroy(pub EventId);
+pub struct EventDestroy<T: std::fmt::Display = EventId>(pub T);
 
-impl std::fmt::Display for EventDestroy {
+impl<T: std::fmt::Display> std::fmt::Display for EventDestroy<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cudaEventDestroy({})", self.0)
     }
 }
 
-pub struct StreamDestroy(pub StreamId);
+pub struct StreamDestroy<T: std::fmt::Display = StreamId>(pub T);
 
-impl std::fmt::Display for StreamDestroy {
+impl<T: std::fmt::Display> std::fmt::Display for StreamDestroy<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cudaStreamDestroy({})", self.0)
+    }
+}
+
+pub trait IntoCheckedStmt: std::fmt::Display {
+    fn into_checked_stmt(self) -> super::Statement;
+}
+
+impl<T: std::fmt::Display> IntoCheckedStmt for EventCreate<T> {
+    fn into_checked_stmt(self) -> super::Statement {
+        super::Statement::Raw(format!("cudaCheckErr({});", self))
+    }
+}
+
+impl<T: std::fmt::Display> IntoCheckedStmt for EventDestroy<T> {
+    fn into_checked_stmt(self) -> super::Statement {
+        super::Statement::Raw(format!("cudaCheckErr({});", self))
+    }
+}
+
+impl<T: std::fmt::Display> IntoCheckedStmt for StreamCreate<T> {
+    fn into_checked_stmt(self) -> super::Statement {
+        super::Statement::Raw(format!("cudaCheckErr({});", self))
+    }
+}
+
+impl<T: std::fmt::Display> IntoCheckedStmt for StreamDestroy<T> {
+    fn into_checked_stmt(self) -> super::Statement {
+        super::Statement::Raw(format!("cudaCheckErr({});", self))
     }
 }
 

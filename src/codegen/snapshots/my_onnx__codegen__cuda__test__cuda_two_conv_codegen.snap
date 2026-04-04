@@ -43,8 +43,9 @@ void init_cudnn_5(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
   setting.find_best_algo(&cudnn_handler_ctx);
 }
 struct ModelState {
-  bool initialized = false;
   void *d_arena = nullptr;
+  cudaStream_t stream_0 = nullptr;
+  CudnnHandlerContext cudnn_handler_ctx0;
   CudnnConvSetting cudnn_setting2;
   CudnnConvSetting cudnn_setting5;
 };
@@ -52,12 +53,23 @@ struct ModelState {
 extern "C" void* model_init() {
   auto *state = new ModelState;
   cudaCheckErr(cudaMalloc(&state->d_arena, 40960));
+  cudaCheckErr(cudaStreamCreate(&state->stream_0));
+  cudnnCheckErr(cudnnCreate(&state->cudnn_handler_ctx0.handle));
+  cudnnCheckErr(cudnnSetStream(state->cudnn_handler_ctx0.handle, state->stream_0));
+  init_cudnn_2(state->cudnn_setting2, state->cudnn_handler_ctx0);
+  init_cudnn_5(state->cudnn_setting5, state->cudnn_handler_ctx0);
+  state->cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(state->cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting2.workspace_size_in_bytes);
+  state->cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(state->cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting5.workspace_size_in_bytes);
+  cudaCheckErr(cudaMalloc(&state->cudnn_handler_ctx0.workspace, state->cudnn_handler_ctx0.workspace_max_size_in_bytes));
   return state;
 }
 
 extern "C" void model_destroy(void *ptr) {
   auto *state = static_cast<ModelState*>(ptr);
   cudaCheckErr(cudaFree(state->d_arena));
+  cudaCheckErr(cudaStreamDestroy(state->stream_0));
+  cudaCheckErr(cudaFree(state->cudnn_handler_ctx0.workspace));
+  cudnnCheckErr(cudnnDestroy(state->cudnn_handler_ctx0.handle));
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.x_desc));
   cudnnCheckErr(cudnnDestroyTensorDescriptor(state->cudnn_setting2.y_desc));
   cudnnCheckErr(cudnnDestroyFilterDescriptor(state->cudnn_setting2.w_desc));
@@ -80,18 +92,8 @@ extern "C" void model(void *state_ptr, void **output, void **input, void **initi
   void *d_chunk_0 = (char*)state->d_arena + 0;
   void *d_chunk_1 = (char*)state->d_arena + 8192;
   void *d_chunk_2 = (char*)state->d_arena + 24576;
-  cudaStream_t stream_0;
-  cudaCheckErr(cudaStreamCreate(&stream_0));
-  CudnnHandlerContext cudnn_handler_ctx0;
-  cudnnCheckErr(cudnnCreate(&cudnn_handler_ctx0.handle));
-  cudnnCheckErr(cudnnSetStream(cudnn_handler_ctx0.handle, stream_0));
-  if (!state->initialized) {
-    init_cudnn_2(state->cudnn_setting2, cudnn_handler_ctx0);
-    init_cudnn_5(state->cudnn_setting5, cudnn_handler_ctx0);
-  }
-  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting2.workspace_size_in_bytes);
-  cudnn_handler_ctx0.workspace_max_size_in_bytes = std::max(cudnn_handler_ctx0.workspace_max_size_in_bytes, state->cudnn_setting5.workspace_size_in_bytes);
-  cudaCheckErr(cudaMalloc(&cudnn_handler_ctx0.workspace, cudnn_handler_ctx0.workspace_max_size_in_bytes));
+  cudaStream_t stream_0 = state->stream_0;
+  CudnnHandlerContext &cudnn_handler_ctx0 = state->cudnn_handler_ctx0;
   cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
   cudaCheckErr(cudaMemcpyAsync(d_chunk_2, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
   state->cudnn_setting2.x = d_chunk_1;
@@ -105,9 +107,5 @@ extern "C" void model(void *state_ptr, void **output, void **input, void **initi
   state->cudnn_setting5.y = d_chunk_2;
   state->cudnn_setting5.call_conv_forward<float>(&cudnn_handler_ctx0);
   cudaCheckErr(cudaMemcpyAsync(h_output_15, d_chunk_2, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
-  cudaCheckErr(cudaStreamDestroy(stream_0));
-  cudaCheckErr(cudaFree(cudnn_handler_ctx0.workspace));
-  cudnnCheckErr(cudnnDestroy(cudnn_handler_ctx0.handle));
-  state->initialized = true;
   cudaCheckErr(cudaDeviceSynchronize());
 }

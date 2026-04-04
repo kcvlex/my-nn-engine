@@ -86,7 +86,7 @@ pub fn run_validated_model(
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let session = Session::new(
+    let mut session = Session::new(
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),

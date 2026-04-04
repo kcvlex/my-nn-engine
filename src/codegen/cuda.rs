@@ -79,7 +79,6 @@ impl std::fmt::Display for DataType {
 
 enum MemSize {
     Single(SingleMemSize),
-    Chunk(ChunkMemSize),
     Raw(Expr),
 }
 
@@ -87,7 +86,6 @@ impl std::fmt::Display for MemSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MemSize::Single(size) => write!(f, "{}", size),
-            MemSize::Chunk(size) => write!(f, "{}", size),
             MemSize::Raw(expr) => write!(f, "{}", expr),
         }
     }
@@ -492,19 +490,16 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             .into(),
         );
 
-        let ctx = CudnnContext::DefaultContext;
         stmts.push(Statement::Raw(format!(
-            "{}.find_best_algo(&{});",
+            "{}.find_best_algo(&cudnn_handler_ctx);",
             setting.setting(),
-            ctx.ctx(),
         )));
 
         let init_fn = format!("init_cudnn_{}", self.kernel_id.index());
         let init_fn_decl = format!(
-            "void {init_fn}(CudnnConvSetting &{setting}, CudnnHandlerContext &{ctx})",
+            "void {init_fn}(CudnnConvSetting &{setting}, CudnnHandlerContext &cudnn_handler_ctx)",
             init_fn = init_fn,
             setting = setting.setting(),
-            ctx = ctx.ctx(),
         );
 
         Ok(CudnnCode {
@@ -679,97 +674,104 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
+        use runtime_api::StateRef;
+
         for event_id in self.to_record_events.iter().copied() {
-            self.stmts
-                .push(Statement::Raw(format!("cudaEvent_t {event_id};")));
-            self.stmts.push(EventCreate { event_id }.into());
+            self.state_fields
+                .push(format!("cudaEvent_t {event_id} = nullptr;"));
+            self.init_stmts.push(
+                EventCreate {
+                    event_id: StateRef(event_id),
+                }
+                .into_checked_stmt(),
+            );
+            self.destroy_stmts
+                .push(EventDestroy(StateRef(event_id)).into_checked_stmt());
+            self.stmts.push(Statement::Raw(format!(
+                "cudaEvent_t {event_id} = state->{event_id};"
+            )));
         }
 
         for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
-            self.stmts
-                .push(Statement::Raw(format!("cudaStream_t {stream_id};")));
-            self.stmts.push(StreamCreate { stream_id }.into());
+            self.state_fields
+                .push(format!("cudaStream_t {stream_id} = nullptr;"));
+            self.init_stmts.push(
+                StreamCreate {
+                    stream_id: StateRef(stream_id),
+                }
+                .into_checked_stmt(),
+            );
+            self.destroy_stmts
+                .push(StreamDestroy(StateRef(stream_id)).into_checked_stmt());
+            self.stmts.push(Statement::Raw(format!(
+                "cudaStream_t {stream_id} = state->{stream_id};"
+            )));
         }
 
         for (_, handler) in self.cublas_handlers.iter() {
-            self.stmts.push(Statement::Raw(format!(
-                "cublasHandle_t {handler};",
-                handler = handler,
-            )));
-            self.stmts.push(CublasApi::Create(*handler).into());
-            self.stmts.push(CublasApi::SetStream(*handler).into());
+            let sh = handler.with_state_prefix();
+            self.state_fields
+                .push(format!("cublasHandle_t {handler} = nullptr;"));
+            self.init_stmts.push(CublasApi::Create(sh).into());
+            self.init_stmts.push(CublasApi::SetStream(sh).into());
+            self.destroy_stmts.push(CublasApi::Destroy(sh).into());
+            self.stmts
+                .push(Statement::Raw(format!("cublasHandle_t {handler} = {sh};")));
         }
 
         for (stream_id, kernels) in self.cudnn_ctxs.iter() {
-            let ctx = CudnnContext::StreamContext(*stream_id);
-            self.stmts.push(Statement::Raw(format!(
-                "CudnnHandlerContext {ctx};",
-                ctx = ctx.ctx()
-            )));
+            let ctx = CudnnContext::new(*stream_id);
+            let ctx_name = ctx.ctx();
 
-            self.stmts.push(CudnnOps::Create(ctx).into());
-            self.stmts.push(CudnnOps::SetStream(*stream_id).into());
+            let sctx = ctx.with_state_prefix();
+            let sctx_name = sctx.ctx();
 
-            self.stmts
-                .push(Statement::Raw("if (!state->initialized) {".to_string()));
+            self.state_fields
+                .push(format!("CudnnHandlerContext {ctx_name};"));
+
+            self.init_stmts.push(CudnnOps::Create(sctx).into());
+            self.init_stmts.push(CudnnOps::SetStream(sctx).into());
+
             for kernel_id in kernels.iter().copied() {
                 let setting = CudnnSettingName::KernelId(kernel_id);
                 let code = CudnnCodeGenerator::new(self.schedule, kernel_id).generate()?;
-                self.stmts.push(Statement::Raw(format!(
-                    "  {init_fn}({ss}, {ctx});",
+                self.init_stmts.push(Statement::Raw(format!(
+                    "{init_fn}({ss}, {sctx_name});",
                     init_fn = code.init_fn,
                     ss = setting.state_setting(),
-                    ctx = ctx.ctx(),
                 )));
                 self.separated_codes.push(SeparatedCode::Cudnn(code));
             }
-            self.stmts.push(Statement::Raw("}".to_string()));
 
-            // Compute workspace max from state settings (valid on all runs)
             for kernel_id in kernels.iter().copied() {
                 let setting = CudnnSettingName::KernelId(kernel_id);
-                self.stmts.push(Statement::Raw(format!(
+                self.init_stmts.push(Statement::Raw(format!(
                     "{ws_max} = std::max({ws_max}, {ss}.workspace_size_in_bytes);",
-                    ws_max = ctx.workspace_max_size(),
+                    ws_max = sctx.workspace_max_size(),
                     ss = setting.state_setting(),
                 )));
             }
-            self.stmts.push(
+            self.init_stmts.push(
                 Malloc {
-                    dst: Expr::Identifier(ctx.workspace_ptr()),
-                    mem_size: MemSize::Raw(Expr::Identifier(ctx.workspace_max_size())),
+                    dst: Expr::Identifier(sctx.workspace_ptr()),
+                    mem_size: MemSize::Raw(Expr::Identifier(sctx.workspace_max_size())),
                 }
                 .into(),
             );
+
+            self.destroy_stmts
+                .push(Free(Expr::Identifier(sctx.workspace_ptr())).into());
+            self.destroy_stmts.push(CudnnOps::Destroy(sctx).into());
+
+            self.stmts.push(Statement::Raw(format!(
+                "CudnnHandlerContext &{ctx_name} = {sctx_name};"
+            )));
         }
 
         Ok(self.move_statements())
     }
 
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
-        for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
-            self.stmts.push(StreamDestroy(stream_id).into());
-        }
-
-        for event_id in self.to_record_events.iter().copied() {
-            self.stmts.push(EventDestroy(event_id).into());
-        }
-
-        for (_, handler) in self.cublas_handlers.iter() {
-            self.stmts.push(CublasApi::Destroy(*handler).into());
-        }
-
-        for (stream_id, _) in self.cudnn_ctxs.iter() {
-            let ctx = CudnnContext::StreamContext(*stream_id);
-            self.stmts
-                .push(Free(Expr::Identifier(ctx.workspace_ptr())).into());
-            self.stmts.push(CudnnOps::Destroy(ctx).into());
-        }
-
-        if !self.cudnn_ctxs.is_empty() {
-            self.stmts
-                .push(Statement::Raw("state->initialized = true;".to_string()));
-        }
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
     }
@@ -1088,7 +1090,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let cudnn_handler = {
                         let kernels = self.cudnn_ctxs.entry(stream_id).or_default();
                         kernels.push(kernel_id);
-                        CudnnContext::StreamContext(stream_id)
+                        CudnnContext::new(stream_id)
                     };
 
                     let input = self.device_identifier(kernel.inputs[args::CONV_DATA])?;
@@ -1593,7 +1595,6 @@ impl HostCode {
 
         // ModelState struct
         writeln!(writer, "struct ModelState {{")?;
-        writeln!(writer, "  bool initialized = false;")?;
         for field in &self.state_fields {
             writeln!(writer, "  {field}")?;
         }

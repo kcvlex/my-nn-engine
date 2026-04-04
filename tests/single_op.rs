@@ -100,7 +100,7 @@ macro_rules! assert_eq_epsilon {
 fn with_session<P, F>(p: P, targets: &[Target], f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
-    F: Fn(Session) -> TestResult,
+    F: Fn(&mut Session) -> TestResult,
 {
     use std::path::PathBuf;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -114,9 +114,9 @@ where
                 .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
-        let session = Session::new(&path, None, &opt)?;
+        let mut session = Session::new(&path, None, &opt)?;
         let _guard = common::cuda_lock(target);
-        f(session)?;
+        f(&mut session)?;
     }
     Ok(())
 }
@@ -129,7 +129,7 @@ fn with_session_and_tensors<P, F>(
 ) -> TestResult
 where
     P: AsRef<std::path::Path>,
-    F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
+    F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
 {
     use std::path::PathBuf;
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -159,9 +159,9 @@ where
                 .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
-        let session = Session::new(dir.join("model.onnx"), None, &opt)?;
+        let mut session = Session::new(dir.join("model.onnx"), None, &opt)?;
         let _guard = common::cuda_lock(target);
-        f(session, (&inputs, &outputs))?;
+        f(&mut session, (&inputs, &outputs))?;
     }
     Ok(())
 }
@@ -169,7 +169,7 @@ where
 fn with_cpu_session<P, F>(p: P, f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
-    F: Fn(Session) -> TestResult,
+    F: Fn(&mut Session) -> TestResult,
 {
     with_session(p, &[Target::CPU], f)
 }
@@ -177,7 +177,7 @@ where
 fn with_all_sessions<P, F>(p: P, f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
-    F: Fn(Session) -> TestResult,
+    F: Fn(&mut Session) -> TestResult,
 {
     #[cfg(feature = "cuda")]
     let targets = &[Target::CPU, Target::CUDA];
@@ -189,7 +189,7 @@ where
 pub fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
-    F: Fn(Session, (&[Tensor], &[Tensor])) -> TestResult,
+    F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
 {
     #[cfg(feature = "cuda")]
     let targets = &[Target::CPU, Target::CUDA];
