@@ -637,7 +637,7 @@ impl Conv {
             .map(|x| x.ints())
             .transpose()?
             .with_default(1);
-        let groups = attributes.get("groups").map_or(Ok(1), |x| x.i())?;
+        let group = attributes.get("group").map_or(Ok(1), |x| x.i())?;
         let kernel_shape = attributes
             .get("kernel_shape")
             .ok_or(ModelLoadError::Unexpected(
@@ -655,7 +655,7 @@ impl Conv {
         Ok(Conv {
             pad,
             dilations,
-            groups: groups as usize,
+            group: group as usize,
             kernel_shape,
             strides,
             input_layout: Layout::NCHW,

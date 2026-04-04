@@ -209,6 +209,10 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
     let node = &graph.nodes[id];
     match &node.op {
         Operator::Conv(ref conv) => {
+            assert!(
+                conv.group == 1,
+                "CPU DecomposeConv does not support groups > 1"
+            );
             let conv = conv.clone();
             let data_value = node.inputs[args::CONV_DATA].unwrap();
             let kernel_value = node.inputs[args::CONV_WEIGHT].unwrap();

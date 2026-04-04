@@ -484,6 +484,7 @@ impl<'sched> CudnnCodeGenerator<'sched> {
                 dilation_h: conv.dilations[0],
                 dilation_w: conv.dilations[1],
                 mode: CudnnConvolutionMode::CrossCorrelation,
+                groups: conv.group,
             }
             .into(),
         );

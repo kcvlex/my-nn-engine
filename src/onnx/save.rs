@@ -205,8 +205,8 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
                     v.iter().map(|&x| x as i64).collect(),
                 ));
             }
-            if c.groups != 1 {
-                attrs.push(attr_int("groups", c.groups as i64));
+            if c.group != 1 {
+                attrs.push(attr_int("group", c.group as i64));
             }
             attrs.push(attr_ints(
                 "kernel_shape",

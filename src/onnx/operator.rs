@@ -180,7 +180,7 @@ pub enum Activation {
 pub struct Conv {
     pub pad: ConvPad,
     pub dilations: OptionalVec<usize>,
-    pub groups: usize,
+    pub group: usize,
     pub kernel_shape: ResolvedTensorDims,
     pub strides: OptionalVec<usize>,
     pub input_layout: Layout,
@@ -238,8 +238,8 @@ impl Conv {
 
         let feature_map_size = weight_shape[0];
 
-        assert!(feature_map_size.is_multiple_of(self.groups));
-        assert!(channels == weight_shape[1] * self.groups);
+        assert!(feature_map_size.is_multiple_of(self.group));
+        assert!(channels == weight_shape[1] * self.group);
 
         let kernel_shape = &weight_shape[2..];
         let default_pad = OptionalVec::new(None, (0, 0));

@@ -241,6 +241,7 @@ pub enum CudnnOps {
         dilation_w: usize,
         mode: CudnnConvolutionMode,
         ty: DataType,
+        groups: usize,
     },
     SetActivationDescriptor {
         id: CudnnSettingName,
@@ -356,6 +357,7 @@ impl std::fmt::Display for CudnnOps {
                 dilation_w,
                 mode,
                 ty,
+                groups,
             } => {
                 write!(
                     f,
@@ -369,7 +371,16 @@ impl std::fmt::Display for CudnnOps {
                     dilation_w,
                     mode.as_ref(),
                     ty.cudnn()
-                )
+                )?;
+                if *groups > 1 {
+                    write!(
+                        f,
+                        ");\n  cudnnCheckErr(cudnnSetConvolutionGroupCount({}, {})",
+                        id.convolution_descriptor(),
+                        groups
+                    )?;
+                }
+                Ok(())
             }
             Self::SetActivationDescriptor {
                 id,

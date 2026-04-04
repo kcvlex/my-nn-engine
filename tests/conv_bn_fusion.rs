@@ -29,7 +29,7 @@ fn conv_op() -> Conv {
     Conv {
         pad: ConvPad::NotSet(OptionalVec::new(None, (0, 0))),
         dilations: OptionalVec::new(None, 1),
-        groups: 1,
+        group: 1,
         kernel_shape: ResolvedTensorDims::new(&[1, 1]),
         strides: OptionalVec::new(None, 1),
         input_layout: Layout::NCHW,
