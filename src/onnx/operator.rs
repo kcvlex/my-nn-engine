@@ -925,6 +925,7 @@ pub mod args {
     pub const CONV_DATA: usize = 0;
     pub const CONV_WEIGHT: usize = 1;
     pub const CONV_BIAS: usize = 2;
+    pub const CONV_WORKSPACE: usize = 3;
 
     pub const LAYER_NORM_DATA: usize = 0;
     pub const LAYER_NORM_SCALE: usize = 1;

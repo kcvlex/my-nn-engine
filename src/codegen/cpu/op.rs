@@ -49,6 +49,15 @@ impl<'ctx> TensorPtr<'ctx> {
         self
     }
 
+    pub fn add_offset(
+        self,
+        builder: &inkwell::builder::Builder<'ctx>,
+        offset: IntValue<'ctx>,
+    ) -> Result<Self, inkwell::builder::BuilderError> {
+        let new_offset = builder.build_int_add(self.offset, offset, "add_off")?;
+        Ok(self.set_offset(new_offset))
+    }
+
     pub fn set_type(mut self, ty: ResolvedTensorType) -> Self {
         self.ty = ty;
         self

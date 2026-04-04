@@ -895,6 +895,26 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     split,
                 ),
+                Operator::Conv(ref conv) => {
+                    // ptrs[0] = output, ptrs[1..] = flatten(inputs) with None skipped
+                    // Map kernel.inputs indices to ptrs indices
+                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
+                    let mut ptr_idx = 1; // skip output
+                    for (i, inp) in kernel.inputs.iter().enumerate() {
+                        if inp.is_some() {
+                            input_ptrs[i] = Some(ptr_idx);
+                            ptr_idx += 1;
+                        }
+                    }
+                    let data = &ptrs[input_ptrs[args::CONV_DATA].unwrap()];
+                    let weight = &ptrs[input_ptrs[args::CONV_WEIGHT].unwrap()];
+                    let bias = input_ptrs
+                        .get(args::CONV_BIAS)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    let workspace = &ptrs[input_ptrs[args::CONV_WORKSPACE].unwrap()];
+                    translator.build_conv(&ptrs[0], data, weight, bias, workspace, conv, entry)
+                }
                 Operator::Attention(_) => panic!(),
                 Operator::BatchedGemm(ref gemm) => {
                     translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)

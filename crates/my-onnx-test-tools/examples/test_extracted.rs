@@ -71,7 +71,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok("CUDA") | Ok("cuda") => Target::CUDA,
         _ => Target::CPU,
     };
-    let session = Session::new(
+    let mut session = Session::new(
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),

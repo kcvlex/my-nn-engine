@@ -168,8 +168,18 @@ impl<'sched> MemoryPlanner<'sched> {
                 .insert(*output, AllocateType::Output(*output));
         }
 
+        let mut extra_inputs: HashMap<KernelId, Vec<ValueId>> = HashMap::new();
         for (kernel_id, _) in self.schedule.kernels.iter() {
             let allocated = self.run_kernel(kernel_id);
+            for (value_id, ref alloc) in &allocated {
+                if matches!(alloc, AllocateType::Chunk(_)) {
+                    // Track inputs that got newly allocated (e.g., workspace)
+                    let kernel = &self.schedule.kernels[kernel_id];
+                    if kernel.inputs.iter().flatten().any(|id| id == value_id) {
+                        extra_inputs.entry(kernel_id).or_default().push(*value_id);
+                    }
+                }
+            }
             for (value_id, allocated) in allocated {
                 self.allocations.insert(value_id, allocated);
             }
@@ -196,12 +206,15 @@ impl<'sched> MemoryPlanner<'sched> {
         self.schedule
             .kernels
             .iter()
-            .map(|(_, kernel)| match self.schedule.options.target {
-                Target::CPU => kernel
-                    .outputs
-                    .iter()
-                    .map(|id| to_allocate_info(self, id))
-                    .collect(),
+            .map(|(kernel_id, kernel)| match self.schedule.options.target {
+                Target::CPU => {
+                    let extras = extra_inputs.get(&kernel_id).cloned().unwrap_or_default();
+                    extras
+                        .iter()
+                        .chain(kernel.outputs.iter())
+                        .map(|id| to_allocate_info(self, id))
+                        .collect()
+                }
                 Target::CUDA => kernel
                     .inputs
                     .iter()
@@ -238,22 +251,24 @@ impl<'sched> MemoryPlanner<'sched> {
         let kernel = &self.schedule.kernels.0[kernel_id];
         let stream = self.kernel2stream.get(&kernel_id).copied().unwrap_or(0);
 
-        if self.schedule.options.target != Target::CPU {
-            for input in kernel.inputs.iter().flatten() {
-                match self.allocations.get(input) {
-                    Some(info) => {
-                        info.chunk_id().to_owned().expect("Input must be allocated");
+        for input in kernel.inputs.iter().flatten() {
+            match self.allocations.get(input) {
+                Some(_) => {}
+                None => {
+                    if self.schedule.options.target == Target::CPU &&
+                        (self.deps.inputs_set.contains(input) ||
+                            self.schedule.graph.initializer.contains_key(input))
+                    {
+                        continue;
                     }
-                    None => {
-                        let chunk_id = self.chunks.reuse_or_new(stream);
-                        self.allocations
-                            .insert(*input, AllocateType::Chunk(chunk_id));
-                        *self.liveness_counter.entry(chunk_id).or_insert(0) +=
-                            self.deps.value2used.get(input).unwrap().len();
-                        res.push((*input, AllocateType::Chunk(chunk_id)));
-                    }
-                };
-            }
+                    let chunk_id = self.chunks.reuse_or_new(stream);
+                    self.allocations
+                        .insert(*input, AllocateType::Chunk(chunk_id));
+                    *self.liveness_counter.entry(chunk_id).or_insert(0) +=
+                        self.deps.value2used.get(input).map_or(1, |u| u.len());
+                    res.push((*input, AllocateType::Chunk(chunk_id)));
+                }
+            };
         }
 
         for output in kernel.outputs.iter() {
@@ -433,20 +448,18 @@ mod test {
         let mem = MemoryPlanner::new(&schedule)
             .run()
             .iter()
-            .flatten()
             .zip_eq(schedule.kernels.iter().map(|(_, k)| k.name.clone()))
-            .map(
-                |(
-                    AllocateInfo {
-                        ty, is_first_use, ..
+            .flat_map(|(allocs, name)| {
+                allocs.iter().map(
+                    move |AllocateInfo {
+                              ty, is_first_use, ..
+                          }| Test {
+                        ty: *ty,
+                        is_first_use: *is_first_use,
+                        name: name.clone(),
                     },
-                    name,
-                )| Test {
-                    ty: *ty,
-                    is_first_use: *is_first_use,
-                    name,
-                },
-            )
+                )
+            })
             .collect::<Vec<_>>();
         insta::assert_yaml_snapshot!(&mem);
         Ok(())

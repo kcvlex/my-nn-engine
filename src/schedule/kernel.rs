@@ -3,8 +3,13 @@ use std::collections::HashMap;
 use itertools::zip_eq;
 
 use crate::onnx::model::*;
+use crate::onnx::operator::args;
+use crate::onnx::operator::Layout;
+use crate::onnx::operator::Operator;
 use crate::onnx::utils;
 use crate::schedule::*;
+use crate::tensor::types::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::GraphOp;
 use crate::utils::UnionFind;
 
@@ -163,7 +168,12 @@ impl KernelsBuilder {
         self.nodes.id2order[&id]
     }
 
-    fn run(&self, graph: &Graph, graph_op: &impl GraphOp) -> Kernels {
+    fn run(
+        &self,
+        graph: &mut Graph,
+        graph_op: &mut impl GraphOp,
+        target: crate::options::Target,
+    ) -> Kernels {
         let mut uf = UnionFind::new(self.elementwise_nodes.ordered.len());
         for node_id in self.elementwise_nodes.ordered.iter().rev() {
             self.try_fuse(*node_id, graph, graph_op, &mut uf);
@@ -203,30 +213,66 @@ impl KernelsBuilder {
             let kernel = match tag {
                 KernelTag::Ignore => continue,
                 KernelTag::Single => {
-                    let node = &graph.nodes[node_id];
-                    let op = node.op.clone();
-                    let body = if op.is_elementwise() {
-                        let ops = vec![(
-                            op,
-                            node.inputs
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, v)| v.is_some())
-                                .map(|(i, _)| ElementwiseOpArg::Input(i))
-                                .collect(),
-                        )];
-                        KernelBody::ElementWises(ElementWises { ops })
-                    } else {
-                        let body = Opaque {
-                            op: node.op.clone(),
+                    let (body, name) = {
+                        let node = &graph.nodes[node_id];
+                        let op = node.op.clone();
+                        let body = if op.is_elementwise() {
+                            let ops = vec![(
+                                op,
+                                node.inputs
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, v)| v.is_some())
+                                    .map(|(i, _)| ElementwiseOpArg::Input(i))
+                                    .collect(),
+                            )];
+                            KernelBody::ElementWises(ElementWises { ops })
+                        } else {
+                            KernelBody::Opaque(Opaque { op })
                         };
-                        KernelBody::Opaque(body)
+                        (body, node.name.clone())
                     };
+                    if matches!(target, crate::options::Target::CPU) {
+                        if let Operator::Conv(ref conv) = graph.nodes[node_id].op {
+                            let output_ty = graph
+                                .get_resolved_tensor_type(graph.nodes[node_id].outputs[0])
+                                .unwrap();
+                            let weight_ty = graph
+                                .get_resolved_tensor_type(
+                                    graph.nodes[node_id].inputs[args::CONV_WEIGHT].unwrap(),
+                                )
+                                .unwrap();
+                            let n = output_ty.dims[0];
+                            let (h_out, w_out) = match conv.output_layout {
+                                Layout::NCHW => (2, 3),
+                                Layout::NHWC => (1, 2),
+                            };
+                            let h_out = output_ty.dims[h_out];
+                            let w_out = output_ty.dims[w_out];
+                            let c_in_per_group = weight_ty.dims[1];
+                            let c_out_per_group = weight_ty.dims[0] / conv.group;
+                            let kh = conv.kernel_shape[0];
+                            let kw = conv.kernel_shape[1];
+                            let ws_elems = n * h_out * w_out * c_in_per_group * kh * kw;
+                            let ws_ty = ResolvedTensorType::new(
+                                output_ty.elem_type,
+                                ResolvedTensorDims::new(&[
+                                    ws_elems.max(n * c_out_per_group * h_out * w_out)
+                                ]),
+                            );
+                            let ws_value = graph_op.register_new_value(
+                                graph,
+                                format!("conv_workspace_{}", node_id.index()),
+                                ws_ty,
+                            );
+                            graph_op.set_node_input(graph, node_id, args::CONV_WORKSPACE, ws_value);
+                        }
+                    }
                     Kernel {
                         inputs: graph.nodes[node_id].inputs.clone(),
                         outputs: graph.nodes[node_id].outputs.clone(),
                         body,
-                        name: node.name.clone(),
+                        name,
                     }
                 }
                 KernelTag::ElementwiseLast(group_id) => {
@@ -250,6 +296,10 @@ impl KernelsBuilder {
     }
 }
 
-pub fn build_kernels(graph: &Graph, graph_op: &impl GraphOp) -> Kernels {
-    KernelsBuilder::new(graph).run(graph, graph_op)
+pub fn build_kernels(
+    graph: &mut Graph,
+    graph_op: &mut impl GraphOp,
+    target: crate::options::Target,
+) -> Kernels {
+    KernelsBuilder::new(graph).run(graph, graph_op, target)
 }

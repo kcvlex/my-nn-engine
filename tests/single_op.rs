@@ -566,18 +566,12 @@ fn conv_bias() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
 fn depthwise_conv() -> TestResult {
-    with_session_and_tensors(
-        "depthwise_conv",
-        &[Target::CUDA],
-        (1, 1),
-        |session, (inputs, expected)| {
-            let outputs = session.run(inputs)?;
-            assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
-            Ok(())
-        },
-    )
+    with_all_sessions_and_tensors("depthwise_conv", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
+        Ok(())
+    })
 }
 
 #[test]
@@ -1362,6 +1356,24 @@ fn transpose_contiguous_fold() -> TestResult {
             .to_owned()
             .into_dyn();
         tensor_assert_eq!(output[0], expected);
+        Ok(())
+    })
+}
+
+#[test]
+fn conv_stride2_1x1() -> TestResult {
+    with_all_sessions_and_tensors("conv_stride2_1x1", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
+        Ok(())
+    })
+}
+
+#[test]
+fn conv_3x3_stride2() -> TestResult {
+    with_all_sessions_and_tensors("conv_3x3_stride2", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-3);
         Ok(())
     })
 }

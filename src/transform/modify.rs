@@ -84,6 +84,8 @@ pub trait GraphOp {
         *graph.initializer.get_mut(&value_id).unwrap() = tensor;
     }
 
+    fn set_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize, value: ValueId);
+
     fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize);
 
     /// Returns `(source_value, chain)` where `source_value` is the input of the last
@@ -263,6 +265,25 @@ impl GraphOp for SimpleGraphOp {
 
     fn used_node(&self, value: ValueId) -> Option<&IndexSet<(NodeId, usize)>> {
         self.value2used.get(&value)
+    }
+
+    fn set_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize, value: ValueId) {
+        while graph.nodes[node_id].inputs.len() <= index {
+            graph.nodes[node_id].inputs.push(None);
+        }
+        if let Some(old_value) = graph.nodes[node_id].inputs[index] {
+            if let Entry::Occupied(mut entry) = self.value2used.entry(old_value) {
+                entry.get_mut().shift_remove(&(node_id, index));
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+            }
+        }
+        graph.nodes[node_id].inputs[index] = Some(value);
+        self.value2used
+            .entry(value)
+            .or_default()
+            .insert((node_id, index));
     }
 
     fn drop_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize) {

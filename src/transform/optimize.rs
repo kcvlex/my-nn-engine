@@ -11,6 +11,7 @@ pub mod layer_norm_fusion;
 pub mod nodes_reorder;
 pub mod transpose_fusion;
 
+use crate::options::Options;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::optimize::attention_fusion::AttentionFusion;
 use crate::transform::optimize::canonicalization::Canonicalization;
@@ -28,7 +29,7 @@ use crate::transform::optimize::transpose_fusion::TransposeFusion;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_optimize_passes() -> SimplePassManager<SimpleGraphOp> {
+pub fn create_optimize_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut pass_manager = SimplePassManager::new("Optimization".to_string());
     pass_manager.add_pass(Box::new(IdentityElimination::default()));
     pass_manager.add_pass(Box::new(Canonicalization::default()));
@@ -36,7 +37,9 @@ pub fn create_optimize_passes() -> SimplePassManager<SimpleGraphOp> {
         check_strides: false,
     }));
     pass_manager.add_pass(Box::new(ConvBNFusion::default()));
-    pass_manager.add_pass(Box::new(ConvActivationFusion::default()));
+    if matches!(opt.target, crate::options::Target::CUDA) {
+        pass_manager.add_pass(Box::new(ConvActivationFusion::default()));
+    }
     pass_manager.add_pass(Box::new(FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(LayerNormFusion::default()));
     pass_manager.add_pass(Box::new(AttentionFusion::default()));

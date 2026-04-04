@@ -94,7 +94,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
 
     let managers = [
         create_infer_passes(options),
-        create_optimize_passes(),
+        create_optimize_passes(options),
         create_lower_passes(options, enable_nhwc),
         create_epilog_passes(options),
     ];

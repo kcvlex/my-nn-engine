@@ -212,8 +212,8 @@ impl IndexMut<KernelId> for Kernels {
 }
 
 impl Schedule {
-    pub fn new(graph: Graph, options: Options) -> Self {
-        let graph_op = SimpleGraphOp::new(&graph);
+    pub fn new(mut graph: Graph, options: Options) -> Self {
+        let mut graph_op = SimpleGraphOp::new(&graph);
         let inputs = graph
             .inputs
             .iter()
@@ -221,7 +221,6 @@ impl Schedule {
                 Operator::Input(v) => v,
                 _ => unreachable!(),
             })
-            //.chain(graph.initializer.keys().copied())
             .collect::<Vec<_>>();
         let outputs = graph
             .outputs
@@ -232,7 +231,7 @@ impl Schedule {
             })
             .collect::<Vec<_>>();
         let initializers = graph.initializer.keys().copied().collect::<Vec<_>>();
-        let kernels = kernel::build_kernels(&graph, &graph_op);
+        let kernels = kernel::build_kernels(&mut graph, &mut graph_op, options.target);
         Self {
             inputs,
             outputs,

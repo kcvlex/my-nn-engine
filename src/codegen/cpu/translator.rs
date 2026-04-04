@@ -14,6 +14,7 @@ use crate::codegen::cpu::llvm::*;
 use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::onnx::operator;
+use crate::onnx::operator::Layout;
 use crate::onnx::operator::ReinterpretType;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::data::ScalarData;
@@ -801,7 +802,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
         };
         let src_val = self
-            .build_load(&src.clone().set_offset(src_offset))?
+            .build_load(&src.clone().add_offset(self.builder, src_offset)?)?
             .into_float_value();
         self.builder.build_unconditional_branch(bb_store)?;
 
@@ -856,6 +857,342 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.finalize_counted_loop(phi_n, entry, c(nbatch), hdr_n, exit, latch_n)?;
 
         self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
+    /// for g in 0..groups:
+    ///   im2col(src[g*src_stride..], workspace[0..M*K])
+    ///   if bias:
+    ///     broadcast_copy(bias[g*Cout_g..], dst[g*M*Cout_g..])
+    ///     gemm(dst[g*M*Cout_g..] = workspace * weight[g]^T + dst)  // beta=1
+    ///   else:
+    ///     gemm(dst[g*M*Cout_g..] = workspace * weight[g]^T)        // beta=0
+    ///   if NCHW:
+    ///     for n in 0..N:
+    ///       copy dst[n*H*W*Cout_g..] to workspace  // save HWC
+    ///       for c in 0..Cout_g:
+    ///         for hw in 0..H*W:
+    ///           dst[n*Cout_g*H*W + c*H*W + hw] = workspace[hw*Cout_g + c]
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_conv(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        weight: &TensorPtr<'ctx>,
+        bias: Option<&TensorPtr<'ctx>>,
+        workspace: &TensorPtr<'ctx>,
+        conv: &operator::Conv,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let i64_ty = self.context.i64_type();
+        let groups = conv.group;
+        let c_in_per_group = weight.ty.dims[1];
+        let c_out_per_group = weight.ty.dims[0] / groups;
+        let kh = conv.kernel_shape[0];
+        let kw = conv.kernel_shape[1];
+
+        let output_shape = conv.output_shape(&src.ty.dims, &weight.ty.dims);
+        let n_batch = src.ty.dims[0];
+        let (h_out, w_out) = match conv.output_layout {
+            Layout::NCHW => (2, 3),
+            Layout::NHWC => (1, 2),
+        };
+        let h_out = output_shape[h_out];
+        let w_out = output_shape[w_out];
+        let m = n_batch * h_out * w_out;
+        let k = c_in_per_group * kh * kw;
+
+        let im2col_op = operator::Im2Col {
+            nbatch: n_batch,
+            one_fm_shape: ResolvedTensorDims::new(&[h_out, w_out]),
+            pad: conv.pad.clone(),
+            channel: c_in_per_group,
+            dilations: conv.dilations.clone(),
+            one_kernel_shape: ResolvedTensorDims::new(&[kh, kw]),
+            strides: conv.strides.clone(),
+            pad_val: operator::PadVal::Zero,
+            layout: conv.input_layout,
+        };
+
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+        let group_entry = bb("conv.group.entry");
+        let group_latch = bb("conv.group.latch");
+        let im2col_entry = bb("conv.im2col.entry");
+        let gemm_body = bb("conv.gemm.body");
+        let exit = bb("conv.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(group_entry)?;
+
+        self.builder.position_at_end(group_entry);
+        let (phi_g, ind_g) = self.init_counted_loop(group_entry)?;
+        self.builder.build_unconditional_branch(im2col_entry)?;
+
+        self.builder.position_at_end(im2col_entry);
+        let ty = ResolvedTensorType::new(src.ty.elem_type, ResolvedTensorDims::new(&[m, k]));
+        let im2col_ptr = TensorPtr {
+            ptr: workspace.ptr,
+            ty,
+            offset: i64_ty.const_zero(),
+            name: "conv_gemm_dst".to_string(),
+        };
+        let src_group_offset = match conv.input_layout {
+            Layout::NCHW => src.ty.stride(1) * c_in_per_group,
+            Layout::NHWC => c_in_per_group,
+        };
+        let offset = self.builder.build_int_mul(
+            ind_g,
+            i64_ty.const_int(src_group_offset as u64, false),
+            "im2col_offset",
+        )?;
+        let offset = self
+            .builder
+            .build_int_add(offset, src.offset, "im2col_offset_abs")?;
+        let src_ptr = TensorPtr {
+            ptr: src.ptr,
+            ty: src.ty.clone(),
+            offset,
+            name: "conv_im2col_src".to_string(),
+        };
+        let im2col_exit = self.build_im2col(&im2col_ptr, &src_ptr, &im2col_op, im2col_entry)?;
+
+        self.builder.position_at_end(im2col_exit);
+        self.builder.build_unconditional_branch(gemm_body)?;
+
+        self.builder.position_at_end(gemm_body);
+        let offset = self.builder.build_int_mul(
+            ind_g,
+            i64_ty.const_int((c_out_per_group * k) as u64, false),
+            "weight_group_offset",
+        )?;
+        let ty = ResolvedTensorType::new(
+            weight.ty.elem_type,
+            ResolvedTensorDims::new(&[c_out_per_group, k]),
+        );
+        let weight_ptr = TensorPtr {
+            ptr: weight.ptr,
+            ty,
+            offset,
+            name: "conv_gemm_weight".to_string(),
+        };
+
+        let offset = self.builder.build_int_mul(
+            ind_g,
+            i64_ty.const_int((m * c_out_per_group) as u64, false),
+            "gemm_dst_group_offset",
+        )?;
+        let ty = ResolvedTensorType::new(
+            dst.ty.elem_type,
+            ResolvedTensorDims::new(&[m, c_out_per_group]),
+        );
+        let dst_ptr = TensorPtr {
+            ptr: dst.ptr,
+            ty,
+            offset,
+            name: "conv_gemm_dst".to_string(),
+        };
+        let bias_broadcast = bias.map(|b| {
+            let bias_offset = self
+                .builder
+                .build_int_mul(
+                    ind_g,
+                    i64_ty.const_int(c_out_per_group as u64, false),
+                    "bias_group_offset",
+                )
+                .unwrap();
+            let bias_1d_ty = ResolvedTensorType::new(
+                b.ty.elem_type,
+                ResolvedTensorDims::new(&[c_out_per_group]),
+            );
+            let target_dims = ResolvedTensorDims::new(&[m, c_out_per_group]);
+            let broadcast_ty = bias_1d_ty.broadcast(&target_dims);
+            TensorPtr {
+                ptr: b.ptr,
+                ty: broadcast_ty,
+                offset: bias_offset,
+                name: "conv_bias_broadcast".to_string(),
+            }
+        });
+        let gemm_op = operator::Gemm {
+            trans_a: false,
+            trans_b: true,
+            alpha: 1.0,
+            beta: if bias.is_some() { 1.0 } else { 0.0 },
+        };
+        let gemm_exit = self.build_gemm(
+            &dst_ptr,
+            &im2col_ptr,
+            &weight_ptr,
+            bias_broadcast.as_ref(),
+            gemm_body,
+            &gemm_op,
+        )?;
+
+        match conv.output_layout {
+            Layout::NHWC => {
+                self.builder.build_unconditional_branch(group_latch)?;
+            }
+            Layout::NCHW => {
+                let n_hdr = bb("conv.trans_n.hdr");
+                let save_body = bb("conv.save_hwc");
+                let trans_c_entry = bb("conv.trans_c.entry");
+                let trans_hw = bb("conv.trans_hw");
+                let trans_c_latch = bb("conv.trans_c.latch");
+                let n_latch = bb("conv.trans_n.latch");
+                self.builder.build_unconditional_branch(n_hdr)?;
+
+                let hwc = (h_out * w_out * c_out_per_group) as u64;
+
+                let (phi_n, ind_n) = self.init_counted_loop(n_hdr)?;
+                let g_src_base = self.builder.build_int_mul(
+                    ind_g,
+                    i64_ty.const_int((m * c_out_per_group) as u64, false),
+                    "g_src_base",
+                )?;
+                let n_base_src = self.builder.build_int_mul(
+                    ind_n,
+                    i64_ty.const_int(hwc, false),
+                    "n_base_src_n",
+                )?;
+                let n_base_src =
+                    self.builder
+                        .build_int_add(n_base_src, g_src_base, "n_base_src")?;
+                let c_out = weight.ty.dims[0];
+                let g_dst_base = self.builder.build_int_mul(
+                    ind_g,
+                    i64_ty.const_int((n_batch * c_out_per_group * h_out * w_out) as u64, false),
+                    "g_dst_base",
+                )?;
+                let n_base_dst = self.builder.build_int_mul(
+                    ind_n,
+                    i64_ty.const_int((c_out * h_out * w_out) as u64, false),
+                    "n_base_dst_n",
+                )?;
+                let n_base_dst =
+                    self.builder
+                        .build_int_add(n_base_dst, g_dst_base, "n_base_dst")?;
+                self.builder.build_unconditional_branch(save_body)?;
+
+                let bound = h_out * w_out * c_out_per_group;
+                self.builder.position_at_end(save_body);
+                let (phi_hwc, ind_hwc) = self.init_counted_loop(save_body)?;
+                let ty =
+                    ResolvedTensorType::new(dst.ty.elem_type, ResolvedTensorDims::new(&[bound]));
+                let offset = self
+                    .builder
+                    .build_int_add(n_base_src, ind_hwc, "save_src_off")?;
+                let src_ptr = TensorPtr {
+                    ptr: dst.ptr,
+                    offset,
+                    ty: ty.clone(),
+                    name: "conv_save_src".to_string(),
+                };
+                let dst_ptr = TensorPtr {
+                    ptr: workspace.ptr,
+                    offset: ind_hwc,
+                    ty,
+                    name: "conv_save_dst".to_string(),
+                };
+                let load = self.build_load(&src_ptr)?;
+                self.build_store(&dst_ptr, load)?;
+                self.finalize_counted_loop(
+                    phi_hwc,
+                    n_hdr,
+                    i64_ty.const_int(bound as u64, false),
+                    save_body,
+                    trans_c_entry,
+                    save_body,
+                )?;
+
+                self.builder.position_at_end(trans_c_entry);
+                let (phi_c, ind_c) = self.init_counted_loop(trans_c_entry)?;
+                self.builder.build_unconditional_branch(trans_hw)?;
+
+                self.builder.position_at_end(trans_hw);
+                let (phi_hw, ind_hw) = self.init_counted_loop(trans_hw)?;
+                // src: workspace[hw * C + c] (HWC order)
+                let offset = self.builder.build_int_mul(
+                    ind_hw,
+                    i64_ty.const_int(c_out_per_group as u64, false),
+                    "save_c_offset",
+                )?;
+                let offset = self.builder.build_int_add(offset, ind_c, "save_offset")?;
+                let src_ptr = TensorPtr {
+                    ptr: workspace.ptr,
+                    offset,
+                    ty: ResolvedTensorType::new(
+                        dst.ty.elem_type,
+                        ResolvedTensorDims::new(&[h_out * w_out * c_out_per_group]),
+                    ),
+                    name: "conv_trans_src".to_string(),
+                };
+                // dst: dst[n_base + c * H * W + hw] (NCHW order)
+                let offset = self.builder.build_int_mul(
+                    ind_c,
+                    i64_ty.const_int((h_out * w_out) as u64, false),
+                    "dst_c_offset",
+                )?;
+                let offset = self.builder.build_int_add(offset, ind_hw, "dst_chw")?;
+                let offset = self
+                    .builder
+                    .build_int_add(n_base_dst, offset, "dst_offset")?;
+                let dst_ptr = TensorPtr {
+                    ptr: dst.ptr,
+                    offset,
+                    ty: ResolvedTensorType::new(
+                        dst.ty.elem_type,
+                        ResolvedTensorDims::new(&[c_out_per_group * h_out * w_out]),
+                    ),
+                    name: "conv_trans_dst".to_string(),
+                };
+                let val = self.build_load(&src_ptr)?;
+                self.build_store(&dst_ptr, val)?;
+                self.finalize_counted_loop(
+                    phi_hw,
+                    trans_c_entry,
+                    i64_ty.const_int((h_out * w_out) as u64, false),
+                    trans_hw,
+                    trans_c_latch,
+                    trans_hw,
+                )?;
+
+                self.builder.position_at_end(trans_c_latch);
+                self.finalize_counted_loop(
+                    phi_c,
+                    save_body,
+                    i64_ty.const_int(c_out_per_group as u64, false),
+                    trans_c_entry,
+                    n_latch,
+                    trans_c_latch,
+                )?;
+
+                self.builder.position_at_end(n_latch);
+                self.finalize_counted_loop(
+                    phi_n,
+                    gemm_exit,
+                    i64_ty.const_int(n_batch as u64, false),
+                    n_hdr,
+                    group_latch,
+                    n_latch,
+                )?;
+            }
+        }
+
+        self.builder.position_at_end(group_latch);
+        self.finalize_counted_loop(
+            phi_g,
+            entry,
+            i64_ty.const_int(groups as u64, false),
+            group_entry,
+            exit,
+            group_latch,
+        )?;
+
+        assert!(
+            conv.activation == operator::Activation::Identity,
+            "CPU Conv activation must be Identity (ConvActivationFusion is CUDA-only)"
+        );
+
         Ok(exit)
     }
 
@@ -1386,18 +1723,20 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         if b.ty.stride(0) < b.ty.stride(1) {
             trans_b = !trans_b;
         }
+        self.builder.position_at_end(entry);
+        let a_gep = self.build_gep(a)?;
+        let b_gep = self.build_gep(b)?;
+        let c_gep = self.build_gep(dst)?;
         let gemm = GemmArgs {
-            a: (a.ptr, trans_a),
-            b: (b.ptr, trans_b),
-            c: dst.ptr,
+            a: (a_gep, trans_a),
+            b: (b_gep, trans_b),
+            c: c_gep,
             alpha: gemm.alpha,
             beta,
             m,
             n,
             k,
         };
-
-        self.builder.position_at_end(entry);
         self.blas
             .call_gemm(dst.ty.elem_type.float_type().unwrap(), &gemm, self.builder)?;
         Ok(entry)
