@@ -1,6 +1,7 @@
 pub mod attention_fusion;
 pub mod canonicalization;
 pub mod const_folding;
+pub mod conv_activation_fusion;
 pub mod conv_bn_fusion;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
@@ -15,6 +16,7 @@ use crate::transform::optimize::attention_fusion::AttentionFusion;
 use crate::transform::optimize::canonicalization::Canonicalization;
 use crate::transform::optimize::canonicalization::MatMul2BatchedGemm;
 use crate::transform::optimize::const_folding::ConstantFolding;
+use crate::transform::optimize::conv_activation_fusion::ConvActivationFusion;
 use crate::transform::optimize::conv_bn_fusion::ConvBNFusion;
 use crate::transform::optimize::fast_gelu_fusion::FastGeLUFusion;
 use crate::transform::optimize::gemm_add_fusion::GemmAddFusion;
@@ -34,6 +36,7 @@ pub fn create_optimize_passes() -> SimplePassManager<SimpleGraphOp> {
         check_strides: false,
     }));
     pass_manager.add_pass(Box::new(ConvBNFusion::default()));
+    pass_manager.add_pass(Box::new(ConvActivationFusion::default()));
     pass_manager.add_pass(Box::new(FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(LayerNormFusion::default()));
     pass_manager.add_pass(Box::new(AttentionFusion::default()));

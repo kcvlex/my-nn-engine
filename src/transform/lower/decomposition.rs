@@ -368,6 +368,29 @@ fn im2col_core<T: GraphOp>(graph: &mut Graph, modifier: &mut T, id: NodeId) {
                 Layout::NHWC => reshaped_output,
             };
 
+            let final_output = match conv.activation {
+                Activation::Identity => final_output,
+                Activation::ReLU => {
+                    let ty = graph
+                        .get_resolved_tensor_type(final_output)
+                        .unwrap()
+                        .clone();
+                    let relu_output =
+                        modifier.register_new_value(graph, format!("Im2Col_{index}_ReLU"), ty);
+                    modifier.register_new_node(
+                        graph,
+                        Node {
+                            inputs: vec![final_output],
+                            outputs: vec![relu_output],
+                            name: format!("Im2Col_{index}_ReLU"),
+                            op: Operator::ReLU,
+                            meta: NodeMeta::default(),
+                        },
+                    );
+                    relu_output
+                }
+            };
+
             modifier.replace_input_value(graph, old_output_value, final_output);
         }
 

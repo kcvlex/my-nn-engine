@@ -54,29 +54,11 @@ impl Layout {
     }
 }
 
-#[allow(dead_code)]
-#[derive(AsRefStr, Clone, Copy)]
-pub enum CudnnActivationMode {
-    #[strum(serialize = "CUDNN_ACTIVATION_SIGMOID")]
-    Sigmoid,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_RELU")]
-    Relu,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_TANH")]
-    Tanh,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_CLIPPED_RELU")]
-    ClippedRelu,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_ELU")]
-    Elu,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_IDENTITY")]
-    Identity,
-
-    #[strum(serialize = "CUDNN_ACTIVATION_SWISH")]
-    Swish,
+fn cudnn_activation_mode(act: Activation) -> &'static str {
+    match act {
+        Activation::Identity => "CUDNN_ACTIVATION_IDENTITY",
+        Activation::ReLU => "CUDNN_ACTIVATION_RELU",
+    }
 }
 
 #[allow(dead_code)]
@@ -262,7 +244,7 @@ pub enum CudnnOps {
     },
     SetActivationDescriptor {
         id: CudnnSettingName,
-        mode: CudnnActivationMode,
+        mode: Activation,
         nan_prop: CudnnNanPropagation,
 
         // ceiling for clipped RELU, alpha for ELU (copied from cudnn_ops.h)
@@ -399,7 +381,7 @@ impl std::fmt::Display for CudnnOps {
                     f,
                     "cudnnSetActivationDescriptor({}, {}, {}, {})",
                     id.activation_descriptor(),
-                    mode.as_ref(),
+                    cudnn_activation_mode(*mode),
                     nan_prop.as_ref(),
                     coef
                 )

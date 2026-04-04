@@ -34,6 +34,7 @@ fn conv_op() -> Conv {
         strides: OptionalVec::new(None, 1),
         input_layout: Layout::NCHW,
         output_layout: Layout::NCHW,
+        activation: Activation::default(),
     }
 }
 

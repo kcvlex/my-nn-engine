@@ -661,6 +661,7 @@ impl Conv {
             strides,
             input_layout: Layout::NCHW,
             output_layout: Layout::NCHW,
+            activation: Activation::default(),
         })
     }
 }

@@ -432,19 +432,6 @@ impl<'sched> CudnnCodeGenerator<'sched> {
                 }
                 .into(),
             );
-
-            // TODO: Set proper activation.
-            let activation = CudnnActivationMode::Identity;
-            stmts.push(CudnnOps::CreateActivationDescriptor(setting).into());
-            stmts.push(
-                CudnnOps::SetActivationDescriptor {
-                    id: setting,
-                    mode: activation,
-                    nan_prop: CudnnNanPropagation::NotPropagateNan,
-                    coef: 0.0, // only used for clipped ReLU
-                }
-                .into(),
-            );
         }
 
         let conv = match kernel.body {
@@ -454,6 +441,17 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             },
             _ => unimplemented!(),
         };
+
+        stmts.push(CudnnOps::CreateActivationDescriptor(setting).into());
+        stmts.push(
+            CudnnOps::SetActivationDescriptor {
+                id: setting,
+                mode: conv.activation,
+                nan_prop: CudnnNanPropagation::NotPropagateNan,
+                coef: 0.0,
+            }
+            .into(),
+        );
         let (pad_h, pad_w) = match conv.pad {
             ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
             ConvPad::Valid => (0, 0),

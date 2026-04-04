@@ -168,6 +168,13 @@ pub enum ConvPad {
     Valid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Activation {
+    #[default]
+    Identity,
+    ReLU,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Conv {
     pub pad: ConvPad,
@@ -177,6 +184,7 @@ pub struct Conv {
     pub strides: OptionalVec<usize>,
     pub input_layout: Layout,
     pub output_layout: Layout,
+    pub activation: Activation,
 }
 
 #[derive(Debug)]
