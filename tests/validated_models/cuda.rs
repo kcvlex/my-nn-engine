@@ -43,3 +43,8 @@ fn test_bertsquad12() -> Result {
 fn test_gpt2() -> Result {
     run_test("GPT2", 1e-2, (1, 13), Some("model.onnx"))
 }
+
+#[test]
+fn test_mobilenetv2() -> Result {
+    run_test("mobilenetv2-12", 1e-2, (1, 1), None)
+}
