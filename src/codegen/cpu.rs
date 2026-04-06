@@ -859,9 +859,6 @@ impl<'ll> CodeGen<'ll, '_> {
                         translator.build_maxpool_nhwc(&ptrs[0], &ptrs[1], pooling, entry)
                     }
                 },
-                Operator::Im2Col(ref im2col) => {
-                    translator.build_im2col(&ptrs[0], &ptrs[1], im2col, entry)
-                }
                 Operator::OneHot(ref one_hot) => {
                     translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
                 }

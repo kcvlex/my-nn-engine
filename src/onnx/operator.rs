@@ -89,7 +89,6 @@ pub enum Operator {
     // Custom
     Contiguous(Contiguous),
     Transfer(TransferKind),
-    Im2Col(Im2Col),
     NHWC2NCHW,
     ReduceMatrix(ReduceOp),
     Reinterpret(Reinterpret),
@@ -635,26 +634,6 @@ pub enum PadVal {
     NInf,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Im2Col {
-    pub nbatch: usize,
-    pub one_fm_shape: ResolvedTensorDims, // convolution of one image and one kernel (feature map)
-    pub pad: ConvPad,
-    pub channel: usize,
-    pub dilations: OptionalVec<usize>,
-    pub one_kernel_shape: ResolvedTensorDims,
-    pub strides: OptionalVec<usize>,
-    pub pad_val: PadVal,
-    pub layout: Layout,
-}
-
-impl Im2Col {
-    pub fn padded_len(&self, dim: usize) -> usize {
-        let unit = self.dilations[dim] * (self.one_kernel_shape[dim] - 1) + 1;
-        self.strides[dim] * (self.one_fm_shape[dim] - 1) + unit
-    }
-}
-
 impl Resize {
     pub fn resized_shape(&self, graph: &Graph, node_id: NodeId) -> Option<ResolvedTensorDims> {
         let node = &graph.nodes[node_id];
@@ -823,7 +802,6 @@ impl Operator {
             // Custom
             Operator::Contiguous(_) => "Contiguous",
             Operator::Transfer(_) => "Transfer",
-            Operator::Im2Col(_) => "Im2Col",
             Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
             Operator::Reinterpret(_) => "Reinterpret",
@@ -871,7 +849,6 @@ impl Operator {
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
-            Operator::Im2Col(_) |
             Operator::LayerNormalization(_) |
             Operator::MatMul |
             Operator::MaxPool(_) |

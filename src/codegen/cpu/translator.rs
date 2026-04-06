@@ -39,6 +39,25 @@ pub struct FunctionTranslator<'a, 'ctx> {
     pub debug_stuff: &'a DebugStuff<'ctx>,
 }
 
+struct Im2Col {
+    nbatch: usize,
+    one_fm_shape: ResolvedTensorDims,
+    pad: operator::ConvPad,
+    channel: usize,
+    dilations: operator::OptionalVec<usize>,
+    one_kernel_shape: ResolvedTensorDims,
+    strides: operator::OptionalVec<usize>,
+    pad_val: operator::PadVal,
+    layout: operator::Layout,
+}
+
+impl Im2Col {
+    fn padded_len(&self, dim: usize) -> usize {
+        let unit = self.dilations[dim] * (self.one_kernel_shape[dim] - 1) + 1;
+        self.strides[dim] * (self.one_fm_shape[dim] - 1) + unit
+    }
+}
+
 impl<'ctx> FunctionTranslator<'_, 'ctx> {
     fn init_counted_loop(
         &self,
@@ -574,11 +593,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_store(op.dst_operand(), res)
     }
 
-    pub fn build_im2col(
+    fn build_im2col(
         &self,
         dst: &TensorPtr<'ctx>,
         src: &TensorPtr<'ctx>,
-        im2col: &operator::Im2Col,
+        im2col: &Im2Col,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         // NCHW: src[N, C_in, H_in, W_in], NHWC: src[N, H_in, W_in, C_in]
@@ -902,7 +921,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let m = n_batch * h_out * w_out;
         let k = c_in_per_group * kh * kw;
 
-        let im2col_op = operator::Im2Col {
+        let im2col_op = Im2Col {
             nbatch: n_batch,
             one_fm_shape: ResolvedTensorDims::new(&[h_out, w_out]),
             pad: conv.pad.clone(),

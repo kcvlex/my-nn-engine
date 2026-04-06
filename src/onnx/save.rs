@@ -413,9 +413,6 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Contiguous(_) => vec![],
         Operator::NHWC2NCHW => vec![],
 
-        // TODO
-        Operator::Im2Col(_) => vec![],
-
         Operator::ReduceMatrix(op) => {
             let op = match op {
                 ReduceOp::Max => "max",

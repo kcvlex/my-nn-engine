@@ -603,10 +603,7 @@ pub fn infer_node_output(
             }
             res.push(ty);
         }
-        Operator::Input(_) |
-        Operator::Output(_) |
-        Operator::Im2Col(_) |
-        Operator::ReduceMatrix(_) => {
+        Operator::Input(_) | Operator::Output(_) | Operator::ReduceMatrix(_) => {
             for output in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(*output);
                 assert!(ty.is_some());
