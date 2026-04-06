@@ -148,17 +148,20 @@ impl NHWC2NCHWSinkAndFold {
             op => {
                 assert!(op.is_elementwise());
                 for (i, c) in cands.iter().enumerate() {
+                    let Some(v) = graph.nodes[node_id].inputs[i] else {
+                        continue;
+                    };
                     if let Some(def_id) = c {
                         assert!(matches!(graph.nodes[*def_id].op, Operator::NHWC2NCHW));
                         let nhwc_input = graph.nodes[*def_id].inputs[0].unwrap();
                         modifier.replace_input_value_if_without_typecheck(
                             graph,
-                            graph.nodes[node_id].inputs[i].unwrap(),
+                            v,
                             nhwc_input,
                             |id, _| id == node_id,
                         );
                     } else {
-                        let v = graph.nodes[node_id].inputs[i].unwrap();
+                        let v = v;
                         let nchw_ty = graph.get_resolved_tensor_type(v).unwrap();
                         let nhwc_ty = nchw_ty.transpose(&[0, 2, 3, 1]);
                         let reinterp_out = modifier.register_new_value(
@@ -400,14 +403,19 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
                     return;
                 }
 
-                if !self.graph.nodes[node_id].inputs.iter().all(|input| {
-                    self.graph
-                        .get_resolved_tensor_type(input.unwrap())
-                        .unwrap()
-                        .dims
-                        .ndim() ==
-                        4
-                }) {
+                if !self.graph.nodes[node_id]
+                    .inputs
+                    .iter()
+                    .filter_map(|x| x.as_ref())
+                    .all(|input| {
+                        self.graph
+                            .get_resolved_tensor_type(*input)
+                            .unwrap()
+                            .dims
+                            .ndim() ==
+                            4
+                    })
+                {
                     self.memo.insert(node_id, SinkScore::Forbidden);
                     return;
                 }
