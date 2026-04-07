@@ -1004,6 +1004,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "ConstantOfShape" => Ok(Operator::ConstantOfShape(ConstantOfShape::load(
             attributes,
         )?)),
+        "AveragePool" => Ok(Operator::AveragePool(Pooling::load(attributes)?)),
         "Conv" => Ok(Operator::Conv(Conv::load(attributes)?)),
         "Div" => Ok(Operator::Div),
         "Exp" => Ok(Operator::Exp),

@@ -24,6 +24,7 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
                     node.op,
                     Operator::BatchedGemm(_) |
                         Operator::Attention(_) |
+                        Operator::AveragePool(_) |
                         Operator::Conv(_) |
                         Operator::MaxPool(_)
                 )
@@ -35,7 +36,7 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
             match graph.nodes[id].op {
                 Operator::BatchedGemm(_) => self.handle_batched_gemm(graph, modifier, id),
                 Operator::Attention(_) => self.handle_attention(graph, modifier, id),
-                Operator::Conv(_) | Operator::MaxPool(_) => {
+                Operator::AveragePool(_) | Operator::Conv(_) | Operator::MaxPool(_) => {
                     self.handle_conv_pool(graph, modifier, id)
                 }
                 _ => unreachable!(),

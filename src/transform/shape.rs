@@ -274,7 +274,7 @@ pub fn infer_node_output(
             }
             res.push(ResolvedTensorType::new(a.elem_type, output));
         }
-        Operator::MaxPool(ref pooling) => {
+        Operator::AveragePool(ref pooling) | Operator::MaxPool(ref pooling) => {
             let x = &inputs[args::MAXPOOL_DATA];
             let dims = pooling.output_shape(&x.dims);
             res.push(ResolvedTensorType::new(x.elem_type, dims));

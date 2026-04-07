@@ -25,6 +25,12 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::UIntType;
 
+#[derive(Clone, Copy)]
+pub enum PoolMode {
+    Max,
+    Avg,
+}
+
 #[derive(Clone)]
 pub struct FunctionTranslator<'a, 'ctx> {
     pub context: &'ctx Context,
@@ -1403,19 +1409,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
-    // for n, c, oh, ow:
-    //   val = -inf
-    //   for kh, kw:
-    //     ih = oh * stride_h + kh * dilation_h - pad_h
-    //     iw = ow * stride_w + kw * dilation_w - pad_w
-    //     if !oob(ih, iw):
-    //       val = max(val, src[n, c, ih, iw])
-    //   dst[n, c, oh, ow] = val
-    pub fn build_maxpool_nchw(
+    pub fn build_pool_nchw(
         &self,
         dst: &TensorPtr<'ctx>,
         src: &TensorPtr<'ctx>,
         pooling: &operator::Pooling,
+        mode: PoolMode,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         assert_eq!(pooling.kernel_shape.ndim(), 2);
@@ -1448,30 +1447,33 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             _ => unimplemented!(),
         };
         let elem_ty = fp_ty.llvm_type(self.context);
-        let neg_inf = elem_ty
-            .const_float(match fp_ty {
-                FloatType::F32 => f32::NEG_INFINITY as f64,
-                FloatType::F64 => f64::NEG_INFINITY,
-            })
-            .as_basic_value_enum();
+        let init_val = match mode {
+            PoolMode::Avg => elem_ty.const_float(0.0).as_basic_value_enum(),
+            PoolMode::Max => elem_ty
+                .const_float(match fp_ty {
+                    FloatType::F32 => f32::NEG_INFINITY as f64,
+                    FloatType::F64 => f64::NEG_INFINITY,
+                })
+                .as_basic_value_enum(),
+        };
 
         let bb = |name: &str| self.context.append_basic_block(*self.func, name);
-        let hdr_n = bb("mp.n.hdr");
-        let hdr_c = bb("mp.c.hdr");
-        let hdr_oh = bb("mp.oh.hdr");
-        let hdr_ow = bb("mp.ow.hdr");
-        let hdr_kh = bb("mp.kh.hdr");
-        let hdr_kw = bb("mp.kw.hdr");
-        let body = bb("mp.body");
-        let bb_update = bb("mp.update");
-        let latch_kw = bb("mp.kw.latch");
-        let latch_kh = bb("mp.kh.latch");
-        let store_bb = bb("mp.store");
-        let latch_ow = bb("mp.ow.latch");
-        let latch_oh = bb("mp.oh.latch");
-        let latch_c = bb("mp.c.latch");
-        let latch_n = bb("mp.n.latch");
-        let exit = bb("mp.exit");
+        let hdr_n = bb("pool.n.hdr");
+        let hdr_c = bb("pool.c.hdr");
+        let hdr_oh = bb("pool.oh.hdr");
+        let hdr_ow = bb("pool.ow.hdr");
+        let hdr_kh = bb("pool.kh.hdr");
+        let hdr_kw = bb("pool.kw.hdr");
+        let body = bb("pool.body");
+        let bb_update = bb("pool.update");
+        let latch_kw = bb("pool.kw.latch");
+        let latch_kh = bb("pool.kh.latch");
+        let store_bb = bb("pool.store");
+        let latch_ow = bb("pool.ow.latch");
+        let latch_oh = bb("pool.oh.latch");
+        let latch_c = bb("pool.c.latch");
+        let latch_n = bb("pool.n.latch");
+        let exit = bb("pool.exit");
 
         self.builder.position_at_end(entry);
         self.builder.build_unconditional_branch(hdr_n)?;
@@ -1488,20 +1490,20 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let (phi_ow, ind_ow) = self.init_counted_loop(hdr_ow)?;
         self.builder.build_unconditional_branch(hdr_kh)?;
 
-        // Inner loops: kh, kw with max accumulator
         self.builder.position_at_end(hdr_kh);
         let phi_kh = self.builder.build_phi(i64_ty, "ind")?;
         let ind_kh = phi_kh.as_basic_value().into_int_value();
-        let max_acc_kh = self.builder.build_phi(elem_ty, "max_acc")?;
+        let acc_kh = self.builder.build_phi(elem_ty, "acc")?;
+        let cnt_acc_kh = self.builder.build_phi(i64_ty, "cnt_acc")?;
         self.builder.build_unconditional_branch(hdr_kw)?;
 
         self.builder.position_at_end(hdr_kw);
         let phi_kw = self.builder.build_phi(i64_ty, "ind")?;
         let ind_kw = phi_kw.as_basic_value().into_int_value();
-        let max_acc = self.builder.build_phi(elem_ty, "max_acc")?;
+        let acc = self.builder.build_phi(elem_ty, "acc")?;
+        let cnt_acc = self.builder.build_phi(i64_ty, "cnt_acc")?;
         self.builder.build_unconditional_branch(body)?;
 
-        // Body: compute ih, iw, bounds check, update max
         self.builder.position_at_end(body);
         let ih = {
             let a =
@@ -1558,7 +1560,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder
             .build_conditional_branch(oob, latch_kw, bb_update)?;
 
-        // Load src[n, c, ih, iw] and update max
         self.builder.position_at_end(bb_update);
         let src_offset = {
             let o = self.builder.build_int_mul(
@@ -1583,20 +1584,31 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let src_val = self
             .build_load(&src.clone().set_offset(src_offset))?
             .into_float_value();
-        let cur_max = max_acc.as_basic_value().into_float_value();
-        let fmax = self.intrinsics.fmax.get(fp_ty);
-        let new_max = self
-            .build_tail_call(fmax, &[cur_max.into(), src_val.into()], "new_max")?
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_float_value();
+        let cur_acc = acc.as_basic_value().into_float_value();
+        let new_acc = match mode {
+            PoolMode::Avg => self
+                .builder
+                .build_float_add(cur_acc, src_val, "new_acc")?
+                .as_basic_value_enum(),
+            PoolMode::Max => {
+                let fmax = self.intrinsics.fmax.get(fp_ty);
+                self.build_tail_call(fmax, &[cur_acc.into(), src_val.into()], "new_acc")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+        };
+        let cur_cnt = cnt_acc.as_basic_value().into_int_value();
+        let new_cnt = self
+            .builder
+            .build_int_add(cur_cnt, i64_ty.const_int(1, false), "new_cnt")?;
         self.builder.build_unconditional_branch(latch_kw)?;
 
-        // kw latch: merge max_acc from body (update) and body (oob skip)
         self.builder.position_at_end(latch_kw);
-        let merged_max = self.builder.build_phi(elem_ty, "merged_max")?;
-        merged_max.add_incoming(&[(&new_max, bb_update), (&cur_max, body)]);
+        let merged_acc = self.builder.build_phi(elem_ty, "merged_acc")?;
+        merged_acc.add_incoming(&[(&new_acc, bb_update), (&cur_acc, body)]);
+        let merged_cnt = self.builder.build_phi(i64_ty, "merged_cnt")?;
+        merged_cnt.add_incoming(&[(&new_cnt, bb_update), (&cur_cnt, body)]);
         let c = |v: u64| i64_ty.const_int(v, false);
         let ind_kw_next = self.builder.build_int_add(ind_kw, c(1), "next")?;
         let kw_done =
@@ -1605,12 +1617,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder
             .build_conditional_branch(kw_done, latch_kh, hdr_kw)?;
         phi_kw.add_incoming(&[(&i64_ty.const_zero(), hdr_kh), (&ind_kw_next, latch_kw)]);
-        max_acc.add_incoming(&[
-            (&max_acc_kh.as_basic_value(), hdr_kh),
-            (&merged_max.as_basic_value(), latch_kw),
+        acc.add_incoming(&[
+            (&acc_kh.as_basic_value(), hdr_kh),
+            (&merged_acc.as_basic_value(), latch_kw),
+        ]);
+        cnt_acc.add_incoming(&[
+            (&cnt_acc_kh.as_basic_value(), hdr_kh),
+            (&merged_cnt.as_basic_value(), latch_kw),
         ]);
 
-        // kh latch
         self.builder.position_at_end(latch_kh);
         let ind_kh_next = self.builder.build_int_add(ind_kh, c(1), "next")?;
         let kh_done =
@@ -1619,10 +1634,29 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder
             .build_conditional_branch(kh_done, store_bb, hdr_kh)?;
         phi_kh.add_incoming(&[(&i64_ty.const_zero(), hdr_ow), (&ind_kh_next, latch_kh)]);
-        max_acc_kh.add_incoming(&[(&neg_inf, hdr_ow), (&merged_max.as_basic_value(), latch_kh)]);
+        acc_kh.add_incoming(&[
+            (&init_val, hdr_ow),
+            (&merged_acc.as_basic_value(), latch_kh),
+        ]);
+        cnt_acc_kh.add_incoming(&[
+            (&i64_ty.const_zero(), hdr_ow),
+            (&merged_cnt.as_basic_value(), latch_kh),
+        ]);
 
-        // Store dst[n, c, oh, ow] = max_val
         self.builder.position_at_end(store_bb);
+        let final_val = match mode {
+            PoolMode::Avg => {
+                let final_acc = merged_acc.as_basic_value().into_float_value();
+                let final_cnt = merged_cnt.as_basic_value().into_int_value();
+                let cnt_fp = self
+                    .builder
+                    .build_signed_int_to_float(final_cnt, elem_ty, "cnt_fp")?;
+                self.builder
+                    .build_float_div(final_acc, cnt_fp, "avg")?
+                    .as_basic_value_enum()
+            }
+            PoolMode::Max => merged_acc.as_basic_value(),
+        };
         let dst_offset = {
             let o = self.builder.build_int_mul(
                 ind_n,
@@ -1646,10 +1680,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             )?;
             self.builder.build_int_add(o, ind_ow, "dst_off")?
         };
-        self.build_store(
-            &dst.clone().set_offset(dst_offset),
-            merged_max.as_basic_value(),
-        )?;
+        self.build_store(&dst.clone().set_offset(dst_offset), final_val)?;
         self.builder.build_unconditional_branch(latch_ow)?;
 
         self.finalize_counted_loop(phi_ow, hdr_oh, c(w_out), hdr_ow, latch_oh, latch_ow)?;
@@ -1661,21 +1692,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
-    // for n, oh, ow:
-    //   max_vals = [-inf; C]
-    //   for kh, kw:
-    //     ih = oh * stride_h + kh * dilation_h - pad_h
-    //     iw = ow * stride_w + kw * dilation_w - pad_w
-    //     if !oob(ih, iw):
-    //       for c in 0..C:
-    //         max_vals[c] = max(max_vals[c], src[n, ih, iw, c])
-    //   for c in 0..C:
-    //     dst[n, oh, ow, c] = max_vals[c]
-    pub fn build_maxpool_nhwc(
+    pub fn build_pool_nhwc(
         &self,
         dst: &TensorPtr<'ctx>,
         src: &TensorPtr<'ctx>,
         pooling: &operator::Pooling,
+        mode: PoolMode,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         assert_eq!(pooling.kernel_shape.ndim(), 2);
@@ -1709,32 +1731,38 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             _ => unimplemented!(),
         };
         let elem_ty = fp_ty.llvm_type(self.context);
-        let neg_inf_val = match fp_ty {
-            FloatType::F32 => f32::NEG_INFINITY as f64,
-            FloatType::F64 => f64::NEG_INFINITY,
+        let init_float = match mode {
+            PoolMode::Avg => 0.0,
+            PoolMode::Max => match fp_ty {
+                FloatType::F32 => f32::NEG_INFINITY as f64,
+                FloatType::F64 => f64::NEG_INFINITY,
+            },
         };
 
-        let max_vals_ptr =
+        let acc_vals_ptr =
             self.builder
-                .build_array_alloca(elem_ty, i64_ty.const_int(c_in, false), "max_vals")?;
+                .build_array_alloca(elem_ty, i64_ty.const_int(c_in, false), "acc_vals")?;
+        let cnt_ptr = self
+            .builder
+            .build_array_alloca(i64_ty, i64_ty.const_int(1, false), "cnt")?;
 
         let bb = |name: &str| self.context.append_basic_block(*self.func, name);
-        let hdr_n = bb("mp.n.hdr");
-        let hdr_oh = bb("mp.oh.hdr");
-        let hdr_ow = bb("mp.ow.hdr");
-        let init_loop = bb("mp.init");
-        let hdr_kh = bb("mp.kh.hdr");
-        let hdr_kw = bb("mp.kw.hdr");
-        let body = bb("mp.body");
-        let bb_update = bb("mp.update");
-        let update_loop = bb("mp.update_c");
-        let latch_kw = bb("mp.kw.latch");
-        let latch_kh = bb("mp.kh.latch");
-        let store_loop = bb("mp.store_c");
-        let latch_ow = bb("mp.ow.latch");
-        let latch_oh = bb("mp.oh.latch");
-        let latch_n = bb("mp.n.latch");
-        let exit = bb("mp.exit");
+        let hdr_n = bb("pool.n.hdr");
+        let hdr_oh = bb("pool.oh.hdr");
+        let hdr_ow = bb("pool.ow.hdr");
+        let init_loop = bb("pool.init");
+        let hdr_kh = bb("pool.kh.hdr");
+        let hdr_kw = bb("pool.kw.hdr");
+        let body = bb("pool.body");
+        let bb_update = bb("pool.update");
+        let update_loop = bb("pool.update_c");
+        let latch_kw = bb("pool.kw.latch");
+        let latch_kh = bb("pool.kh.latch");
+        let store_loop = bb("pool.store_c");
+        let latch_ow = bb("pool.ow.latch");
+        let latch_oh = bb("pool.oh.latch");
+        let latch_n = bb("pool.n.latch");
+        let exit = bb("pool.exit");
 
         let c = |v: u64| i64_ty.const_int(v, false);
 
@@ -1753,14 +1781,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let (phi_init, ind_init) = self.init_counted_loop(init_loop)?;
         let gep = unsafe {
             self.builder
-                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_init], "max_vals_gep")?
+                .build_in_bounds_gep(elem_ty, acc_vals_ptr, &[ind_init], "acc_vals_gep")?
         };
         self.builder
-            .build_store(gep, elem_ty.const_float(neg_inf_val))?;
-        let init_done = bb("mp.init_done");
+            .build_store(gep, elem_ty.const_float(init_float))?;
+        let init_done = bb("pool.init_done");
         self.finalize_counted_loop(phi_init, hdr_ow, c(c_in), init_loop, init_done, init_loop)?;
 
         self.builder.position_at_end(init_done);
+        self.builder.build_store(cnt_ptr, i64_ty.const_zero())?;
         self.builder.build_unconditional_branch(hdr_kh)?;
 
         let (phi_kh, ind_kh) = self.init_counted_loop(hdr_kh)?;
@@ -1815,6 +1844,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_conditional_branch(oob, latch_kw, bb_update)?;
 
         self.builder.position_at_end(bb_update);
+        let cur_cnt = self
+            .builder
+            .build_load(i64_ty, cnt_ptr, "cur_cnt")?
+            .into_int_value();
+        let new_cnt = self.builder.build_int_add(cur_cnt, c(1), "new_cnt")?;
+        self.builder.build_store(cnt_ptr, new_cnt)?;
         self.builder.build_unconditional_branch(update_loop)?;
 
         let (phi_uc, ind_uc) = self.init_counted_loop(update_loop)?;
@@ -1839,19 +1874,26 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .into_float_value();
         let gep = unsafe {
             self.builder
-                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_uc], "max_gep")?
+                .build_in_bounds_gep(elem_ty, acc_vals_ptr, &[ind_uc], "acc_gep")?
         };
-        let cur_max = self
+        let cur_acc = self
             .builder
-            .build_load(elem_ty, gep, "cur_max")?
+            .build_load(elem_ty, gep, "cur_acc")?
             .into_float_value();
-        let fmax = self.intrinsics.fmax.get(fp_ty);
-        let new_max = self
-            .build_tail_call(fmax, &[cur_max.into(), src_val.into()], "new_max")?
-            .try_as_basic_value()
-            .left()
-            .unwrap();
-        self.builder.build_store(gep, new_max)?;
+        let new_acc = match mode {
+            PoolMode::Avg => self
+                .builder
+                .build_float_add(cur_acc, src_val, "new_acc")?
+                .as_basic_value_enum(),
+            PoolMode::Max => {
+                let fmax = self.intrinsics.fmax.get(fp_ty);
+                self.build_tail_call(fmax, &[cur_acc.into(), src_val.into()], "new_acc")?
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+            }
+        };
+        self.builder.build_store(gep, new_acc)?;
         self.finalize_counted_loop(
             phi_uc,
             bb_update,
@@ -1868,9 +1910,27 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let (phi_sc, ind_sc) = self.init_counted_loop(store_loop)?;
         let gep = unsafe {
             self.builder
-                .build_in_bounds_gep(elem_ty, max_vals_ptr, &[ind_sc], "store_gep")?
+                .build_in_bounds_gep(elem_ty, acc_vals_ptr, &[ind_sc], "store_gep")?
         };
-        let val = self.builder.build_load(elem_ty, gep, "val")?;
+        let val = self
+            .builder
+            .build_load(elem_ty, gep, "val")?
+            .into_float_value();
+        let final_val = match mode {
+            PoolMode::Avg => {
+                let final_cnt = self
+                    .builder
+                    .build_load(i64_ty, cnt_ptr, "final_cnt")?
+                    .into_int_value();
+                let cnt_fp = self
+                    .builder
+                    .build_signed_int_to_float(final_cnt, elem_ty, "cnt_fp")?;
+                self.builder
+                    .build_float_div(val, cnt_fp, "avg")?
+                    .as_basic_value_enum()
+            }
+            PoolMode::Max => val.as_basic_value_enum(),
+        };
         let dst_offset = {
             let o = self
                 .builder
@@ -1888,7 +1948,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             )?;
             self.builder.build_int_add(o, ind_sc, "dst_off")?
         };
-        self.build_store(&dst.clone().set_offset(dst_offset), val)?;
+        self.build_store(&dst.clone().set_offset(dst_offset), final_val)?;
         self.finalize_counted_loop(phi_sc, latch_kh, c(c_in), store_loop, latch_ow, store_loop)?;
 
         self.finalize_counted_loop(phi_ow, hdr_oh, c(w_out), hdr_ow, latch_oh, latch_ow)?;

@@ -250,7 +250,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
 
         Operator::LeakyReLU(l) => vec![attr_float("alpha", l.alpha as f32)],
 
-        Operator::MaxPool(p) => {
+        Operator::AveragePool(p) | Operator::MaxPool(p) => {
             let mut attrs = vec![];
             if p.ceil_mode {
                 attrs.push(attr_int("ceil_mode", 1));

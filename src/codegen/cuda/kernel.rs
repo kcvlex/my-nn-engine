@@ -1278,14 +1278,45 @@ impl<'sched> CopyBuilder<'sched> {
     }
 }
 
-pub struct MaxPoolBuilder<'sched> {
+pub struct PoolBuilder<'sched> {
     ctx: BuilderContext<'sched>,
+    is_max: bool,
 }
 
-impl<'sched> MaxPoolBuilder<'sched> {
+impl<'sched> PoolBuilder<'sched> {
     pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        let kernel = &schedule.kernels[decl.kernel_id];
+        let is_max = matches!(
+            &kernel.body,
+            KernelBody::Opaque(Opaque {
+                op: Operator::MaxPool(_)
+            })
+        );
         Self {
             ctx: BuilderContext::new(schedule, decl),
+            is_max,
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let pool = match &kernel.body {
+            KernelBody::Opaque(Opaque {
+                op: Operator::MaxPool(pool),
+            }) => pool,
+            KernelBody::Opaque(Opaque {
+                op: Operator::AveragePool(pool),
+            }) => pool,
+            _ => panic!("Expected MaxPool or AveragePool operator"),
+        };
+
+        if pool.kernel_shape.ndim() != 2 {
+            unimplemented!("Only 2D pooling is supported");
+        }
+
+        match pool.layout {
+            operator::Layout::NCHW => self.build_nchw(pool),
+            operator::Layout::NHWC => self.build_nhwc(pool),
         }
     }
 
@@ -1325,8 +1356,9 @@ impl<'sched> MaxPoolBuilder<'sched> {
         let out = KernelVar::Value(output);
         let decl = self.ctx.decl.decl();
 
-        Ok(format!(
-            "
+        if self.is_max {
+            Ok(format!(
+                "
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
@@ -1359,25 +1391,45 @@ impl<'sched> MaxPoolBuilder<'sched> {
     {out}[{gid}] = max_val;
 }}
 "
-        ))
-    }
+            ))
+        } else {
+            Ok(format!(
+                "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
 
-    pub fn build(&mut self) -> Result<String, BuildError> {
-        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::Opaque(Opaque {
-            op: Operator::MaxPool(pool),
-        }) = &kernel.body
-        else {
-            panic!("Expected MaxPool operator");
-        };
+    int o_w_idx = {gid} % {o_width};
+    int o_h_idx = ({gid} / {o_width}) % {o_height};
+    int o_c_idx = ({gid} / ({o_width} * {o_height})) % {channels};
+    int o_b_idx = {gid} / ({o_width} * {o_height} * {channels});
 
-        if pool.kernel_shape.ndim() != 2 {
-            unimplemented!("Only 2D max pooling is supported");
-        }
+    int i_w_begin = o_w_idx * {stride_w} - {pad_w};
+    int i_h_begin = o_h_idx * {stride_h} - {pad_h};
+    int i_w_end = i_w_begin + {kernel_w};
+    int i_h_end = i_h_begin + {kernel_h};
 
-        match pool.layout {
-            operator::Layout::NCHW => self.build_nchw(pool),
-            operator::Layout::NHWC => self.build_nhwc(pool),
+    {ty} sum_val = 0;
+    int cnt = 0;
+    for (int h = i_h_begin; h < i_h_end; h++) {{
+        for (int w = i_w_begin; w < i_w_end; w++) {{
+            if (0 <= h && h < {height} && 0 <= w && w < {width}) {{
+                int in_idx = o_b_idx * {channels};
+                in_idx += o_c_idx;
+                in_idx *= {height};
+                in_idx += h;
+                in_idx *= {width};
+                in_idx += w;
+                sum_val += {in_}[in_idx];
+                cnt++;
+            }}
+        }}
+    }}
+
+    {out}[{gid}] = sum_val / ({ty})cnt;
+}}
+"
+            ))
         }
     }
 
@@ -1416,8 +1468,9 @@ impl<'sched> MaxPoolBuilder<'sched> {
         let out = KernelVar::Value(output);
         let decl = self.ctx.decl.decl();
 
-        Ok(format!(
-            "
+        if self.is_max {
+            Ok(format!(
+                "
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
@@ -1448,7 +1501,44 @@ impl<'sched> MaxPoolBuilder<'sched> {
     {out}[{gid}] = max_val;
 }}
 "
-        ))
+            ))
+        } else {
+            Ok(format!(
+                "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+
+    int o_c_idx = {gid} % {channels};
+    int o_w_idx = ({gid} / {channels}) % {o_width};
+    int o_h_idx = ({gid} / ({channels} * {o_width})) % {o_height};
+    int o_b_idx = {gid} / ({channels} * {o_width} * {o_height});
+
+    int i_w_begin = o_w_idx * {stride_w} - {pad_w};
+    int i_h_begin = o_h_idx * {stride_h} - {pad_h};
+    int i_w_end = i_w_begin + {kernel_w};
+    int i_h_end = i_h_begin + {kernel_h};
+
+    {ty} sum_val = 0;
+    int cnt = 0;
+    for (int h = i_h_begin; h < i_h_end; h++) {{
+        for (int w = i_w_begin; w < i_w_end; w++) {{
+            if (0 <= h && h < {height} && 0 <= w && w < {width}) {{
+                int in_idx = o_b_idx * ({height} * {width} * {channels})
+                           + h * ({width} * {channels})
+                           + w * {channels}
+                           + o_c_idx;
+                sum_val += {in_}[in_idx];
+                cnt++;
+            }}
+        }}
+    }}
+
+    {out}[{gid}] = sum_val / ({ty})cnt;
+}}
+"
+            ))
+        }
     }
 }
 

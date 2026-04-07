@@ -43,6 +43,7 @@ impl TensorIndex {
 pub enum Operator {
     Add,
     Attention(Attention),
+    AveragePool(Pooling),
     BatchedGemm(BatchedGemm),
     BatchNormalization(BatchNormalization),
     Cast(Cast),
@@ -756,6 +757,7 @@ impl Operator {
         match self {
             Operator::Add => "Add",
             Operator::Attention(_) => "Attention",
+            Operator::AveragePool(_) => "AveragePool",
             Operator::BatchedGemm(_) => "BatchedGemm",
             Operator::BatchNormalization(_) => "BatchNormalization",
             Operator::Cast(_) => "Cast",
@@ -841,6 +843,7 @@ impl Operator {
             Operator::Unsqueeze(_) => OperatorType::Bijective,
 
             Operator::Attention(_) |
+            Operator::AveragePool(_) |
             Operator::BatchedGemm(_) |
             Operator::Concat(_) |
             Operator::Constant(_) |
@@ -913,6 +916,7 @@ pub mod args {
     pub const MATMUL_LHS: usize = 0;
     pub const MATMUL_RHS: usize = 1;
 
+    pub const AVGPOOL_DATA: usize = 0;
     pub const MAXPOOL_DATA: usize = 0;
 
     pub const TRANSPOSE_DATA: usize = 0;

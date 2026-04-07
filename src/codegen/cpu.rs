@@ -851,14 +851,21 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Gemm(ref gemm) => {
                     translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
                 }
-                Operator::MaxPool(ref pooling) => match pooling.layout {
-                    Layout::NCHW => {
-                        translator.build_maxpool_nchw(&ptrs[0], &ptrs[1], pooling, entry)
+                Operator::AveragePool(ref pooling) | Operator::MaxPool(ref pooling) => {
+                    let mode = match op {
+                        Operator::AveragePool(_) => PoolMode::Avg,
+                        Operator::MaxPool(_) => PoolMode::Max,
+                        _ => unreachable!(),
+                    };
+                    match pooling.layout {
+                        Layout::NCHW => {
+                            translator.build_pool_nchw(&ptrs[0], &ptrs[1], pooling, mode, entry)
+                        }
+                        Layout::NHWC => {
+                            translator.build_pool_nhwc(&ptrs[0], &ptrs[1], pooling, mode, entry)
+                        }
                     }
-                    Layout::NHWC => {
-                        translator.build_maxpool_nhwc(&ptrs[0], &ptrs[1], pooling, entry)
-                    }
-                },
+                }
                 Operator::OneHot(ref one_hot) => {
                     translator.build_one_hot(ptrs[0].clone(), ptrs[1].clone(), entry, one_hot)
                 }

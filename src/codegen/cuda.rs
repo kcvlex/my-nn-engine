@@ -25,8 +25,8 @@ use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
-use crate::codegen::cuda::kernel::MaxPoolBuilder;
 use crate::codegen::cuda::kernel::OneHotBuilder;
+use crate::codegen::cuda::kernel::PoolBuilder;
 use crate::codegen::cuda::kernel::ReduceMatrixBuilder;
 use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
@@ -1367,13 +1367,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                Operator::MaxPool(_) => {
+                Operator::AveragePool(_) | Operator::MaxPool(_) => {
                     let size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
                         .dims
                         .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        MaxPoolBuilder::new(sched, decl).build()
+                        PoolBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
                         create_launch_kernel(kernel::CUDAKernel::GeneratedKernel(generated), size)?

@@ -92,15 +92,18 @@ impl NHWC2NCHWSinkAndFold {
                 );
             }
 
-            Operator::MaxPool(_) => {
+            Operator::AveragePool(_) | Operator::MaxPool(_) => {
                 assert!(matches!(
                     graph.nodes[cands[0].unwrap()].op,
                     Operator::NHWC2NCHW
                 ));
                 let cur_input = graph.nodes[node_id].inputs[0].unwrap();
                 let new_input = graph.nodes[cands[0].unwrap()].inputs[0].unwrap();
+                let op_name = graph.nodes[node_id].op.name().to_owned();
                 let pooling = match &mut graph.nodes[node_id].op {
-                    Operator::MaxPool(ref mut pooling) => pooling,
+                    Operator::AveragePool(ref mut pooling) | Operator::MaxPool(ref mut pooling) => {
+                        pooling
+                    }
                     _ => unreachable!(),
                 };
                 assert!(pooling.layout == Layout::NCHW);
@@ -119,7 +122,7 @@ impl NHWC2NCHWSinkAndFold {
 
                 let nchw_output = modifier.register_new_value(
                     graph,
-                    format!("MaxPool_NHWC2NCHW_{}", output.index()),
+                    format!("{}_NHWC2NCHW_{}", op_name, output.index()),
                     old_ty,
                 );
                 let nhwc2nchw_id = modifier.register_new_node(
@@ -127,7 +130,7 @@ impl NHWC2NCHWSinkAndFold {
                     Node {
                         inputs: vec![Some(output)],
                         outputs: vec![nchw_output],
-                        name: format!("MaxPool_NHWC2NCHW_{}", output.index()),
+                        name: format!("{}_NHWC2NCHW_{}", op_name, output.index()),
                         op: Operator::NHWC2NCHW,
                         meta: NodeMeta::default(),
                     },
@@ -378,7 +381,7 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
                 self.memo.insert(node_id, SinkScore::Benefit);
             }
 
-            Operator::MaxPool(_) => {
+            Operator::AveragePool(_) | Operator::MaxPool(_) => {
                 self.memo.insert(node_id, SinkScore::Benefit);
             }
 
