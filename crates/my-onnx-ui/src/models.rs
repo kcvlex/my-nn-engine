@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use my_onnx::options::Options;
 use my_onnx::options::Target;
@@ -40,7 +41,7 @@ impl ModelId {
 }
 
 pub struct ModelRegistry {
-    models: HashMap<(ModelId, Target), Arc<Session>>,
+    models: HashMap<(ModelId, Target), Arc<Mutex<Session>>>,
     models_dir: PathBuf,
 }
 
@@ -61,7 +62,7 @@ impl ModelRegistry {
         model_id: ModelId,
         target: Target,
         inputs: &[Tensor],
-    ) -> Result<Arc<Session>, String> {
+    ) -> Result<Arc<Mutex<Session>>, String> {
         // TODO: Type check.
         if let Some(session) = self.models.get(&(model_id, target)) {
             return Ok(session.clone());
@@ -80,7 +81,7 @@ impl ModelRegistry {
         let session = Session::new(&model_path, Some(types.as_slice()), &options)
             .map_err(|e| format!("Failed to load {}: {:?}", model_id.display_name(), e))?;
 
-        let session = Arc::new(session);
+        let session = Arc::new(Mutex::new(session));
         self.models.insert((model_id, target), session.clone());
         log::info!("Loaded {} successfully", model_id.display_name());
         Ok(session)

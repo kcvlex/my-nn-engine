@@ -94,6 +94,8 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         // Run inference
         let start = std::time::Instant::now();
         let outputs = session
+            .lock()
+            .map_err(|e| Status::internal(format!("Session lock failed: {:?}", e)))?
             .run(&input_tensors)
             .map_err(|e| Status::internal(format!("Inference failed: {:?}", e)))?;
         let inference_time_ms = start.elapsed().as_secs_f64() * 1000.0;
