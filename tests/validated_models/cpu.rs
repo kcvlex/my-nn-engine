@@ -48,3 +48,13 @@ fn test_gpt2() -> Result {
 fn test_mobilenetv2() -> Result {
     run_test("mobilenetv2-12", 1e-3, (1, 1), None)
 }
+
+#[test]
+fn test_efficientnet_lite4_11() -> Result {
+    run_test(
+        "efficientnet-lite4-11",
+        1e-3,
+        (1, 1),
+        Some("efficientnet-lite4.onnx"),
+    )
+}

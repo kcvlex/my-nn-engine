@@ -12,9 +12,11 @@ RESNET152_V2_7_SHA256 = 78b507483050a427870a264c398d121f44b92d69c8ca0c53217eb513
 BERTSQUAD_12_SHA256 = 4cd041010ab4ad11c23c0eb7f056c4e4286a894b6d712ef09445b955763fb1b1
 YOLOV4_SHA256 = 7d06db57b6b4fff4f75dd3bd16f29b32faec4552d763869d5a3c37d25542cbb2
 GPT2_10_SHA256 = 0c9b81350c95cf2f40e8e72f76792ef6b3c73894beee571171739079330aad53
+MOBILENETV2_12_SHA256 = 5f83b422708a708b592a5fd56d84710038511789df3ae510b84123930c37762d
+EFFICIENTNET_LITE4_11_SHA256 = 1914de663a575f0ec015b7a33c335b363e910f64cc91d08e66587ea877fd9d7b
 
 .PHONY: all
-all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4 gpt2-10 synset.txt
+all: mnist-12 resnet18-v2-7 resnet152-v2-7 bertsquad-12 yolov4 gpt2-10 mobilenetv2-12 efficientnet-lite4-11 synset.txt
 
 mnist-12: mnist-12.tar.gz
 	echo "$(MNIST_12_SHA256)  $<" | sha256sum -c -
@@ -57,6 +59,21 @@ gpt2-10: gpt2-10.tar.gz
 
 gpt2-10.tar.gz:
 	$(WGET) -O $@ $(TEXT)/gpt-2/model/$@
+
+mobilenetv2-12: mobilenetv2-12.tar.gz
+	echo "$(MOBILENETV2_12_SHA256)  $<" | sha256sum -c -
+	tar -xvf $<
+
+mobilenetv2-12.tar.gz:
+	$(WGET) -O $@ $(CLASSIFICATION)/mobilenet/model/$@
+
+efficientnet-lite4-11: efficientnet-lite4-11.tar.gz
+	echo "$(EFFICIENTNET_LITE4_11_SHA256)  $<" | sha256sum -c -
+	tar -xvf $<
+	mv efficientnet-lite4 $@
+
+efficientnet-lite4-11.tar.gz:
+	$(WGET) -O $@ $(CLASSIFICATION)/efficientnet-lite4/model/$@
 
 synset.txt:
 	$(WGET) -O $@ $(CLASSIFICATION)/$@

@@ -21,7 +21,7 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
         with:
-          models: mnist-12 resnet18-v2-7 resnet152-v2-7 mobilenetv2-12 bertsquad-12 yolov4 gpt2-10
+          models: mnist-12 resnet18-v2-7 resnet152-v2-7 mobilenetv2-12 efficientnet-lite4-11 bertsquad-12 yolov4 gpt2-10
 
       - name: Build (CPU-only)
         run: cargo build --no-default-features --verbose

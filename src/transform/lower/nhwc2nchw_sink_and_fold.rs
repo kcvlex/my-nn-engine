@@ -7,6 +7,7 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
 use crate::onnx::utils::simple_topological_order;
+use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::TensorType;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
@@ -146,6 +147,90 @@ impl NHWC2NCHWSinkAndFold {
 
             Operator::NHWC2NCHW => {
                 assert!(cands.is_empty());
+            }
+
+            Operator::Reinterpret(Reinterpret { ref ops }) => {
+                let def_id = cands[0].unwrap();
+                assert!(matches!(graph.nodes[def_id].op, Operator::NHWC2NCHW));
+
+                let cur_input = graph.nodes[node_id].inputs[0].unwrap();
+                let new_input = graph.nodes[def_id].inputs[0].unwrap();
+
+                let mut new_ops = vec![ReinterpretType::Transpose(Transpose {
+                    perm: Some(vec![0, 3, 1, 2]),
+                })];
+                new_ops.extend(ops.clone());
+
+                let output = graph.nodes[node_id].outputs[0];
+                let output_ty = graph.get_resolved_tensor_type(output).unwrap();
+
+                if output_ty.dims.ndim() == 4 {
+                    new_ops.push(ReinterpretType::Transpose(Transpose {
+                        perm: Some(vec![0, 2, 3, 1]),
+                    }));
+
+                    let old_ty = output_ty.clone();
+                    let nhwc_ty = old_ty.transpose(&[0, 2, 3, 1]).contiguous();
+                    graph.values[output].ty = Some(TensorType::Resolved(nhwc_ty));
+
+                    let nchw_output = modifier.register_new_value(
+                        graph,
+                        format!("Reinterpret_NHWC2NCHW_{}", output.index()),
+                        old_ty,
+                    );
+                    let nhwc2nchw_id = modifier.register_new_node(
+                        graph,
+                        Node {
+                            inputs: vec![Some(output)],
+                            outputs: vec![nchw_output],
+                            name: format!("Reinterpret_NHWC2NCHW_{}", output.index()),
+                            op: Operator::NHWC2NCHW,
+                            meta: NodeMeta::default(),
+                        },
+                    );
+                    marked.insert(nhwc2nchw_id);
+                    modifier.replace_input_value_if_without_typecheck(
+                        graph,
+                        output,
+                        nchw_output,
+                        |id, _| id != nhwc2nchw_id && id != node_id,
+                    );
+                }
+
+                {
+                    let input_ty = graph.get_resolved_tensor_type(new_input).unwrap().clone();
+                    let mut ty = input_ty;
+                    for op in new_ops.iter() {
+                        ty = match op {
+                            ReinterpretType::Transpose(ref perm) => {
+                                let perm = perm.perm(ty.dims.ndim()).unwrap();
+                                ty.transpose(&perm)
+                            }
+                            ReinterpretType::Reshape {
+                                ref before,
+                                ref after,
+                            } => {
+                                assert_eq!(
+                                    ty.dims.size(),
+                                    before.iter().product::<usize>(),
+                                    "Reshape before dims mismatch after NHWC2NCHW sink"
+                                );
+                                ty.try_reshape(&ResolvedTensorDims::new(after)).unwrap()
+                            }
+                            ReinterpretType::Broadcast { ref after, .. } => {
+                                ty.broadcast(&ResolvedTensorDims::new(after))
+                            }
+                        };
+                    }
+                }
+
+                graph.nodes[node_id].op = Operator::Reinterpret(Reinterpret { ops: new_ops });
+                modifier.replace_input_value_if_without_typecheck(
+                    graph,
+                    cur_input,
+                    new_input,
+                    |id, _| id == node_id,
+                );
             }
 
             op => {
@@ -401,7 +486,7 @@ impl<'a, T: GraphOp> SinkMarker<'a, T> {
             }
 
             op => {
-                if !op.is_elementwise() {
+                if !op.is_elementwise() && !matches!(op, Operator::Reinterpret(_)) {
                     self.memo.insert(node_id, SinkScore::Forbidden);
                     return;
                 }

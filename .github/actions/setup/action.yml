@@ -75,6 +75,7 @@ runs:
             exit 1
           fi
 
+          local extract_name=$(jq -r --arg n "$name" '.models[$n].extract_name // empty' "$MANIFEST")
           local url="${REPO}/raw/${COMMIT}/${path}"
 
           if [ ! -f "${name}.tar.gz" ]; then
@@ -94,6 +95,9 @@ runs:
           if [ ! -d "$name" ]; then
             echo "Extracting $name..."
             tar -xzf "${name}.tar.gz"
+            if [ -n "$extract_name" ] && [ "$extract_name" != "$name" ]; then
+              mv "$extract_name" "$name"
+            fi
           else
             echo "$name directory already exists, skipping extraction..."
           fi

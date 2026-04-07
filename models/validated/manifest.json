@@ -29,6 +29,11 @@
     "mobilenetv2-12": {
       "path": "validated/vision/classification/mobilenet/model/mobilenetv2-12.tar.gz",
       "sha256": "5f83b422708a708b592a5fd56d84710038511789df3ae510b84123930c37762d"
+    },
+    "efficientnet-lite4-11": {
+      "path": "validated/vision/classification/efficientnet-lite4/model/efficientnet-lite4-11.tar.gz",
+      "sha256": "1914de663a575f0ec015b7a33c335b363e910f64cc91d08e66587ea877fd9d7b",
+      "extract_name": "efficientnet-lite4"
     }
   }
 }

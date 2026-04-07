@@ -71,18 +71,26 @@ pub fn run_validated_model(
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
         .join(model);
-    let data_dir = root_dir.join("test_data_set_0");
     let model_path = root_dir.join(model_filename.unwrap_or(format!("{model}.onnx").as_str()));
 
+    let data_dirs: Vec<_> = (0..)
+        .map(|i| root_dir.join(format!("test_data_set_{i}")))
+        .take_while(|p| p.exists())
+        .collect();
+    assert!(
+        !data_dirs.is_empty(),
+        "No test_data_set_* found for {model}"
+    );
+
     let (num_inputs, num_outputs) = nums;
-    let inputs = (0..num_inputs)
+
+    let first_inputs = (0..num_inputs)
         .map(|i| {
-            Tensor::load_from_path(data_dir.join(format!("input_{}.pb", i)))
+            Tensor::load_from_path(data_dirs[0].join(format!("input_{i}.pb")))
                 .map_err(SessionError::ModelLoadError)
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    let input_types = inputs
+    let input_types = first_inputs
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
@@ -91,20 +99,33 @@ pub fn run_validated_model(
         Some(&input_types),
         &Options::builder().target(target).build(),
     )?;
-
     let _guard = cuda_lock(target);
-    let outputs = session.run(&inputs)?;
-    let expected = (0..num_outputs)
-        .map(|i| {
-            Tensor::load_from_path(data_dir.join(format!("output_{}.pb", i)))
-                .map_err(SessionError::ModelLoadError)
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for (output, expected) in outputs.iter().zip(expected.iter()) {
-        assert!(
-            output.eq_with_epsilon(expected, epsilon, CompPolicy::Either),
-            "Output mismatch (epsilon={epsilon})",
-        );
+
+    for (set_idx, data_dir) in data_dirs.iter().enumerate() {
+        let inputs = if set_idx == 0 {
+            first_inputs.clone()
+        } else {
+            (0..num_inputs)
+                .map(|i| {
+                    Tensor::load_from_path(data_dir.join(format!("input_{i}.pb")))
+                        .map_err(SessionError::ModelLoadError)
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        let outputs = session.run(&inputs)?;
+        let expected = (0..num_outputs)
+            .map(|i| {
+                Tensor::load_from_path(data_dir.join(format!("output_{i}.pb")))
+                    .map_err(SessionError::ModelLoadError)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (output, expected) in outputs.iter().zip(expected.iter()) {
+            assert!(
+                output.eq_with_epsilon(expected, epsilon, CompPolicy::Either),
+                "Output mismatch in test_data_set_{set_idx} (epsilon={epsilon})",
+            );
+        }
     }
     Ok(())
 }
