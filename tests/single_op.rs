@@ -575,6 +575,19 @@ fn depthwise_conv() -> TestResult {
 }
 
 #[test]
+fn depthwise_conv_bias() -> TestResult {
+    with_all_sessions_and_tensors(
+        "depthwise_conv_bias",
+        (1, 1),
+        |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn maxpool() -> TestResult {
     with_all_sessions("maxpool.onnx", |session| {
         let (input, orig) = make_range_tensor!(f32, 1, 3, 8, 8)?;

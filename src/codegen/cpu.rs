@@ -909,8 +909,16 @@ impl<'ll> CodeGen<'ll, '_> {
                         .get(args::CONV_BIAS)
                         .and_then(|x| *x)
                         .map(|i| &ptrs[i]);
-                    let workspace = &ptrs[input_ptrs[args::CONV_WORKSPACE].unwrap()];
-                    translator.build_conv(&ptrs[0], data, weight, bias, workspace, conv, entry)
+                    if conv.group > 1 {
+                        assert!(
+                            conv.group == weight.ty.dims[0],
+                            "Only depthwise (group=C_out) or group=1 Conv supported on CPU"
+                        );
+                        translator.build_depthwise_conv(&ptrs[0], data, weight, bias, conv, entry)
+                    } else {
+                        let workspace = &ptrs[input_ptrs[args::CONV_WORKSPACE].unwrap()];
+                        translator.build_conv(&ptrs[0], data, weight, bias, workspace, conv, entry)
+                    }
                 }
                 Operator::Attention(_) => panic!(),
                 Operator::BatchedGemm(ref gemm) => {

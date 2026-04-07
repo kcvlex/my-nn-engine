@@ -629,9 +629,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let kh = im2col.one_kernel_shape[0] as u64;
         let kw = im2col.one_kernel_shape[1] as u64;
         let c_in = im2col.channel as u64;
-        let (h_in, w_in) = match layout {
-            operator::Layout::NCHW => (src.ty.dims[2] as u64, src.ty.dims[3] as u64),
-            operator::Layout::NHWC => (src.ty.dims[1] as u64, src.ty.dims[2] as u64),
+        let (h_in, w_in, src_c_stride) = match layout {
+            operator::Layout::NCHW => (src.ty.dims[2] as u64, src.ty.dims[3] as u64, c_in),
+            operator::Layout::NHWC => (
+                src.ty.dims[1] as u64,
+                src.ty.dims[2] as u64,
+                src.ty.dims[3] as u64,
+            ),
         };
         let stride_h = im2col.strides[0] as u64;
         let stride_w = im2col.strides[1] as u64;
@@ -802,19 +806,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             operator::Layout::NHWC => {
                 let o = self.builder.build_int_mul(
                     ind_n,
-                    i64_ty.const_int(h_in * w_in * c_in, false),
+                    i64_ty.const_int(h_in * w_in * src_c_stride, false),
                     "so_n",
                 )?;
                 let o = self.builder.build_int_add(
                     o,
-                    self.builder
-                        .build_int_mul(ih, i64_ty.const_int(w_in * c_in, false), "so_h")?,
+                    self.builder.build_int_mul(
+                        ih,
+                        i64_ty.const_int(w_in * src_c_stride, false),
+                        "so_h",
+                    )?,
                     "so_nh",
                 )?;
                 let o = self.builder.build_int_add(
                     o,
-                    self.builder
-                        .build_int_mul(iw, i64_ty.const_int(c_in, false), "so_w")?,
+                    self.builder.build_int_mul(
+                        iw,
+                        i64_ty.const_int(src_c_stride, false),
+                        "so_w",
+                    )?,
                     "so_nhw",
                 )?;
                 self.builder.build_int_add(o, ind_c, "src_off")?
@@ -879,19 +889,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
-    /// for g in 0..groups:
-    ///   im2col(src[g*src_stride..], workspace[0..M*K])
-    ///   if bias:
-    ///     broadcast_copy(bias[g*Cout_g..], dst[g*M*Cout_g..])
-    ///     gemm(dst[g*M*Cout_g..] = workspace * weight[g]^T + dst)  // beta=1
-    ///   else:
-    ///     gemm(dst[g*M*Cout_g..] = workspace * weight[g]^T)        // beta=0
-    ///   if NCHW:
-    ///     for n in 0..N:
-    ///       copy dst[n*H*W*Cout_g..] to workspace  // save HWC
-    ///       for c in 0..Cout_g:
-    ///         for hw in 0..H*W:
-    ///           dst[n*Cout_g*H*W + c*H*W + hw] = workspace[hw*Cout_g + c]
+    /// groups=1 only:
+    ///   im2col(src, workspace)
+    ///   if bias: broadcast_copy(bias, dst); gemm(dst = workspace * weight^T + dst)
+    ///   else: gemm(dst = workspace * weight^T)
+    ///   if NCHW: transpose dst [N,H,W,C] -> [N,C,H,W] via workspace
     #[allow(clippy::too_many_arguments)]
     pub fn build_conv(
         &self,
@@ -903,10 +905,10 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         conv: &operator::Conv,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(conv.group == 1);
         let i64_ty = self.context.i64_type();
-        let groups = conv.group;
-        let c_in_per_group = weight.ty.dims[1];
-        let c_out_per_group = weight.ty.dims[0] / groups;
+        let c_in = weight.ty.dims[1];
+        let c_out = weight.ty.dims[0];
         let kh = conv.kernel_shape[0];
         let kw = conv.kernel_shape[1];
 
@@ -919,13 +921,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let h_out = output_shape[h_out];
         let w_out = output_shape[w_out];
         let m = n_batch * h_out * w_out;
-        let k = c_in_per_group * kh * kw;
+        let k = c_in * kh * kw;
 
         let im2col_op = Im2Col {
             nbatch: n_batch,
             one_fm_shape: ResolvedTensorDims::new(&[h_out, w_out]),
             pad: conv.pad.clone(),
-            channel: c_in_per_group,
+            channel: c_in,
             dilations: conv.dilations.clone(),
             one_kernel_shape: ResolvedTensorDims::new(&[kh, kw]),
             strides: conv.strides.clone(),
@@ -934,123 +936,62 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
 
         let bb = |name: &str| self.context.append_basic_block(*self.func, name);
-        let group_entry = bb("conv.group.entry");
-        let group_latch = bb("conv.group.latch");
-        let im2col_entry = bb("conv.im2col.entry");
-        let gemm_body = bb("conv.gemm.body");
-        let exit = bb("conv.exit");
 
-        self.builder.position_at_end(entry);
-        self.builder.build_unconditional_branch(group_entry)?;
-
-        self.builder.position_at_end(group_entry);
-        let (phi_g, ind_g) = self.init_counted_loop(group_entry)?;
-        self.builder.build_unconditional_branch(im2col_entry)?;
-
-        self.builder.position_at_end(im2col_entry);
         let ty = ResolvedTensorType::new(src.ty.elem_type, ResolvedTensorDims::new(&[m, k]));
         let im2col_ptr = TensorPtr {
             ptr: workspace.ptr,
             ty,
             offset: i64_ty.const_zero(),
-            name: "conv_gemm_dst".to_string(),
+            name: "conv_im2col".to_string(),
         };
-        let src_group_offset = match conv.input_layout {
-            Layout::NCHW => src.ty.stride(1) * c_in_per_group,
-            Layout::NHWC => c_in_per_group,
-        };
-        let offset = self.builder.build_int_mul(
-            ind_g,
-            i64_ty.const_int(src_group_offset as u64, false),
-            "im2col_offset",
-        )?;
-        let offset = self
-            .builder
-            .build_int_add(offset, src.offset, "im2col_offset_abs")?;
-        let src_ptr = TensorPtr {
-            ptr: src.ptr,
-            ty: src.ty.clone(),
-            offset,
-            name: "conv_im2col_src".to_string(),
-        };
-        let im2col_exit = self.build_im2col(&im2col_ptr, &src_ptr, &im2col_op, im2col_entry)?;
 
-        self.builder.position_at_end(im2col_exit);
-        self.builder.build_unconditional_branch(gemm_body)?;
+        let cur_bb = self.build_im2col(&im2col_ptr, src, &im2col_op, entry)?;
 
-        self.builder.position_at_end(gemm_body);
-        let offset = self.builder.build_int_mul(
-            ind_g,
-            i64_ty.const_int((c_out_per_group * k) as u64, false),
-            "weight_group_offset",
-        )?;
-        let ty = ResolvedTensorType::new(
-            weight.ty.elem_type,
-            ResolvedTensorDims::new(&[c_out_per_group, k]),
-        );
+        let ty = ResolvedTensorType::new(weight.ty.elem_type, ResolvedTensorDims::new(&[c_out, k]));
         let weight_ptr = TensorPtr {
             ptr: weight.ptr,
             ty,
-            offset,
-            name: "conv_gemm_weight".to_string(),
+            offset: i64_ty.const_zero(),
+            name: "conv_weight".to_string(),
         };
 
-        let offset = self.builder.build_int_mul(
-            ind_g,
-            i64_ty.const_int((m * c_out_per_group) as u64, false),
-            "gemm_dst_group_offset",
-        )?;
-        let ty = ResolvedTensorType::new(
-            dst.ty.elem_type,
-            ResolvedTensorDims::new(&[m, c_out_per_group]),
-        );
+        let ty = ResolvedTensorType::new(dst.ty.elem_type, ResolvedTensorDims::new(&[m, c_out]));
         let dst_ptr = TensorPtr {
             ptr: dst.ptr,
             ty,
-            offset,
+            offset: i64_ty.const_zero(),
             name: "conv_gemm_dst".to_string(),
         };
+
         let bias_broadcast = bias.map(|b| {
-            let bias_offset = self
-                .builder
-                .build_int_mul(
-                    ind_g,
-                    i64_ty.const_int(c_out_per_group as u64, false),
-                    "bias_group_offset",
-                )
-                .unwrap();
-            let bias_1d_ty = ResolvedTensorType::new(
-                b.ty.elem_type,
-                ResolvedTensorDims::new(&[c_out_per_group]),
-            );
-            let target_dims = ResolvedTensorDims::new(&[m, c_out_per_group]);
-            let broadcast_ty = bias_1d_ty.broadcast(&target_dims);
+            let ty = ResolvedTensorType::new(b.ty.elem_type, ResolvedTensorDims::new(&[c_out]));
+            let broadcast_ty = ty.broadcast(&ResolvedTensorDims::new(&[m, c_out]));
             TensorPtr {
                 ptr: b.ptr,
                 ty: broadcast_ty,
-                offset: bias_offset,
+                offset: i64_ty.const_zero(),
                 name: "conv_bias_broadcast".to_string(),
             }
         });
+
         let gemm_op = operator::Gemm {
             trans_a: false,
             trans_b: true,
             alpha: 1.0,
             beta: if bias.is_some() { 1.0 } else { 0.0 },
         };
-        let gemm_exit = self.build_gemm(
+        let cur_bb = self.build_gemm(
             &dst_ptr,
             &im2col_ptr,
             &weight_ptr,
             bias_broadcast.as_ref(),
-            gemm_body,
+            cur_bb,
             &gemm_op,
         )?;
 
-        match conv.output_layout {
-            Layout::NHWC => {
-                self.builder.build_unconditional_branch(group_latch)?;
-            }
+        // GEMM output is [M, C_out] = [N*H*W, C] (NHWC-like)
+        let exit = match conv.output_layout {
+            Layout::NHWC => cur_bb,
             Layout::NCHW => {
                 let n_hdr = bb("conv.trans_n.hdr");
                 let save_body = bb("conv.save_hwc");
@@ -1058,42 +999,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let trans_hw = bb("conv.trans_hw");
                 let trans_c_latch = bb("conv.trans_c.latch");
                 let n_latch = bb("conv.trans_n.latch");
+                let exit = bb("conv.exit");
                 self.builder.build_unconditional_branch(n_hdr)?;
 
-                let hwc = (h_out * w_out * c_out_per_group) as u64;
-
                 let (phi_n, ind_n) = self.init_counted_loop(n_hdr)?;
-                let g_src_base = self.builder.build_int_mul(
-                    ind_g,
-                    i64_ty.const_int((m * c_out_per_group) as u64, false),
-                    "g_src_base",
-                )?;
+                let hwc = (h_out * w_out * c_out) as u64;
                 let n_base_src = self.builder.build_int_mul(
                     ind_n,
                     i64_ty.const_int(hwc, false),
-                    "n_base_src_n",
-                )?;
-                let n_base_src =
-                    self.builder
-                        .build_int_add(n_base_src, g_src_base, "n_base_src")?;
-                let c_out = weight.ty.dims[0];
-                let g_dst_base = self.builder.build_int_mul(
-                    ind_g,
-                    i64_ty.const_int((n_batch * c_out_per_group * h_out * w_out) as u64, false),
-                    "g_dst_base",
+                    "n_base_src",
                 )?;
                 let n_base_dst = self.builder.build_int_mul(
                     ind_n,
                     i64_ty.const_int((c_out * h_out * w_out) as u64, false),
-                    "n_base_dst_n",
+                    "n_base_dst",
                 )?;
-                let n_base_dst =
-                    self.builder
-                        .build_int_add(n_base_dst, g_dst_base, "n_base_dst")?;
                 self.builder.build_unconditional_branch(save_body)?;
 
-                let bound = h_out * w_out * c_out_per_group;
                 self.builder.position_at_end(save_body);
+                let bound = h_out * w_out * c_out;
                 let (phi_hwc, ind_hwc) = self.init_counted_loop(save_body)?;
                 let ty =
                     ResolvedTensorType::new(dst.ty.elem_type, ResolvedTensorDims::new(&[bound]));
@@ -1106,14 +1030,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     ty: ty.clone(),
                     name: "conv_save_src".to_string(),
                 };
-                let dst_ptr = TensorPtr {
+                let dst_ws = TensorPtr {
                     ptr: workspace.ptr,
                     offset: ind_hwc,
                     ty,
                     name: "conv_save_dst".to_string(),
                 };
                 let load = self.build_load(&src_ptr)?;
-                self.build_store(&dst_ptr, load)?;
+                self.build_store(&dst_ws, load)?;
                 self.finalize_counted_loop(
                     phi_hwc,
                     n_hdr,
@@ -1129,43 +1053,39 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
                 self.builder.position_at_end(trans_hw);
                 let (phi_hw, ind_hw) = self.init_counted_loop(trans_hw)?;
-                // src: workspace[hw * C + c] (HWC order)
                 let offset = self.builder.build_int_mul(
                     ind_hw,
-                    i64_ty.const_int(c_out_per_group as u64, false),
-                    "save_c_offset",
+                    i64_ty.const_int(c_out as u64, false),
+                    "ws_hw_off",
                 )?;
-                let offset = self.builder.build_int_add(offset, ind_c, "save_offset")?;
-                let src_ptr = TensorPtr {
+                let offset = self.builder.build_int_add(offset, ind_c, "ws_off")?;
+                let ws_src = TensorPtr {
                     ptr: workspace.ptr,
                     offset,
                     ty: ResolvedTensorType::new(
                         dst.ty.elem_type,
-                        ResolvedTensorDims::new(&[h_out * w_out * c_out_per_group]),
+                        ResolvedTensorDims::new(&[bound]),
                     ),
                     name: "conv_trans_src".to_string(),
                 };
-                // dst: dst[n_base + c * H * W + hw] (NCHW order)
                 let offset = self.builder.build_int_mul(
                     ind_c,
                     i64_ty.const_int((h_out * w_out) as u64, false),
-                    "dst_c_offset",
+                    "dst_c_off",
                 )?;
                 let offset = self.builder.build_int_add(offset, ind_hw, "dst_chw")?;
-                let offset = self
-                    .builder
-                    .build_int_add(n_base_dst, offset, "dst_offset")?;
-                let dst_ptr = TensorPtr {
+                let offset = self.builder.build_int_add(n_base_dst, offset, "dst_off")?;
+                let dst_nchw = TensorPtr {
                     ptr: dst.ptr,
                     offset,
                     ty: ResolvedTensorType::new(
                         dst.ty.elem_type,
-                        ResolvedTensorDims::new(&[c_out_per_group * h_out * w_out]),
+                        ResolvedTensorDims::new(&[c_out * h_out * w_out]),
                     ),
                     name: "conv_trans_dst".to_string(),
                 };
-                let val = self.build_load(&src_ptr)?;
-                self.build_store(&dst_ptr, val)?;
+                let val = self.build_load(&ws_src)?;
+                self.build_store(&dst_nchw, val)?;
                 self.finalize_counted_loop(
                     phi_hw,
                     trans_c_entry,
@@ -1179,7 +1099,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.finalize_counted_loop(
                     phi_c,
                     save_body,
-                    i64_ty.const_int(c_out_per_group as u64, false),
+                    i64_ty.const_int(c_out as u64, false),
                     trans_c_entry,
                     n_latch,
                     trans_c_latch,
@@ -1188,30 +1108,298 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 self.builder.position_at_end(n_latch);
                 self.finalize_counted_loop(
                     phi_n,
-                    gemm_exit,
+                    cur_bb,
                     i64_ty.const_int(n_batch as u64, false),
                     n_hdr,
-                    group_latch,
+                    exit,
                     n_latch,
                 )?;
+                exit
             }
-        }
+        };
 
-        self.builder.position_at_end(group_latch);
-        self.finalize_counted_loop(
-            phi_g,
-            entry,
-            i64_ty.const_int(groups as u64, false),
-            group_entry,
-            exit,
-            group_latch,
+        Ok(exit)
+    }
+
+    // depthwise conv (groups=C_in=C_out, c_out_per_group=1):
+    // for n, oh, ow:
+    //   for c in 0..C:
+    //     val = bias[c] or 0
+    //     for kh, kw:
+    //       ih = oh*sh + kh*dh - pad_h; iw = ow*sw + kw*dw - pad_w
+    //       if !oob: val += src[n,c,ih,iw] * weight[c,0,kh,kw]
+    //     dst[...] = val   (NCHW or NHWC)
+    pub fn build_depthwise_conv(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        weight: &TensorPtr<'ctx>,
+        bias: Option<&TensorPtr<'ctx>>,
+        conv: &operator::Conv,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(conv.group > 1);
+        // TODO: support c_out_per_group > 1 (currently assumes groups == C_in == C_out)
+        assert!(conv.group == weight.ty.dims[0]);
+        let i64_ty = self.context.i64_type();
+        let c = weight.ty.dims[0];
+        let kh = conv.kernel_shape[0];
+        let kw = conv.kernel_shape[1];
+
+        let output_shape = conv.output_shape(&src.ty.dims, &weight.ty.dims);
+        let n_batch = src.ty.dims[0];
+        let (h_out_idx, w_out_idx) = match conv.output_layout {
+            Layout::NCHW => (2, 3),
+            Layout::NHWC => (1, 2),
+        };
+        let h_out = output_shape[h_out_idx];
+        let w_out = output_shape[w_out_idx];
+        let (h_in, w_in) = match conv.input_layout {
+            Layout::NCHW => (src.ty.dims[2], src.ty.dims[3]),
+            Layout::NHWC => (src.ty.dims[1], src.ty.dims[2]),
+        };
+        let stride_h = conv.strides[0] as u64;
+        let stride_w = conv.strides[1] as u64;
+        let dilation_h = conv.dilations[0] as u64;
+        let dilation_w = conv.dilations[1] as u64;
+        let (pad_h, pad_w) = match &conv.pad {
+            operator::ConvPad::NotSet(pad) => (pad[0].0 as u64, pad[1].0 as u64),
+            operator::ConvPad::Valid => (0, 0),
+            _ => unimplemented!(),
+        };
+
+        let fp_ty = match src.ty.elem_type {
+            DataType::Float(t) => t,
+            _ => unimplemented!(),
+        };
+        let elem_ty = fp_ty.llvm_type(self.context);
+
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+        let hdr_n = bb("dw.n.hdr");
+        let hdr_oh = bb("dw.oh.hdr");
+        let hdr_ow = bb("dw.ow.hdr");
+        let hdr_c = bb("dw.c.hdr");
+        let hdr_kh = bb("dw.kh.hdr");
+        let hdr_kw = bb("dw.kw.hdr");
+        let body = bb("dw.body");
+        let bb_load = bb("dw.load");
+        let bb_pad = bb("dw.pad");
+        let bb_acc = bb("dw.acc");
+        let latch_kw = bb("dw.kw.latch");
+        let latch_kh = bb("dw.kh.latch");
+        let store_bb = bb("dw.store");
+        let latch_c = bb("dw.c.latch");
+        let latch_ow = bb("dw.ow.latch");
+        let latch_oh = bb("dw.oh.latch");
+        let latch_n = bb("dw.n.latch");
+        let exit = bb("dw.exit");
+
+        let ci = |v: u64| i64_ty.const_int(v, false);
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(hdr_n)?;
+
+        let (phi_n, ind_n) = self.init_counted_loop(hdr_n)?;
+        self.builder.build_unconditional_branch(hdr_oh)?;
+        let (phi_oh, ind_oh) = self.init_counted_loop(hdr_oh)?;
+        self.builder.build_unconditional_branch(hdr_ow)?;
+        let (phi_ow, ind_ow) = self.init_counted_loop(hdr_ow)?;
+        self.builder.build_unconditional_branch(hdr_c)?;
+
+        let (phi_c, ind_c) = self.init_counted_loop(hdr_c)?;
+        let init_val = if let Some(b) = bias {
+            self.build_load(&b.clone().add_offset(self.builder, ind_c)?)?
+                .into_float_value()
+        } else {
+            elem_ty.const_float(0.0)
+        };
+        self.builder.build_unconditional_branch(hdr_kh)?;
+
+        let (phi_kh, ind_kh) = self.init_counted_loop(hdr_kh)?;
+        let acc_kh = self.builder.build_phi(elem_ty, "acc_kh")?;
+        self.builder.build_unconditional_branch(hdr_kw)?;
+
+        let (phi_kw, ind_kw) = self.init_counted_loop(hdr_kw)?;
+        let acc = self.builder.build_phi(elem_ty, "acc")?;
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let ih = {
+            let a = self.builder.build_int_mul(ind_oh, ci(stride_h), "oh_s")?;
+            let b = self.builder.build_int_mul(ind_kh, ci(dilation_h), "kh_d")?;
+            let v = self.builder.build_int_add(a, b, "ih_raw")?;
+            self.builder.build_int_sub(v, ci(pad_h), "ih")?
+        };
+        let iw = {
+            let a = self.builder.build_int_mul(ind_ow, ci(stride_w), "ow_s")?;
+            let b = self.builder.build_int_mul(ind_kw, ci(dilation_w), "kw_d")?;
+            let v = self.builder.build_int_add(a, b, "iw_raw")?;
+            self.builder.build_int_sub(v, ci(pad_w), "iw")?
+        };
+
+        let oob = {
+            let h_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                ih,
+                i64_ty.const_zero(),
+                "h_neg",
+            )?;
+            let h_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                ih,
+                ci(h_in as u64),
+                "h_big",
+            )?;
+            let w_neg = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                iw,
+                i64_ty.const_zero(),
+                "w_neg",
+            )?;
+            let w_big = self.builder.build_int_compare(
+                inkwell::IntPredicate::SGE,
+                iw,
+                ci(w_in as u64),
+                "w_big",
+            )?;
+            let h_oob = self.builder.build_or(h_neg, h_big, "h_oob")?;
+            let w_oob = self.builder.build_or(w_neg, w_big, "w_oob")?;
+            self.builder.build_or(h_oob, w_oob, "oob")?
+        };
+        self.builder
+            .build_conditional_branch(oob, bb_pad, bb_load)?;
+
+        // load src and weight, multiply-accumulate
+        self.builder.position_at_end(bb_load);
+        let src_offset = match conv.input_layout {
+            Layout::NCHW => {
+                let o = self
+                    .builder
+                    .build_int_mul(ind_n, ci((c * h_in * w_in) as u64), "so_n")?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ind_c, ci((h_in * w_in) as u64), "so_c")?,
+                    "so_nc",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder.build_int_mul(ih, ci(w_in as u64), "so_h")?,
+                    "so_nch",
+                )?;
+                self.builder.build_int_add(o, iw, "src_off")?
+            }
+            Layout::NHWC => {
+                let o = self
+                    .builder
+                    .build_int_mul(ind_n, ci((h_in * w_in * c) as u64), "so_n")?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ih, ci((w_in * c) as u64), "so_h")?,
+                    "so_nh",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder.build_int_mul(iw, ci(c as u64), "so_w")?,
+                    "so_nhw",
+                )?;
+                self.builder.build_int_add(o, ind_c, "src_off")?
+            }
+        };
+        let src_val = self
+            .build_load(&src.clone().add_offset(self.builder, src_offset)?)?
+            .into_float_value();
+        let w_offset = {
+            let o = self
+                .builder
+                .build_int_mul(ind_c, ci((kh * kw) as u64), "wo_c")?;
+            let o = self.builder.build_int_add(
+                o,
+                self.builder.build_int_mul(ind_kh, ci(kw as u64), "wo_kh")?,
+                "wo_ckh",
+            )?;
+            self.builder.build_int_add(o, ind_kw, "w_off")?
+        };
+        let w_val = self
+            .build_load(&weight.clone().add_offset(self.builder, w_offset)?)?
+            .into_float_value();
+
+        let prod = self.builder.build_float_mul(src_val, w_val, "prod")?;
+        let new_acc = self.builder.build_float_add(
+            acc.as_basic_value().into_float_value(),
+            prod,
+            "new_acc",
         )?;
+        self.builder.build_unconditional_branch(bb_acc)?;
 
-        assert!(
-            conv.activation == operator::Activation::Identity,
-            "CPU Conv activation must be Identity (ConvActivationFusion is CUDA-only)"
-        );
+        // pad: skip (acc unchanged)
+        self.builder.position_at_end(bb_pad);
+        self.builder.build_unconditional_branch(bb_acc)?;
 
+        // merge
+        self.builder.position_at_end(bb_acc);
+        let merged = self.builder.build_phi(elem_ty, "merged")?;
+        merged.add_incoming(&[(&new_acc, bb_load), (&acc.as_basic_value(), bb_pad)]);
+        self.builder.build_unconditional_branch(latch_kw)?;
+
+        self.finalize_counted_loop(phi_kw, hdr_kh, ci(kw as u64), hdr_kw, latch_kh, latch_kw)?;
+        acc.add_incoming(&[
+            (&acc_kh.as_basic_value(), hdr_kh),
+            (&merged.as_basic_value(), latch_kw),
+        ]);
+
+        self.finalize_counted_loop(phi_kh, hdr_c, ci(kh as u64), hdr_kh, store_bb, latch_kh)?;
+        acc_kh.add_incoming(&[(&init_val, hdr_c), (&merged.as_basic_value(), latch_kh)]);
+
+        self.builder.position_at_end(store_bb);
+        let final_val = merged.as_basic_value().into_float_value();
+        let dst_offset = match conv.output_layout {
+            Layout::NCHW => {
+                let o =
+                    self.builder
+                        .build_int_mul(ind_n, ci((c * h_out * w_out) as u64), "do_n")?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ind_c, ci((h_out * w_out) as u64), "do_c")?,
+                    "do_nc",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ind_oh, ci(w_out as u64), "do_h")?,
+                    "do_nch",
+                )?;
+                self.builder.build_int_add(o, ind_ow, "dst_off")?
+            }
+            Layout::NHWC => {
+                let o =
+                    self.builder
+                        .build_int_mul(ind_n, ci((h_out * w_out * c) as u64), "do_n")?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder
+                        .build_int_mul(ind_oh, ci((w_out * c) as u64), "do_h")?,
+                    "do_nh",
+                )?;
+                let o = self.builder.build_int_add(
+                    o,
+                    self.builder.build_int_mul(ind_ow, ci(c as u64), "do_w")?,
+                    "do_nhw",
+                )?;
+                self.builder.build_int_add(o, ind_c, "dst_off")?
+            }
+        };
+        self.build_store(&dst.clone().set_offset(dst_offset), final_val)?;
+        self.builder.build_unconditional_branch(latch_c)?;
+
+        self.finalize_counted_loop(phi_c, hdr_ow, ci(c as u64), hdr_c, latch_ow, latch_c)?;
+        self.finalize_counted_loop(phi_ow, hdr_oh, ci(w_out as u64), hdr_ow, latch_oh, latch_ow)?;
+        self.finalize_counted_loop(phi_oh, hdr_n, ci(h_out as u64), hdr_oh, latch_n, latch_oh)?;
+        self.finalize_counted_loop(phi_n, entry, ci(n_batch as u64), hdr_n, exit, latch_n)?;
+
+        self.builder.position_at_end(exit);
         Ok(exit)
     }
 
