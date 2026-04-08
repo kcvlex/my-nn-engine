@@ -50,32 +50,6 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
             );
         }
 
-        let initializer_ids: Vec<_> = graph.initializer.keys().copied().collect();
-        for value_id in initializer_ids {
-            let ty = graph.get_resolved_tensor_type(value_id).unwrap().clone();
-            let device_value = modifier.register_new_value(
-                graph,
-                format!("Transfer_H2D_init_{}", value_id.index()),
-                ty,
-            );
-            let h2d_id = modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![Some(value_id)],
-                    outputs: vec![device_value],
-                    name: format!("Transfer_H2D_init_{}", value_id.index()),
-                    op: Operator::Transfer(TransferKind::HostToDevice),
-                    meta: NodeMeta::default(),
-                },
-            );
-            modifier.replace_input_value_if_without_typecheck(
-                graph,
-                value_id,
-                device_value,
-                |id, _| id != h2d_id,
-            );
-        }
-
         let outputs: Vec<_> = graph
             .outputs
             .iter()

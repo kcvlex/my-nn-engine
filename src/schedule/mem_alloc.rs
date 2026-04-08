@@ -219,6 +219,7 @@ impl<'sched> MemoryPlanner<'sched> {
                     .inputs
                     .iter()
                     .flatten()
+                    .filter(|id| !self.schedule.graph.initializer.contains_key(id))
                     .chain(kernel.outputs.iter())
                     .map(|id| to_allocate_info(self, id))
                     .collect(),
@@ -255,9 +256,8 @@ impl<'sched> MemoryPlanner<'sched> {
             match self.allocations.get(input) {
                 Some(_) => {}
                 None => {
-                    if self.schedule.options.target == Target::CPU &&
-                        (self.deps.inputs_set.contains(input) ||
-                            self.schedule.graph.initializer.contains_key(input))
+                    if self.deps.inputs_set.contains(input) ||
+                        self.schedule.graph.initializer.contains_key(input)
                     {
                         continue;
                     }

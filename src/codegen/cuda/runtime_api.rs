@@ -10,6 +10,7 @@ pub enum CudaRuntimeApi {
     RecordEvent(RecordEvent),
     Malloc(Malloc),
     Memcpy(Memcpy),
+    MemcpySync(MemcpySync),
     WaitEvent(WaitEvent),
     DeviceSynchronize,
 
@@ -27,6 +28,7 @@ impl std::fmt::Display for CudaRuntimeApi {
             CudaRuntimeApi::RecordEvent(event) => write!(f, "{}", event),
             CudaRuntimeApi::Malloc(malloc) => write!(f, "{}", malloc),
             CudaRuntimeApi::Memcpy(memcpy) => write!(f, "{}", memcpy),
+            CudaRuntimeApi::MemcpySync(memcpy) => write!(f, "{}", memcpy),
             CudaRuntimeApi::WaitEvent(wait_event) => write!(f, "{}", wait_event),
             CudaRuntimeApi::DeviceSynchronize => write!(f, "cudaDeviceSynchronize()"),
             CudaRuntimeApi::Free(free) => write!(f, "{}", free),
@@ -107,6 +109,7 @@ impl std::fmt::Display for Free {
 pub enum CudaMemcpyKind {
     HostToDevice,
     DeviceToHost,
+    DeviceToDevice,
 }
 
 impl std::fmt::Display for CudaMemcpyKind {
@@ -117,6 +120,7 @@ impl std::fmt::Display for CudaMemcpyKind {
             match self {
                 CudaMemcpyKind::HostToDevice => "cudaMemcpyHostToDevice",
                 CudaMemcpyKind::DeviceToHost => "cudaMemcpyDeviceToHost",
+                CudaMemcpyKind::DeviceToDevice => "cudaMemcpyDeviceToDevice",
             }
         )
     }
@@ -136,6 +140,23 @@ impl std::fmt::Display for Memcpy {
             f,
             "cudaMemcpyAsync({}, {}, {}, {}, {})",
             self.dst, self.src, self.mem_size, self.kind, self.stream
+        )
+    }
+}
+
+pub struct MemcpySync {
+    pub dst: Expr,
+    pub src: Expr,
+    pub mem_size: MemSize,
+    pub kind: CudaMemcpyKind,
+}
+
+impl std::fmt::Display for MemcpySync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cudaMemcpy({}, {}, {}, {})",
+            self.dst, self.src, self.mem_size, self.kind
         )
     }
 }
@@ -215,6 +236,7 @@ impl_into_stmt!(StreamCreate);
 impl_into_stmt!(RecordEvent);
 impl_into_stmt!(Malloc);
 impl_into_stmt!(Memcpy);
+impl_into_stmt!(MemcpySync);
 impl_into_stmt!(WaitEvent);
 impl_into_stmt!(Free);
 impl_into_stmt!(EventDestroy);

@@ -180,7 +180,7 @@ impl std::fmt::Display for ChunkMemSize {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Expr {
     Identifier(String),
     Literal(String),
@@ -247,6 +247,7 @@ pub struct HostCodeGenerator<'sched> {
     value2chunk: HashMap<ValueId, ChunkId>,
     hostmem2identifier: HashMap<ValueId, String>,
     devicemem2identifier: Vec<String>,
+    initializer_device_ids: HashMap<ValueId, String>,
 
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
@@ -552,6 +553,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             value2chunk: HashMap::new(),
             hostmem2identifier: HashMap::new(),
             devicemem2identifier: Vec::new(),
+            initializer_device_ids: HashMap::new(),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
@@ -570,7 +572,6 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         for (arg_name, value_ids) in &[
             (ARG_INPUT, &self.schedule.inputs[..]),
-            (ARG_INITIALIZER, &self.schedule.initializers[..]),
             (ARG_OUTPUT, &self.schedule.outputs[..]),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
@@ -587,6 +588,38 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
             }
+        }
+
+        for (idx, value) in self.schedule.initializers.iter().enumerate() {
+            let rty = self.get_resolved_tensor_type(*value)?;
+            let ty_str = rty.elem_type.to_string();
+            let mem_size: MemSize = rty.into();
+            let host_name = format!("h_{}_{}", ARG_INITIALIZER, value.index());
+            let device_name = format!("d_init_{}", value.index());
+            self.init_stmts.push(Statement::Raw(format!(
+                "{ty_str} *{host_name} = ({ty_str} *)({ARG_INITIALIZER}[{idx}]);"
+            )));
+            self.state_fields
+                .push(format!("void *{device_name} = nullptr;"));
+            self.init_stmts.push(
+                Malloc {
+                    dst: Expr::Identifier(format!("state->{device_name}")),
+                    mem_size: MemSize::Raw(Expr::Identifier(format!("{mem_size}"))),
+                }
+                .into(),
+            );
+            self.init_stmts.push(
+                MemcpySync {
+                    dst: Expr::Identifier(format!("state->{device_name}")),
+                    src: Expr::Identifier(host_name),
+                    mem_size: MemSize::Raw(Expr::Identifier(format!("{mem_size}"))),
+                    kind: CudaMemcpyKind::HostToDevice,
+                }
+                .into(),
+            );
+            self.destroy_stmts
+                .push(Free(Expr::Identifier(format!("state->{device_name}"))).into());
+            self.initializer_device_ids.insert(*value, device_name);
         }
 
         let mut mem_sizes = vec![
@@ -776,6 +809,9 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
+        if let Some(name) = self.initializer_device_ids.get(&value_id) {
+            return Ok(Expr::Identifier(format!("state->{name}")));
+        }
         let chunk_id = self
             .value2chunk
             .get(&value_id)
@@ -914,15 +950,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Identity | Operator::Reinterpret(_) => {
-                    let input_chunk = self
-                        .value2chunk
-                        .get(&kernel.inputs[0].unwrap())
-                        .ok_or(BuildError::ChunkNotFound(kernel.inputs[0].unwrap()))?;
-                    let output_chunk = self
-                        .value2chunk
-                        .get(&kernel.outputs[0])
-                        .ok_or(BuildError::ChunkNotFound(kernel.outputs[0]))?;
-                    if input_chunk != output_chunk {
+                    let input_chunk = self.value2chunk.get(&kernel.inputs[0].unwrap());
+                    let output_chunk = self.value2chunk.get(&kernel.outputs[0]);
+                    let same_chunk = match (input_chunk, output_chunk) {
+                        (Some(ic), Some(oc)) => ic == oc,
+                        _ => false,
+                    };
+                    if !same_chunk {
                         let output_size = self
                             .get_resolved_tensor_type(kernel.outputs[0])?
                             .dims
@@ -1247,15 +1281,25 @@ impl<'sched> HostCodeGenerator<'sched> {
                         (tmp0, tmp1)
                     };
 
-                    // TODO: Copy bias into output chunk if bias_chunk != output_chunk.
                     if kernel.inputs.len() == 3 {
                         assert!(matches!(op, Operator::Gemm(_)));
-                        let bias_chunk = self
-                            .value2chunk
-                            .get(&kernel.inputs[args::GEMM_C].unwrap())
-                            .unwrap();
-                        let output_chunk = self.value2chunk.get(&kernel.outputs[0]).unwrap();
-                        assert!(bias_chunk == output_chunk);
+                        let bias_id = kernel.inputs[args::GEMM_C].unwrap();
+                        let bias_dev = self.device_identifier(bias_id)?;
+                        let output_dev = self.device_identifier(kernel.outputs[0])?;
+                        if bias_dev != output_dev {
+                            let mem_size =
+                                MemSize::Single(self.single_mem_size(kernel.outputs[0])?);
+                            self.stmts.push(
+                                Memcpy {
+                                    dst: output_dev.clone(),
+                                    src: bias_dev,
+                                    mem_size,
+                                    kind: CudaMemcpyKind::DeviceToDevice,
+                                    stream: stream_id,
+                                }
+                                .into(),
+                            );
+                        }
                     }
 
                     let a = self
@@ -1647,7 +1691,7 @@ impl HostCode {
 
         write!(
             writer,
-            r#"extern "C" void* model_init() {{
+            r#"extern "C" void* model_init(void **{ARG_INITIALIZER}) {{
   auto *state = new ModelState;
 {init_body}
   return state;
@@ -1659,7 +1703,7 @@ extern "C" void model_destroy(void *ptr) {{
   delete state;
 }}
 
-extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
+extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) {{
   auto *state = static_cast<ModelState*>(state_ptr);
 "#
         )?;

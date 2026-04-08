@@ -17,9 +17,8 @@ use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type InitType = unsafe extern "C" fn() -> *mut std::ffi::c_void;
-type RunType =
-    unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8, *const *const u8);
+type InitType = unsafe extern "C" fn(*const *const u8) -> *mut std::ffi::c_void;
+type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
 pub struct SessionCUDA {
@@ -160,7 +159,12 @@ impl SessionCUDA {
 
     pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
         if self.state.is_null() {
-            self.state = unsafe { (self.init_func)() };
+            let initializer_ptrs = self
+                .initializer
+                .iter()
+                .map(|t| t.as_ptr())
+                .collect::<Vec<_>>();
+            self.state = unsafe { (self.init_func)(initializer_ptrs.as_ptr()) };
         }
         let mut output_bufs = self
             .output_ty
@@ -173,19 +177,7 @@ impl SessionCUDA {
             .collect::<Vec<_>>();
         let input_bufs = inputs.iter().map(StrictTensor::from).collect::<Vec<_>>();
         let input_ptrs = input_bufs.iter().map(|t| t.as_ptr()).collect::<Vec<_>>();
-        let initializer_ptrs = self
-            .initializer
-            .iter()
-            .map(|t| t.as_ptr())
-            .collect::<Vec<_>>();
-        unsafe {
-            (self.run_func)(
-                self.state,
-                output_ptrs.as_ptr(),
-                input_ptrs.as_ptr(),
-                initializer_ptrs.as_ptr(),
-            )
-        };
+        unsafe { (self.run_func)(self.state, output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
         let outputs = zip_eq(self.output_ty.iter(), output_bufs)
             .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
             .collect::<Vec<_>>();
