@@ -359,103 +359,23 @@ impl<'sched> CudnnCodeGenerator<'sched> {
             Layout::NCHW => (0, 1, 2, 3),
             Layout::NHWC => (0, 3, 1, 2),
         };
-        let (out_n, out_c, out_h, out_w) = match conv.output_layout {
+        let (_out_n, _out_c, out_h, out_w) = match conv.output_layout {
             Layout::NCHW => (0, 1, 2, 3),
             Layout::NHWC => (0, 3, 1, 2),
         };
 
-        let input_desc = TensorDescriptor {
-            id: setting,
-            role: TensorRole::Input,
-        };
-        let output_desc = TensorDescriptor {
-            id: setting,
-            role: TensorRole::Output,
-        };
-        stmts.push(CudnnOps::CreateTensorDescriptor(input_desc).into());
-        stmts.push(
-            CudnnOps::SetTensor4dDescriptor {
-                desc: input_desc,
-                data_type: input_ty.elem_type,
-                format: conv.input_layout,
-                nbatch: input_ty.dims[in_n],
-                channels: input_ty.dims[in_c],
-                height: input_ty.dims[in_h],
-                width: input_ty.dims[in_w],
-            }
-            .into(),
-        );
-        stmts.push(CudnnOps::CreateTensorDescriptor(output_desc).into());
-        stmts.push(
-            CudnnOps::SetTensor4dDescriptor {
-                desc: output_desc,
-                data_type: output_ty.elem_type,
-                format: conv.output_layout,
-                nbatch: output_ty.dims[out_n],
-                channels: output_ty.dims[out_c],
-                height: output_ty.dims[out_h],
-                width: output_ty.dims[out_w],
-            }
-            .into(),
-        );
+        let has_bias = kernel
+            .inputs
+            .get(args::CONV_BIAS)
+            .and_then(|x| *x)
+            .is_some();
+        let has_relu = conv.activation == Activation::ReLU;
+        let x_is_nhwc = conv.input_layout == Layout::NHWC;
+        let y_is_nhwc = conv.output_layout == Layout::NHWC;
 
-        stmts.push(CudnnOps::CreateFilterDescriptor(setting).into());
-        stmts.push(
-            CudnnOps::SetFilter4dDescriptor {
-                id: setting,
-                data_type: weight_ty.elem_type,
-                format: Layout::NCHW,
-                out_feature_maps: weight_ty.dims[0],
-                in_feature_maps: weight_ty.dims[1],
-                height: weight_ty.dims[2],
-                width: weight_ty.dims[3],
-            }
-            .into(),
-        );
-        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).and_then(|x| *x) {
-            let bias_ty = self.get_resolved_tensor_type(bias)?.clone();
-            assert!(bias_ty.dims.ndim() == 1);
-            assert!(bias_ty.is_contiguous());
-            let bias_desc = TensorDescriptor {
-                id: setting,
-                role: TensorRole::Bias,
-            };
-            stmts.push(CudnnOps::CreateTensorDescriptor(bias_desc).into());
-            stmts.push(
-                CudnnOps::SetTensor4dDescriptor {
-                    desc: bias_desc,
-                    data_type: bias_ty.elem_type,
-                    format: Layout::NCHW,
-                    nbatch: 1,
-                    channels: bias_ty.dims[0],
-                    height: 1,
-                    width: 1,
-                }
-                .into(),
-            );
-        }
-
-        let conv = match kernel.body {
-            KernelBody::Opaque(Opaque { ref op }) => match op {
-                Operator::Conv(ref conv) => conv,
-                _ => unimplemented!(),
-            },
-            _ => unimplemented!(),
-        };
-
-        stmts.push(CudnnOps::CreateActivationDescriptor(setting).into());
-        stmts.push(
-            CudnnOps::SetActivationDescriptor {
-                id: setting,
-                mode: conv.activation,
-                nan_prop: CudnnNanPropagation::NotPropagateNan,
-                coef: 0.0,
-            }
-            .into(),
-        );
-        let (pad_h, pad_w) = match conv.pad {
-            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0),
-            ConvPad::Valid => (0, 0),
+        let (pad_h_pre, pad_w_pre, pad_h_post, pad_w_post) = match conv.pad {
+            ConvPad::NotSet(ref pad) => (pad[0].0, pad[1].0, pad[0].1, pad[1].1),
+            ConvPad::Valid => (0, 0, 0, 0),
             ConvPad::SameUpper | ConvPad::SameLower => {
                 let calc = |dim: usize| {
                     let input = input_ty.dims[2 + dim];
@@ -463,36 +383,44 @@ impl<'sched> CudnnCodeGenerator<'sched> {
                     let stride = conv.strides[dim];
                     let ext_len = stride * (output - 1) + weight_ty.dims[2 + dim];
                     let pad_total = ext_len - input;
-                    pad_total / 2 +
+                    let pad_pre = pad_total / 2 +
                         if matches!(conv.pad, ConvPad::SameLower) {
                             pad_total % 2
                         } else {
                             0
-                        }
+                        };
+                    let pad_post = pad_total - pad_pre;
+                    (pad_pre, pad_post)
                 };
-                (calc(0), calc(1))
+                let (ph_pre, ph_post) = calc(0);
+                let (pw_pre, pw_post) = calc(1);
+                (ph_pre, pw_pre, ph_post, pw_post)
             }
         };
-        stmts.push(CudnnOps::CreateConvolutionDescriptor(setting).into());
-        stmts.push(
-            CudnnOps::SetConvolution2dDescriptor {
-                id: setting,
-                ty: weight_ty.elem_type,
-                pad_h,
-                pad_w,
-                stride_h: conv.strides[0],
-                stride_w: conv.strides[1],
-                dilation_h: conv.dilations[0],
-                dilation_w: conv.dilations[1],
-                mode: CudnnConvolutionMode::CrossCorrelation,
-                groups: conv.group,
-            }
-            .into(),
-        );
+
+        let data_type = input_ty.elem_type.cudnn();
+        let n = input_ty.dims[in_n];
+        let c = input_ty.dims[in_c];
+        let h = input_ty.dims[in_h];
+        let w = input_ty.dims[in_w];
+        let k = weight_ty.dims[0];
+        let r = weight_ty.dims[2];
+        let s = weight_ty.dims[3];
+        let out_h = output_ty.dims[out_h];
+        let out_w = output_ty.dims[out_w];
 
         stmts.push(Statement::Raw(format!(
-            "{}.find_best_algo(&cudnn_handler_ctx);",
-            setting.setting(),
+            "{ss}.build(&cudnn_handler_ctx, {data_type}, \
+             {n}, {c}, {h}, {w}, {k}, {r}, {s}, {out_h}, {out_w}, \
+             {pad_h_pre}, {pad_w_pre}, {pad_h_post}, {pad_w_post}, \
+             {stride_h}, {stride_w}, {dil_h}, {dil_w}, \
+             {groups}, {has_bias}, {has_relu}, {x_is_nhwc}, {y_is_nhwc});",
+            ss = setting.setting(),
+            stride_h = conv.strides[0],
+            stride_w = conv.strides[1],
+            dil_h = conv.dilations[0],
+            dil_w = conv.dilations[1],
+            groups = conv.group,
         )));
 
         let init_fn = format!("init_cudnn_{}", self.kernel_id.index());
@@ -772,27 +700,19 @@ impl<'sched> HostCodeGenerator<'sched> {
                     init_fn = code.init_fn,
                     ss = setting.state_setting(),
                 )));
+                self.init_stmts.push(
+                    Malloc {
+                        dst: Expr::Identifier(format!("{}.workspace", setting.state_setting())),
+                        mem_size: MemSize::Raw(Expr::Identifier(format!(
+                            "{}.workspace_size",
+                            setting.state_setting()
+                        ))),
+                    }
+                    .into(),
+                );
                 self.separated_codes.push(SeparatedCode::Cudnn(code));
             }
 
-            for kernel_id in kernels.iter().copied() {
-                let setting = CudnnSettingName::KernelId(kernel_id);
-                self.init_stmts.push(Statement::Raw(format!(
-                    "{ws_max} = std::max({ws_max}, {ss}.workspace_size_in_bytes);",
-                    ws_max = sctx.workspace_max_size(),
-                    ss = setting.state_setting(),
-                )));
-            }
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier(sctx.workspace_ptr()),
-                    mem_size: MemSize::Raw(Expr::Identifier(sctx.workspace_max_size())),
-                }
-                .into(),
-            );
-
-            self.destroy_stmts
-                .push(Free(Expr::Identifier(sctx.workspace_ptr())).into());
             self.destroy_stmts.push(CudnnOps::Destroy(sctx).into());
 
             self.stmts.push(Statement::Raw(format!(
@@ -1136,34 +1056,19 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let weights =
                         self.device_identifier(kernel.inputs[args::CONV_WEIGHT].unwrap())?;
                     let output = self.device_identifier(kernel.outputs[0])?;
-                    let input_ty = self
-                        .get_resolved_tensor_type(kernel.inputs[0].unwrap())?
-                        .clone();
-                    let template_ty = input_ty.elem_type.to_string();
                     let setting = CudnnSettingName::KernelId(kernel_id);
 
-                    let ss = setting.state_setting();
-                    self.stmts
-                        .push(Statement::Raw(format!("{ss}.x = {input};")));
-                    self.stmts
-                        .push(Statement::Raw(format!("{ss}.w = {weights};")));
-                    self.stmts
-                        .push(Statement::Raw(format!("{ss}.y = {output};")));
-                    let func =
-                        if let Some(bias) = kernel.inputs.get(args::CONV_BIAS).and_then(|x| *x) {
-                            self.stmts.push(Statement::Raw(format!(
-                                "{ss}.bias = {};",
-                                self.device_identifier(bias)?,
-                            )));
-                            "call_conv_bias_activation_forward"
-                        } else {
-                            "call_conv_forward"
-                        };
+                    let bias = if let Some(bias_id) =
+                        kernel.inputs.get(args::CONV_BIAS).and_then(|x| *x)
+                    {
+                        self.device_identifier(bias_id)?.to_string()
+                    } else {
+                        "nullptr".to_string()
+                    };
                     self.stmts.push(Statement::Raw(format!(
-                        "{ss}.{func}<{ty}>(&{ctx});",
-                        func = func,
-                        ty = template_ty,
-                        ctx = cudnn_handler.ctx()
+                        "{ss}.execute(&{ctx}, {input}, {weights}, {output}, {bias});",
+                        ss = setting.state_setting(),
+                        ctx = cudnn_handler.ctx(),
                     )));
                 }
 
@@ -1591,37 +1496,13 @@ impl<'sched> HostCodeGenerator<'sched> {
             for kernel_id in kernels.iter().copied() {
                 let setting = CudnnSettingName::KernelId(kernel_id);
                 state_fields.push(format!("CudnnConvSetting {};", setting.setting()));
-                let ss = CudnnSettingName::StateKernelId(kernel_id);
                 destroy_body.push(
-                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                        id: ss,
-                        role: TensorRole::Input,
-                    })
+                    Free(Expr::Identifier(format!(
+                        "{}.workspace",
+                        setting.state_setting()
+                    )))
                     .into(),
                 );
-                destroy_body.push(
-                    CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                        id: ss,
-                        role: TensorRole::Output,
-                    })
-                    .into(),
-                );
-                destroy_body.push(CudnnOps::DestroyFilterDescriptor(ss).into());
-                destroy_body.push(CudnnOps::DestroyConvolutionDescriptor(ss).into());
-                if self.schedule.kernels[kernel_id]
-                    .inputs
-                    .get(args::CONV_BIAS)
-                    .is_some()
-                {
-                    destroy_body.push(
-                        CudnnOps::DestroyTensorDescriptor(TensorDescriptor {
-                            id: ss,
-                            role: TensorRole::Bias,
-                        })
-                        .into(),
-                    );
-                }
-                destroy_body.push(CudnnOps::DestroyActivationDescriptor(ss).into());
             }
         }
 

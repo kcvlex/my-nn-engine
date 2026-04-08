@@ -92,6 +92,7 @@ impl SessionCUDA {
                     .args([
                         src.to_str().unwrap(),
                         format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
+                        "-std=c++17",
                         "-dc",
                         "-o",
                         obj.to_str().unwrap(),

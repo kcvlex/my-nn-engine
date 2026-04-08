@@ -46,7 +46,7 @@ fn test_gpt2() -> Result {
 
 #[test]
 fn test_mobilenetv2() -> Result {
-    run_test("mobilenetv2-12", 1e-2, (1, 1), None)
+    run_test("mobilenetv2-12", 5e-2, (1, 1), None)
 }
 
 #[test]

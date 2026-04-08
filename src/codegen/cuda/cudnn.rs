@@ -1,5 +1,4 @@
 use derive_more::From;
-use strum_macros::AsRefStr;
 
 use crate::codegen::cuda::*;
 use crate::schedule::*;
@@ -22,7 +21,7 @@ impl std::fmt::Display for CudnnApi {
 }
 
 impl DataType {
-    fn cudnn(&self) -> &'static str {
+    pub fn cudnn(&self) -> &'static str {
         match self {
             DataType::SInt(SIntType::I32) => "CUDNN_DATA_INT32",
             DataType::SInt(SIntType::I64) => "CUDNN_DATA_INT64",
@@ -33,119 +32,25 @@ impl DataType {
     }
 }
 
-#[allow(dead_code)]
-#[derive(AsRefStr)]
-pub enum CudnnConvolutionMode {
-    #[strum(serialize = "CUDNN_CONVOLUTION")]
-    Convolution,
-
-    #[strum(serialize = "CUDNN_CROSS_CORRELATION")]
-    CrossCorrelation,
-}
-
-use crate::onnx::operator::Layout;
-
-impl Layout {
-    pub fn cudnn_format(&self) -> &'static str {
-        match self {
-            Layout::NCHW => "CUDNN_TENSOR_NCHW",
-            Layout::NHWC => "CUDNN_TENSOR_NHWC",
-        }
-    }
-}
-
-fn cudnn_activation_mode(act: Activation) -> &'static str {
-    match act {
-        Activation::Identity => "CUDNN_ACTIVATION_IDENTITY",
-        Activation::ReLU => "CUDNN_ACTIVATION_RELU",
-    }
-}
-
-#[allow(dead_code)]
-#[derive(AsRefStr)]
-pub enum CudnnNanPropagation {
-    #[strum(serialize = "CUDNN_NOT_PROPAGATE_NAN")]
-    NotPropagateNan,
-
-    #[strum(serialize = "CUDNN_PROPAGATE_NAN")]
-    PropagateNan,
-}
-
-pub trait CudnnIdentifier {
-    fn setting(&self) -> String;
-
-    fn state_setting(&self) -> String {
-        format!("state->{}", self.setting())
-    }
-
-    fn input_descriptor(&self) -> String {
-        format!("{}.x_desc", self.setting())
-    }
-
-    fn output_descriptor(&self) -> String {
-        format!("{}.y_desc", self.setting())
-    }
-
-    fn filter_descriptor(&self) -> String {
-        format!("{}.w_desc", self.setting())
-    }
-
-    fn bias_descriptor(&self) -> String {
-        format!("{}.bias_desc", self.setting())
-    }
-
-    fn convolution_descriptor(&self) -> String {
-        format!("{}.conv_desc", self.setting())
-    }
-
-    fn activation_descriptor(&self) -> String {
-        format!("{}.activation_desc", self.setting())
-    }
-}
-
 #[derive(Clone, Copy)]
 pub enum CudnnSettingName {
     DefaultName,
     KernelId(KernelId),
-    StateKernelId(KernelId),
 }
 
-impl CudnnIdentifier for CudnnSettingName {
-    fn setting(&self) -> String {
+impl CudnnSettingName {
+    pub fn setting(&self) -> String {
         match self {
             CudnnSettingName::DefaultName => "setting".to_string(),
             CudnnSettingName::KernelId(id) => format!("cudnn_setting{}", id.index()),
-            CudnnSettingName::StateKernelId(id) => {
-                format!("state->cudnn_setting{}", id.index())
-            }
         }
     }
-}
 
-#[derive(Clone, Copy)]
-pub enum TensorRole {
-    Input,
-    Bias,
-    Output,
-}
-
-#[derive(Clone, Copy)]
-pub struct TensorDescriptor {
-    pub id: CudnnSettingName,
-    pub role: TensorRole,
-}
-
-impl std::fmt::Display for TensorDescriptor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self.role {
-                TensorRole::Input => self.id.input_descriptor(),
-                TensorRole::Bias => self.id.bias_descriptor(),
-                TensorRole::Output => self.id.output_descriptor(),
-            }
-        )
+    pub fn state_setting(&self) -> String {
+        match self {
+            CudnnSettingName::DefaultName => "setting".to_string(),
+            CudnnSettingName::KernelId(id) => format!("state->cudnn_setting{}", id.index()),
+        }
     }
 }
 
@@ -189,68 +94,11 @@ impl CudnnContext {
     pub fn handler(&self) -> String {
         format!("{}.handle", self.ctx())
     }
-
-    pub fn workspace_ptr(&self) -> String {
-        format!("{}.workspace", self.ctx())
-    }
-
-    pub fn workspace_max_size(&self) -> String {
-        format!("{}.workspace_max_size_in_bytes", self.ctx())
-    }
 }
 
-// TODO: Bias
 pub enum CudnnOps {
     Create(CudnnContext),
-    CreateTensorDescriptor(TensorDescriptor),
-    CreateFilterDescriptor(CudnnSettingName),
-    CreateConvolutionDescriptor(CudnnSettingName),
-    CreateActivationDescriptor(CudnnSettingName),
-
     Destroy(CudnnContext),
-    DestroyTensorDescriptor(TensorDescriptor),
-    DestroyFilterDescriptor(CudnnSettingName),
-    DestroyConvolutionDescriptor(CudnnSettingName),
-    DestroyActivationDescriptor(CudnnSettingName),
-
-    SetTensor4dDescriptor {
-        desc: TensorDescriptor,
-        data_type: DataType,
-        format: Layout,
-        nbatch: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-    },
-    SetFilter4dDescriptor {
-        id: CudnnSettingName,
-        data_type: DataType,
-        format: Layout,
-        out_feature_maps: usize,
-        in_feature_maps: usize,
-        height: usize,
-        width: usize,
-    },
-    SetConvolution2dDescriptor {
-        id: CudnnSettingName,
-        pad_h: usize,
-        pad_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        dilation_h: usize,
-        dilation_w: usize,
-        mode: CudnnConvolutionMode,
-        ty: DataType,
-        groups: usize,
-    },
-    SetActivationDescriptor {
-        id: CudnnSettingName,
-        mode: Activation,
-        nan_prop: CudnnNanPropagation,
-
-        // ceiling for clipped RELU, alpha for ELU (copied from cudnn_ops.h)
-        coef: f64,
-    },
     SetStream(CudnnContext),
 }
 
@@ -260,142 +108,8 @@ impl std::fmt::Display for CudnnOps {
             Self::Create(handler) => {
                 write!(f, "cudnnCreate(&{})", handler.handler())
             }
-            Self::CreateTensorDescriptor(desc) => {
-                write!(f, "cudnnCreateTensorDescriptor(&{})", desc)
-            }
-            Self::CreateFilterDescriptor(id) => {
-                write!(
-                    f,
-                    "cudnnCreateFilterDescriptor(&{})",
-                    id.filter_descriptor()
-                )
-            }
-            Self::CreateConvolutionDescriptor(id) => write!(
-                f,
-                "cudnnCreateConvolutionDescriptor(&{})",
-                id.convolution_descriptor()
-            ),
-            Self::CreateActivationDescriptor(id) => write!(
-                f,
-                "cudnnCreateActivationDescriptor(&{})",
-                id.activation_descriptor()
-            ),
-
             Self::Destroy(handler) => {
                 write!(f, "cudnnDestroy({})", handler.handler())
-            }
-            Self::DestroyTensorDescriptor(desc) => {
-                write!(f, "cudnnDestroyTensorDescriptor({})", desc)
-            }
-            Self::DestroyFilterDescriptor(id) => {
-                write!(
-                    f,
-                    "cudnnDestroyFilterDescriptor({})",
-                    id.filter_descriptor()
-                )
-            }
-            Self::DestroyConvolutionDescriptor(id) => write!(
-                f,
-                "cudnnDestroyConvolutionDescriptor({})",
-                id.convolution_descriptor()
-            ),
-            Self::DestroyActivationDescriptor(id) => write!(
-                f,
-                "cudnnDestroyActivationDescriptor({})",
-                id.activation_descriptor()
-            ),
-
-            Self::SetTensor4dDescriptor {
-                desc,
-                data_type,
-                format,
-                nbatch,
-                channels,
-                height,
-                width,
-            } => {
-                write!(
-                    f,
-                    "cudnnSetTensor4dDescriptor({}, {}, {}, {}, {}, {}, {})",
-                    desc,
-                    format.cudnn_format(),
-                    data_type.cudnn(),
-                    nbatch,
-                    channels,
-                    height,
-                    width,
-                )
-            }
-            Self::SetFilter4dDescriptor {
-                id,
-                data_type,
-                format,
-                out_feature_maps,
-                in_feature_maps,
-                height,
-                width,
-            } => {
-                write!(
-                    f,
-                    "cudnnSetFilter4dDescriptor({}, {}, {}, {}, {}, {}, {})",
-                    id.filter_descriptor(),
-                    data_type.cudnn(),
-                    format.cudnn_format(),
-                    out_feature_maps,
-                    in_feature_maps,
-                    height,
-                    width,
-                )
-            }
-            Self::SetConvolution2dDescriptor {
-                id,
-                pad_h,
-                pad_w,
-                stride_h,
-                stride_w,
-                dilation_h,
-                dilation_w,
-                mode,
-                ty,
-                groups,
-            } => {
-                write!(
-                    f,
-                    "cudnnSetConvolution2dDescriptor({}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    id.convolution_descriptor(),
-                    pad_h,
-                    pad_w,
-                    stride_h,
-                    stride_w,
-                    dilation_h,
-                    dilation_w,
-                    mode.as_ref(),
-                    ty.cudnn()
-                )?;
-                if *groups > 1 {
-                    write!(
-                        f,
-                        ");\n  cudnnCheckErr(cudnnSetConvolutionGroupCount({}, {})",
-                        id.convolution_descriptor(),
-                        groups
-                    )?;
-                }
-                Ok(())
-            }
-            Self::SetActivationDescriptor {
-                id,
-                mode,
-                nan_prop,
-                coef,
-            } => {
-                write!(
-                    f,
-                    "cudnnSetActivationDescriptor({}, {}, {}, {})",
-                    id.activation_descriptor(),
-                    cudnn_activation_mode(*mode),
-                    nan_prop.as_ref(),
-                    coef
-                )
             }
             Self::SetStream(ctx) => {
                 let stream_id = ctx.stream_id;
