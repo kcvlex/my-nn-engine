@@ -1078,6 +1078,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Conv" => Ok(Operator::Conv(Conv::load(attributes)?)),
         "Cos" => Ok(Operator::Cos),
         "Div" => Ok(Operator::Div),
+        "Equal" => Ok(Operator::Equal),
         "Exp" => Ok(Operator::Exp),
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
         "Gelu" => Ok(Operator::GeLU(GeLU::load(attributes)?)),

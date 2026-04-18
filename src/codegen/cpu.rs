@@ -752,7 +752,12 @@ impl<'ll> CodeGen<'ll, '_> {
                                           target_dim: &ResolvedTensorDims|
          -> SingleOpcode {
             match op {
-                Operator::Add | Operator::Div | Operator::Mul | Operator::Pow | Operator::Sub => {
+                Operator::Add |
+                Operator::Div |
+                Operator::Equal |
+                Operator::Mul |
+                Operator::Pow |
+                Operator::Sub => {
                     assert!(operands.len() == 2);
                     for (_, i) in operands.iter().filter_map(|(dt, idx)| idx.map(|i| (dt, i))) {
                         ptrs[i].ty = ptrs[i].ty.broadcast(target_dim);
@@ -790,6 +795,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Clip(v) => SingleOpcode::Clip(*v),
                 Operator::Cos => SingleOpcode::Cos,
                 Operator::Div => SingleOpcode::Div,
+                Operator::Equal => SingleOpcode::Equal,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
@@ -819,6 +825,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::BatchNormalization(_) |
                 Operator::Clip(_) |
                 Operator::Cos |
+                Operator::Equal |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |

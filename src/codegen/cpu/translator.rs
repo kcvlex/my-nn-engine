@@ -162,6 +162,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         &self,
         opcode: SingleOpcode,
         ty: DataType,
+        input_ty: Option<DataType>,
         operands: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
         macro_rules! unary_op {
@@ -378,6 +379,30 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                             "cast",
                         )?
                         .as_basic_value_enum(),
+                }
+            }
+
+            SingleOpcode::Equal => {
+                let is_float = matches!(input_ty.unwrap(), DataType::Float(_));
+                let (lhs, rhs) = binary_op!(operands);
+                if is_float {
+                    self.builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::OEQ,
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "cmp",
+                        )?
+                        .as_basic_value_enum()
+                } else {
+                    self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "cmp",
+                        )?
+                        .as_basic_value_enum()
                 }
             }
 
@@ -632,6 +657,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         let ty = op.result_type();
+        let input_ty = op.src_operands().get(0).map(|op| op.ty.elem_type);
         let res = match op.opcode {
             Opcode::Single(opcode) => {
                 let operands = op
@@ -639,7 +665,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .iter()
                     .map(|op| self.build_load(op))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.build_single_op(opcode, ty, &operands)?
+                self.build_single_op(opcode, ty, input_ty, &operands)?
             }
             Opcode::Fused(ref ops) => {
                 let mut intermediates = Vec::with_capacity(ops.len());
@@ -647,17 +673,24 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let ty = op.result_type();
                 for (opcode, args) in ops.iter() {
                     let opcode = *opcode;
-                    let operands = args
+                    let typed_operands = args
                         .iter()
                         .map(|arg| match arg {
-                            ElementwiseOpArg::Input(i) => self.build_load(&srcs[*i]),
+                            ElementwiseOpArg::Input(i) => {
+                                Ok((self.build_load(&srcs[*i])?, srcs[*i].ty.elem_type))
+                            }
                             ElementwiseOpArg::NthResult(i) => Ok(intermediates[*i]),
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    let res = self.build_single_op(opcode, ty, &operands)?;
-                    intermediates.push(res);
+                    let operands = typed_operands
+                        .iter()
+                        .map(|(val, _)| *val)
+                        .collect::<Vec<_>>();
+                    let input_ty = typed_operands.first().map(|(_, ty)| *ty);
+                    let res = self.build_single_op(opcode, ty, input_ty, &operands)?;
+                    intermediates.push((res, ty));
                 }
-                *intermediates.last().unwrap()
+                intermediates.last().unwrap().0
             }
         };
         self.build_store(op.dst_operand(), res)

@@ -82,6 +82,7 @@ pub enum SingleOpcode {
     Clip(Clip),
     Cos,
     Div,
+    Equal,
     Exp,
     GeLU(GeLU),
     LeakyReLU(LeakyReLU),

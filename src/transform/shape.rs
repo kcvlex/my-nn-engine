@@ -14,6 +14,7 @@ use crate::options::Options;
 use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::broadcast_shape;
+use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
@@ -120,6 +121,13 @@ pub fn infer_node_output(
             assert_eq!(a.elem_type, b.elem_type);
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
+        }
+        Operator::Equal => {
+            let a = &inputs[0];
+            let b = &inputs[1];
+            assert_eq!(a.elem_type, b.elem_type);
+            let dims = broadcast_shape(&a.dims, &b.dims)?;
+            res.push(ResolvedTensorType::new(DataType::Bool, dims));
         }
         Operator::BatchedGemm(gemm) => {
             let a = &inputs[0];

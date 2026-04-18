@@ -54,6 +54,7 @@ pub enum Operator {
     Conv(Conv),
     Cos,
     Div,
+    Equal,
     Exp,
     Gather(Gather),
     GeLU(GeLU),
@@ -773,6 +774,7 @@ impl Operator {
             Operator::Conv(_) => "Conv",
             Operator::Cos => "Cos",
             Operator::Div => "Div",
+            Operator::Equal => "Equal",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
             Operator::GeLU(_) => "Gelu",
@@ -832,6 +834,7 @@ impl Operator {
             Operator::Clip(_) |
             Operator::Cos |
             Operator::Div |
+            Operator::Equal |
             Operator::Exp |
             Operator::GeLU(_) |
             Operator::Identity |
@@ -909,6 +912,9 @@ pub mod args {
     pub const ATTENTION_K: usize = 1;
     pub const ATTENTION_V: usize = 2;
     pub const ATTENTION_MASK: usize = 3;
+
+    pub const EQUAL_A: usize = 0;
+    pub const EQUAL_B: usize = 1;
 
     pub const RESHAPE_DATA: usize = 0;
     pub const RESHAPE_SHAPE: usize = 1;

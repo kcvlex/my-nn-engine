@@ -438,6 +438,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         KernelExpr::Raw(match op {
             Operator::Add => format!("({} + {})", lhs, rhs),
             Operator::Div => format!("({} / {})", lhs, rhs),
+            Operator::Equal => format!("({} == {})", lhs, rhs),
             Operator::Mul => format!("({} * {})", lhs, rhs),
             // TODO: Support integer types.
             Operator::Pow => format!("pow({}, {})", lhs, rhs),
@@ -480,6 +481,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             }
             binop @ (Operator::Add |
             Operator::Div |
+            Operator::Equal |
             Operator::Mul |
             Operator::Pow |
             Operator::Sub) => {
