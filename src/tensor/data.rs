@@ -6,6 +6,7 @@ use crate::tensor::types::*;
 // TODO: Complex
 #[derive(Debug, Clone)]
 pub enum TensorData {
+    Bool(Vec<u8>),
     SInt(SIntType, Vec<i64>),
     UInt(UIntType, Vec<u64>),
     Float(FloatType, Vec<f64>),
@@ -13,6 +14,7 @@ pub enum TensorData {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ScalarData {
+    Bool(u8),
     SInt(SIntType, i64),
     UInt(UIntType, u64),
     Float(FloatType, f64),
@@ -23,6 +25,7 @@ impl Eq for TensorData {}
 impl PartialEq for TensorData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (TensorData::Bool(a), TensorData::Bool(b)) => a == b,
             (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => a0 == b0 && a1 == b1,
@@ -36,6 +39,7 @@ impl Eq for ScalarData {}
 impl PartialEq for ScalarData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (ScalarData::Bool(a), ScalarData::Bool(b)) => a == b,
             (ScalarData::SInt(a0, a1), ScalarData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
             (ScalarData::UInt(a0, a1), ScalarData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
             (ScalarData::Float(a0, a1), ScalarData::Float(b0, b1)) => a0 == b0 && a1 == b1,
@@ -47,6 +51,7 @@ impl PartialEq for ScalarData {
 impl ScalarData {
     pub fn to_tensor_data(&self, num: usize) -> TensorData {
         match self {
+            ScalarData::Bool(v) => TensorData::Bool(vec![*v; num]),
             ScalarData::SInt(ty, v) => TensorData::SInt(*ty, vec![*v; num]),
             ScalarData::UInt(ty, v) => TensorData::UInt(*ty, vec![*v; num]),
             ScalarData::Float(ty, v) => TensorData::Float(*ty, vec![*v; num]),
@@ -64,6 +69,7 @@ pub enum CompPolicy {
 impl TensorData {
     pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64, comp: CompPolicy) -> bool {
         match (self, other) {
+            (TensorData::Bool(a), TensorData::Bool(b)) => a == b,
             (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::UInt(a0, a1), TensorData::UInt(b0, b1)) => a0 == b0 && a1 == b1,
             (TensorData::Float(a0, a1), TensorData::Float(b0, b1)) => {
@@ -103,6 +109,7 @@ impl TensorData {
 
     pub fn size(&self) -> usize {
         match self {
+            TensorData::Bool(v) => v.len(),
             TensorData::SInt(_, v) => v.len(),
             TensorData::UInt(_, v) => v.len(),
             TensorData::Float(_, v) => v.len(),
@@ -111,6 +118,7 @@ impl TensorData {
 
     pub fn elem_type(&self) -> DataType {
         match self {
+            TensorData::Bool(_) => DataType::Bool,
             TensorData::SInt(t, _) => DataType::SInt(*t),
             TensorData::UInt(t, _) => DataType::UInt(*t),
             TensorData::Float(t, _) => DataType::Float(*t),
@@ -125,6 +133,7 @@ impl TensorData {
         }
 
         match self {
+            TensorData::Bool(v) => v.clone(),
             TensorData::SInt(_, v) => convert!(v),
             TensorData::UInt(_, v) => convert!(v),
             TensorData::Float(_, v) => convert!(v),
@@ -144,8 +153,16 @@ impl TensorData {
             }};
         }
         match ty {
+            DataType::Bool => TensorData::Bool(
+                raw.iter()
+                    .map(|&b| if b != 0 { 1u8 } else { 0u8 })
+                    .collect(),
+            ),
             DataType::SInt(ty @ SIntType::I32) => TensorData::SInt(ty, convert!(raw, i32, i64)),
             DataType::SInt(ty @ SIntType::I64) => TensorData::SInt(ty, convert!(raw, i64, i64)),
+            DataType::UInt(ty @ UIntType::U8) => {
+                TensorData::UInt(ty, raw.iter().map(|&b| b as u64).collect())
+            }
             DataType::UInt(ty @ UIntType::U64) => TensorData::UInt(ty, convert!(raw, u64, u64)),
             DataType::Float(ty @ FloatType::F32) => TensorData::Float(ty, convert!(raw, f32, f64)),
             DataType::Float(ty @ FloatType::F64) => TensorData::Float(ty, convert!(raw, f64, f64)),
@@ -155,6 +172,7 @@ impl TensorData {
     pub fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
         let size = dims.size();
         match ty {
+            DataType::Bool => TensorData::Bool(vec![0u8; size]),
             DataType::SInt(t) => TensorData::SInt(t, vec![0; size]),
             DataType::UInt(t) => TensorData::UInt(t, vec![0; size]),
             DataType::Float(t) => TensorData::Float(t, vec![0.0; size]),
@@ -163,6 +181,7 @@ impl TensorData {
 
     pub fn to_scalar_data(&self) -> Option<ScalarData> {
         match self {
+            TensorData::Bool(v) if v.len() == 1 => Some(ScalarData::Bool(v[0])),
             TensorData::SInt(t, v) if v.len() == 1 => Some(ScalarData::SInt(*t, v[0])),
             TensorData::UInt(t, v) if v.len() == 1 => Some(ScalarData::UInt(*t, v[0])),
             TensorData::Float(t, v) if v.len() == 1 => Some(ScalarData::Float(*t, v[0])),
@@ -172,10 +191,21 @@ impl TensorData {
 
     pub fn to_scalars(&self) -> Vec<ScalarData> {
         match self {
+            TensorData::Bool(v) => v.iter().map(|x| ScalarData::Bool(*x)).collect(),
             TensorData::SInt(t, v) => v.iter().map(|x| ScalarData::SInt(*t, *x)).collect(),
             TensorData::UInt(t, v) => v.iter().map(|x| ScalarData::UInt(*t, *x)).collect(),
             TensorData::Float(t, v) => v.iter().map(|x| ScalarData::Float(*t, *x)).collect(),
         }
+    }
+}
+
+impl From<Vec<u8>> for TensorData {
+    fn from(v: Vec<u8>) -> Self {
+        TensorData::Bool(
+            v.into_iter()
+                .map(|x| if x != 0 { 1u8 } else { 0u8 })
+                .collect(),
+        )
     }
 }
 
@@ -212,6 +242,7 @@ impl From<Vec<f64>> for TensorData {
 impl ScalarData {
     pub fn elem_type(&self) -> DataType {
         match self {
+            ScalarData::Bool(_) => DataType::Bool,
             ScalarData::SInt(t, _) => DataType::SInt(*t),
             ScalarData::UInt(t, _) => DataType::UInt(*t),
             ScalarData::Float(t, _) => DataType::Float(*t),
@@ -224,6 +255,7 @@ impl TryInto<ScalarData> for TensorData {
 
     fn try_into(self) -> Result<ScalarData, Self::Error> {
         match self {
+            TensorData::Bool(v) if v.len() == 1 => Ok(ScalarData::Bool(v[0])),
             TensorData::SInt(ty, v) if v.len() == 1 => Ok(ScalarData::SInt(ty, v[0])),
             TensorData::UInt(ty, v) if v.len() == 1 => Ok(ScalarData::UInt(ty, v[0])),
             TensorData::Float(ty, v) if v.len() == 1 => Ok(ScalarData::Float(ty, v[0])),
@@ -238,6 +270,7 @@ impl TryInto<ScalarData> for TensorData {
 impl std::fmt::Display for ScalarData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ScalarData::Bool(v) => write!(f, "{}", v),
             ScalarData::SInt(_, v) => write!(f, "{}", v),
             ScalarData::UInt(_, v) => write!(f, "{}", v),
             ScalarData::Float(_, v) => write!(f, "{}", v),

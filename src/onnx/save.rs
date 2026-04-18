@@ -76,8 +76,10 @@ fn attr_tensor(name: &str, proto: TensorProto) -> AttributeProto {
 
 fn data_type_to_i32(dt: DataType) -> i32 {
     match dt {
+        DataType::Bool => tensor_proto::DataType::Bool as i32,
         DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
+        DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
         DataType::UInt(UIntType::U64) => tensor_proto::DataType::Uint64 as i32,
         DataType::Float(FloatType::F32) => tensor_proto::DataType::Float as i32,
         DataType::Float(FloatType::F64) => tensor_proto::DataType::Double as i32,
@@ -86,6 +88,12 @@ fn data_type_to_i32(dt: DataType) -> i32 {
 
 fn scalar_to_tensor_proto(scalar: &ScalarData) -> TensorProto {
     match scalar {
+        ScalarData::Bool(v) => TensorProto {
+            dims: vec![1],
+            data_type: tensor_proto::DataType::Bool as i32,
+            int32_data: vec![*v as i32],
+            ..Default::default()
+        },
         ScalarData::Float(FloatType::F32, v) => TensorProto {
             dims: vec![1],
             data_type: tensor_proto::DataType::Float as i32,
@@ -108,6 +116,12 @@ fn scalar_to_tensor_proto(scalar: &ScalarData) -> TensorProto {
             dims: vec![1],
             data_type: tensor_proto::DataType::Int64 as i32,
             int64_data: vec![*v],
+            ..Default::default()
+        },
+        ScalarData::UInt(UIntType::U8, v) => TensorProto {
+            dims: vec![1],
+            data_type: tensor_proto::DataType::Uint8 as i32,
+            int32_data: vec![*v as i32],
             ..Default::default()
         },
         ScalarData::UInt(UIntType::U64, v) => TensorProto {

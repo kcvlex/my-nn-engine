@@ -90,6 +90,10 @@ macro_rules! cast_vec {
 macro_rules! into_raw_tensor {
     ($tensor: expr, $ty: ty) => {{
         match &$tensor.data {
+            TensorData::Bool(v) => RawTensor {
+                data: v.iter().map(|&b| b as $ty).collect(),
+                dims: &$tensor.dims[..],
+            },
             TensorData::SInt(_, v) => RawTensor {
                 data: cast_vec!(v, $ty),
                 dims: &$tensor.dims[..],
@@ -109,6 +113,7 @@ macro_rules! into_raw_tensor {
 macro_rules! apply_ndarray_ops {
     ($self: expr, $func: expr, $($args: expr),*) => {{
         match &$self.data {
+            TensorData::Bool(_) | TensorData::UInt(UIntType::U8, _) => $func(into_raw_tensor!($self, u8), $($args,)*).try_into(),
             TensorData::SInt(SIntType::I32, _) => $func(into_raw_tensor!($self, i32), $($args,)*).try_into(),
             TensorData::SInt(SIntType::I64, _) => $func(into_raw_tensor!($self, i64), $($args,)*).try_into(),
             TensorData::UInt(UIntType::U64, _) => $func(into_raw_tensor!($self, u64), $($args,)*).try_into(),
@@ -176,6 +181,7 @@ impl Tensor {
         }
 
         match tensors[0].data {
+            TensorData::Bool(_) | TensorData::UInt(UIntType::U8, _) => collect_slices!(u8),
             TensorData::SInt(SIntType::I32, _) => collect_slices!(i32),
             TensorData::SInt(SIntType::I64, _) => collect_slices!(i64),
             TensorData::UInt(UIntType::U64, _) => collect_slices!(u64),
@@ -227,6 +233,7 @@ define_try_from!(f64);
 define_try_from!(i32);
 define_try_from!(i64);
 define_try_from!(u64);
+define_try_from!(u8);
 
 #[cfg(test)]
 mod test {

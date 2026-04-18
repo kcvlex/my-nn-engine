@@ -29,6 +29,7 @@ use crate::tensor::Tensor;
 use crate::transform::transform_graph;
 
 enum StrictTensor {
+    U8(Vec<u8>),
     I32(Vec<i32>),
     I64(Vec<i64>),
     U64(Vec<u64>),
@@ -46,6 +47,7 @@ impl StrictTensor {
     fn zeros(ty: DataType, dims: &ResolvedTensorDims) -> Self {
         let sz = dims.size().max(1);
         match ty {
+            DataType::Bool | DataType::UInt(UIntType::U8) => StrictTensor::U8(vec![0; sz]),
             DataType::SInt(SIntType::I32) => StrictTensor::I32(vec![0; sz]),
             DataType::SInt(SIntType::I64) => StrictTensor::I64(vec![0; sz]),
             DataType::UInt(UIntType::U64) => StrictTensor::U64(vec![0; sz]),
@@ -56,6 +58,7 @@ impl StrictTensor {
 
     fn as_ptr(&self) -> *const u8 {
         match self {
+            StrictTensor::U8(v) => v.as_ptr() as *const u8,
             StrictTensor::I32(v) => v.as_ptr() as *const u8,
             StrictTensor::I64(v) => v.as_ptr() as *const u8,
             StrictTensor::U64(v) => v.as_ptr() as *const u8,
@@ -66,6 +69,7 @@ impl StrictTensor {
 
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match self {
+            StrictTensor::U8(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::I32(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::I64(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::U64(v) => v.as_mut_ptr() as *mut u8,
@@ -76,6 +80,11 @@ impl StrictTensor {
 
     fn into_tensor(self, dims: ResolvedTensorDims) -> Tensor {
         match self {
+            StrictTensor::U8(v) => Tensor::new(
+                dims,
+                TensorData::Bool(v.iter().map(|&b| if b != 0 { 1u8 } else { 0u8 }).collect()),
+            )
+            .unwrap(),
             StrictTensor::I32(v) => {
                 Tensor::new(dims, TensorData::SInt(SIntType::I32, cast_vec!(v, i64))).unwrap()
             }
@@ -94,6 +103,8 @@ impl StrictTensor {
 impl From<&Tensor> for StrictTensor {
     fn from(t: &Tensor) -> Self {
         match &t.data {
+            TensorData::Bool(v) => StrictTensor::U8(v.clone()),
+            TensorData::UInt(UIntType::U8, v) => StrictTensor::U8(cast_vec!(v, u8)),
             TensorData::SInt(SIntType::I32, v) => StrictTensor::I32(cast_vec!(v, i32)),
             TensorData::SInt(SIntType::I64, v) => StrictTensor::I64(v.clone()),
             TensorData::UInt(UIntType::U64, v) => StrictTensor::U64(v.clone()),

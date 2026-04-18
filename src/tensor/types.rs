@@ -232,6 +232,7 @@ impl FromIterator<usize> for ResolvedTensorDims {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum DataType {
+    Bool,
     SInt(SIntType),
     UInt(UIntType),
     Float(FloatType),
@@ -260,12 +261,14 @@ impl SIntType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum UIntType {
+    U8,
     U64,
 }
 
 impl UIntType {
     pub fn bit_width(&self) -> usize {
         match self {
+            UIntType::U8 => 8,
             UIntType::U64 => 64,
         }
     }
@@ -304,6 +307,7 @@ impl DataType {
 
     pub fn bit_width(&self) -> usize {
         match self {
+            DataType::Bool => 8,
             DataType::SInt(sty) => sty.bit_width(),
             DataType::UInt(uty) => uty.bit_width(),
             DataType::Float(fty) => fty.bit_width(),

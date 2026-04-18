@@ -68,8 +68,10 @@ impl std::fmt::Display for DataType {
             f,
             "{}",
             match self {
+                DataType::Bool => "int8_t",
                 DataType::SInt(SIntType::I32) => "i32",
                 DataType::SInt(SIntType::I64) => "i64",
+                DataType::UInt(UIntType::U8) => "uint8_t",
                 DataType::UInt(UIntType::U64) => "u64",
                 DataType::Float(FloatType::F32) => "float",
                 DataType::Float(FloatType::F64) => "double",
@@ -153,6 +155,7 @@ impl ChunkMemSize {
             .iter()
             .map(|s| {
                 let elem_size = match s.ty {
+                    DataType::Bool | DataType::UInt(UIntType::U8) => 1,
                     DataType::Float(FloatType::F32) | DataType::SInt(SIntType::I32) => 4,
                     DataType::Float(FloatType::F64) |
                     DataType::SInt(SIntType::I64) |

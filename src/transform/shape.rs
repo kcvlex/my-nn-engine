@@ -563,6 +563,7 @@ pub fn infer_node_output(
             }
 
             let count = match input {
+                TensorData::Bool(ref v) => v.iter().filter(|&&x| x != 0).count(),
                 TensorData::SInt(_, ref v) => count_nonzero!(v),
                 TensorData::UInt(_, ref v) => count_nonzero!(v),
                 TensorData::Float(_, ref v) => count_nonzero!(v),

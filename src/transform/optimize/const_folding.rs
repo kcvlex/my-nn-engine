@@ -75,6 +75,13 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             macro_rules! cast {
                 ($data: expr, $to: expr) => {{
                     match $to {
+                        DataType::Bool => TensorData::Bool(
+                            $data
+                                .to_vec()
+                                .iter()
+                                .map(|x| if *x as i64 != 0 { 1u8 } else { 0u8 })
+                                .collect_vec(),
+                        ),
                         DataType::SInt(to) => TensorData::SInt(
                             *to,
                             $data.to_vec().iter().map(|x| *x as i64).collect_vec(),
@@ -91,6 +98,10 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
                 }};
             }
             let data = match data {
+                TensorData::Bool(data) => {
+                    let as_i64: Vec<i64> = data.iter().map(|&b| b as i64).collect();
+                    cast!(as_i64, to)
+                }
                 TensorData::SInt(_, data) => cast!(data, to),
                 TensorData::UInt(_, data) => cast!(data, to),
                 TensorData::Float(_, data) => cast!(data, to),
@@ -143,6 +154,10 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             }
 
             let indices = match &input.data {
+                TensorData::Bool(data) => {
+                    let as_i64: Vec<i64> = data.iter().map(|&b| b as i64).collect();
+                    calc(&as_i64, dims)
+                }
                 TensorData::SInt(_, data) => calc(data, dims),
                 TensorData::UInt(_, data) => calc(data, dims),
                 TensorData::Float(_, data) => calc(data, dims),
@@ -267,6 +282,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                         .to_scalar_data()
                         .expect("OneHot 'depth' must be a scalar.");
                     match tensor {
+                        ScalarData::Bool(v) => v as usize,
                         ScalarData::SInt(_, v) => v as usize,
                         ScalarData::UInt(_, v) => v as usize,
                         ScalarData::Float(_, v) => v as usize,
@@ -327,6 +343,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                     .and_then(|id| graph.initializer.get(id))
                     .and_then(|tensor| tensor.data.to_scalar_data())
                     .map(|s| match s {
+                        ScalarData::Bool(v) => v as f64,
                         ScalarData::SInt(_, v) => v as f64,
                         ScalarData::UInt(_, v) => v as f64,
                         ScalarData::Float(_, v) => v,

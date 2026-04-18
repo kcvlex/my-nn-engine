@@ -164,6 +164,7 @@ impl SIntType {
 impl UIntType {
     pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::IntType<'ctx> {
         match self {
+            UIntType::U8 => ctx.i8_type(),
             UIntType::U64 => ctx.i64_type(),
         }
     }
@@ -181,6 +182,7 @@ impl FloatType {
 impl DataType {
     pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> BasicTypeEnum<'ctx> {
         match self {
+            DataType::Bool => ctx.i8_type().as_basic_type_enum(),
             DataType::SInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
             DataType::UInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
             DataType::Float(t) => t.llvm_type(ctx).as_basic_type_enum(),

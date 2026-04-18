@@ -23,8 +23,10 @@ impl std::fmt::Display for CudnnApi {
 impl DataType {
     pub fn cudnn(&self) -> &'static str {
         match self {
+            DataType::Bool => "CUDNN_DATA_INT8",
             DataType::SInt(SIntType::I32) => "CUDNN_DATA_INT32",
             DataType::SInt(SIntType::I64) => "CUDNN_DATA_INT64",
+            DataType::UInt(UIntType::U8) => "CUDNN_DATA_UINT8",
             DataType::UInt(UIntType::U64) => "CUDNN_DATA_UINT64",
             DataType::Float(FloatType::F32) => "CUDNN_DATA_FLOAT",
             DataType::Float(FloatType::F64) => "CUDNN_DATA_DOUBLE",

@@ -348,30 +348,24 @@ impl GraphLoader {
 }
 
 fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
-    let is_bool = tensor.data_type == tensor_proto::DataType::Bool as i32;
     let elem_type = DataType::try_from(tensor.data_type)?;
-    let data = if is_bool {
-        if tensor.raw_data.is_empty() {
-            TensorData::SInt(
-                SIntType::I32,
-                tensor.int32_data.into_iter().map(i64::from).collect(),
-            )
-        } else {
-            TensorData::SInt(
-                SIntType::I32,
-                tensor
-                    .raw_data
-                    .iter()
-                    .map(|&b| if b != 0 { 1i64 } else { 0i64 })
-                    .collect(),
-            )
-        }
-    } else if tensor.raw_data.is_empty() {
+    let data = if tensor.raw_data.is_empty() {
         match elem_type {
+            DataType::Bool => TensorData::Bool(
+                tensor
+                    .int32_data
+                    .into_iter()
+                    .map(|v| if v != 0 { 1u8 } else { 0u8 })
+                    .collect(),
+            ),
             DataType::SInt(ty @ SIntType::I32) => {
                 TensorData::SInt(ty, tensor.int32_data.into_iter().map(i64::from).collect())
             }
             DataType::SInt(ty @ SIntType::I64) => TensorData::SInt(ty, tensor.int64_data),
+            DataType::UInt(ty @ UIntType::U8) => TensorData::UInt(
+                ty,
+                tensor.int32_data.into_iter().map(|v| v as u64).collect(),
+            ),
             DataType::UInt(ty @ UIntType::U64) => TensorData::UInt(ty, tensor.uint64_data),
             DataType::Float(ty @ FloatType::F32) => {
                 TensorData::Float(ty, tensor.float_data.into_iter().map(f64::from).collect())
@@ -392,8 +386,10 @@ fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
 
 pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
     let data_type = match tensor.data.elem_type() {
+        DataType::Bool => tensor_proto::DataType::Bool as i32,
         DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
+        DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
         DataType::UInt(UIntType::U64) => tensor_proto::DataType::Uint64 as i32,
         DataType::Float(FloatType::F32) => tensor_proto::DataType::Float as i32,
         DataType::Float(FloatType::F64) => tensor_proto::DataType::Double as i32,
@@ -402,6 +398,13 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
     let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
 
     let (float_data, double_data, int32_data, int64_data, uint64_data) = match &tensor.data {
+        TensorData::Bool(v) => (
+            vec![],
+            vec![],
+            v.iter().map(|&b| b as i32).collect(),
+            vec![],
+            vec![],
+        ),
         TensorData::Float(FloatType::F32, v) => (
             v.iter().map(|&x| x as f32).collect(),
             vec![],
@@ -418,6 +421,13 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
             vec![],
         ),
         TensorData::SInt(SIntType::I64, v) => (vec![], vec![], vec![], v.clone(), vec![]),
+        TensorData::UInt(UIntType::U8, v) => (
+            vec![],
+            vec![],
+            v.iter().map(|&x| x as i32).collect(),
+            vec![],
+            vec![],
+        ),
         TensorData::UInt(UIntType::U64, v) => (vec![], vec![], vec![], vec![], v.clone()),
     };
 
@@ -476,7 +486,7 @@ impl TryFrom<i32> for DataType {
         let value = tensor_proto::DataType::try_from(value)
             .map_err(|e| ModelLoadError::Unexpected(format!("Invalid DataType: {:?}", e)))?;
         match value {
-            tensor_proto::DataType::Bool => Ok(SIntType::I32.into()),
+            tensor_proto::DataType::Bool => Ok(DataType::Bool),
             tensor_proto::DataType::Float => Ok(FloatType::F32.into()),
             tensor_proto::DataType::Double => Ok(FloatType::F64.into()),
             tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),

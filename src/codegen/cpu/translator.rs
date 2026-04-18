@@ -261,6 +261,49 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     (DataType::UInt(ufrom), DataType::UInt(uto)) if ufrom == uto => src,
                     (DataType::Float(ffrom), DataType::Float(fto)) if ffrom == fto => src,
 
+                    (DataType::Bool, DataType::SInt(sto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), sto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+                    (DataType::Bool, DataType::UInt(uto)) => self
+                        .builder
+                        .build_int_cast(src.into_int_value(), uto.llvm_type(self.context), "cast")?
+                        .as_basic_value_enum(),
+                    (DataType::Bool, DataType::Float(fto)) => self
+                        .builder
+                        .build_unsigned_int_to_float(
+                            src.into_int_value(),
+                            fto.llvm_type(self.context),
+                            "cast",
+                        )?
+                        .as_basic_value_enum(),
+                    (DataType::Bool, DataType::Bool) => src,
+
+                    (DataType::SInt(_) | DataType::UInt(_), DataType::Bool) => {
+                        let zero = src.into_int_value().get_type().const_zero();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            src.into_int_value(),
+                            zero,
+                            "cast",
+                        )?;
+                        self.builder
+                            .build_int_z_extend(cmp, self.context.i8_type(), "cast")?
+                            .as_basic_value_enum()
+                    }
+                    (DataType::Float(_), DataType::Bool) => {
+                        let zero = src.into_float_value().get_type().const_zero();
+                        let cmp = self.builder.build_float_compare(
+                            inkwell::FloatPredicate::ONE,
+                            src.into_float_value(),
+                            zero,
+                            "cast",
+                        )?;
+                        self.builder
+                            .build_int_z_extend(cmp, self.context.i8_type(), "cast")?
+                            .as_basic_value_enum()
+                    }
+
                     // Integer to integer casts
                     (DataType::SInt(_), DataType::SInt(sto)) => self
                         .builder
@@ -465,7 +508,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 };
                 let llvm_cast_ty = cast_ty.llvm_type(self.context);
                 let convert_op = |v: BasicValueEnum<'ctx>, ty: DataType| match ty {
-                    DataType::SInt(_) => {
+                    DataType::Bool | DataType::SInt(_) => {
                         self.builder
                             .build_signed_int_to_float(v.into_int_value(), llvm_cast_ty, "")
                     }
@@ -495,6 +538,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .unwrap();
 
                 match base_ty {
+                    DataType::Bool => self
+                        .builder
+                        .build_float_to_signed_int(
+                            res.into_float_value(),
+                            self.context.i8_type(),
+                            "res",
+                        )?
+                        .as_basic_value_enum(),
                     DataType::SInt(sty) => self
                         .builder
                         .build_float_to_signed_int(
@@ -3020,6 +3071,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         value: &ScalarData,
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
         let res = match value {
+            ScalarData::Bool(v) => self.context.i8_type().const_int(*v as u64, false).into(),
             ScalarData::SInt(ty, v) => {
                 let ty = match ty {
                     SIntType::I32 => self.context.i32_type(),
@@ -3029,6 +3081,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             ScalarData::UInt(ty, v) => {
                 let ty = match ty {
+                    UIntType::U8 => self.context.i8_type(),
                     UIntType::U64 => self.context.i64_type(),
                 };
                 ty.const_int(*v, false).into()
@@ -3190,26 +3243,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let cond_val = self.build_load(&cond_ptr)?;
         let x_val = self.build_load(&x_ptr)?;
         let y_val = self.build_load(&y_ptr)?;
-        let is_true = match cond.ty.elem_type {
-            DataType::SInt(SIntType::I32) => self.builder.build_int_compare(
-                inkwell::IntPredicate::NE,
-                cond_val.into_int_value(),
-                self.context.i32_type().const_zero(),
-                "is_true",
-            )?,
-            DataType::SInt(SIntType::I64) => self.builder.build_int_compare(
-                inkwell::IntPredicate::NE,
-                cond_val.into_int_value(),
-                i64_type.const_zero(),
-                "is_true",
-            )?,
-            _ => self.builder.build_int_compare(
-                inkwell::IntPredicate::NE,
-                cond_val.into_int_value(),
-                self.context.i32_type().const_zero(),
-                "is_true",
-            )?,
-        };
+        let cond_int = cond_val.into_int_value();
+        let zero = cond_int.get_type().const_zero();
+        let is_true =
+            self.builder
+                .build_int_compare(inkwell::IntPredicate::NE, cond_int, zero, "is_true")?;
         let selected = self
             .builder
             .build_select(is_true, x_val, y_val, "selected")?;
