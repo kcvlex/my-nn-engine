@@ -29,6 +29,7 @@ impl<'ctx> FloatIntrinsics<'ctx> {
 #[allow(dead_code)]
 pub struct Intrinsics<'ll> {
     pub ceil: FloatIntrinsics<'ll>,
+    pub cos: FloatIntrinsics<'ll>,
     pub exp: FloatIntrinsics<'ll>,
     pub fma: FloatIntrinsics<'ll>,
     pub fmax: FloatIntrinsics<'ll>,
@@ -36,6 +37,7 @@ pub struct Intrinsics<'ll> {
     pub floor: FloatIntrinsics<'ll>,
     pub log: FloatIntrinsics<'ll>,
     pub pow: FloatIntrinsics<'ll>,
+    pub sin: FloatIntrinsics<'ll>,
     pub sqrt: FloatIntrinsics<'ll>,
     pub tanh: FloatIntrinsics<'ll>,
 

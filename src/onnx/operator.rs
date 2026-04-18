@@ -52,6 +52,7 @@ pub enum Operator {
     Constant(Constant),
     ConstantOfShape(ConstantOfShape),
     Conv(Conv),
+    Cos,
     Div,
     Exp,
     Gather(Gather),
@@ -78,6 +79,7 @@ pub enum Operator {
     Resize(Resize),
     Shape(Shape),
     Sigmoid,
+    Sin,
     Slice,
     Softmax(Softmax),
     Split(Split),
@@ -767,6 +769,7 @@ impl Operator {
             Operator::Constant(_) => "Constant",
             Operator::ConstantOfShape(_) => "ConstantOfShape",
             Operator::Conv(_) => "Conv",
+            Operator::Cos => "Cos",
             Operator::Div => "Div",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
@@ -793,6 +796,7 @@ impl Operator {
             Operator::Resize(_) => "Resize",
             Operator::Shape(_) => "Shape",
             Operator::Sigmoid => "Sigmoid",
+            Operator::Sin => "Sin",
             Operator::Slice => "Slice",
             Operator::Softmax(_) => "Softmax",
             Operator::Split(_) => "Split",
@@ -822,6 +826,7 @@ impl Operator {
             Operator::BatchNormalization(_) |
             Operator::Cast(_) |
             Operator::Clip(_) |
+            Operator::Cos |
             Operator::Div |
             Operator::Exp |
             Operator::GeLU(_) |
@@ -834,6 +839,7 @@ impl Operator {
             Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |
+            Operator::Sin |
             Operator::Sqrt |
             Operator::Sub |
             Operator::Tanh => OperatorType::Elementwise,

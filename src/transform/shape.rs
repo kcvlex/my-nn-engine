@@ -180,6 +180,7 @@ pub fn infer_node_output(
         }
         Operator::BatchNormalization(_) |
         Operator::Clip(_) |
+        Operator::Cos |
         Operator::Exp |
         Operator::GeLU(_) |
         Operator::Identity |
@@ -190,6 +191,7 @@ pub fn infer_node_output(
         Operator::Reciprocal |
         Operator::ReLU |
         Operator::Sigmoid |
+        Operator::Sin |
         Operator::Softmax(_) |
         Operator::Sqrt |
         Operator::Tanh |

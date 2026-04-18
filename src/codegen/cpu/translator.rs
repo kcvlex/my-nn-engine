@@ -380,17 +380,21 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
             SingleOpcode::Neg => {
                 let src = unary_op!(operands).into_float_value();
-                self.builder
-                    .build_float_neg(src, "neg")?
-                    .as_basic_value_enum()
+                self.builder.build_float_neg(src, "neg")?.as_basic_value_enum()
             }
 
-            opcode @ (SingleOpcode::Exp | SingleOpcode::Log | SingleOpcode::Sqrt) => {
+            opcode @ (SingleOpcode::Cos |
+            SingleOpcode::Exp |
+            SingleOpcode::Log |
+            SingleOpcode::Sin |
+            SingleOpcode::Sqrt) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();
                 let f = match opcode {
+                    SingleOpcode::Cos => self.intrinsics.cos.get(ty),
                     SingleOpcode::Exp => self.intrinsics.exp.get(ty),
                     SingleOpcode::Log => self.intrinsics.log.get(ty),
+                    SingleOpcode::Sin => self.intrinsics.sin.get(ty),
                     SingleOpcode::Sqrt => self.intrinsics.sqrt.get(ty),
                     _ => unreachable!(),
                 };

@@ -140,6 +140,7 @@ fn conv_pad_attrs(pad: &ConvPad) -> Vec<AttributeProto> {
 fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
     match op {
         Operator::Add |
+        Operator::Cos |
         Operator::Sub |
         Operator::Mul |
         Operator::Neg |
@@ -151,6 +152,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Reciprocal |
         Operator::ReLU |
         Operator::Sigmoid |
+        Operator::Sin |
         Operator::Tanh |
         Operator::Identity |
         Operator::MatMul |

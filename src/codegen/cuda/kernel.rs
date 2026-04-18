@@ -402,6 +402,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
     fn unary_op(&self, op: &Operator, x: KernelVar) -> KernelExpr {
         KernelExpr::Raw(match op {
             Operator::Cast(Cast { to }) => format!("({})({})", to, x),
+            Operator::Cos => format!("cosf({})", x),
             Operator::Exp => format!("exp({})", x),
             Operator::GeLU(GeLU { approximate }) => {
                 if !approximate {
@@ -426,6 +427,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Reciprocal => format!("(1.0 / {})", x),
             Operator::ReLU => format!("((0 <= {}) ? {} : 0)", x, x),
             Operator::Sigmoid => format!("(1.0 / (1.0 + exp(-{})))", x),
+            Operator::Sin => format!("sinf({})", x),
             Operator::Sqrt => format!("sqrt({})", x),
             Operator::Tanh => format!("tanh({})", x),
             _ => unreachable!(),
@@ -458,6 +460,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             }
             uop @ (Operator::Cast(_) |
             Operator::Clip(_) |
+            Operator::Cos |
             Operator::Exp |
             Operator::GeLU(_) |
             Operator::Identity |
@@ -467,6 +470,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |
+            Operator::Sin |
             Operator::Sqrt |
             Operator::Tanh) => {
                 let [a] = inputs else {

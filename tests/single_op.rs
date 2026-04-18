@@ -1401,6 +1401,24 @@ fn transpose_contiguous_fold() -> TestResult {
 }
 
 #[test]
+fn cos() -> TestResult {
+    with_all_sessions_and_tensors("cos", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
+fn sin() -> TestResult {
+    with_all_sessions_and_tensors("sin", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
 fn conv_stride2_1x1() -> TestResult {
     with_all_sessions_and_tensors("conv_stride2_1x1", (1, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;

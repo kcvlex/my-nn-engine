@@ -895,6 +895,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Add |
+                Operator::Cos |
                 Operator::Div |
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
@@ -908,6 +909,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
+                Operator::Sin |
                 Operator::Sqrt |
                 Operator::Sub |
                 Operator::Tanh => unreachable!(),

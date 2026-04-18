@@ -259,6 +259,10 @@ impl CodeGenContext {
             f_f32: get_intrinsic!("llvm.ceil", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.ceil", &[f64_ty])?,
         };
+        let cos = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.cos", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.cos", &[f64_ty])?,
+        };
         let exp = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.exp", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.exp", &[f64_ty])?,
@@ -287,6 +291,10 @@ impl CodeGenContext {
             f_f32: get_intrinsic!("llvm.pow", &[f32_ty, f32_ty])?,
             f_f64: get_intrinsic!("llvm.pow", &[f64_ty, f64_ty])?,
         };
+        let sin = FloatIntrinsics {
+            f_f32: get_intrinsic!("llvm.sin", &[f32_ty])?,
+            f_f64: get_intrinsic!("llvm.sin", &[f64_ty])?,
+        };
         let sqrt = FloatIntrinsics {
             f_f32: get_intrinsic!("llvm.sqrt", &[f32_ty])?,
             f_f64: get_intrinsic!("llvm.sqrt", &[f64_ty])?,
@@ -308,6 +316,7 @@ impl CodeGenContext {
 
         let intrinsics = Intrinsics {
             ceil,
+            cos,
             exp,
             floor,
             fma,
@@ -315,6 +324,7 @@ impl CodeGenContext {
             fmin,
             log,
             pow,
+            sin,
             sqrt,
             smin_i32,
             smin_i64,
@@ -751,6 +761,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
                 Operator::Clip(_) |
+                Operator::Cos |
                 Operator::Exp |
                 Operator::GeLU(_) |
                 Operator::LeakyReLU(_) |
@@ -759,6 +770,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
+                Operator::Sin |
                 Operator::Sqrt |
                 Operator::Tanh => (),
 
@@ -774,6 +786,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     SingleOpcode::Cast(src, cast.to)
                 }
                 Operator::Clip(v) => SingleOpcode::Clip(*v),
+                Operator::Cos => SingleOpcode::Cos,
                 Operator::Div => SingleOpcode::Div,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
@@ -790,6 +803,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Reciprocal => SingleOpcode::Reciprocal,
                 Operator::ReLU => SingleOpcode::ReLU,
                 Operator::Sigmoid => SingleOpcode::Sigmoid,
+                Operator::Sin => SingleOpcode::Sin,
                 Operator::Sqrt => SingleOpcode::Sqrt,
                 Operator::Sub => SingleOpcode::Sub,
                 Operator::Tanh => SingleOpcode::Tanh,
@@ -802,6 +816,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Add |
                 Operator::BatchNormalization(_) |
                 Operator::Clip(_) |
+                Operator::Cos |
                 Operator::Exp |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
@@ -811,6 +826,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
+                Operator::Sin |
                 Operator::Sqrt |
                 Operator::Sub |
                 Operator::Tanh => unreachable!(),
