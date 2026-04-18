@@ -142,6 +142,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Add |
         Operator::Sub |
         Operator::Mul |
+        Operator::Neg |
         Operator::Div |
         Operator::Exp |
         Operator::Log |

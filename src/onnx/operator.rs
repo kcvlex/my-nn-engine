@@ -65,6 +65,7 @@ pub enum Operator {
     MatMul,
     MaxPool(Pooling),
     Mul,
+    Neg,
     NonZero,
     OneHot(OneHot),
     Pow,
@@ -779,6 +780,7 @@ impl Operator {
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
             Operator::Mul => "Mul",
+            Operator::Neg => "Neg",
             Operator::NonZero => "NonZero",
             Operator::OneHot(_) => "OneHot",
             Operator::Pow => "Pow",
@@ -827,6 +829,7 @@ impl Operator {
             Operator::LeakyReLU(_) |
             Operator::Log |
             Operator::Mul |
+            Operator::Neg |
             Operator::Pow |
             Operator::Reciprocal |
             Operator::ReLU |

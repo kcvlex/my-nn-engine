@@ -755,6 +755,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::GeLU(_) |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
+                Operator::Neg |
                 Operator::Reciprocal |
                 Operator::ReLU |
                 Operator::Sigmoid |
@@ -779,6 +780,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,
+                Operator::Neg => SingleOpcode::Neg,
                 Operator::Pow => {
                     assert!(operands.len() == 2);
                     let lhs = operands[0].0;
@@ -804,6 +806,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
+                Operator::Neg |
                 Operator::Pow |
                 Operator::Reciprocal |
                 Operator::ReLU |

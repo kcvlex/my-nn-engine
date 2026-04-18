@@ -422,6 +422,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 format!("((0 <= {}) ? {} : {} * {})", x, x, alpha, x)
             }
             Operator::Log => format!("log({})", x),
+            Operator::Neg => format!("-({})", x),
             Operator::Reciprocal => format!("(1.0 / {})", x),
             Operator::ReLU => format!("((0 <= {}) ? {} : 0)", x, x),
             Operator::Sigmoid => format!("(1.0 / (1.0 + exp(-{})))", x),
@@ -462,6 +463,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Identity |
             Operator::LeakyReLU(_) |
             Operator::Log |
+            Operator::Neg |
             Operator::Reciprocal |
             Operator::ReLU |
             Operator::Sigmoid |

@@ -186,6 +186,7 @@ pub fn infer_node_output(
         Operator::LayerNormalization(_) |
         Operator::LeakyReLU(_) |
         Operator::Log |
+        Operator::Neg |
         Operator::Reciprocal |
         Operator::ReLU |
         Operator::Sigmoid |

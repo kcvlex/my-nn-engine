@@ -378,6 +378,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .as_basic_value_enum()
             }
 
+            SingleOpcode::Neg => {
+                let src = unary_op!(operands).into_float_value();
+                self.builder
+                    .build_float_neg(src, "neg")?
+                    .as_basic_value_enum()
+            }
+
             opcode @ (SingleOpcode::Exp | SingleOpcode::Log | SingleOpcode::Sqrt) => {
                 let src = unary_op!(operands);
                 let ty = ty.float_type().unwrap();

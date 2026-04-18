@@ -86,6 +86,7 @@ pub enum SingleOpcode {
     LeakyReLU(LeakyReLU),
     Log,
     Mul,
+    Neg,
     Pow(DataType, DataType),
     Reciprocal,
     ReLU,
