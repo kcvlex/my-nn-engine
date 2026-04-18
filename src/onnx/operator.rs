@@ -70,6 +70,7 @@ pub enum Operator {
     NonZero,
     OneHot(OneHot),
     Pow,
+    Range,
     Reciprocal,
     ReduceMax(Reduce),
     ReduceMean(Reduce),
@@ -788,6 +789,7 @@ impl Operator {
             Operator::NonZero => "NonZero",
             Operator::OneHot(_) => "OneHot",
             Operator::Pow => "Pow",
+            Operator::Range => "Range",
             Operator::Reciprocal => "Reciprocal",
             Operator::ReduceMax(_) => "ReduceMax",
             Operator::ReduceMean(_) => "ReduceMean",
@@ -868,6 +870,7 @@ impl Operator {
             Operator::MaxPool(_) |
             Operator::NonZero |
             Operator::OneHot(_) |
+            Operator::Range |
             Operator::ReduceMax(_) |
             Operator::ReduceMatrix(_) |
             Operator::ReduceMean(_) |

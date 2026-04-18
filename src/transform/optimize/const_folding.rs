@@ -167,6 +167,31 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let tensor = Tensor::new(shape, TensorData::SInt(SIntType::I64, indices)).ok()?;
             Some(vec![tensor])
         }
+        Operator::Range => {
+            let start = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let limit = graph.initializer.get(&node.inputs[1].unwrap())?;
+            let delta = graph.initializer.get(&node.inputs[2].unwrap())?;
+            let start_s = start.data.to_scalar_data()?;
+            let limit_s = limit.data.to_scalar_data()?;
+            let delta_s = delta.data.to_scalar_data()?;
+            let (data, len) = match (&start_s, &limit_s, &delta_s) {
+                (ScalarData::Float(ty, s), ScalarData::Float(_, l), ScalarData::Float(_, d)) => {
+                    let n = ((*l - *s) / *d).ceil() as usize;
+                    let v: Vec<f64> = (0..n).map(|i| *s + (i as f64) * *d).collect();
+                    (TensorData::Float(*ty, v), n)
+                }
+                (ScalarData::SInt(ty, s), ScalarData::SInt(_, l), ScalarData::SInt(_, d)) => {
+                    let diff = *l - *s;
+                    let n = ((diff + *d - diff.signum()) / *d) as usize;
+                    let v: Vec<i64> = (0..n).map(|i| *s + (i as i64) * *d).collect();
+                    (TensorData::SInt(*ty, v), n)
+                }
+                _ => return None,
+            };
+            let dims = ResolvedTensorDims::new(&[len]);
+            let tensor = Tensor::new(dims, data).ok()?;
+            Some(vec![tensor])
+        }
         Operator::Reciprocal => {
             let v = graph.initializer.get(&node.inputs[0].unwrap())?;
             let data = match &v.data {

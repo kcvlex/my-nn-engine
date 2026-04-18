@@ -1446,6 +1446,20 @@ fn neg() -> TestResult {
 }
 
 #[test]
+fn range() -> TestResult {
+    with_session_and_tensors(
+        "range",
+        &[Target::CPU],
+        (0, 1),
+        |session, (inputs, expected)| {
+            let outputs = session.run(inputs)?;
+            assert_eq!(outputs[0], expected[0]);
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn r#where() -> TestResult {
     with_all_sessions_and_tensors("where", (3, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;

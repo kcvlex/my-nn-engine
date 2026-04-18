@@ -162,6 +162,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Exp |
         Operator::Log |
         Operator::Pow |
+        Operator::Range |
         Operator::Sqrt |
         Operator::Reciprocal |
         Operator::ReLU |

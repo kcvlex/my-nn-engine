@@ -1054,6 +1054,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "NonZero" => Ok(Operator::NonZero),
         "OneHot" => Ok(Operator::OneHot(OneHot::load(attributes)?)),
         "Pow" => Ok(Operator::Pow),
+        "Range" => Ok(Operator::Range),
         "Reciprocal" => Ok(Operator::Reciprocal),
         "ReduceMax" => Ok(Operator::ReduceMax(Reduce::load(attributes)?)),
         "ReduceMean" => Ok(Operator::ReduceMean(Reduce::load(attributes)?)),

@@ -11,6 +11,7 @@ use crate::onnx::model::NodeId;
 use crate::onnx::model::UnifyMode;
 use crate::onnx::operator::*;
 use crate::options::Options;
+use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::broadcast_shape;
 use crate::tensor::types::ResolvedTensorDims;
@@ -576,6 +577,50 @@ pub fn infer_node_output(
             ));
         }
 
+        Operator::Range => {
+            let start = graph
+                .initializer
+                .get(&node.inputs[0].unwrap())
+                .ok_or(TypeError::UnresolvedInput)?;
+            let limit = graph
+                .initializer
+                .get(&node.inputs[1].unwrap())
+                .ok_or(TypeError::UnresolvedInput)?;
+            let delta = graph
+                .initializer
+                .get(&node.inputs[2].unwrap())
+                .ok_or(TypeError::UnresolvedInput)?;
+            let start_val = start
+                .data
+                .to_scalar_data()
+                .ok_or(TypeError::UnresolvedInput)?;
+            let limit_val = limit
+                .data
+                .to_scalar_data()
+                .ok_or(TypeError::UnresolvedInput)?;
+            let delta_val = delta
+                .data
+                .to_scalar_data()
+                .ok_or(TypeError::UnresolvedInput)?;
+            let len = match (&start_val, &limit_val, &delta_val) {
+                (ScalarData::Float(_, s), ScalarData::Float(_, l), ScalarData::Float(_, d)) => {
+                    ((l - s) / d).ceil() as usize
+                }
+                (ScalarData::SInt(_, s), ScalarData::SInt(_, l), ScalarData::SInt(_, d)) => {
+                    let diff = l - s;
+                    ((diff + d - diff.signum()) / d) as usize
+                }
+                _ => {
+                    return Err(TypeError::InferError(
+                        "Range: unsupported types".to_string(),
+                    ));
+                }
+            };
+            res.push(ResolvedTensorType::new(
+                start_val.elem_type(),
+                ResolvedTensorDims::new(&[len]),
+            ));
+        }
         Operator::NHWC2NCHW => {
             let data = &inputs[0];
             let t = Transpose {
