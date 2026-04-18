@@ -1035,6 +1035,15 @@ fn concat_axis_2() -> TestResult {
 }
 
 #[test]
+fn cast_f32_to_i64() -> TestResult {
+    with_all_sessions_and_tensors("cast_f32_to_i64", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq!(outputs[0], expected[0]);
+        Ok(())
+    })
+}
+
+#[test]
 fn bias_gemm() -> TestResult {
     with_all_sessions("bias_gemm.onnx", |session| {
         let (input0, orig0) = make_range_tensor!(f32, 4, 7)?;
@@ -1392,6 +1401,24 @@ fn transpose_contiguous_fold() -> TestResult {
 }
 
 #[test]
+fn cos() -> TestResult {
+    with_all_sessions_and_tensors("cos", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
+fn sin() -> TestResult {
+    with_all_sessions_and_tensors("sin", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
 fn conv_stride2_1x1() -> TestResult {
     with_all_sessions_and_tensors("conv_stride2_1x1", (1, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;
@@ -1405,6 +1432,15 @@ fn conv_3x3_stride2() -> TestResult {
     with_all_sessions_and_tensors("conv_3x3_stride2", (1, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;
         assert_eq_epsilon!(outputs[0], expected[0], 1e-3);
+        Ok(())
+    })
+}
+
+#[test]
+fn neg() -> TestResult {
+    with_all_sessions_and_tensors("neg", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
         Ok(())
     })
 }
