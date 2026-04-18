@@ -606,6 +606,14 @@ pub fn infer_node_output(
             }
             res.push(ty);
         }
+        Operator::Where => {
+            let cond = &inputs[args::WHERE_COND];
+            let x = &inputs[args::WHERE_X];
+            let y = &inputs[args::WHERE_Y];
+            let dims = broadcast_shape(&cond.dims, &x.dims)?;
+            let dims = broadcast_shape(&dims, &y.dims)?;
+            res.push(ResolvedTensorType::new(x.elem_type, dims));
+        }
         Operator::Input(_) | Operator::Output(_) | Operator::ReduceMatrix(_) => {
             for output in node.outputs.iter() {
                 let ty = graph.get_resolved_tensor_type(*output);

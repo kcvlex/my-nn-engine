@@ -1444,3 +1444,12 @@ fn neg() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+fn r#where() -> TestResult {
+    with_all_sessions_and_tensors("where", (3, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}

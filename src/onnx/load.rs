@@ -348,8 +348,25 @@ impl GraphLoader {
 }
 
 fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
+    let is_bool = tensor.data_type == tensor_proto::DataType::Bool as i32;
     let elem_type = DataType::try_from(tensor.data_type)?;
-    let data = if tensor.raw_data.is_empty() {
+    let data = if is_bool {
+        if tensor.raw_data.is_empty() {
+            TensorData::SInt(
+                SIntType::I32,
+                tensor.int32_data.into_iter().map(i64::from).collect(),
+            )
+        } else {
+            TensorData::SInt(
+                SIntType::I32,
+                tensor
+                    .raw_data
+                    .iter()
+                    .map(|&b| if b != 0 { 1i64 } else { 0i64 })
+                    .collect(),
+            )
+        }
+    } else if tensor.raw_data.is_empty() {
         match elem_type {
             DataType::SInt(ty @ SIntType::I32) => {
                 TensorData::SInt(ty, tensor.int32_data.into_iter().map(i64::from).collect())
@@ -459,6 +476,7 @@ impl TryFrom<i32> for DataType {
         let value = tensor_proto::DataType::try_from(value)
             .map_err(|e| ModelLoadError::Unexpected(format!("Invalid DataType: {:?}", e)))?;
         match value {
+            tensor_proto::DataType::Bool => Ok(SIntType::I32.into()),
             tensor_proto::DataType::Float => Ok(FloatType::F32.into()),
             tensor_proto::DataType::Double => Ok(FloatType::F64.into()),
             tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),
@@ -1045,6 +1063,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Tanh" => Ok(Operator::Tanh),
         "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
         "Unsqueeze" => Ok(Operator::Unsqueeze(Unsqueeze::load(attributes)?)),
+        "Where" => Ok(Operator::Where),
 
         // Custom
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),

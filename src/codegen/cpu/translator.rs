@@ -380,7 +380,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
             SingleOpcode::Neg => {
                 let src = unary_op!(operands).into_float_value();
-                self.builder.build_float_neg(src, "neg")?.as_basic_value_enum()
+                self.builder
+                    .build_float_neg(src, "neg")?
+                    .as_basic_value_enum()
             }
 
             opcode @ (SingleOpcode::Cos |
@@ -3117,6 +3119,112 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         )?;
         self.builder.position_at_end(exit);
 
+        Ok(exit)
+    }
+
+    pub fn build_where(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        cond: &TensorPtr<'ctx>,
+        x: &TensorPtr<'ctx>,
+        y: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let i64_type = self.context.i64_type();
+        let output_size = dst.ty.dims.size() as u64;
+        let output_dims: Vec<u64> = dst.ty.dims.iter().map(|d| *d as u64).collect();
+
+        let cond_bc = cond.ty.broadcast(&dst.ty.dims);
+        let x_bc = x.ty.broadcast(&dst.ty.dims);
+        let y_bc = y.ty.broadcast(&dst.ty.dims);
+
+        let cond_info: Vec<(u64, u64)> = (0..cond_bc.dims.ndim())
+            .map(|d| (cond_bc.dims[d] as u64, cond_bc.stride(d) as u64))
+            .collect();
+        let x_info: Vec<(u64, u64)> = (0..x_bc.dims.ndim())
+            .map(|d| (x_bc.dims[d] as u64, x_bc.stride(d) as u64))
+            .collect();
+        let y_info: Vec<(u64, u64)> = (0..y_bc.dims.ndim())
+            .map(|d| (y_bc.dims[d] as u64, y_bc.stride(d) as u64))
+            .collect();
+
+        let body = self.context.append_basic_block(*self.func, "where.body");
+        let exit = self.context.append_basic_block(*self.func, "where.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let (ind, ind_val) = self.init_counted_loop(body)?;
+        let compute_offset =
+            |info: &[(u64, u64)], base: IntValue<'ctx>| -> Result<IntValue<'ctx>, BuilderError> {
+                let mut offset = base;
+                let mut remaining = ind_val;
+                for (dim_idx, out_dim) in output_dims.iter().enumerate().rev() {
+                    let dim_const = i64_type.const_int(*out_dim, false);
+                    let idx = self.builder.build_int_unsigned_rem(
+                        remaining,
+                        dim_const,
+                        &format!("idx.{}", dim_idx),
+                    )?;
+                    remaining = self.builder.build_int_unsigned_div(
+                        remaining,
+                        dim_const,
+                        &format!("rem.{}", dim_idx),
+                    )?;
+                    let (_, stride) = info[dim_idx];
+                    if stride != 0 {
+                        let stride_const = i64_type.const_int(stride, false);
+                        let contrib = self.builder.build_int_mul(idx, stride_const, "contrib")?;
+                        offset = self.builder.build_int_add(offset, contrib, "off")?;
+                    }
+                }
+                Ok(offset)
+            };
+        let cond_offset = compute_offset(&cond_info, cond.offset)?;
+        let x_offset = compute_offset(&x_info, x.offset)?;
+        let y_offset = compute_offset(&y_info, y.offset)?;
+        let cond_ptr = cond.clone().set_offset(cond_offset);
+        let x_ptr = x.clone().set_offset(x_offset);
+        let y_ptr = y.clone().set_offset(y_offset);
+        let cond_val = self.build_load(&cond_ptr)?;
+        let x_val = self.build_load(&x_ptr)?;
+        let y_val = self.build_load(&y_ptr)?;
+        let is_true = match cond.ty.elem_type {
+            DataType::SInt(SIntType::I32) => self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                self.context.i32_type().const_zero(),
+                "is_true",
+            )?,
+            DataType::SInt(SIntType::I64) => self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                i64_type.const_zero(),
+                "is_true",
+            )?,
+            _ => self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                self.context.i32_type().const_zero(),
+                "is_true",
+            )?,
+        };
+        let selected = self
+            .builder
+            .build_select(is_true, x_val, y_val, "selected")?;
+        let dst_ptr = dst.clone().set_offset(ind_val);
+        self.build_store(&dst_ptr, selected)?;
+        self.finalize_counted_loop(
+            ind,
+            entry,
+            i64_type.const_int(output_size, false),
+            body,
+            exit,
+            body,
+        )?;
+
+        self.builder.position_at_end(exit);
         Ok(exit)
     }
 

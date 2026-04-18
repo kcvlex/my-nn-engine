@@ -946,6 +946,9 @@ impl<'ll> CodeGen<'ll, '_> {
                         translator.build_conv(&ptrs[0], data, weight, bias, workspace, conv, entry)
                     }
                 }
+                Operator::Where => {
+                    translator.build_where(&ptrs[0], &ptrs[1], &ptrs[2], &ptrs[3], entry)
+                }
                 Operator::Attention(_) => panic!(),
                 Operator::BatchedGemm(ref gemm) => {
                     translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)

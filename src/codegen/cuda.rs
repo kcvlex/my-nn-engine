@@ -31,6 +31,7 @@ use crate::codegen::cuda::kernel::ReduceMatrixBuilder;
 use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
+use crate::codegen::cuda::kernel::WhereBuilder;
 use crate::codegen::cuda::runtime_api::*;
 use crate::onnx::model::ValueId;
 use crate::onnx::operator;
@@ -1432,6 +1433,23 @@ impl<'sched> HostCodeGenerator<'sched> {
                         create_launch_kernel(
                             kernel::CUDAKernel::GeneratedKernel(generated),
                             input_size,
+                        )?
+                        .into(),
+                    );
+                }
+
+                Operator::Where => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        WhereBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
                         )?
                         .into(),
                     );

@@ -1548,6 +1548,88 @@ impl<'sched> PoolBuilder<'sched> {
     }
 }
 
+pub struct WhereBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> WhereBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::Opaque(Opaque {
+            op: Operator::Where,
+        }) = &kernel.body
+        else {
+            panic!("Expected Where operator");
+        };
+
+        let cond_id = kernel.inputs[args::WHERE_COND].unwrap();
+        let x_id = kernel.inputs[args::WHERE_X].unwrap();
+        let y_id = kernel.inputs[args::WHERE_Y].unwrap();
+        let output_id = kernel.outputs[0];
+
+        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
+        let cond_ty = self.ctx.get_resolved_tensor_type(cond_id)?;
+        let x_ty = self.ctx.get_resolved_tensor_type(x_id)?;
+        let y_ty = self.ctx.get_resolved_tensor_type(y_id)?;
+
+        let size = output_ty.dims.size();
+        let ndim = output_ty.dims.ndim();
+        let value_ty: TypeSymbol = output_ty.elem_type.into();
+
+        let gid = KernelVar::Gid;
+        let out = KernelVar::Value(output_id);
+        let cond = KernelVar::Value(cond_id);
+        let x = KernelVar::Value(x_id);
+        let y = KernelVar::Value(y_id);
+        let decl = self.ctx.decl.decl();
+
+        let cond_bc = cond_ty.broadcast(&output_ty.dims);
+        let x_bc = x_ty.broadcast(&output_ty.dims);
+        let y_bc = y_ty.broadcast(&output_ty.dims);
+
+        let gen_index = |ty: &ResolvedTensorType, var_name: &str| -> String {
+            let mut lines = Vec::new();
+            lines.push(format!("int {var_name} = 0;"));
+            lines.push("{ int rem = gid;".to_string());
+            for i in (0..ndim).rev() {
+                let out_dim = output_ty.dims[i];
+                let stride = ty.stride(i);
+                lines.push(format!("int idx_{i} = rem % {out_dim};"));
+                lines.push(format!("rem = rem / {out_dim};"));
+                if stride != 0 {
+                    lines.push(format!("{var_name} += idx_{i} * {stride};"));
+                }
+            }
+            lines.push("}".to_string());
+            lines.join("\n    ")
+        };
+
+        let cond_idx = gen_index(&cond_bc, "cond_idx");
+        let x_idx = gen_index(&x_bc, "x_idx");
+        let y_idx = gen_index(&y_bc, "y_idx");
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {cond_idx}
+    {x_idx}
+    {y_idx}
+    {value_ty} result = ({cond}[cond_idx] != 0) ? {x}[x_idx] : {y}[y_idx];
+    {out}[{gid}] = result;
+}}
+"
+        ))
+    }
+}
+
 pub struct ReduceMatrixBuilder<'sched> {
     ctx: BuilderContext<'sched>,
 }

@@ -89,6 +89,7 @@ pub enum Operator {
     Tanh,
     Transpose(Transpose),
     Unsqueeze(Unsqueeze),
+    Where,
 
     // Custom
     Contiguous(Contiguous),
@@ -806,6 +807,7 @@ impl Operator {
             Operator::Tanh => "Tanh",
             Operator::Transpose(_) => "Transpose",
             Operator::Unsqueeze(_) => "Unsqueeze",
+            Operator::Where => "Where",
 
             // Custom
             Operator::Contiguous(_) => "Contiguous",
@@ -876,7 +878,8 @@ impl Operator {
             Operator::Slice |
             Operator::Softmax(_) |
             Operator::Split(_) |
-            Operator::Transfer(_) => OperatorType::Opaque,
+            Operator::Transfer(_) |
+            Operator::Where => OperatorType::Opaque,
 
             Operator::Input(_) | Operator::Output(_) => OperatorType::Dummy,
         }
@@ -953,6 +956,10 @@ pub mod args {
     pub const CLIP_DATA: usize = 0;
     pub const CLIP_MIN: usize = 1;
     pub const CLIP_MAX: usize = 2;
+
+    pub const WHERE_COND: usize = 0;
+    pub const WHERE_X: usize = 1;
+    pub const WHERE_Y: usize = 2;
 }
 
 //#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]

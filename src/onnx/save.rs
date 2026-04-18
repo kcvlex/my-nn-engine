@@ -160,7 +160,8 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Slice |
         Operator::NonZero |
         Operator::GlobalAveragePool |
-        Operator::Transfer(_) => vec![],
+        Operator::Transfer(_) |
+        Operator::Where => vec![],
 
         Operator::Attention(attn) => vec![
             attr_int("is_causal", if attn.is_causal { 1 } else { 0 }),
