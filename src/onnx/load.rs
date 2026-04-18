@@ -59,6 +59,7 @@ pub trait LoadProto {
 
 impl LoadProto for Model {
     fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self> {
+        let base_dir = p.as_ref().parent().map(|p| p.to_path_buf());
         let model = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
         let model = ModelProto::decode(&*model).map_err(ModelLoadError::Decode)?;
         let opset_import = model
@@ -70,7 +71,7 @@ impl LoadProto for Model {
             })
             .collect();
         let graph = model.graph.ok_or(ModelLoadError::NoGraph)?;
-        let graph = GraphLoader::default().load_graph(graph)?;
+        let graph = GraphLoader::default().load_graph(graph, base_dir.as_deref())?;
         Ok(Model {
             ir_version: model.ir_version,
             opset_import,
@@ -88,7 +89,7 @@ impl LoadProto for Tensor {
     fn load_from_path<P: AsRef<Path>>(p: P) -> LoadResult<Self> {
         let tensor = std::fs::read(p).map_err(ModelLoadError::FileRead)?;
         let tensor = TensorProto::decode(&*tensor).map_err(ModelLoadError::Decode)?;
-        load_tensor(tensor)
+        load_tensor(tensor, None)
     }
 }
 
@@ -102,7 +103,7 @@ impl Tensor {
     /// Create Tensor from ONNX TensorProto bytes
     pub fn from_proto_bytes(bytes: &[u8]) -> LoadResult<Self> {
         let proto = TensorProto::decode(bytes).map_err(ModelLoadError::Decode)?;
-        load_tensor(proto)
+        load_tensor(proto, None)
     }
 }
 
@@ -199,7 +200,7 @@ impl Attribute {
 type Attributes = HashMap<String, Attribute>;
 
 impl GraphLoader {
-    fn load_graph(mut self, graph: GraphProto) -> LoadResult<Graph> {
+    fn load_graph(mut self, graph: GraphProto, base_dir: Option<&Path>) -> LoadResult<Graph> {
         let input = {
             let initializer_names: HashSet<_> =
                 graph.initializer.iter().map(|x| x.name.as_str()).collect();
@@ -210,7 +211,7 @@ impl GraphLoader {
                 .collect();
             input
         };
-        let initializer = self.load_initializer(graph.initializer)?;
+        let initializer = self.load_initializer(graph.initializer, base_dir)?;
         let inputs = self.load_value_info_vec(input)?;
         let outputs = self.load_value_info_vec(graph.output)?;
         let mut nodes = self.load_nodes(graph.node)?;
@@ -299,11 +300,15 @@ impl GraphLoader {
         Ok(res)
     }
 
-    fn load_initializer(&mut self, v: Vec<TensorProto>) -> LoadResult<BTreeMap<ValueId, Tensor>> {
+    fn load_initializer(
+        &mut self,
+        v: Vec<TensorProto>,
+        base_dir: Option<&Path>,
+    ) -> LoadResult<BTreeMap<ValueId, Tensor>> {
         let mut res = BTreeMap::new();
         for tensor in v.into_iter() {
             let name = tensor.name.clone();
-            let tensor = load_tensor(tensor)?;
+            let tensor = load_tensor(tensor, base_dir)?;
             let id = self.entries.entry(name.clone()).or_insert_with(|| {
                 self.values.alloc(ValueInfo {
                     name,
@@ -347,9 +352,46 @@ impl GraphLoader {
     }
 }
 
-fn load_tensor(tensor: TensorProto) -> LoadResult<Tensor> {
+fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tensor> {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
     let elem_type = DataType::try_from(tensor.data_type)?;
-    let data = if tensor.raw_data.is_empty() {
+    let data = if !tensor.external_data.is_empty() {
+        let ed: HashMap<&str, &str> = tensor
+            .external_data
+            .iter()
+            .map(|kv| (kv.key.as_str(), kv.value.as_str()))
+            .collect();
+        let location = ed.get("location").ok_or_else(|| {
+            ModelLoadError::Unexpected("external_data missing location".to_string())
+        })?;
+        let offset = ed
+            .get("offset")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let length = ed.get("length").and_then(|s| s.parse::<u64>().ok());
+        let base = base_dir.ok_or_else(|| {
+            ModelLoadError::Unexpected("external_data requires base_dir".to_string())
+        })?;
+        let mut file =
+            std::fs::File::open(base.join(location)).map_err(ModelLoadError::FileRead)?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(ModelLoadError::FileRead)?;
+        let raw = if let Some(len) = length {
+            let mut buf = vec![0u8; len as usize];
+            file.read_exact(&mut buf)
+                .map_err(ModelLoadError::FileRead)?;
+            buf
+        } else {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(ModelLoadError::FileRead)?;
+            buf
+        };
+        TensorData::from_bytes(elem_type, &raw)
+    } else if tensor.raw_data.is_empty() {
         match elem_type {
             DataType::Bool => TensorData::Bool(
                 tensor
@@ -535,7 +577,7 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
                 .collect::<Result<Vec<_>, _>>()
                 .map(Attribute::Strings),
             attribute_proto::AttributeType::Tensor => {
-                load_tensor(attr.t.unwrap()).map(Attribute::Tensor)
+                load_tensor(attr.t.unwrap(), None).map(Attribute::Tensor)
             }
             x => Err(ModelLoadError::UnsupportedAttributeType(x)),
         }?;
