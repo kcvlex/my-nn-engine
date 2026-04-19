@@ -259,6 +259,63 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let dims = ResolvedTensorDims::new(&[prefix, suffix]);
             Some(vec![input.reshape(&dims)])
         }
+        Operator::Where => {
+            let cond = graph.initializer.get(&node.inputs[args::WHERE_COND].unwrap())?;
+            let x = graph.initializer.get(&node.inputs[args::WHERE_X].unwrap())?;
+            let y = graph.initializer.get(&node.inputs[args::WHERE_Y].unwrap())?;
+            let ty = broadcast_shape(&cond.dims, &broadcast_shape(&x.dims, &y.dims).ok()?).ok()?;
+            let cond = cond.broadcast(&ty);
+            let x = x.broadcast(&ty);
+            let y = y.broadcast(&ty);
+            let TensorData::Bool(ref cond_data) = cond.data else {
+                return None;
+            };
+            macro_rules! pattern {
+                ($ctor: expr, $xv: expr, $yv: expr, $t: expr) => {{
+                    let data = izip!(cond_data.iter(), $xv.iter(), $yv.iter())
+                        .map(|(c, xv, yv)| if *c != 0 { *xv } else { *yv })
+                        .collect_vec();
+                    Some($ctor(*$t, data))
+                }};
+            }
+            let data = match (&x.data, &y.data) {
+                (TensorData::SInt(t, xv), TensorData::SInt(_, yv)) => {
+                    pattern!(TensorData::SInt, xv, yv, t)
+                }
+                (TensorData::UInt(t, xv), TensorData::UInt(_, yv)) => {
+                    pattern!(TensorData::UInt, xv, yv, t)
+                }
+                (TensorData::Float(t, xv), TensorData::Float(_, yv)) => {
+                    pattern!(TensorData::Float, xv, yv, t)
+                }
+                _ => None,
+            }?;
+            let tensor = Tensor::new(ty, data).ok()?;
+            Some(vec![tensor])
+        }
+        Operator::Equal => {
+            let a = graph.initializer.get(&node.inputs[args::EQUAL_A].unwrap())?;
+            let b = graph.initializer.get(&node.inputs[args::EQUAL_B].unwrap())?;
+            let ty = broadcast_shape(&a.dims, &b.dims).ok()?;
+            let a = a.broadcast(&ty);
+            let b = b.broadcast(&ty);
+            macro_rules! cmp {
+                ($av: expr, $bv: expr) => {
+                    izip!($av.iter(), $bv.iter())
+                        .map(|(a, b)| if a == b { 1u8 } else { 0u8 })
+                        .collect_vec()
+                };
+            }
+            let data = match (&a.data, &b.data) {
+                (TensorData::SInt(_, av), TensorData::SInt(_, bv)) => cmp!(av, bv),
+                (TensorData::UInt(_, av), TensorData::UInt(_, bv)) => cmp!(av, bv),
+                (TensorData::Float(_, av), TensorData::Float(_, bv)) => cmp!(av, bv),
+                (TensorData::Bool(av), TensorData::Bool(bv)) => cmp!(av, bv),
+                _ => return None,
+            };
+            let tensor = Tensor::new(ty, TensorData::Bool(data)).ok()?;
+            Some(vec![tensor])
+        }
         Operator::Shape(Shape { ref start, ref end }) => {
             let input = node.inputs[0].unwrap();
             let input = &graph.get_resolved_tensor_type(input)?.dims;
