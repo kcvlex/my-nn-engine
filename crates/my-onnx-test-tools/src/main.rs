@@ -221,7 +221,9 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
     let mut right: usize = total_nodes - 1;
     let mut first_fail: Option<(usize, String)> = None;
 
+    let mut step: usize = 0;
     while left <= right {
+        step += 1;
         let mid = (left + right) / 2;
 
         // 2b. Call container: extract-node
@@ -240,7 +242,14 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             extract_args.push(input.to_string_lossy().to_string());
         }
 
-        eprint!("Testing node [{}/{}] ", mid, total_nodes - 1,);
+        eprintln!(
+            "[step {}] range=[{}, {}] mid={}/{} — extracting...",
+            step,
+            left,
+            right,
+            mid,
+            total_nodes - 1,
+        );
 
         let node_info = match container_output(
             &config.project_root,
@@ -248,11 +257,11 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             &extract_args,
         ) {
             Ok(info) => {
-                eprintln!("{}", info);
+                eprintln!("[step {}] mid={} node: {}", step, mid, info);
                 info
             }
             Err(e) => {
-                eprintln!("extraction failed: {}", e);
+                eprintln!("[step {}] mid={} extraction failed: {}", step, mid, e);
                 // Treat extraction failure as a test failure
                 first_fail = Some((mid, format!("node_{} (extraction failed)", mid)));
                 let Some(new_right) = mid.checked_sub(1) else {
@@ -263,6 +272,8 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             }
         };
 
+        eprintln!("[step {}] mid={} running test...", step, mid);
+
         // 2c. Run test command on the host
         let extracted_model_dir = config.project_root.join(&node_dir_rel);
         let status = Command::new(&config.test_command[0])
@@ -271,10 +282,10 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             .status()?;
 
         if status.success() {
-            eprintln!("  PASS");
+            eprintln!("[step {}] mid={} => PASS", step, mid);
             left = mid + 1;
         } else {
-            eprintln!("  FAIL");
+            eprintln!("[step {}] mid={} => FAIL", step, mid);
             first_fail = Some((mid, node_info));
             let Some(new_right) = mid.checked_sub(1) else {
                 break;
