@@ -55,6 +55,7 @@ pub enum Operator {
     Cos,
     Div,
     Equal,
+    Expand,
     Exp,
     Gather(Gather),
     GeLU(GeLU),
@@ -775,6 +776,7 @@ impl Operator {
             Operator::Cos => "Cos",
             Operator::Div => "Div",
             Operator::Equal => "Equal",
+            Operator::Expand => "Expand",
             Operator::Exp => "Exp",
             Operator::Gather(_) => "Gather",
             Operator::GeLU(_) => "Gelu",
@@ -885,6 +887,7 @@ impl Operator {
             Operator::Softmax(_) |
             Operator::Split(_) |
             Operator::Transfer(_) |
+            Operator::Expand |
             Operator::Where => OperatorType::Opaque,
 
             Operator::Input(_) | Operator::Output(_) => OperatorType::Dummy,

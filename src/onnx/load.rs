@@ -1079,6 +1079,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Cos" => Ok(Operator::Cos),
         "Div" => Ok(Operator::Div),
         "Equal" => Ok(Operator::Equal),
+        "Expand" => Ok(Operator::Expand),
         "Exp" => Ok(Operator::Exp),
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
         "Gelu" => Ok(Operator::GeLU(GeLU::load(attributes)?)),

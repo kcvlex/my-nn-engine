@@ -20,6 +20,7 @@ use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
+use crate::codegen::cuda::kernel::ExpandBuilder;
 use crate::codegen::cuda::kernel::FuncQualifier;
 use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
@@ -1449,6 +1450,23 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         WhereBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
+                    );
+                }
+
+                Operator::Expand => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        ExpandBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
                         create_launch_kernel(

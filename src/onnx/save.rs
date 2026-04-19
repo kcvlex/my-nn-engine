@@ -160,6 +160,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Neg |
         Operator::Div |
         Operator::Equal |
+        Operator::Expand |
         Operator::Exp |
         Operator::Log |
         Operator::Pow |

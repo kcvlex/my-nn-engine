@@ -3299,6 +3299,68 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    pub fn build_expand(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let i64_type = self.context.i64_type();
+        let output_size = dst.ty.dims.size() as u64;
+        let output_dims: Vec<u64> = dst.ty.dims.iter().map(|d| *d as u64).collect();
+
+        let src_bc = src.ty.broadcast(&dst.ty.dims);
+
+        let src_info: Vec<(u64, u64)> = (0..src_bc.dims.ndim())
+            .map(|d| (src_bc.dims[d] as u64, src_bc.stride(d) as u64))
+            .collect();
+
+        let body = self.context.append_basic_block(*self.func, "expand.body");
+        let exit = self.context.append_basic_block(*self.func, "expand.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let (ind, ind_val) = self.init_counted_loop(body)?;
+        let mut offset = src.offset;
+        let mut remaining = ind_val;
+        for (dim_idx, out_dim) in output_dims.iter().enumerate().rev() {
+            let dim_const = i64_type.const_int(*out_dim, false);
+            let idx = self.builder.build_int_unsigned_rem(
+                remaining,
+                dim_const,
+                &format!("idx.{}", dim_idx),
+            )?;
+            remaining = self.builder.build_int_unsigned_div(
+                remaining,
+                dim_const,
+                &format!("rem.{}", dim_idx),
+            )?;
+            let (_, stride) = src_info[dim_idx];
+            if stride != 0 {
+                let stride_const = i64_type.const_int(stride, false);
+                let contrib = self.builder.build_int_mul(idx, stride_const, "contrib")?;
+                offset = self.builder.build_int_add(offset, contrib, "off")?;
+            }
+        }
+        let src_ptr = src.clone().set_offset(offset);
+        let val = self.build_load(&src_ptr)?;
+        let dst_ptr = dst.clone().set_offset(ind_val);
+        self.build_store(&dst_ptr, val)?;
+        self.finalize_counted_loop(
+            ind,
+            entry,
+            i64_type.const_int(output_size, false),
+            body,
+            exit,
+            body,
+        )?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_softmax(
         &self,
         dst: TensorPtr<'ctx>,

@@ -1632,6 +1632,70 @@ impl<'sched> WhereBuilder<'sched> {
     }
 }
 
+pub struct ExpandBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> ExpandBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::Opaque(Opaque {
+            op: Operator::Expand,
+        }) = &kernel.body
+        else {
+            panic!("Expected Expand operator");
+        };
+
+        let input_id = kernel.inputs[0].unwrap();
+        let output_id = kernel.outputs[0];
+
+        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
+        let input_ty = self.ctx.get_resolved_tensor_type(input_id)?;
+
+        let size = output_ty.dims.size();
+        let ndim = output_ty.dims.ndim();
+
+        let gid = KernelVar::Gid;
+        let out = KernelVar::Value(output_id);
+        let inp = KernelVar::Value(input_id);
+        let decl = self.ctx.decl.decl();
+
+        let src_bc = input_ty.broadcast(&output_ty.dims);
+
+        let mut lines = Vec::new();
+        lines.push(format!("int src_idx = 0;"));
+        lines.push("{ int rem = gid;".to_string());
+        for i in (0..ndim).rev() {
+            let out_dim = output_ty.dims[i];
+            let stride = src_bc.stride(i);
+            lines.push(format!("int idx_{i} = rem % {out_dim};"));
+            lines.push(format!("rem = rem / {out_dim};"));
+            if stride != 0 {
+                lines.push(format!("src_idx += idx_{i} * {stride};"));
+            }
+        }
+        lines.push("}".to_string());
+        let src_idx = lines.join("\n    ");
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {src_idx}
+    {out}[{gid}] = {inp}[src_idx];
+}}
+"
+        ))
+    }
+}
+
 pub struct ReduceMatrixBuilder<'sched> {
     ctx: BuilderContext<'sched>,
 }

@@ -181,6 +181,26 @@ pub fn infer_node_output(
                 ResolvedTensorDims::new(&[batch_size, q_num_heads, q_sequence_length, v_head_size]),
             ));
         }
+        Operator::Expand => {
+            let input = &inputs[0];
+            let shape_tensor = &graph
+                .initializer
+                .get(&node.inputs[1].unwrap())
+                .ok_or(TypeError::UnresolvedInput)?
+                .data;
+            let target_dims = match shape_tensor {
+                TensorData::SInt(SIntType::I64, ref v) => {
+                    ResolvedTensorDims::new(&v.iter().map(|&x| x as usize).collect::<Vec<_>>())
+                }
+                _ => {
+                    return Err(TypeError::InferError(
+                        "Expand: invalid shape type".to_string(),
+                    ));
+                }
+            };
+            let dims = broadcast_shape(&input.dims, &target_dims)?;
+            res.push(ResolvedTensorType::new(input.elem_type, dims));
+        }
         Operator::Pow => {
             let a = &inputs[0];
             let b = &inputs[1];
