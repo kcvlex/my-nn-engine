@@ -36,11 +36,14 @@ impl Canonicalization {
         match &op {
             Operator::Pow => {
                 let exponent = inputs[1].unwrap();
-                let Some(tensor) = graph.initializer.get(&exponent) else {
-                    return;
-                };
-                let Some(scalar) = tensor.data.to_scalar_data() else {
-                    return;
+                let scalar = {
+                    let Some(tensor) = graph.get_initializer(exponent) else {
+                        return;
+                    };
+                    let Some(scalar) = tensor.data.to_scalar_data() else {
+                        return;
+                    };
+                    scalar
                 };
                 if !matches!(
                     scalar,

@@ -47,7 +47,13 @@ impl ShapeInference {
         let unify_mode = UnifyMode::OverwriteStrides;
         for id in ids {
             prop_constant(graph, id, modifier);
-            let types = infer_node_output(graph, id, unify_mode, self.target)?;
+            let types = infer_node_output(graph, id, unify_mode, self.target).map_err(|e| {
+                eprintln!(
+                    "shape inference failed at node {:?} op={:?}: {:?}",
+                    graph.nodes[id].name, graph.nodes[id].op, e
+                );
+                e
+            })?;
             let outputs = graph.nodes[id].outputs.clone();
             for (value_id, inferred) in izip!(outputs.iter(), types.iter()) {
                 graph.try_unify_type(*value_id, inferred, unify_mode)?;

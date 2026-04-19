@@ -90,7 +90,7 @@ impl EarlyBroadcast {
             {
                 unimplemented!("EarlyBroadcast for Gemm with shared bias is not implemented");
             }
-            if !graph.initializer.contains_key(&bias) {
+            if !graph.has_initializer(bias) {
                 unimplemented!("EarlyBroadcast for Gemm with non-constant bias is not implemented");
             }
             let target_dims = graph
@@ -98,11 +98,7 @@ impl EarlyBroadcast {
                 .unwrap()
                 .dims
                 .clone();
-            let tensor = graph
-                .initializer
-                .get(&bias)
-                .unwrap()
-                .broadcast(&target_dims);
+            let tensor = graph.get_initializer(bias).unwrap().broadcast(&target_dims);
             modifier.replace_tensor(graph, bias, tensor);
         }
     }

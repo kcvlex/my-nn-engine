@@ -57,7 +57,7 @@ fn is_cube(node: &Node, graph: &Graph) -> bool {
     if !matches!(&node.op, Operator::Pow) {
         return false;
     }
-    let Some(exponent) = graph.initializer.get(&node.inputs[1].unwrap()) else {
+    let Some(exponent) = graph.get_initializer(node.inputs[1].unwrap()) else {
         return false;
     };
     let Some(exponent) = exponent.data.to_scalar_data() else {
@@ -97,7 +97,7 @@ fn match_fast_gelu_pattern<T: GraphOp>(
         let Some(other) = extract_other_binary_input(node, known_input) else {
             return false;
         };
-        let Some(other) = graph.initializer.get(&other) else {
+        let Some(other) = graph.get_initializer(other) else {
             return false;
         };
         let Some(other) = other.data.to_scalar_data() else {

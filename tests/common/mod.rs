@@ -204,7 +204,7 @@ macro_rules! build_graph {
                 ty: Some(TensorType::Resolved($init_val.tensor_type())),
             });
             registry.insert(name, init);
-            graph.initializer.insert(init, $init_val);
+            graph.set_initializer(init, $init_val);
         )*
 
         // Create nodes

@@ -7,8 +7,11 @@ use id_arena::Arena;
 use id_arena::Id;
 use itertools::zip_eq;
 
+use crate::onnx::load::ModelLoadError;
 use crate::onnx::operator::Operator;
 use crate::onnx::operator::OperatorType;
+use crate::tensor::data::TensorData;
+use crate::tensor::types::DataType;
 use crate::tensor::types::Dimension;
 use crate::tensor::types::ParamKey;
 use crate::tensor::types::ResolvedTensorDims;
@@ -43,9 +46,19 @@ pub struct Graph {
     pub inputs: Vec<NodeId>,
     pub outputs: Vec<NodeId>,
     pub values: Values,
-    pub initializer: BTreeMap<ValueId, Tensor>,
+    pub(super) initializer: BTreeMap<ValueId, Tensor>,
+    pub(super) external_refs: BTreeMap<ValueId, ExternalTensorRef>,
 
     pub(crate) resolved_params: HashMap<ParamKey, usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalTensorRef {
+    pub path: std::path::PathBuf,
+    pub offset: u64,
+    pub length: Option<u64>,
+    pub elem_type: DataType,
+    pub dims: ResolvedTensorDims,
 }
 
 fn unify_types(
@@ -100,7 +113,7 @@ impl Graph {
                 Operator::Input(v) => v,
                 _ => unreachable!(),
             })
-            .filter(|&v| !self.initializer.contains_key(&v))
+            .filter(|&v| !self.has_initializer(v))
             .collect::<Vec<_>>();
         if input_tys.len() != ids.len() {
             return Err(TypeError::InconsistentInput);
@@ -222,9 +235,64 @@ impl Graph {
             outputs: vec![],
             values: Values::default(),
             initializer: BTreeMap::new(),
+            external_refs: BTreeMap::new(),
             resolved_params: HashMap::new(),
         }
     }
+
+    pub fn get_initializer(&self, value_id: ValueId) -> Option<Tensor> {
+        if let Some(t) = self.initializer.get(&value_id) {
+            return Some(t.clone());
+        }
+        let r = self.external_refs.get(&value_id)?;
+        load_external(r).ok()
+    }
+
+    pub fn set_initializer(&mut self, value_id: ValueId, tensor: Tensor) {
+        self.external_refs.remove(&value_id);
+        self.initializer.insert(value_id, tensor);
+    }
+
+    pub fn has_initializer(&self, value_id: ValueId) -> bool {
+        self.initializer.contains_key(&value_id) || self.external_refs.contains_key(&value_id)
+    }
+
+    pub fn initializer_ids(&self) -> Vec<ValueId> {
+        self.initializer
+            .keys()
+            .copied()
+            .chain(self.external_refs.keys().copied())
+            .collect()
+    }
+
+    pub fn remove_initializer<F: Fn(&ValueId) -> bool>(&mut self, remove: F) {
+        self.initializer.retain(|k, _| !remove(k));
+        self.external_refs.retain(|k, _| !remove(k));
+    }
+}
+
+fn load_external(r: &ExternalTensorRef) -> Result<Tensor, ModelLoadError> {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
+    let mut file = std::fs::File::open(&r.path).map_err(ModelLoadError::FileRead)?;
+    file.seek(SeekFrom::Start(r.offset))
+        .map_err(ModelLoadError::FileRead)?;
+    let raw = if let Some(len) = r.length {
+        let mut buf = vec![0u8; len as usize];
+        file.read_exact(&mut buf)
+            .map_err(ModelLoadError::FileRead)?;
+        buf
+    } else {
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(ModelLoadError::FileRead)?;
+        buf
+    };
+    let data = TensorData::from_bytes(r.elem_type, &raw);
+    Tensor::new(r.dims.clone(), data)
+        .map_err(|e| ModelLoadError::Unexpected(format!("external data shape mismatch: {:?}", e)))
 }
 
 #[derive(Debug, Default, Clone)]

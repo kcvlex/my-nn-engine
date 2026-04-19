@@ -96,7 +96,7 @@ struct AttentionPattern {
 //
 // The combined mask is: `0` where `c <= r`, `-penalty` where `c > r`.
 fn build_causal_additive_mask(
-    graph: &Graph,
+    graph: &mut Graph,
     causal_node: NodeId,
     mask_node: Option<NodeId>,
     qk_scaled: ValueId,
@@ -104,7 +104,7 @@ fn build_causal_additive_mask(
     qk_col: usize,
 ) -> Option<Tensor> {
     let causal_mat = extract_other_binary_input(&graph.nodes[causal_node], qk_scaled)?;
-    let causal = graph.initializer.get(&causal_mat)?;
+    let causal = graph.get_initializer(causal_mat)?.clone();
     let ty = &causal.tensor_type();
     let ndim = ty.dims.ndim();
     if ndim < 2 || ty.dims[ndim - 2] != qk_row || ty.dims[ndim - 1] != qk_col {
@@ -129,8 +129,8 @@ fn build_causal_additive_mask(
     }
 
     let penalty = if let Some(mask_node) = mask_node {
-        let mask_val = &graph.nodes[mask_node].inputs[1].unwrap();
-        let mask = graph.initializer.get(mask_val)?;
+        let mask_val = graph.nodes[mask_node].inputs[1].unwrap();
+        let mask = graph.get_initializer(mask_val)?.clone();
         let mty = &mask.tensor_type();
         let mndim = mty.dims.ndim();
         if mndim < 2 || mty.dims[mndim - 2] != qk_row || mty.dims[mndim - 1] != qk_col {
@@ -260,7 +260,7 @@ fn match_attention_pattern<T: GraphOp>(
         .last_node();
 
     let scale = extract_other_binary_input(&graph.nodes[scale_node?], qk?)?;
-    let scale = graph.initializer.get(&scale)?.data.to_scalar_data()?;
+    let scale = graph.get_initializer(scale)?.data.to_scalar_data()?;
     let ScalarData::Float(_, scale) = scale else {
         return None;
     };

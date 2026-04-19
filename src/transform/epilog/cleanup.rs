@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use crate::onnx::model::Graph;
@@ -23,11 +22,6 @@ impl<T: GraphOp> Pass<T> for CleanupTensors {
             .filter_map(|v| *v)
             .collect();
 
-        let mut tmp = BTreeMap::new();
-        std::mem::swap(&mut graph.initializer, &mut tmp);
-        graph.initializer = tmp
-            .into_iter()
-            .filter(|(v, _)| used_values.contains(v))
-            .collect();
+        graph.remove_initializer(|v| !used_values.contains(v));
     }
 }

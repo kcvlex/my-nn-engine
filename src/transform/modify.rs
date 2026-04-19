@@ -31,7 +31,7 @@ pub trait GraphOp {
 
     fn register_new_tensor(&mut self, graph: &mut Graph, tensor: Tensor, name: String) -> ValueId {
         let value_id = self.register_new_value(graph, name, tensor.tensor_type());
-        graph.initializer.insert(value_id, tensor);
+        graph.set_initializer(value_id, tensor);
         value_id
     }
 
@@ -81,7 +81,7 @@ pub trait GraphOp {
 
     fn replace_tensor(&self, graph: &mut Graph, value_id: ValueId, tensor: Tensor) {
         self.replace_tensor_type(graph, value_id, tensor.tensor_type());
-        *graph.initializer.get_mut(&value_id).unwrap() = tensor;
+        graph.set_initializer(value_id, tensor);
     }
 
     fn set_node_input(&mut self, graph: &mut Graph, node_id: NodeId, index: usize, value: ValueId);
@@ -362,7 +362,7 @@ impl SimpleGraphOp {
             .inputs
             .iter()
             .filter_map(|v| v.as_ref())
-            .filter(|v| !graph.initializer.contains_key(v))
+            .filter(|v| !graph.has_initializer(**v))
         {
             let (defined, _) = self.value2defined.get(value).unwrap();
             self.used_nodes_dfs(graph, *defined, visited);

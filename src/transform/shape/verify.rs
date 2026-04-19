@@ -38,9 +38,12 @@ impl<T: GraphOp> Pass<T> for ShapeVerification {
 }
 
 impl ShapeVerification {
-    fn run_impl(&self, graph: &Graph) -> Result<(), VerifyShapeError> {
-        for (node_id, node) in graph.nodes.iter() {
-            match node.op {
+    fn run_impl(&self, graph: &mut Graph) -> Result<(), VerifyShapeError> {
+        let node_ids: Vec<_> = graph.nodes.iter().map(|(id, _)| id).collect();
+        for node_id in node_ids {
+            let node_op = graph.nodes[node_id].op.clone();
+            let node_outputs = graph.nodes[node_id].outputs.clone();
+            match node_op {
                 Operator::Input(_) => (),
                 Operator::Output(value) if self.check_strides => {
                     let resolved = graph
@@ -62,7 +65,7 @@ impl ShapeVerification {
                         self.target,
                     )
                     .map_err(VerifyShapeError::TypeError)?;
-                    for (value_id, inferred) in zip_eq(node.outputs.iter(), resolved.into_iter()) {
+                    for (value_id, inferred) in zip_eq(node_outputs.iter(), resolved.into_iter()) {
                         let cur = graph
                             .get_resolved_tensor_type(*value_id)
                             .ok_or(VerifyShapeError::UnresolvedShape(*value_id))?;

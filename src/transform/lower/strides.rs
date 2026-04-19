@@ -70,7 +70,7 @@ impl AssignStridesImpl {
             self.complete_value(graph, modifier, id);
         }
 
-        let initializer = graph.initializer.keys().copied().collect::<Vec<_>>();
+        let initializer = graph.initializer_ids();
         for id in initializer {
             self.complete_value(graph, modifier, id);
         }

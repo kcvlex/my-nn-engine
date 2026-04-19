@@ -178,7 +178,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
     let var = var.unwrap();
     let var_eps_node = &graph.nodes[var_eps_node.unwrap()];
     let epsilon = extract_other_binary_input(var_eps_node, var)?;
-    let epsilon = graph.initializer.get(&epsilon)?.data.to_scalar_data()?;
+    let epsilon = graph.get_initializer(epsilon)?.data.to_scalar_data()?;
     let ScalarData::Float(_, epsilon) = epsilon else {
         return None;
     };
@@ -259,7 +259,7 @@ fn match_layer_norm_pattern<T: GraphOp>(
     let var = var.unwrap();
     let var_eps_node = &graph.nodes[var_eps_node.unwrap()];
     let epsilon = extract_other_binary_input(var_eps_node, var)?;
-    let epsilon = graph.initializer.get(&epsilon)?.data.to_scalar_data()?;
+    let epsilon = graph.get_initializer(epsilon)?.data.to_scalar_data()?;
     let ScalarData::Float(_, epsilon) = epsilon else {
         return None;
     };

@@ -48,19 +48,20 @@ impl<T: GraphOp> Pass<T> for ConvBNFusion {
 
             // All BN parameters must be initializers
             let (Some(bn_scale), Some(bn_bias), Some(bn_mean), Some(bn_var)) = (
-                graph.initializer.get(&bn_scale_id),
-                graph.initializer.get(&bn_bias_id),
-                graph.initializer.get(&bn_mean_id),
-                graph.initializer.get(&bn_var_id),
+                graph.get_initializer(bn_scale_id).map(|t| t.clone()),
+                graph.get_initializer(bn_bias_id).map(|t| t.clone()),
+                graph.get_initializer(bn_mean_id).map(|t| t.clone()),
+                graph.get_initializer(bn_var_id).map(|t| t.clone()),
             ) else {
                 continue;
             };
 
-            let Some(conv_weight) = graph.initializer.get(&conv_weight_id) else {
+            let Some(conv_weight) = graph.get_initializer(conv_weight_id).map(|t| t.clone()) else {
                 continue;
             };
 
-            let conv_bias = conv_bias_id.and_then(|id| graph.initializer.get(&id));
+            let conv_bias =
+                conv_bias_id.and_then(|id| graph.get_initializer(id).map(|t| t.clone()));
 
             // Extract float data
             let (Some(scale), Some(bias), Some(mean), Some(var)) = (

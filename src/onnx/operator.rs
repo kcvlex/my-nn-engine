@@ -501,24 +501,21 @@ pub struct Unsqueeze {
 }
 
 impl Slice {
-    pub fn collect_slices(graph: &Graph, node_id: NodeId) -> Option<Vec<Self>> {
-        let node = &graph.nodes[node_id];
-        let dims = &graph
-            .get_resolved_tensor_type(node.inputs[args::SLICE_DATA].unwrap())?
-            .dims;
+    pub fn collect_slices(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Self>> {
+        let inputs = graph.nodes[node_id].inputs.clone();
+        let dims = graph
+            .get_resolved_tensor_type(inputs[args::SLICE_DATA].unwrap())?
+            .dims
+            .clone();
         let starts = graph
-            .initializer
-            .get(&node.inputs[args::SLICE_STARTS].unwrap())?
+            .get_initializer(inputs[args::SLICE_STARTS].unwrap())?
             .to_indices()?;
         let ends = graph
-            .initializer
-            .get(&node.inputs[args::SLICE_ENDS].unwrap())?
+            .get_initializer(inputs[args::SLICE_ENDS].unwrap())?
             .to_indices()?;
-        let axes = node
-            .inputs
-            .get(args::SLICE_AXES)
-            .and_then(|x| *x)
-            .and_then(|x| graph.initializer.get(&x))
+        let axes_id = inputs.get(args::SLICE_AXES).and_then(|x| *x);
+        let axes = axes_id
+            .and_then(|x| graph.get_initializer(x))
             .and_then(|x| x.to_indices())
             .unwrap_or(
                 (0..(starts.len() as isize))
@@ -526,15 +523,9 @@ impl Slice {
                     .collect::<Vec<_>>(),
             );
 
-        if node
-            .inputs
-            .get(args::SLICE_STEPS)
-            .and_then(|x| *x)
-            .is_some()
-        {
+        if let Some(steps_id) = inputs.get(args::SLICE_STEPS).and_then(|x| *x) {
             let is_all_one = graph
-                .initializer
-                .get(&node.inputs[args::SLICE_STEPS].unwrap())
+                .get_initializer(steps_id)
                 .and_then(|x| x.to_1d_sints())
                 .unwrap()
                 .iter()
@@ -652,22 +643,19 @@ pub enum PadVal {
 }
 
 impl Resize {
-    pub fn resized_shape(&self, graph: &Graph, node_id: NodeId) -> Option<ResolvedTensorDims> {
-        let node = &graph.nodes[node_id];
-        let Operator::Resize(resize) = &node.op else {
+    pub fn resized_shape(&self, graph: &mut Graph, node_id: NodeId) -> Option<ResolvedTensorDims> {
+        let op = graph.nodes[node_id].op.clone();
+        let inputs = graph.nodes[node_id].inputs.clone();
+        let Operator::Resize(resize) = &op else {
             unreachable!()
         };
 
         let mut dims = graph
-            .get_resolved_tensor_type(node.inputs[0].unwrap())?
+            .get_resolved_tensor_type(inputs[0].unwrap())?
             .dims
             .clone();
-        if let Some(roi) = &node
-            .inputs
-            .get(args::RESIZE_ROI)
-            .and_then(|x| *x)
-            .and_then(|x| graph.initializer.get(&x))
-        {
+        let roi_id = inputs.get(args::RESIZE_ROI).and_then(|x| *x);
+        if let Some(roi) = roi_id.and_then(|x| graph.get_initializer(x)) {
             if !roi.dims.is_scalar() {
                 unimplemented!()
             }

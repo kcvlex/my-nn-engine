@@ -48,7 +48,7 @@ pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
             if let Some(defines) = defined.get(value) {
                 adj.entry(*defines).or_insert(IndexSet::new()).insert(id);
             } else {
-                assert!(graph.initializer.contains_key(value));
+                assert!(graph.has_initializer(*value));
             }
         }
     }
@@ -229,8 +229,8 @@ mod comp {
         ) -> Result<(), InequalityError> {
             let left = &self.left.graph.values[left_id];
             let right = &self.right.graph.values[right_id];
-            let left_init = self.left.graph.initializer.get(&left_id);
-            let right_init = self.right.graph.initializer.get(&right_id);
+            let left_init = self.left.graph.initializer.get(&left_id).cloned();
+            let right_init = self.right.graph.initializer.get(&right_id).cloned();
             match (left_init, right_init) {
                 (Some(lv), Some(rv)) if lv == rv => {
                     return Ok(());
@@ -435,9 +435,9 @@ mod comp_structural {
             }
 
             // Both initializers
-            let left_init = self.left.graph.initializer.get(&left_id);
-            let right_init = self.right.graph.initializer.get(&right_id);
-            let inits_equal = match (left_init, right_init) {
+            let left_init = self.left.graph.initializer.get(&left_id).cloned();
+            let right_init = self.right.graph.initializer.get(&right_id).cloned();
+            let inits_equal = match (&left_init, &right_init) {
                 (Some(lv), Some(rv)) => match self.epsilon {
                     Some(eps) => {
                         lv.eq_with_epsilon(rv, eps, crate::tensor::data::CompPolicy::Either)

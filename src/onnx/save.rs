@@ -554,7 +554,7 @@ fn graph_to_proto(graph: &Graph) -> GraphProto {
     let input: Vec<ValueInfoProto> = graph
         .input_values()
         .into_iter()
-        .filter(|v| !graph.initializer.contains_key(v))
+        .filter(|v| !graph.has_initializer(*v))
         .map(|v| value_info_to_proto(graph, v))
         .collect();
 
@@ -663,16 +663,10 @@ mod tests {
         assert_eq!(original.graph.outputs.len(), reloaded.graph.outputs.len());
 
         // Initializers
-        assert_eq!(
-            original.graph.initializer.len(),
-            reloaded.graph.initializer.len()
-        );
-        for ((&oid, otensor), (&rid, rtensor)) in original
-            .graph
-            .initializer
-            .iter()
-            .zip(reloaded.graph.initializer.iter())
-        {
+        let orig_init = original.graph.initializer;
+        let reloaded_init = reloaded.graph.initializer;
+        assert_eq!(orig_init.len(), reloaded_init.len());
+        for ((&oid, otensor), (&rid, rtensor)) in orig_init.iter().zip(reloaded_init.iter()) {
             let oname = &original.graph.values[oid].name;
             let rname = &reloaded.graph.values[rid].name;
             assert_eq!(oname, rname, "initializer name mismatch");

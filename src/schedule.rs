@@ -230,7 +230,7 @@ impl Schedule {
                 _ => unreachable!(),
             })
             .collect::<Vec<_>>();
-        let initializers = graph.initializer.keys().copied().collect::<Vec<_>>();
+        let initializers = graph.initializer_ids();
         let kernels = kernel::build_kernels(&mut graph, &mut graph_op, options.target);
         Self {
             inputs,

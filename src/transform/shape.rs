@@ -94,20 +94,20 @@ fn transpose(
 
 // TODO: Remove _target.
 pub fn infer_node_output(
-    graph: &Graph,
+    graph: &mut Graph,
     node_id: NodeId,
     mode: UnifyMode,
     _target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
-    let node = &graph.nodes[node_id];
+    let node = graph.nodes[node_id].clone();
 
-    let inputs: Vec<&ResolvedTensorType> = node
+    let inputs: Vec<ResolvedTensorType> = node
         .inputs
         .iter()
         .filter_map(|id| *id)
         .flat_map(|id| {
             graph.values[id].ty.as_ref().map(|x| match x {
-                TensorType::Resolved(x) => Some(x),
+                TensorType::Resolved(x) => Some(x.clone()),
                 TensorType::Unresolved(_) => None,
             })
         })
@@ -199,8 +199,7 @@ pub fn infer_node_output(
         Operator::Expand => {
             let input = &inputs[0];
             let shape_tensor = &graph
-                .initializer
-                .get(&node.inputs[1].unwrap())
+                .get_initializer(node.inputs[1].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
             let target_dims = match shape_tensor {
@@ -255,8 +254,7 @@ pub fn infer_node_output(
         Operator::Reshape => {
             let a = &inputs[args::RESHAPE_DATA];
             let shape = &graph
-                .initializer
-                .get(&node.inputs[args::RESHAPE_SHAPE].unwrap())
+                .get_initializer(node.inputs[args::RESHAPE_SHAPE].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
             let shape = match shape {
@@ -426,7 +424,7 @@ pub fn infer_node_output(
         }
 
         Operator::Split(ref split) => {
-            let input = inputs[0];
+            let input = &inputs[0];
             let axis = split.axis.index(input.dims.ndim());
             split
                 .split(&input.dims)
@@ -481,6 +479,12 @@ pub fn infer_node_output(
             let input = &inputs[0].dims;
             let indices = &inputs[1].dims;
             let ndim = input.ndim();
+            if ndim == 0 {
+                eprintln!(
+                    "Gather node {:?}: input rank 0, inputs = {:?}",
+                    graph.nodes[node_id].name, graph.nodes[node_id].inputs
+                );
+            }
             let axis = axis.index(ndim);
             let mut dims = Vec::with_capacity(ndim - 1 + indices.ndim());
             let mut indices = Some(indices);
@@ -541,8 +545,7 @@ pub fn infer_node_output(
 
         Operator::ConstantOfShape(ConstantOfShape { value }) => {
             let shape = graph
-                .initializer
-                .get(&node.inputs[0].unwrap())
+                .get_initializer(node.inputs[0].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?;
             let ty = match shape.data {
                 TensorData::SInt(SIntType::I64, ref v) => {
@@ -597,8 +600,7 @@ pub fn infer_node_output(
 
         Operator::NonZero => {
             let input = &graph
-                .initializer
-                .get(&node.inputs[0].unwrap())
+                .get_initializer(node.inputs[0].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?
                 .data;
 
@@ -624,16 +626,13 @@ pub fn infer_node_output(
 
         Operator::Range => {
             let start = graph
-                .initializer
-                .get(&node.inputs[0].unwrap())
+                .get_initializer(node.inputs[0].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?;
             let limit = graph
-                .initializer
-                .get(&node.inputs[1].unwrap())
+                .get_initializer(node.inputs[1].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?;
             let delta = graph
-                .initializer
-                .get(&node.inputs[2].unwrap())
+                .get_initializer(node.inputs[2].unwrap())
                 .ok_or(TypeError::UnresolvedInput)?;
             let start_val = start
                 .data

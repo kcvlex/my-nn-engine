@@ -7,6 +7,7 @@ use itertools::Itertools;
 use prost::DecodeError;
 use prost::Message;
 
+use crate::onnx::model::ExternalTensorRef;
 use crate::onnx::model::Graph;
 use crate::onnx::model::Model;
 use crate::onnx::model::Node;
@@ -23,6 +24,7 @@ use crate::tensor::types::DataType;
 use crate::tensor::types::Dimension;
 use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
@@ -111,6 +113,7 @@ impl Tensor {
 struct GraphLoader {
     entries: HashMap<String, ValueId>,
     values: Values,
+    external_refs: BTreeMap<ValueId, ExternalTensorRef>,
 }
 
 #[allow(dead_code)]
@@ -201,6 +204,7 @@ type Attributes = HashMap<String, Attribute>;
 
 impl GraphLoader {
     fn load_graph(mut self, graph: GraphProto, base_dir: Option<&Path>) -> LoadResult<Graph> {
+        let graph_name = graph.name.clone();
         let input = {
             let initializer_names: HashSet<_> =
                 graph.initializer.iter().map(|x| x.name.as_str()).collect();
@@ -211,7 +215,7 @@ impl GraphLoader {
                 .collect();
             input
         };
-        let initializer = self.load_initializer(graph.initializer, base_dir)?;
+        let loaded_initializers = self.load_initializer(graph.initializer, base_dir)?;
         let inputs = self.load_value_info_vec(input)?;
         let outputs = self.load_value_info_vec(graph.output)?;
         let mut nodes = self.load_nodes(graph.node, base_dir)?;
@@ -244,12 +248,11 @@ impl GraphLoader {
             .collect();
 
         // Fill dummy values
-        let mut initializer = initializer;
-        let defined: HashSet<ValueId> = initializer
+        let defined: HashSet<ValueId> = loaded_initializers
             .keys()
             .copied()
+            .chain(self.external_refs.keys().copied())
             .chain(inputs.iter().map(|&x| nodes[x].outputs[0]))
-            .chain(initializer.keys().copied())
             .chain(
                 nodes
                     .iter()
@@ -261,6 +264,7 @@ impl GraphLoader {
             TensorData::Float(FloatType::F32, vec![-42.0]),
         )
         .unwrap();
+        let mut dummy_initializers: Vec<(ValueId, Tensor)> = Vec::new();
         for value_id in nodes
             .iter()
             .flat_map(|(_, node)| node.inputs.iter())
@@ -268,19 +272,23 @@ impl GraphLoader {
             .filter(|&x| !defined.contains(x))
             .unique()
         {
-            initializer.insert(*value_id, tensor.clone());
+            dummy_initializers.push((*value_id, tensor.clone()));
             self.values[*value_id].ty = Some(TensorType::Resolved(tensor.tensor_type()));
         }
 
-        Ok(Graph {
-            name: graph.name,
-            initializer,
-            inputs,
-            outputs,
-            values: self.values,
-            nodes,
-            resolved_params: HashMap::new(),
-        })
+        let mut graph = Graph::empty_graph(graph_name);
+        graph.nodes = nodes;
+        graph.inputs = inputs;
+        graph.outputs = outputs;
+        graph.values = self.values;
+        for (id, t) in loaded_initializers {
+            graph.set_initializer(id, t);
+        }
+        graph.external_refs = self.external_refs;
+        for (id, t) in dummy_initializers {
+            graph.set_initializer(id, t);
+        }
+        Ok(graph)
     }
 
     fn load_value_info_vec(&mut self, v: Vec<ValueInfoProto>) -> LoadResult<Vec<ValueId>> {
@@ -308,6 +316,18 @@ impl GraphLoader {
         let mut res = BTreeMap::new();
         for tensor in v.into_iter() {
             let name = tensor.name.clone();
+            if !tensor.external_data.is_empty() {
+                let external_ref = make_external_ref(&tensor, base_dir)?;
+                let ty = ResolvedTensorType::new(external_ref.elem_type, external_ref.dims.clone());
+                let id = *self.entries.entry(name.clone()).or_insert_with(|| {
+                    self.values.alloc(ValueInfo {
+                        name,
+                        ty: Some(TensorType::Resolved(ty)),
+                    })
+                });
+                self.external_refs.insert(id, external_ref);
+                continue;
+            }
             let tensor = load_tensor(tensor, base_dir)?;
             let id = self.entries.entry(name.clone()).or_insert_with(|| {
                 self.values.alloc(ValueInfo {
@@ -350,6 +370,37 @@ impl GraphLoader {
         }
         Ok(res)
     }
+}
+
+fn make_external_ref(
+    tensor: &TensorProto,
+    base_dir: Option<&Path>,
+) -> LoadResult<ExternalTensorRef> {
+    let elem_type = DataType::try_from(tensor.data_type)?;
+    let ed: HashMap<&str, &str> = tensor
+        .external_data
+        .iter()
+        .map(|kv| (kv.key.as_str(), kv.value.as_str()))
+        .collect();
+    let location = ed
+        .get("location")
+        .ok_or_else(|| ModelLoadError::Unexpected("external_data missing location".to_string()))?;
+    let offset = ed
+        .get("offset")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let length = ed.get("length").and_then(|s| s.parse::<u64>().ok());
+    let base = base_dir
+        .ok_or_else(|| ModelLoadError::Unexpected("external_data requires base_dir".to_string()))?;
+    let dims =
+        ResolvedTensorDims::new(&tensor.dims.iter().map(|&x| x as usize).collect::<Vec<_>>());
+    Ok(ExternalTensorRef {
+        path: base.join(location),
+        offset,
+        length,
+        elem_type,
+        dims,
+    })
 }
 
 fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tensor> {
@@ -559,10 +610,7 @@ fn load_utf8(v: Vec<u8>) -> LoadResult<String> {
     String::from_utf8(v).map_err(|err| ModelLoadError::Unexpected(err.to_string()))
 }
 
-fn load_attributes(
-    v: Vec<AttributeProto>,
-    base_dir: Option<&Path>,
-) -> LoadResult<Attributes> {
+fn load_attributes(v: Vec<AttributeProto>, base_dir: Option<&Path>) -> LoadResult<Attributes> {
     let mut res = HashMap::new();
     for attr in v.into_iter() {
         let name = attr.name;

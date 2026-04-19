@@ -39,16 +39,16 @@ impl<T: GraphOp> Pass<T> for OpsetAdaptation {
     }
 }
 
-fn lookup_constant_tensor(graph: &Graph, value_id: ValueId) -> Option<&Tensor> {
-    if let Some(t) = graph.initializer.get(&value_id) {
-        return Some(t);
+fn lookup_constant_tensor(graph: &Graph, value_id: ValueId) -> Option<Tensor> {
+    if let Some(t) = graph.get_initializer(value_id) {
+        return Some(t.clone());
     }
     for (_, node) in graph.nodes.iter() {
         if !node.outputs.contains(&value_id) {
             continue;
         }
         if let Operator::Constant(Constant { value }) = &node.op {
-            return Some(value);
+            return Some(value.clone());
         }
     }
     None

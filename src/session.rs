@@ -177,11 +177,14 @@ impl Session {
 
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
-        let initializer: Vec<_> = model
-            .graph
-            .initializer
-            .values()
-            .map(StrictTensor::from)
+        let initializer_ids = model.graph.initializer_ids();
+        let initializer: Vec<_> = initializer_ids
+            .iter()
+            .map(|&id| {
+                StrictTensor::from(
+                    &model.graph.get_initializer(id).expect("initializer missing"),
+                )
+            })
             .collect::<Vec<_>>();
 
         let mut schedule = Schedule::new(model.graph, options.clone());

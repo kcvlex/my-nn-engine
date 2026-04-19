@@ -219,7 +219,7 @@ impl<'sched> MemoryPlanner<'sched> {
                     .inputs
                     .iter()
                     .flatten()
-                    .filter(|id| !self.schedule.graph.initializer.contains_key(id))
+                    .filter(|id| !self.schedule.graph.has_initializer(**id))
                     .chain(kernel.outputs.iter())
                     .map(|id| to_allocate_info(self, id))
                     .collect(),
@@ -257,7 +257,7 @@ impl<'sched> MemoryPlanner<'sched> {
                 Some(_) => {}
                 None => {
                     if self.deps.inputs_set.contains(input) ||
-                        self.schedule.graph.initializer.contains_key(input)
+                        self.schedule.graph.has_initializer(*input)
                     {
                         continue;
                     }
