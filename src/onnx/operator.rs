@@ -937,6 +937,9 @@ pub mod args {
     pub const SQUEEZE_DATA: usize = 0;
     pub const SQUEEZE_AXES: usize = 1;
 
+    pub const REDUCE_DATA: usize = 0;
+    pub const REDUCE_AXES: usize = 1;
+
     pub const RESIZE_ROI: usize = 1;
     pub const RESIZE_SCALES: usize = 2;
     pub const RESIZE_SIZES: usize = 3;

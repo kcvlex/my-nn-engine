@@ -19,6 +19,7 @@ use crate::transform::Pass;
 // Currently handles:
 //   - Unsqueeze: axes moved from attribute (<=12) to input[1] (>=13).
 //   - Squeeze:   axes moved from attribute (<=12) to input[1] (>=13).
+//   - ReduceMax/ReduceMean/ReduceSum: axes moved to input[1] (>=13/18).
 #[derive(Default)]
 pub struct OpsetAdaptation {}
 
@@ -33,6 +34,9 @@ impl<T: GraphOp> Pass<T> for OpsetAdaptation {
             match &graph.nodes[id].op {
                 Operator::Unsqueeze(_) => bake_unsqueeze_axes(graph, id, modifier),
                 Operator::Squeeze(_) => bake_squeeze_axes(graph, id, modifier),
+                Operator::ReduceMax(_) | Operator::ReduceMean(_) | Operator::ReduceSum(_) => {
+                    bake_reduce_axes(graph, id, modifier)
+                }
                 _ => (),
             }
         }
@@ -99,4 +103,23 @@ fn bake_squeeze_axes<T: GraphOp>(
         }
     }
     modifier.drop_node_input(graph, node_id, args::SQUEEZE_AXES);
+}
+
+fn bake_reduce_axes<T: GraphOp>(
+    graph: &mut Graph,
+    node_id: crate::onnx::model::NodeId,
+    modifier: &mut T,
+) {
+    let Some(axes) = extract_axes(graph, node_id, args::REDUCE_AXES) else {
+        return;
+    };
+    let axes_i64: Vec<i64> = axes.iter().map(|a| a.raw() as i64).collect();
+    let reduce = match &mut graph.nodes[node_id].op {
+        Operator::ReduceMax(r) | Operator::ReduceMean(r) | Operator::ReduceSum(r) => r,
+        _ => return,
+    };
+    if reduce.axes.is_empty() {
+        reduce.axes = axes_i64;
+    }
+    modifier.drop_node_input(graph, node_id, args::REDUCE_AXES);
 }
