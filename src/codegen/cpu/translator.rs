@@ -225,6 +225,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
             }
 
+            SingleOpcode::And => {
+                let (lhs, rhs) = binary_op!(operands);
+                self.builder
+                    .build_and(lhs.into_int_value(), rhs.into_int_value(), "and")?
+                    .as_basic_value_enum()
+            }
+
             SingleOpcode::BatchNorm(operator::BatchNormalization { epsilon, .. }) => {
                 let src = operands[operator::args::BATCHNORM_DATA].into_float_value();
                 let scale = operands[operator::args::BATCHNORM_SCALE].into_float_value();

@@ -900,6 +900,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Add |
+                Operator::And |
                 Operator::Cos |
                 Operator::Div |
                 Operator::BatchNormalization(_) |

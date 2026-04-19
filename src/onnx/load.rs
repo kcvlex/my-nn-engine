@@ -1060,6 +1060,7 @@ impl Unsqueeze {
 fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
     match op {
         "Add" => Ok(Operator::Add),
+        "And" => Ok(Operator::And),
         "Attention" => Ok(Operator::Attention(Attention::load(attributes)?)),
         "BatchNormalization" => Ok(Operator::BatchNormalization(BatchNormalization::load(
             attributes,

@@ -122,6 +122,12 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
+        Operator::And => {
+            let a = &inputs[0];
+            let b = &inputs[1];
+            let dims = broadcast_shape(&a.dims, &b.dims)?;
+            res.push(ResolvedTensorType::new(DataType::Bool, dims));
+        }
         Operator::Equal => {
             let a = &inputs[0];
             let b = &inputs[1];

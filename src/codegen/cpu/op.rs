@@ -77,6 +77,7 @@ pub struct Operation<'ctx> {
 #[derive(Debug, Clone, Copy)]
 pub enum SingleOpcode {
     Add,
+    And,
     BatchNorm(BatchNormalization),
     Cast(DataType, DataType),
     Clip(Clip),

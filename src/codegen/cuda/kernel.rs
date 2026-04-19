@@ -438,6 +438,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
     fn binary_op(&self, op: &Operator, lhs: KernelVar, rhs: KernelVar) -> KernelExpr {
         KernelExpr::Raw(match op {
             Operator::Add => format!("({} + {})", lhs, rhs),
+            Operator::And => format!("({} && {})", lhs, rhs),
             Operator::Div => format!("({} / {})", lhs, rhs),
             Operator::Equal => format!("({} == {})", lhs, rhs),
             Operator::Mul => format!("({} * {})", lhs, rhs),
@@ -482,6 +483,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 self.unary_op(uop, *a)
             }
             binop @ (Operator::Add |
+            Operator::And |
             Operator::Div |
             Operator::Equal |
             Operator::Mul |

@@ -42,6 +42,7 @@ impl TensorIndex {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Add,
+    And,
     Attention(Attention),
     AveragePool(Pooling),
     BatchedGemm(BatchedGemm),
@@ -770,6 +771,7 @@ impl Operator {
     pub fn name(&self) -> &str {
         match self {
             Operator::Add => "Add",
+            Operator::And => "And",
             Operator::Attention(_) => "Attention",
             Operator::AveragePool(_) => "AveragePool",
             Operator::BatchedGemm(_) => "BatchedGemm",
@@ -840,6 +842,7 @@ impl Operator {
     pub fn operator_type(&self) -> OperatorType {
         match self {
             Operator::Add |
+            Operator::And |
             Operator::BatchNormalization(_) |
             Operator::Cast(_) |
             Operator::Clip(_) |

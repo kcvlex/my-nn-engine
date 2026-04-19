@@ -753,6 +753,7 @@ impl<'ll> CodeGen<'ll, '_> {
          -> SingleOpcode {
             match op {
                 Operator::Add |
+                Operator::And |
                 Operator::Div |
                 Operator::Equal |
                 Operator::Mul |
@@ -787,6 +788,7 @@ impl<'ll> CodeGen<'ll, '_> {
 
             match op {
                 Operator::Add => SingleOpcode::Add,
+                Operator::And => SingleOpcode::And,
                 Operator::BatchNormalization(bn) => SingleOpcode::BatchNorm(*bn),
                 Operator::Cast(cast) => {
                     assert!(operands.len() == 1);
@@ -824,6 +826,7 @@ impl<'ll> CodeGen<'ll, '_> {
         let exit = match &kernel.body {
             KernelBody::Opaque(Opaque { op }) => match op {
                 Operator::Add |
+                Operator::And |
                 Operator::BatchNormalization(_) |
                 Operator::Clip(_) |
                 Operator::Cos |
