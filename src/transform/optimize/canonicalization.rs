@@ -10,6 +10,7 @@ use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
+use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::utils::*;
@@ -411,52 +412,166 @@ impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
         let ids: Vec<_> = graph
             .nodes
             .iter()
-            .filter_map(|(id, node)| {
-                if !matches!(node.op, Operator::MatMul) {
-                    return None;
-                }
-                let lhs = node.inputs[args::MATMUL_LHS].unwrap();
-                let rhs = node.inputs[args::MATMUL_RHS].unwrap();
-                let ldim = graph.get_resolved_tensor_type(lhs)?.dims.ndim();
-                let rdim = graph.get_resolved_tensor_type(rhs)?.dims.ndim();
-                if ldim < 3 || rdim < 3 {
-                    return None;
-                }
-                // BatchedGemm requires batch dims to match exactly.
-                // If broadcast is needed (e.g. [2,3,4] @ [1,3,5]), keep as MatMul.
-                let l_dims = &graph.get_resolved_tensor_type(lhs)?.dims;
-                let r_dims = &graph.get_resolved_tensor_type(rhs)?.dims;
-                if l_dims[..ldim - 2] != r_dims[..rdim - 2] {
-                    return None;
-                }
-                Some(id)
-            })
+            .filter(|(_, node)| matches!(node.op, Operator::MatMul))
+            .map(|(id, _)| id)
             .collect();
 
         for id in ids {
-            let node = &graph.nodes[id];
-            let lhs = node.inputs[args::MATMUL_LHS].unwrap();
-            let rhs = node.inputs[args::MATMUL_RHS].unwrap();
-            let old_output = node.outputs[0];
-            let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
-            let name = format!("MatMul2BatchedGemm_{:?}", id);
-            let new_output = modifier.register_new_value(graph, name.clone(), ty);
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![Some(lhs), Some(rhs)],
-                    outputs: vec![new_output],
-                    name,
-                    op: Operator::BatchedGemm(BatchedGemm {
-                        alpha: 1.0,
-                        beta: 0.0,
-                        trans_a: false,
-                        trans_b: false,
-                    }),
-                    meta: NodeMeta::default(),
-                },
-            );
-            modifier.replace_input_value(graph, old_output, new_output);
+            if try_lower_matmul(id, graph, modifier).is_none() {
+                // Leave the MatMul in place; only CPU can fall back to a
+                // generic build_matmul kernel.
+                continue;
+            }
         }
     }
+}
+
+// Lowers a single MatMul to a BatchedGemm by promoting ranks and inserting
+// Expand ops to broadcast mismatched batch dims. Returns None if the MatMul
+// is 2D x 2D (already handled by Canonicalization -> Gemm) or has a broadcast
+// that cannot be resolved (e.g. 3 vs 5 on a non-1 dim).
+fn try_lower_matmul<T: GraphOp>(
+    id: NodeId,
+    graph: &mut Graph,
+    modifier: &mut T,
+) -> Option<()> {
+    let lhs = graph.nodes[id].inputs[args::MATMUL_LHS].unwrap();
+    let rhs = graph.nodes[id].inputs[args::MATMUL_RHS].unwrap();
+    let l_dims = graph.get_resolved_tensor_type(lhs)?.dims.clone();
+    let r_dims = graph.get_resolved_tensor_type(rhs)?.dims.clone();
+    let ldim = l_dims.ndim();
+    let rdim = r_dims.ndim();
+    if ldim <= 2 && rdim <= 2 {
+        return None;
+    }
+
+    let max_dim = ldim.max(rdim);
+    let lhs_promoted = prepend_ones(graph, modifier, lhs, max_dim)?;
+    let rhs_promoted = prepend_ones(graph, modifier, rhs, max_dim)?;
+
+    let l_dims = graph.get_resolved_tensor_type(lhs_promoted)?.dims.clone();
+    let r_dims = graph.get_resolved_tensor_type(rhs_promoted)?.dims.clone();
+    let batch_ndim = max_dim - 2;
+    let mut batch_dims = Vec::with_capacity(batch_ndim);
+    for i in 0..batch_ndim {
+        let a = l_dims[i];
+        let b = r_dims[i];
+        let resolved = if a == b {
+            a
+        } else if a == 1 {
+            b
+        } else if b == 1 {
+            a
+        } else {
+            return None;
+        };
+        batch_dims.push(resolved);
+    }
+
+    let lhs_final = broadcast_batch(
+        graph,
+        modifier,
+        id,
+        "Lhs",
+        lhs_promoted,
+        &batch_dims,
+    )?;
+    let rhs_final = broadcast_batch(
+        graph,
+        modifier,
+        id,
+        "Rhs",
+        rhs_promoted,
+        &batch_dims,
+    )?;
+
+    let old_output = graph.nodes[id].outputs[0];
+    let ty = graph.get_resolved_tensor_type(old_output)?.clone();
+    let name = format!("MatMul2BatchedGemm_{:?}", id);
+    let new_output = modifier.register_new_value(graph, name.clone(), ty);
+    modifier.register_new_node(
+        graph,
+        Node {
+            inputs: vec![Some(lhs_final), Some(rhs_final)],
+            outputs: vec![new_output],
+            name,
+            op: Operator::BatchedGemm(BatchedGemm {
+                alpha: 1.0,
+                beta: 0.0,
+                trans_a: false,
+                trans_b: false,
+            }),
+            meta: NodeMeta::default(),
+        },
+    );
+    modifier.replace_input_value(graph, old_output, new_output);
+    Some(())
+}
+
+fn prepend_ones<T: GraphOp>(
+    graph: &mut Graph,
+    modifier: &mut T,
+    value: ValueId,
+    target_ndim: usize,
+) -> Option<ValueId> {
+    let ty = graph.get_resolved_tensor_type(value)?.clone();
+    let cur_ndim = ty.dims.ndim();
+    if cur_ndim == target_ndim {
+        return Some(value);
+    }
+    let mut new_dims = vec![1usize; target_ndim - cur_ndim];
+    new_dims.extend(ty.dims.iter().copied());
+    ReshapeGenerator::default()
+        .set_input(value)
+        .set_dims(&new_dims)
+        .set_allow_contiguous(true)
+        .set_node_name(format!("MatMul2BatchedGemm_Promote_{}", value.index()))
+        .set_value_name(format!("MatMul2BatchedGemm_Promote_{}", value.index()))
+        .generate(graph, modifier)
+        .ok()
+}
+
+// Expands `value` so its leading batch dims match `batch_dims`, leaving the
+// last two matrix dims untouched. Returns `value` unchanged when no broadcast
+// is needed.
+fn broadcast_batch<T: GraphOp>(
+    graph: &mut Graph,
+    modifier: &mut T,
+    id: NodeId,
+    side_tag: &str,
+    value: ValueId,
+    batch_dims: &[usize],
+) -> Option<ValueId> {
+    let ty = graph.get_resolved_tensor_type(value)?.clone();
+    let ndim = ty.dims.ndim();
+    debug_assert!(ndim == batch_dims.len() + 2);
+    if ty.dims[..batch_dims.len()] == *batch_dims {
+        return Some(value);
+    }
+
+    let mut target_dims: Vec<usize> = batch_dims.to_vec();
+    target_dims.push(ty.dims[ndim - 2]);
+    target_dims.push(ty.dims[ndim - 1]);
+
+    let shape_name = format!("MatMul2BatchedGemm_Shape_{side_tag}_{:?}", id);
+    let shape_tensor = ResolvedTensorDims::new(&target_dims).to_tensor();
+    let shape_val = modifier.register_new_tensor(graph, shape_tensor, shape_name);
+
+    let expanded_ty = ResolvedTensorType::new(ty.elem_type, ResolvedTensorDims::new(&target_dims));
+    let expanded = modifier.register_new_value(
+        graph,
+        format!("MatMul2BatchedGemm_Expand_{side_tag}_{:?}", id),
+        expanded_ty,
+    );
+    modifier.register_new_node(
+        graph,
+        Node {
+            inputs: vec![Some(value), Some(shape_val)],
+            outputs: vec![expanded],
+            name: format!("MatMul2BatchedGemm_Expand_{side_tag}_{:?}", id),
+            op: Operator::Expand,
+            meta: NodeMeta::default(),
+        },
+    );
+    Some(expanded)
 }
