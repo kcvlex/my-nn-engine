@@ -154,7 +154,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         name: &str,
     ) -> Result<CallSiteValue<'ctx>, BuilderError> {
         let call = self.builder.build_call(function, args, name)?;
-        //call.set_tail_call(true);
+        call.set_tail_call(false);
         Ok(call)
     }
 
