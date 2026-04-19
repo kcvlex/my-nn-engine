@@ -1,13 +1,16 @@
 use itertools::Itertools;
 
 use crate::onnx::model::Graph;
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::args;
+use crate::onnx::operator::Constant;
 use crate::onnx::operator::Operator;
 use crate::onnx::operator::Squeeze;
 use crate::onnx::operator::TensorIndex;
 use crate::onnx::operator::Unsqueeze;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::SIntType;
+use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
@@ -36,12 +39,28 @@ impl<T: GraphOp> Pass<T> for OpsetAdaptation {
     }
 }
 
-fn extract_axes(graph: &Graph, node_id: crate::onnx::model::NodeId, arg: usize) -> Option<Vec<TensorIndex>> {
-    let tensor = graph.nodes[node_id]
-        .inputs
-        .get(arg)
-        .and_then(|id| id.as_ref())
-        .and_then(|id| graph.initializer.get(id))?;
+fn lookup_constant_tensor(graph: &Graph, value_id: ValueId) -> Option<&Tensor> {
+    if let Some(t) = graph.initializer.get(&value_id) {
+        return Some(t);
+    }
+    for (_, node) in graph.nodes.iter() {
+        if !node.outputs.contains(&value_id) {
+            continue;
+        }
+        if let Operator::Constant(Constant { value }) = &node.op {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn extract_axes(
+    graph: &Graph,
+    node_id: crate::onnx::model::NodeId,
+    arg: usize,
+) -> Option<Vec<TensorIndex>> {
+    let value_id = *graph.nodes[node_id].inputs.get(arg)?.as_ref()?;
+    let tensor = lookup_constant_tensor(graph, value_id)?;
     match &tensor.data {
         TensorData::SInt(SIntType::I64, v) => {
             Some(v.iter().map(|&x| TensorIndex::new(x as isize)).collect())
