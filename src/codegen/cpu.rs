@@ -34,6 +34,7 @@ use crate::onnx::operator::args;
 use crate::onnx::operator::Contiguous;
 use crate::onnx::operator::Layout;
 use crate::onnx::operator::Operator;
+use crate::onnx::operator::Slice;
 use crate::options::Options;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
@@ -672,6 +673,66 @@ impl<'ll> CodeGen<'ll, '_> {
         Ok(())
     }
 
+    fn collect_slice_info(&self, kernel: &Kernel) -> Vec<Slice> {
+        use crate::onnx::operator::TensorIndex;
+        let graph = self.gen_ctx.schedule.graph();
+        let data_id = kernel.inputs[args::SLICE_DATA].unwrap();
+        let dims = graph
+            .get_resolved_tensor_type(data_id)
+            .expect("Slice data must have resolved type")
+            .dims
+            .clone();
+        let starts_id = kernel.inputs[args::SLICE_STARTS].unwrap();
+        let ends_id = kernel.inputs[args::SLICE_ENDS].unwrap();
+        let starts = graph
+            .get_initializer(starts_id)
+            .expect("Slice starts must be an initializer")
+            .to_indices()
+            .expect("Slice starts must be 1D ints");
+        let ends = graph
+            .get_initializer(ends_id)
+            .expect("Slice ends must be an initializer")
+            .to_indices()
+            .expect("Slice ends must be 1D ints");
+        let axes_id = kernel.inputs.get(args::SLICE_AXES).and_then(|x| *x);
+        let axes = axes_id
+            .and_then(|x| graph.get_initializer(x))
+            .and_then(|x| x.to_indices())
+            .unwrap_or_else(|| {
+                (0..(starts.len() as isize))
+                    .map(TensorIndex::new)
+                    .collect::<Vec<_>>()
+            });
+        if let Some(steps_id) = kernel.inputs.get(args::SLICE_STEPS).and_then(|x| *x) {
+            let steps = graph
+                .get_initializer(steps_id)
+                .and_then(|x| x.to_1d_sints())
+                .expect("Slice steps must be a 1D int initializer");
+            assert!(
+                steps.iter().all(|&s| s == 1),
+                "Slice codegen only supports step=1"
+            );
+        }
+        starts
+            .into_iter()
+            .zip(ends.into_iter())
+            .zip(axes.into_iter())
+            .map(|((start, end), axis)| {
+                let axis = axis.index(dims.ndim());
+                let start = start.index(dims[axis]) as isize;
+                let end = end.index(dims[axis]) as isize;
+                let start = start.clamp(0, dims[axis] as isize);
+                let end = end.clamp(0, dims[axis] as isize);
+                Slice {
+                    start,
+                    end,
+                    axis,
+                    step: 1,
+                }
+            })
+            .collect()
+    }
+
     fn compile_kernel(&self, kernel_id: KernelId) -> Result<(), BuilderError> {
         let kernel = &self.gen_ctx.schedule.kernels[kernel_id];
         // dbg!(&node);
@@ -968,6 +1029,10 @@ impl<'ll> CodeGen<'ll, '_> {
                     translator.build_where(&ptrs[0], &ptrs[1], &ptrs[2], &ptrs[3], entry)
                 }
                 Operator::Expand => translator.build_expand(&ptrs[0], &ptrs[1], entry),
+                Operator::Slice => {
+                    let slices = self.collect_slice_info(kernel);
+                    translator.build_slice(&ptrs[0], &ptrs[1], &slices, entry)
+                }
                 Operator::Attention(_) => panic!(),
                 Operator::BatchedGemm(ref gemm) => {
                     translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)

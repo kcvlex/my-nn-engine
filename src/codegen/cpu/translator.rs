@@ -3344,6 +3344,105 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    pub fn build_slice(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        src: &TensorPtr<'ctx>,
+        slices: &[operator::Slice],
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let i64_type = self.context.i64_type();
+        let output_size = dst.ty.dims.size() as u64;
+        let output_dims: Vec<u64> = dst.ty.dims.iter().map(|d| *d as u64).collect();
+        let ndim = output_dims.len();
+
+        // Per-axis start offset (0 if axis not sliced). step=1 only.
+        let mut starts: Vec<u64> = vec![0; ndim];
+        for s in slices.iter() {
+            assert!(s.step == 1, "Slice codegen only supports step=1");
+            assert!(s.axis < ndim);
+            starts[s.axis] = s.start as u64;
+        }
+
+        let src_strides: Vec<u64> = (0..ndim).map(|d| src.stride(d) as u64).collect();
+        let dst_strides: Vec<u64> = (0..ndim).map(|d| dst.stride(d) as u64).collect();
+
+        let body = self.context.append_basic_block(*self.func, "slice.body");
+        let exit = self.context.append_basic_block(*self.func, "slice.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(body)?;
+
+        self.builder.position_at_end(body);
+        let (ind, ind_val) = self.init_counted_loop(body)?;
+        let mut src_offset = src.offset;
+        let mut dst_offset = dst.offset;
+        let mut remaining = ind_val;
+        for (dim_idx, out_dim) in output_dims.iter().enumerate().rev() {
+            let dim_const = i64_type.const_int(*out_dim, false);
+            let out_idx = self.builder.build_int_unsigned_rem(
+                remaining,
+                dim_const,
+                &format!("o_idx.{}", dim_idx),
+            )?;
+            remaining = self.builder.build_int_unsigned_div(
+                remaining,
+                dim_const,
+                &format!("o_rem.{}", dim_idx),
+            )?;
+            let in_idx = if starts[dim_idx] != 0 {
+                let start_const = i64_type.const_int(starts[dim_idx], false);
+                self.builder
+                    .build_int_add(out_idx, start_const, &format!("i_idx.{}", dim_idx))?
+            } else {
+                out_idx
+            };
+            let src_stride = src_strides[dim_idx];
+            if src_stride != 0 {
+                let stride_const = i64_type.const_int(src_stride, false);
+                let contrib = self.builder.build_int_mul(
+                    in_idx,
+                    stride_const,
+                    &format!("src_contrib.{}", dim_idx),
+                )?;
+                src_offset = self.builder.build_int_add(
+                    src_offset,
+                    contrib,
+                    &format!("src_off.{}", dim_idx),
+                )?;
+            }
+            let dst_stride = dst_strides[dim_idx];
+            if dst_stride != 0 {
+                let stride_const = i64_type.const_int(dst_stride, false);
+                let contrib = self.builder.build_int_mul(
+                    out_idx,
+                    stride_const,
+                    &format!("dst_contrib.{}", dim_idx),
+                )?;
+                dst_offset = self.builder.build_int_add(
+                    dst_offset,
+                    contrib,
+                    &format!("dst_off.{}", dim_idx),
+                )?;
+            }
+        }
+        let src_ptr = src.clone().set_offset(src_offset);
+        let val = self.build_load(&src_ptr)?;
+        let dst_ptr = dst.clone().set_offset(dst_offset);
+        self.build_store(&dst_ptr, val)?;
+        self.finalize_counted_loop(
+            ind,
+            entry,
+            i64_type.const_int(output_size, false),
+            body,
+            exit,
+            body,
+        )?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_expand(
         &self,
         dst: &TensorPtr<'ctx>,

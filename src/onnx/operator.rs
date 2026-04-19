@@ -501,8 +501,12 @@ pub struct Unsqueeze {
 }
 
 impl Slice {
-    pub fn collect_slices(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Self>> {
+    pub fn collect_slices(graph: &Graph, node_id: NodeId) -> Option<Vec<Self>> {
         let inputs = graph.nodes[node_id].inputs.clone();
+        Self::collect_from_inputs(graph, &inputs)
+    }
+
+    pub fn collect_from_inputs(graph: &Graph, inputs: &[Option<ValueId>]) -> Option<Vec<Self>> {
         let dims = graph
             .get_resolved_tensor_type(inputs[args::SLICE_DATA].unwrap())?
             .dims

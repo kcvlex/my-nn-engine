@@ -1702,6 +1702,87 @@ impl<'sched> ExpandBuilder<'sched> {
     }
 }
 
+pub struct SliceBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
+}
+
+impl<'sched> SliceBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        let KernelBody::Opaque(Opaque {
+            op: Operator::Slice,
+        }) = &kernel.body
+        else {
+            panic!("Expected Slice operator");
+        };
+
+        let input_id = kernel.inputs[operator::args::SLICE_DATA].unwrap();
+        let output_id = kernel.outputs[0];
+
+        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?.clone();
+        let input_ty = self.ctx.get_resolved_tensor_type(input_id)?.clone();
+
+        let slices =
+            operator::Slice::collect_from_inputs(self.ctx.schedule.graph(), &kernel.inputs)
+                .expect("Failed to collect slices");
+
+        let ndim = output_ty.dims.ndim();
+        assert_eq!(ndim, input_ty.dims.ndim());
+
+        let mut start_per_axis = vec![0isize; ndim];
+        for slice in slices.iter() {
+            if slice.step != 1 {
+                panic!("Slice: only step=1 is supported, got step={}", slice.step);
+            }
+            start_per_axis[slice.axis] = slice.start;
+        }
+
+        let mut base_offset: isize = 0;
+        for i in 0..ndim {
+            base_offset += start_per_axis[i] * input_ty.stride(i) as isize;
+        }
+
+        let size = output_ty.dims.size();
+
+        let gid = KernelVar::Gid;
+        let out = KernelVar::Value(output_id);
+        let inp = KernelVar::Value(input_id);
+        let decl = self.ctx.decl.decl();
+
+        let mut lines = Vec::new();
+        lines.push(format!("int src_idx = {base_offset};"));
+        lines.push("{ int rem = gid;".to_string());
+        for i in (0..ndim).rev() {
+            let out_dim = output_ty.dims[i];
+            let in_stride = input_ty.stride(i);
+            lines.push(format!("int idx_{i} = rem % {out_dim};"));
+            lines.push(format!("rem = rem / {out_dim};"));
+            if in_stride != 0 {
+                lines.push(format!("src_idx += idx_{i} * {in_stride};"));
+            }
+        }
+        lines.push("}".to_string());
+        let src_idx = lines.join("\n    ");
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {src_idx}
+    {out}[{gid}] = {inp}[src_idx];
+}}
+"
+        ))
+    }
+}
+
 pub struct ReduceMatrixBuilder<'sched> {
     ctx: BuilderContext<'sched>,
 }

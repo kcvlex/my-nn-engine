@@ -30,6 +30,7 @@ use crate::codegen::cuda::kernel::OneHotBuilder;
 use crate::codegen::cuda::kernel::PoolBuilder;
 use crate::codegen::cuda::kernel::ReduceMatrixBuilder;
 use crate::codegen::cuda::kernel::ResizeBuilder;
+use crate::codegen::cuda::kernel::SliceBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::kernel::WhereBuilder;
@@ -1470,6 +1471,23 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .size();
                     let generated = self.generate_kernel(kernel_id, |sched, decl| {
                         ExpandBuilder::new(sched, decl).build()
+                    })?;
+                    self.stmts.push(
+                        create_launch_kernel(
+                            kernel::CUDAKernel::GeneratedKernel(generated),
+                            output_size,
+                        )?
+                        .into(),
+                    );
+                }
+
+                Operator::Slice => {
+                    let output_size = self
+                        .get_resolved_tensor_type(kernel.outputs[0])?
+                        .dims
+                        .size();
+                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                        SliceBuilder::new(sched, decl).build()
                     })?;
                     self.stmts.push(
                         create_launch_kernel(

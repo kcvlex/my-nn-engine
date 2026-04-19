@@ -8,7 +8,6 @@ use smallvec::smallvec;
 use smallvec::SmallVec;
 
 use crate::onnx::operator::Slice;
-use crate::onnx::operator::TensorIndex;
 use crate::tensor::Tensor;
 use crate::tensor::TensorData;
 
@@ -163,23 +162,19 @@ impl ResolvedTensorDims {
         &self.0
     }
 
-    pub fn slice_in_place(&mut self, slice: &Slice) {
-        let Slice {
-            start,
-            end,
-            axis,
-            step,
-        } = slice;
-        if *step != 1 {
-            unimplemented!();
-        }
-        self[*axis] = (end - start) as usize;
-    }
-
     pub fn slices(&self, slices: &[Slice]) -> Self {
         let mut res = self.clone();
         for slice in slices {
-            res.slice_in_place(slice);
+            let Slice {
+                start,
+                end,
+                axis,
+                step,
+            } = slice;
+            if *step != 1 {
+                unimplemented!();
+            }
+            res[*axis] = (end - start) as usize;
         }
         res
     }
@@ -563,28 +558,9 @@ impl ResolvedTensorType {
         })
     }
 
-    pub fn slice_in_place(&mut self, rank: usize, start: isize, end: isize) -> usize {
-        let dim = self.dims[rank];
-        let start = TensorIndex::new(start).index(dim);
-        let end = TensorIndex::new(end).index(dim);
-        assert!(start < dim && dim <= end);
-        self.dims[rank] = end - start;
-        self.stride[rank] * start
-    }
-
-    pub(crate) fn normalize_strides(&mut self) {
-        for (dim, stride) in izip!(self.dims.iter(), self.stride.iter_mut()) {
-            if *dim == 1 {
-                *stride = 0;
-            }
-        }
-    }
-
     pub fn slices(&self, slices: &[Slice]) -> Self {
-        let mut res = self.clone();
-        res.dims = res.dims.slices(slices);
-        res.normalize_strides();
-        res
+        let dims = self.dims.slices(slices);
+        ResolvedTensorType::new(self.elem_type, dims)
     }
 
     pub fn is_scalar(&self) -> bool {
