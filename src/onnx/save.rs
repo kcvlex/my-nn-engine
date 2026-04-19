@@ -240,6 +240,8 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             attrs
         }
 
+        Operator::Flatten(f) => vec![attr_int("axis", f.axis.raw() as i64)],
+
         Operator::Gather(g) => vec![attr_int("axis", g.axis.raw() as i64)],
 
         Operator::GeLU(g) => {

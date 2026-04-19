@@ -1081,6 +1081,16 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Equal" => Ok(Operator::Equal),
         "Expand" => Ok(Operator::Expand),
         "Exp" => Ok(Operator::Exp),
+        "Flatten" => {
+            let axis = attributes
+                .get("axis")
+                .map(|x| x.i())
+                .transpose()?
+                .unwrap_or(1);
+            Ok(Operator::Flatten(Flatten {
+                axis: TensorIndex::new(axis as isize),
+            }))
+        }
         "Gather" => Ok(Operator::Gather(Gather::load(attributes)?)),
         "Gelu" => Ok(Operator::GeLU(GeLU::load(attributes)?)),
         "Gemm" => Ok(Operator::Gemm(Gemm::load(attributes)?)),

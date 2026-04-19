@@ -57,6 +57,7 @@ pub enum Operator {
     Equal,
     Expand,
     Exp,
+    Flatten(Flatten),
     Gather(Gather),
     GeLU(GeLU),
     Gemm(Gemm),
@@ -293,6 +294,11 @@ impl Conv {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flatten {
+    pub axis: TensorIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -778,6 +784,7 @@ impl Operator {
             Operator::Equal => "Equal",
             Operator::Expand => "Expand",
             Operator::Exp => "Exp",
+            Operator::Flatten(_) => "Flatten",
             Operator::Gather(_) => "Gather",
             Operator::GeLU(_) => "Gelu",
             Operator::Gemm(_) => "Gemm",
@@ -854,6 +861,7 @@ impl Operator {
             Operator::Tanh => OperatorType::Elementwise,
 
             Operator::Contiguous(_) |
+            Operator::Flatten(_) |
             Operator::NHWC2NCHW |
             Operator::Reshape |
             Operator::Squeeze(_) |

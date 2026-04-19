@@ -252,6 +252,14 @@ pub fn infer_node_output(
             };
             res.push(reshape(a, shape, mode)?);
         }
+        Operator::Flatten(flatten) => {
+            let input = &inputs[0];
+            let axis = flatten.axis.index(input.dims.ndim());
+            let prefix: usize = input.dims.iter().take(axis).product();
+            let suffix: usize = input.dims.iter().skip(axis).product();
+            let dims = ResolvedTensorDims::from([prefix, suffix].as_slice());
+            res.push(ResolvedTensorType::new(input.elem_type, dims));
+        }
         Operator::Resize(resize) => {
             let dims = resize
                 .resized_shape(graph, node_id)

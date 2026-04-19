@@ -134,7 +134,7 @@ impl Canonicalization {
                 modifier.replace_input_value(graph, old_output, new_output);
             }
 
-            Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
+            Operator::Squeeze(_) | Operator::Unsqueeze(_) | Operator::Flatten(_) => {
                 let input = inputs[0].unwrap();
                 let old_output = outputs[0];
                 let node_name = graph.nodes[id].name.clone();
@@ -147,8 +147,8 @@ impl Canonicalization {
                     .set_input(input)
                     .set_dims(&output_dims[..])
                     .set_allow_contiguous(false)
-                    .set_node_name(format!("Squeeze2Reshape_{node_name}"))
-                    .set_value_name(format!("Squeeze2Reshape_Reshaped_{}", input.index()))
+                    .set_node_name(format!("Canonicalize2Reshape_{node_name}"))
+                    .set_value_name(format!("Canonicalize2Reshape_Reshaped_{}", input.index()))
                     .generate(graph, modifier)
                     .unwrap();
                 modifier.replace_input_value(graph, old_output, reshaped);
