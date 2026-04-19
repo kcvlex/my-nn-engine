@@ -1,5 +1,6 @@
 mod early_broadcast;
 pub mod infer;
+pub mod opset_adaptation;
 pub mod verify;
 
 use itertools::izip;
@@ -23,6 +24,7 @@ use crate::tensor::types::TypeError;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::early_broadcast::EarlyBroadcast;
 use crate::transform::shape::infer::ShapeInference;
+use crate::transform::shape::opset_adaptation::OpsetAdaptation;
 use crate::transform::shape::verify::ShapeVerification;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
@@ -727,6 +729,7 @@ pub fn infer_node_output(
 pub fn create_infer_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Shape inference".to_string());
     let target = opt.target;
+    manager.add_pass(Box::new(OpsetAdaptation::default()));
     manager.add_pass(Box::new(ShapeInference { target }));
     manager.add_pass(Box::new(ShapeVerification {
         target,

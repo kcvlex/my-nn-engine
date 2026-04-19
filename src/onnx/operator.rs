@@ -939,6 +939,12 @@ pub mod args {
     pub const RESHAPE_DATA: usize = 0;
     pub const RESHAPE_SHAPE: usize = 1;
 
+    pub const UNSQUEEZE_DATA: usize = 0;
+    pub const UNSQUEEZE_AXES: usize = 1;
+
+    pub const SQUEEZE_DATA: usize = 0;
+    pub const SQUEEZE_AXES: usize = 1;
+
     pub const RESIZE_ROI: usize = 1;
     pub const RESIZE_SCALES: usize = 2;
     pub const RESIZE_SIZES: usize = 3;
