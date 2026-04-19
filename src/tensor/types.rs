@@ -571,6 +571,9 @@ impl ResolvedTensorType {
         if self.is_scalar() {
             return 1;
         }
+        if self.dims.iter().any(|&d| d == 0) {
+            return 0;
+        }
 
         izip!(self.dims.iter(), self.stride.iter())
             .map(|(dim, stride)| dim.max(&1) * stride)

@@ -863,7 +863,9 @@ impl<'sched> ConcatBuilder<'sched> {
     int input_strides[][{ndim}] = {{{input_strides}}};
     int indexes[{ndim}];
     for (int i = 0; i < {ndim}; i++) {{
-        indexes[i] = in_offset / input_strides[select][i] % input_dims[select][i];
+        int stride = input_strides[select][i];
+        int dim = input_dims[select][i];
+        indexes[i] = (dim <= 1 || stride == 0) ? 0 : (in_offset / stride % dim);
     }}
     int input_axis_sizes_acc[] = {{{input_axis_sizes_acc}}};
     indexes[{axis}] += input_axis_sizes_acc[select];
