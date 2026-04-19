@@ -123,7 +123,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
                 _ => None,
             }?;
             let dims = ResolvedTensorDims::from(&dims[..]);
-            let data = value.to_tensor_data(dims.size());
+            let data = value.to_tensor_data(dims.size().max(1));
             let tensor = Tensor::new(dims, data).ok()?;
             Some(vec![tensor])
         }
