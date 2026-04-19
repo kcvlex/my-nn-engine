@@ -765,6 +765,11 @@ impl<'sched> HostCodeGenerator<'sched> {
     where
         F: Fn(&Schedule, KernelDecl) -> Result<String, BuildError>,
     {
+        // Dedup the outputs+inputs list by ValueId so each value appears as a
+        // single kernel parameter. The same ValueId can appear in multiple
+        // input slots (e.g. Concat(A, A) from RoPE, or Mul(x, x) from
+        // canonicalized Pow(x, 2)) and nvcc rejects duplicate parameter names.
+        let mut seen = std::collections::HashSet::<ValueId>::new();
         let params = chain(
             self.schedule.kernels[kernel_id].outputs.iter().copied(),
             self.schedule.kernels[kernel_id]
@@ -773,6 +778,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .flatten()
                 .copied(),
         )
+        .filter(|id| seen.insert(*id))
         .map(|id| {
             let ty = self.get_resolved_tensor_type(id)?;
             let type_symbol: TypeSymbol = ty.elem_type.into();
