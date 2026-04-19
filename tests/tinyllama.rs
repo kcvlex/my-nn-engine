@@ -60,8 +60,7 @@ fn tinyllama_cpu() -> TestResult {
     run_tinyllama(Target::CPU)
 }
 
-#[ignore]
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local", feature = "cuda"))]
 #[test]
 fn tinyllama_cuda() -> TestResult {
     run_tinyllama(Target::CUDA)
