@@ -176,6 +176,11 @@ fn test_causal_is_fused() {
     let canonicalize = Canonicalization::default();
     canonicalize.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
+    let const_fold = ConstantFolding {
+        check_strides: false,
+    };
+    const_fold.run(&mut graph, &mut modifier);
+    modifier.update_deleted_nodes(&mut graph);
     let pass = AttentionFusion::default();
     pass.run(&mut graph, &mut modifier);
     modifier.update_deleted_nodes(&mut graph);
@@ -398,6 +403,143 @@ fn build_bert_attention_subgraph() -> Graph {
               [qk_softmax, v] => y: &[1, num_heads, seq, d_k] },
         ]
     }
+}
+
+// Extracted from TinyLlama: Q and K are pre-scaled (no Mul after MatMul),
+// the mask comes from a Where (runtime-built), and a NaN-guard
+// Where(IsNaN(softmax), 0, softmax) sits between Softmax and the V-MatMul.
+fn build_tinyllama_attention_subgraph() -> Graph {
+    let num_heads = 4;
+    let seq = 6;
+    let d_k = 8;
+    let s_q = 0.5f64;
+    let s_k = 0.5f64;
+
+    let s_q_tensor = Tensor::new(
+        ResolvedTensorDims::new(&[]),
+        ScalarData::Float(FloatType::F32, s_q).to_tensor_data(1),
+    )
+    .unwrap();
+    let s_k_tensor = Tensor::new(
+        ResolvedTensorDims::new(&[]),
+        ScalarData::Float(FloatType::F32, s_k).to_tensor_data(1),
+    )
+    .unwrap();
+    let neg_inf_tensor = Tensor::new(
+        ResolvedTensorDims::new(&[]),
+        ScalarData::Float(FloatType::F32, -1.0e9).to_tensor_data(1),
+    )
+    .unwrap();
+    let zero_tensor = Tensor::new(
+        ResolvedTensorDims::new(&[]),
+        ScalarData::Float(FloatType::F32, 0.0).to_tensor_data(1),
+    )
+    .unwrap();
+
+    build_graph! {
+        name: "tinyllama_attention",
+
+        inputs: {
+            q_raw: (FloatType::F32, &[1, num_heads, seq, d_k]),
+            k_raw_t: (FloatType::F32, &[1, num_heads, d_k, seq]),
+            v: (FloatType::F32, &[1, num_heads, seq, d_k]),
+            mask_cond: (DataType::Bool, &[1, 1, seq, seq]),
+        },
+
+        outputs: {
+            y: (FloatType::F32, &[1, num_heads, seq, d_k]),
+        },
+
+        initializers: {
+            s_q_val = s_q_tensor,
+            s_k_val = s_k_tensor,
+            mask_fill = neg_inf_tensor,
+            mask_zero = zero_tensor.clone(),
+            nan_fill = zero_tensor,
+        },
+
+        nodes: [
+            { "ScaleQ", Operator::Mul,
+              [q_raw, s_q_val] => q_scaled: &[1, num_heads, seq, d_k] },
+
+            { "ScaleK", Operator::Mul,
+              [k_raw_t, s_k_val] => k_t_scaled: &[1, num_heads, d_k, seq] },
+
+            { "QK", Operator::MatMul,
+              [q_scaled, k_t_scaled] => qk: &[1, num_heads, seq, seq] },
+
+            { "MaskWhere", Operator::Where,
+              [mask_cond, mask_fill, mask_zero] => mask: &[1, 1, seq, seq] },
+
+            { "QK_Masked", Operator::Add,
+              [qk, mask] => qk_masked: &[1, num_heads, seq, seq] },
+
+            { "QK_Softmax", Operator::Softmax(Softmax { axis: TensorIndex::new(-1) }),
+              [qk_masked] => qk_softmax: &[1, num_heads, seq, seq] },
+
+            { "IsNaN", Operator::IsNaN,
+              [qk_softmax] => nan_cond: &[1, num_heads, seq, seq] },
+
+            { "NaNGuard", Operator::Where,
+              [nan_cond, nan_fill, qk_softmax] => qk_safe: &[1, num_heads, seq, seq] },
+
+            { "Y", Operator::MatMul,
+              [qk_safe, v] => y: &[1, num_heads, seq, d_k] },
+        ]
+    }
+}
+
+#[test]
+fn test_tinyllama_attention_is_fused() {
+    let num_heads = 4;
+    let seq = 6;
+    let d_k = 8;
+
+    let mut graph = build_tinyllama_attention_subgraph();
+
+    let mut modifier = SimpleGraphOp::new(&graph);
+    let canonicalize = Canonicalization::default();
+    canonicalize.run(&mut graph, &mut modifier);
+    modifier.update_deleted_nodes(&mut graph);
+    let const_fold = ConstantFolding {
+        check_strides: false,
+    };
+    const_fold.run(&mut graph, &mut modifier);
+    modifier.update_deleted_nodes(&mut graph);
+    let pass = AttentionFusion::default();
+    pass.run(&mut graph, &mut modifier);
+    modifier.update_deleted_nodes(&mut graph);
+
+    let attention_nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| matches!(n.op, Operator::Attention(_)))
+        .collect();
+    assert_eq!(
+        attention_nodes.len(),
+        1,
+        "expected exactly one Attention op"
+    );
+    let (_, attn) = &attention_nodes[0];
+    let Operator::Attention(Attention { scale, is_causal }) = attn.op else {
+        unreachable!()
+    };
+    assert!(
+        (scale - 0.25).abs() < 1e-6,
+        "expected s_q*s_k=0.25, got {scale}"
+    );
+    assert!(!is_causal, "runtime mask should not be flagged as causal");
+    assert_eq!(attn.inputs.len(), 4, "Attention should have mask input");
+    let output_ty = graph.get_resolved_tensor_type(attn.outputs[0]).unwrap();
+    assert_eq!(output_ty.dims[..], [1, num_heads, seq, d_k]);
+
+    // NaN guard should have been subsumed by the fused op.
+    let remaining_isnan = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| matches!(n.op, Operator::IsNaN))
+        .count();
+    assert_eq!(remaining_isnan, 0, "IsNaN should be subsumed by Attention");
 }
 
 #[test]
