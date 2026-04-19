@@ -172,6 +172,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Sin |
         Operator::Tanh |
         Operator::Identity |
+        Operator::IsNaN |
         Operator::MatMul |
         Operator::Reshape |
         Operator::Slice |

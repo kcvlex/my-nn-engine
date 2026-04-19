@@ -908,6 +908,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Equal |
                 Operator::Exp |
                 Operator::GeLU(_) |
+                Operator::IsNaN |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |

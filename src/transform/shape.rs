@@ -688,6 +688,10 @@ pub fn infer_node_output(
             }
             res.push(ty);
         }
+        Operator::IsNaN => {
+            let a = &inputs[0];
+            res.push(ResolvedTensorType::new(DataType::Bool, a.dims.clone()));
+        }
         Operator::Where => {
             let cond = &inputs[args::WHERE_COND];
             let x = &inputs[args::WHERE_X];

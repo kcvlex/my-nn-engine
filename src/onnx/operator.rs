@@ -63,6 +63,7 @@ pub enum Operator {
     Gemm(Gemm),
     GlobalAveragePool,
     Identity,
+    IsNaN,
     LayerNormalization(LayerNormalization),
     LeakyReLU(LeakyReLU),
     Log,
@@ -790,6 +791,7 @@ impl Operator {
             Operator::Gemm(_) => "Gemm",
             Operator::GlobalAveragePool => "GlobalAveragePool",
             Operator::Identity => "Identity",
+            Operator::IsNaN => "IsNaN",
             Operator::LayerNormalization(_) => "LayerNormalization",
             Operator::LeakyReLU(_) => "LeakyRelu",
             Operator::Log => "Log",
@@ -847,6 +849,7 @@ impl Operator {
             Operator::Exp |
             Operator::GeLU(_) |
             Operator::Identity |
+            Operator::IsNaN |
             Operator::LeakyReLU(_) |
             Operator::Log |
             Operator::Mul |

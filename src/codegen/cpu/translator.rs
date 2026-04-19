@@ -453,6 +453,20 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .as_basic_value_enum()
             }
 
+            SingleOpcode::IsNaN => {
+                assert!(matches!(input_ty.unwrap(), DataType::Float(_)));
+                let val = unary_op!(operands).into_float_value();
+                let is_nan = self.builder.build_float_compare(
+                    inkwell::FloatPredicate::UNO,
+                    val,
+                    val,
+                    "isnan",
+                )?;
+                self.builder
+                    .build_int_z_extend(is_nan, self.context.i8_type(), "isnan_i8")?
+                    .as_basic_value_enum()
+            }
+
             opcode @ (SingleOpcode::Cos |
             SingleOpcode::Exp |
             SingleOpcode::Log |

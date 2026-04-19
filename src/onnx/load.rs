@@ -1101,6 +1101,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "LeakyRelu" => Ok(Operator::LeakyReLU(LeakyReLU::load(attributes)?)),
         "Log" => Ok(Operator::Log),
         "Identity" => Ok(Operator::Identity),
+        "IsNaN" => Ok(Operator::IsNaN),
         "MatMul" => Ok(Operator::MatMul),
         "MaxPool" => Ok(Operator::MaxPool(Pooling::load(attributes)?)),
         "Mul" => Ok(Operator::Mul),

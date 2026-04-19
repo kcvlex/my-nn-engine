@@ -419,6 +419,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 format!("fmaxf({}, fminf({}, {}))", min, max, x)
             }
             Operator::Identity => format!("{}", x),
+            Operator::IsNaN => format!("(isnan({}) ? (int8_t)1 : (int8_t)0)", x),
             Operator::LeakyReLU(LeakyReLU { alpha }) => {
                 format!("((0 <= {}) ? {} : {} * {})", x, x, alpha, x)
             }
@@ -465,6 +466,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Exp |
             Operator::GeLU(_) |
             Operator::Identity |
+            Operator::IsNaN |
             Operator::LeakyReLU(_) |
             Operator::Log |
             Operator::Neg |

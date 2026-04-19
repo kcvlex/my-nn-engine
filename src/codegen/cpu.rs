@@ -771,6 +771,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Cos |
                 Operator::Exp |
                 Operator::GeLU(_) |
+                Operator::IsNaN |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Neg |
@@ -798,6 +799,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Equal => SingleOpcode::Equal,
                 Operator::Exp => SingleOpcode::Exp,
                 Operator::GeLU(v) => SingleOpcode::GeLU(*v),
+                Operator::IsNaN => SingleOpcode::IsNaN,
                 Operator::LeakyReLU(v) => SingleOpcode::LeakyReLU(*v),
                 Operator::Log => SingleOpcode::Log,
                 Operator::Mul => SingleOpcode::Mul,
@@ -827,6 +829,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Cos |
                 Operator::Equal |
                 Operator::Exp |
+                Operator::IsNaN |
                 Operator::LeakyReLU(_) |
                 Operator::Log |
                 Operator::Mul |
