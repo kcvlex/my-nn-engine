@@ -214,7 +214,7 @@ impl GraphLoader {
         let initializer = self.load_initializer(graph.initializer, base_dir)?;
         let inputs = self.load_value_info_vec(input)?;
         let outputs = self.load_value_info_vec(graph.output)?;
-        let mut nodes = self.load_nodes(graph.node)?;
+        let mut nodes = self.load_nodes(graph.node, base_dir)?;
         let inputs = {
             let mut res = Vec::with_capacity(inputs.len());
             for &x in inputs.iter() {
@@ -320,7 +320,7 @@ impl GraphLoader {
         Ok(res)
     }
 
-    fn load_nodes(&mut self, nodes: Vec<NodeProto>) -> LoadResult<Nodes> {
+    fn load_nodes(&mut self, nodes: Vec<NodeProto>, base_dir: Option<&Path>) -> LoadResult<Nodes> {
         let mut resolve = |x: String| -> ValueId {
             *self.entries.entry(x.clone()).or_insert_with(|| {
                 self.values.alloc(ValueInfo {
@@ -338,7 +338,7 @@ impl GraphLoader {
                 .map(|x| if x.is_empty() { None } else { Some(resolve(x)) })
                 .collect();
             let outputs: Vec<ValueId> = node.output.into_iter().map(|x| resolve(x)).collect();
-            let attributes = load_attributes(node.attribute)?;
+            let attributes = load_attributes(node.attribute, base_dir)?;
             let op = load_op(&node.op_type, &attributes)?;
             res.alloc(Node {
                 name,
@@ -559,7 +559,10 @@ fn load_utf8(v: Vec<u8>) -> LoadResult<String> {
     String::from_utf8(v).map_err(|err| ModelLoadError::Unexpected(err.to_string()))
 }
 
-fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
+fn load_attributes(
+    v: Vec<AttributeProto>,
+    base_dir: Option<&Path>,
+) -> LoadResult<Attributes> {
     let mut res = HashMap::new();
     for attr in v.into_iter() {
         let name = attr.name;
@@ -577,7 +580,7 @@ fn load_attributes(v: Vec<AttributeProto>) -> LoadResult<Attributes> {
                 .collect::<Result<Vec<_>, _>>()
                 .map(Attribute::Strings),
             attribute_proto::AttributeType::Tensor => {
-                load_tensor(attr.t.unwrap(), None).map(Attribute::Tensor)
+                load_tensor(attr.t.unwrap(), base_dir).map(Attribute::Tensor)
             }
             x => Err(ModelLoadError::UnsupportedAttributeType(x)),
         }?;
