@@ -67,6 +67,7 @@ pub enum Operator {
     IsNaN,
     LayerNormalization(LayerNormalization),
     LeakyReLU(LeakyReLU),
+    LessOrEqual,
     Log,
     MatMul,
     MaxPool(Pooling),
@@ -796,6 +797,7 @@ impl Operator {
             Operator::IsNaN => "IsNaN",
             Operator::LayerNormalization(_) => "LayerNormalization",
             Operator::LeakyReLU(_) => "LeakyRelu",
+            Operator::LessOrEqual => "LessOrEqual",
             Operator::Log => "Log",
             Operator::MatMul => "MatMul",
             Operator::MaxPool(_) => "MaxPool",
@@ -854,6 +856,7 @@ impl Operator {
             Operator::Identity |
             Operator::IsNaN |
             Operator::LeakyReLU(_) |
+            Operator::LessOrEqual |
             Operator::Log |
             Operator::Mul |
             Operator::Neg |

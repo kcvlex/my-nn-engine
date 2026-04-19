@@ -135,6 +135,13 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(DataType::Bool, dims));
         }
+        Operator::LessOrEqual => {
+            let a = &inputs[0];
+            let b = &inputs[1];
+            assert_eq!(a.elem_type, b.elem_type);
+            let dims = broadcast_shape(&a.dims, &b.dims)?;
+            res.push(ResolvedTensorType::new(DataType::Bool, dims));
+        }
         Operator::BatchedGemm(gemm) => {
             let a = &inputs[0];
             let b = &inputs[1];

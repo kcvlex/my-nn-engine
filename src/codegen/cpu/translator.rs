@@ -413,6 +413,30 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 }
             }
 
+            SingleOpcode::LessOrEqual => {
+                let is_float = matches!(input_ty.unwrap(), DataType::Float(_));
+                let (lhs, rhs) = binary_op!(operands);
+                if is_float {
+                    self.builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::OLE,
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "cmp",
+                        )?
+                        .as_basic_value_enum()
+                } else {
+                    self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLE,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "cmp",
+                        )?
+                        .as_basic_value_enum()
+                }
+            }
+
             SingleOpcode::GeLU(operator::GeLU { approximate }) => {
                 if !approximate {
                     unimplemented!()

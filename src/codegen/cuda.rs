@@ -901,16 +901,17 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                 Operator::Add |
                 Operator::And |
-                Operator::Cos |
-                Operator::Div |
                 Operator::BatchNormalization(_) |
                 Operator::Cast(_) |
                 Operator::Clip(_) |
+                Operator::Cos |
+                Operator::Div |
                 Operator::Equal |
                 Operator::Exp |
                 Operator::GeLU(_) |
                 Operator::IsNaN |
                 Operator::LeakyReLU(_) |
+                Operator::LessOrEqual |
                 Operator::Log |
                 Operator::Mul |
                 Operator::Pow |
@@ -1478,6 +1479,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                         .into(),
                     );
                 }
+
 
                 _ => {
                     dbg!(&kernel);

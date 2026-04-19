@@ -1100,6 +1100,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             attributes,
         )?)),
         "LeakyRelu" => Ok(Operator::LeakyReLU(LeakyReLU::load(attributes)?)),
+        "LessOrEqual" => Ok(Operator::LessOrEqual),
         "Log" => Ok(Operator::Log),
         "Identity" => Ok(Operator::Identity),
         "IsNaN" => Ok(Operator::IsNaN),

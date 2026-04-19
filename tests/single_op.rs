@@ -1512,3 +1512,12 @@ fn and() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+fn lessorequal() -> TestResult {
+    with_all_sessions_and_tensors("lessorequal", (2, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq!(outputs[0], expected[0]);
+        Ok(())
+    })
+}

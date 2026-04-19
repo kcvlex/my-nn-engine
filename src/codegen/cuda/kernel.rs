@@ -441,6 +441,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::And => format!("({} && {})", lhs, rhs),
             Operator::Div => format!("({} / {})", lhs, rhs),
             Operator::Equal => format!("({} == {})", lhs, rhs),
+            Operator::LessOrEqual => format!("({} <= {})", lhs, rhs),
             Operator::Mul => format!("({} * {})", lhs, rhs),
             // TODO: Support integer types.
             Operator::Pow => format!("pow({}, {})", lhs, rhs),
@@ -486,6 +487,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::And |
             Operator::Div |
             Operator::Equal |
+            Operator::LessOrEqual |
             Operator::Mul |
             Operator::Pow |
             Operator::Sub) => {

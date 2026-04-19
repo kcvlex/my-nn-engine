@@ -88,6 +88,7 @@ pub enum SingleOpcode {
     GeLU(GeLU),
     IsNaN,
     LeakyReLU(LeakyReLU),
+    LessOrEqual,
     Log,
     Mul,
     Neg,
