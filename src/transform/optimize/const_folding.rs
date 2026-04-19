@@ -203,6 +203,62 @@ pub fn fold_constant(graph: &Graph, node_id: NodeId) -> Option<Vec<Tensor>> {
             let tensor = Tensor::new(v.dims.clone(), data).ok()?;
             Some(vec![tensor])
         }
+        Operator::Neg => {
+            let v = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let data = match &v.data {
+                TensorData::Float(ty, data) => {
+                    TensorData::Float(*ty, data.iter().map(|x| -*x).collect_vec())
+                }
+                TensorData::SInt(ty, data) => {
+                    TensorData::SInt(*ty, data.iter().map(|x| -*x).collect_vec())
+                }
+                _ => return None,
+            };
+            let tensor = Tensor::new(v.dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
+        Operator::Sin => {
+            let v = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let data = match &v.data {
+                TensorData::Float(ty, data) => {
+                    TensorData::Float(*ty, data.iter().map(|x| x.sin()).collect_vec())
+                }
+                _ => return None,
+            };
+            let tensor = Tensor::new(v.dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
+        Operator::Cos => {
+            let v = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let data = match &v.data {
+                TensorData::Float(ty, data) => {
+                    TensorData::Float(*ty, data.iter().map(|x| x.cos()).collect_vec())
+                }
+                _ => return None,
+            };
+            let tensor = Tensor::new(v.dims.clone(), data).ok()?;
+            Some(vec![tensor])
+        }
+        Operator::Expand => {
+            let input = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let shape = graph.initializer.get(&node.inputs[1].unwrap())?;
+            let target = match &shape.data {
+                TensorData::SInt(SIntType::I64, v) => {
+                    ResolvedTensorDims::new(&v.iter().map(|&x| x as usize).collect_vec())
+                }
+                _ => return None,
+            };
+            let dims = broadcast_shape(&input.dims, &target).ok()?;
+            Some(vec![input.broadcast(&dims)])
+        }
+        Operator::Flatten(Flatten { axis }) => {
+            let input = graph.initializer.get(&node.inputs[0].unwrap())?;
+            let axis = axis.index(input.dims.ndim());
+            let prefix: usize = input.dims.iter().take(axis).product();
+            let suffix: usize = input.dims.iter().skip(axis).product();
+            let dims = ResolvedTensorDims::new(&[prefix, suffix]);
+            Some(vec![input.reshape(&dims)])
+        }
         Operator::Shape(Shape { ref start, ref end }) => {
             let input = node.inputs[0].unwrap();
             let input = &graph.get_resolved_tensor_type(input)?.dims;

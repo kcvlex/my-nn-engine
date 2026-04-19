@@ -1480,7 +1480,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-
                 _ => {
                     dbg!(&kernel);
                     unimplemented!("Kernel body not implemented: {:?}", op)
