@@ -118,4 +118,36 @@ mod test {
         let options = Options::builder().build();
         transform_graph(&mut graph, &options);
     }
+
+    #[cfg(feature = "local")]
+    #[test]
+    fn infer_tinyllama() {
+        use crate::tensor::Tensor;
+        use crate::transform::create_infer_passes;
+        use crate::transform::modify::SimpleGraphOp;
+        use crate::transform::PassManager;
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/hf/tinyllama");
+        let model = Model::load_from_path(dir.join("model.onnx")).unwrap();
+        let mut graph = model.graph;
+
+        let test_dir = dir.join("test_data_set_0");
+        let mut input_tys = Vec::new();
+        let mut i = 0;
+        loop {
+            let p = test_dir.join(format!("input_{}.pb", i));
+            if !p.exists() {
+                break;
+            }
+            let t = Tensor::load_from_path(&p).unwrap();
+            input_tys.push(t.tensor_type());
+            i += 1;
+        }
+        graph.resolve_input_types(&input_tys).unwrap();
+
+        let options = Options::builder().build();
+        let manager = create_infer_passes(&options);
+        let mut modifier = SimpleGraphOp::new(&graph);
+        manager.run(&mut graph, &mut modifier);
+    }
 }

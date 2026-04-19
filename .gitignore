@@ -8,6 +8,7 @@ Cargo.lock
 *.ll
 *.so
 models/*.onnx
+models/hf/
 download
 
 # Python
