@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ops::Index;
 use std::ops::IndexMut;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use id_arena::Arena;
 use id_arena::Id;
@@ -48,6 +52,7 @@ pub struct Graph {
     pub values: Values,
     pub(super) initializer: BTreeMap<ValueId, Tensor>,
     pub(super) external_refs: BTreeMap<ValueId, ExternalTensorRef>,
+    mmap_cache: Mutex<HashMap<PathBuf, Arc<memmap2::Mmap>>>,
 
     pub(crate) resolved_params: HashMap<ParamKey, usize>,
 }
@@ -236,6 +241,7 @@ impl Graph {
             values: Values::default(),
             initializer: BTreeMap::new(),
             external_refs: BTreeMap::new(),
+            mmap_cache: Mutex::new(HashMap::new()),
             resolved_params: HashMap::new(),
         }
     }
@@ -245,7 +251,54 @@ impl Graph {
             return Some(t.clone());
         }
         let r = self.external_refs.get(&value_id)?;
-        load_external(r).ok()
+        self.load_external(r).ok()
+    }
+
+    pub fn get_inline_initializer(&self, value_id: ValueId) -> Option<&Tensor> {
+        self.initializer.get(&value_id)
+    }
+
+    pub fn with_external_bytes<R>(
+        &self,
+        value_id: ValueId,
+        f: impl FnOnce(DataType, &[u8]) -> R,
+    ) -> Option<Result<R, ModelLoadError>> {
+        let r = self.external_refs.get(&value_id)?;
+        let mmap = match self.mmap_for(&r.path) {
+            Ok(m) => m,
+            Err(e) => return Some(Err(e)),
+        };
+        let start = r.offset as usize;
+        let end = r
+            .length
+            .map(|len| start + len as usize)
+            .unwrap_or(mmap.len());
+        Some(Ok(f(r.elem_type, &mmap[start..end])))
+    }
+
+    fn mmap_for(&self, path: &Path) -> Result<Arc<memmap2::Mmap>, ModelLoadError> {
+        let mut cache = self.mmap_cache.lock().unwrap();
+        if let Some(m) = cache.get(path) {
+            return Ok(Arc::clone(m));
+        }
+        let file = std::fs::File::open(path).map_err(ModelLoadError::FileRead)?;
+        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(ModelLoadError::FileRead)?;
+        let arc = Arc::new(mmap);
+        cache.insert(path.to_path_buf(), Arc::clone(&arc));
+        Ok(arc)
+    }
+
+    fn load_external(&self, r: &ExternalTensorRef) -> Result<Tensor, ModelLoadError> {
+        let mmap = self.mmap_for(&r.path)?;
+        let start = r.offset as usize;
+        let end = r
+            .length
+            .map(|len| start + len as usize)
+            .unwrap_or(mmap.len());
+        let data = TensorData::from_bytes(r.elem_type, &mmap[start..end]);
+        Tensor::new(r.dims.clone(), data).map_err(|e| {
+            ModelLoadError::Unexpected(format!("external data shape mismatch: {:?}", e))
+        })
     }
 
     pub fn set_initializer(&mut self, value_id: ValueId, tensor: Tensor) {
@@ -269,30 +322,6 @@ impl Graph {
         self.initializer.retain(|k, _| !remove(k));
         self.external_refs.retain(|k, _| !remove(k));
     }
-}
-
-fn load_external(r: &ExternalTensorRef) -> Result<Tensor, ModelLoadError> {
-    use std::io::Read;
-    use std::io::Seek;
-    use std::io::SeekFrom;
-
-    let mut file = std::fs::File::open(&r.path).map_err(ModelLoadError::FileRead)?;
-    file.seek(SeekFrom::Start(r.offset))
-        .map_err(ModelLoadError::FileRead)?;
-    let raw = if let Some(len) = r.length {
-        let mut buf = vec![0u8; len as usize];
-        file.read_exact(&mut buf)
-            .map_err(ModelLoadError::FileRead)?;
-        buf
-    } else {
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
-            .map_err(ModelLoadError::FileRead)?;
-        buf
-    };
-    let data = TensorData::from_bytes(r.elem_type, &raw);
-    Tensor::new(r.dims.clone(), data)
-        .map_err(|e| ModelLoadError::Unexpected(format!("external data shape mismatch: {:?}", e)))
 }
 
 #[derive(Debug, Default, Clone)]

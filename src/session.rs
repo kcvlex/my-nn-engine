@@ -114,6 +114,29 @@ impl From<&Tensor> for StrictTensor {
     }
 }
 
+impl StrictTensor {
+    fn from_bytes(ty: DataType, raw: &[u8]) -> Self {
+        macro_rules! parse {
+            ($ctor: expr, $t: ty) => {{
+                let sz = std::mem::size_of::<$t>();
+                let vec: Vec<$t> = raw
+                    .chunks_exact(sz)
+                    .map(|b| <$t>::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                $ctor(vec)
+            }};
+        }
+        match ty {
+            DataType::Bool | DataType::UInt(UIntType::U8) => StrictTensor::U8(raw.to_vec()),
+            DataType::SInt(SIntType::I32) => parse!(StrictTensor::I32, i32),
+            DataType::SInt(SIntType::I64) => parse!(StrictTensor::I64, i64),
+            DataType::UInt(UIntType::U64) => parse!(StrictTensor::U64, u64),
+            DataType::Float(FloatType::F32) => parse!(StrictTensor::F32, f32),
+            DataType::Float(FloatType::F64) => parse!(StrictTensor::F64, f64),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SessionError {
     CodeGenError(CodeGenError),
@@ -178,17 +201,19 @@ impl Session {
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let initializer_ids = model.graph.initializer_ids();
-        let initializer: Vec<_> = initializer_ids
+        let initializer: Vec<StrictTensor> = initializer_ids
             .iter()
-            .map(|&id| {
-                StrictTensor::from(
-                    &model
-                        .graph
-                        .get_initializer(id)
-                        .expect("initializer missing"),
-                )
+            .map(|&id| -> Result<StrictTensor, SessionError> {
+                if let Some(t) = model.graph.get_inline_initializer(id) {
+                    return Ok(StrictTensor::from(t));
+                }
+                model
+                    .graph
+                    .with_external_bytes(id, StrictTensor::from_bytes)
+                    .expect("initializer missing")
+                    .map_err(SessionError::ModelLoadError)
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut schedule = Schedule::new(model.graph, options.clone());
         let schedule_passes = create_schedule_passes(options);
