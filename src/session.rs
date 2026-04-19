@@ -182,7 +182,10 @@ impl Session {
             .iter()
             .map(|&id| {
                 StrictTensor::from(
-                    &model.graph.get_initializer(id).expect("initializer missing"),
+                    &model
+                        .graph
+                        .get_initializer(id)
+                        .expect("initializer missing"),
                 )
             })
             .collect::<Vec<_>>();
