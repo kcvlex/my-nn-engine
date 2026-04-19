@@ -546,14 +546,8 @@ pub fn infer_node_output(
                 .ok_or(TypeError::UnresolvedInput)?;
             let ty = match shape.data {
                 TensorData::SInt(SIntType::I64, ref v) => {
-                    assert_eq!(shape.dims.ndim(), 1);
-                    let dims = v
-                        .iter()
-                        .map(|&x| {
-                            assert!(x != 0);
-                            x as usize
-                        })
-                        .collect::<Vec<_>>();
+                    assert!(shape.dims.ndim() <= 1);
+                    let dims = v.iter().map(|&x| x as usize).collect::<Vec<_>>();
                     ResolvedTensorType::new(value.elem_type(), ResolvedTensorDims::new(&dims))
                 }
                 _ => {
