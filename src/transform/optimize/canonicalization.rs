@@ -430,11 +430,7 @@ impl<T: GraphOp> Pass<T> for MatMul2BatchedGemm {
 // Expand ops to broadcast mismatched batch dims. Returns None if the MatMul
 // is 2D x 2D (already handled by Canonicalization -> Gemm) or has a broadcast
 // that cannot be resolved (e.g. 3 vs 5 on a non-1 dim).
-fn try_lower_matmul<T: GraphOp>(
-    id: NodeId,
-    graph: &mut Graph,
-    modifier: &mut T,
-) -> Option<()> {
+fn try_lower_matmul<T: GraphOp>(id: NodeId, graph: &mut Graph, modifier: &mut T) -> Option<()> {
     let lhs = graph.nodes[id].inputs[args::MATMUL_LHS].unwrap();
     let rhs = graph.nodes[id].inputs[args::MATMUL_RHS].unwrap();
     let l_dims = graph.get_resolved_tensor_type(lhs)?.dims.clone();
@@ -468,22 +464,8 @@ fn try_lower_matmul<T: GraphOp>(
         batch_dims.push(resolved);
     }
 
-    let lhs_final = broadcast_batch(
-        graph,
-        modifier,
-        id,
-        "Lhs",
-        lhs_promoted,
-        &batch_dims,
-    )?;
-    let rhs_final = broadcast_batch(
-        graph,
-        modifier,
-        id,
-        "Rhs",
-        rhs_promoted,
-        &batch_dims,
-    )?;
+    let lhs_final = broadcast_batch(graph, modifier, id, "Lhs", lhs_promoted, &batch_dims)?;
+    let rhs_final = broadcast_batch(graph, modifier, id, "Rhs", rhs_promoted, &batch_dims)?;
 
     let old_output = graph.nodes[id].outputs[0];
     let ty = graph.get_resolved_tensor_type(old_output)?.clone();
