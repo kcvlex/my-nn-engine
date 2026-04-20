@@ -27,9 +27,9 @@ void init_cudnn_3(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
   setting.build(&cudnn_handler_ctx, CUDNN_DATA_FLOAT, 1, 8, 16, 16, 16, 3, 3, 16, 16, 1, 1, 1, 1, 1, 1, 1, 1, 1, false, false, true, false);
 }
 struct ModelState {
+  void *d_arena = nullptr;
   void *d_init_0 = nullptr;
   void *d_init_1 = nullptr;
-  void *d_arena = nullptr;
   cudaStream_t stream_0 = nullptr;
   CudnnHandlerContext cudnn_handler_ctx0;
   CudnnConvSetting cudnn_setting1;
@@ -38,13 +38,13 @@ struct ModelState {
 
 extern "C" void* model_init(void **initializer) {
   auto *state = new ModelState;
+  cudaCheckErr(cudaMalloc(&state->d_arena, 32768));
   float *h_initializer_0 = (float *)(initializer[0]);
   cudaCheckErr(cudaMalloc(&state->d_init_0, 216 * sizeof(float)));
   cudaCheckErr(cudaMemcpy(state->d_init_0, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice));
   float *h_initializer_1 = (float *)(initializer[1]);
   cudaCheckErr(cudaMalloc(&state->d_init_1, 1152 * sizeof(float)));
   cudaCheckErr(cudaMemcpy(state->d_init_1, h_initializer_1, 1152 * sizeof(float), cudaMemcpyHostToDevice));
-  cudaCheckErr(cudaMalloc(&state->d_arena, 32768));
   cudaCheckErr(cudaStreamCreate(&state->stream_0));
   cudnnCheckErr(cudnnCreate(&state->cudnn_handler_ctx0.handle));
   cudnnCheckErr(cudnnSetStream(state->cudnn_handler_ctx0.handle, state->stream_0));
@@ -57,9 +57,9 @@ extern "C" void* model_init(void **initializer) {
 
 extern "C" void model_destroy(void *ptr) {
   auto *state = static_cast<ModelState*>(ptr);
+  cudaCheckErr(cudaFree(state->d_arena));
   cudaCheckErr(cudaFree(state->d_init_0));
   cudaCheckErr(cudaFree(state->d_init_1));
-  cudaCheckErr(cudaFree(state->d_arena));
   cudaCheckErr(cudaStreamDestroy(state->stream_0));
   cudnnCheckErr(cudnnDestroy(state->cudnn_handler_ctx0.handle));
   cudaCheckErr(cudaFree(state->cudnn_setting1.workspace));
