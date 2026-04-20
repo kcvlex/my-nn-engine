@@ -1,6 +1,7 @@
 use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeMeta;
+use crate::onnx::model::ValueId;
 use crate::onnx::operator::*;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
@@ -25,7 +26,26 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
             })
             .collect();
 
-        for (_, value_id) in inputs {
+        let input_host_values: Vec<ValueId> = inputs.iter().map(|(_, v)| *v).collect();
+
+        let initializer_host_values: Vec<ValueId> = graph
+            .initializer_ids()
+            .into_iter()
+            .filter(|&init_id| {
+                graph.nodes.iter().any(|(_, node)| {
+                    node.inputs.iter().enumerate().any(|(idx, inp)| {
+                        *inp == Some(init_id) && !node.op.is_attribute_input(idx)
+                    })
+                })
+            })
+            .collect();
+
+        let host_values: Vec<ValueId> = input_host_values
+            .into_iter()
+            .chain(initializer_host_values)
+            .collect();
+
+        for value_id in host_values {
             let ty = graph.get_resolved_tensor_type(value_id).unwrap().clone();
             let device_value = modifier.register_new_value(
                 graph,

@@ -239,15 +239,6 @@ enum Include {
     Local(&'static str),
 }
 
-#[derive(Clone)]
-struct InitializerPlan {
-    arg_idx: usize,
-    elem_ty: String,
-    mem_size: String,
-    host_name: String,
-    device_name: String,
-}
-
 pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
 
@@ -262,8 +253,6 @@ pub struct HostCodeGenerator<'sched> {
     value2chunk: HashMap<ValueId, ChunkId>,
     hostmem2identifier: HashMap<ValueId, String>,
     devicemem2identifier: Vec<String>,
-    initializer_plans: IndexMap<ValueId, InitializerPlan>,
-    used_device_initializers: std::cell::RefCell<BTreeSet<ValueId>>,
 
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
@@ -497,8 +486,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             value2chunk: HashMap::new(),
             hostmem2identifier: HashMap::new(),
             devicemem2identifier: Vec::new(),
-            initializer_plans: IndexMap::new(),
-            used_device_initializers: std::cell::RefCell::new(BTreeSet::new()),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
@@ -518,6 +505,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         for (arg_name, value_ids) in &[
             (ARG_INPUT, &self.schedule.inputs[..]),
             (ARG_OUTPUT, &self.schedule.outputs[..]),
+            (ARG_INITIALIZER, &self.schedule.initializers[..]),
         ] {
             for (idx, value) in value_ids.iter().enumerate() {
                 let ty = self.get_resolved_tensor_type(*value)?.elem_type.to_string();
@@ -533,24 +521,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
             }
-        }
-
-        for (idx, value) in self.schedule.initializers.iter().enumerate() {
-            let rty = self.get_resolved_tensor_type(*value)?;
-            let elem_ty = rty.elem_type.to_string();
-            let mem_size = MemSize::from(rty).to_string();
-            let host_name = format!("h_{}_{}", ARG_INITIALIZER, value.index());
-            let device_name = format!("d_init_{}", value.index());
-            self.initializer_plans.insert(
-                *value,
-                InitializerPlan {
-                    arg_idx: idx,
-                    elem_ty,
-                    mem_size,
-                    host_name,
-                    device_name,
-                },
-            );
         }
 
         let mut mem_sizes = vec![
@@ -634,43 +604,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.call_kernel(kernel_id)?;
         }
         Ok(self.move_statements())
-    }
-
-    fn emit_used_initializers(&mut self) {
-        let used: Vec<ValueId> = self.used_device_initializers.borrow().iter().copied().collect();
-        for value in used {
-            let plan = &self.initializer_plans[&value];
-            let InitializerPlan {
-                arg_idx,
-                elem_ty,
-                mem_size,
-                host_name,
-                device_name,
-            } = plan.clone();
-            self.init_stmts.push(Statement::Raw(format!(
-                "{elem_ty} *{host_name} = ({elem_ty} *)({ARG_INITIALIZER}[{arg_idx}]);"
-            )));
-            self.state_fields
-                .push(format!("void *{device_name} = nullptr;"));
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier(format!("state->{device_name}")),
-                    mem_size: MemSize::Raw(Expr::Identifier(mem_size.clone())),
-                }
-                .into(),
-            );
-            self.init_stmts.push(
-                MemcpySync {
-                    dst: Expr::Identifier(format!("state->{device_name}")),
-                    src: Expr::Identifier(host_name),
-                    mem_size: MemSize::Raw(Expr::Identifier(mem_size)),
-                    kind: CudaMemcpyKind::HostToDevice,
-                }
-                .into(),
-            );
-            self.destroy_stmts
-                .push(Free(Expr::Identifier(format!("state->{device_name}"))).into());
-        }
     }
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
@@ -769,11 +702,6 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
-        if let Some(plan) = self.initializer_plans.get(&value_id) {
-            let name = plan.device_name.clone();
-            self.used_device_initializers.borrow_mut().insert(value_id);
-            return Ok(Expr::Identifier(format!("state->{name}")));
-        }
         let chunk_id = self
             .value2chunk
             .get(&value_id)
@@ -805,15 +733,23 @@ impl<'sched> HostCodeGenerator<'sched> {
         // single kernel parameter. The same ValueId can appear in multiple
         // input slots (e.g. Concat(A, A) from RoPE, or Mul(x, x) from
         // canonicalized Pow(x, 2)) and nvcc rejects duplicate parameter names.
+        let kernel = &self.schedule.kernels[kernel_id];
+        let attribute_input = |idx: usize| -> bool {
+            match &kernel.body {
+                KernelBody::Opaque(Opaque { op }) => op.is_attribute_input(idx),
+                KernelBody::ElementWises(_) => false,
+            }
+        };
         let mut seen = std::collections::HashSet::<ValueId>::new();
         let params = chain(
-            self.schedule.kernels[kernel_id].outputs.iter().copied(),
-            self.schedule.kernels[kernel_id]
+            kernel.outputs.iter().copied().map(Some),
+            kernel
                 .inputs
                 .iter()
-                .flatten()
-                .copied(),
+                .enumerate()
+                .map(|(idx, inp)| inp.filter(|_| !attribute_input(idx))),
         )
+        .flatten()
         .filter(|id| seen.insert(*id))
         .map(|id| {
             let ty = self.get_resolved_tensor_type(id)?;
@@ -1579,7 +1515,6 @@ impl<'sched> HostCodeGenerator<'sched> {
     pub fn generate(&mut self, opt: &Options) -> Result<HostCode, BuildError> {
         let decl_values = self.gen_decl_values()?;
         let computes = self.gen_computes()?;
-        self.emit_used_initializers();
         let finalize = self.gen_finalize()?;
 
         // NOTE: This must be called at the very end.
@@ -1678,7 +1613,7 @@ impl HostCode {
 
         write!(
             writer,
-            r#"extern "C" void* model_init(void **{ARG_INITIALIZER}) {{
+            r#"extern "C" void* model_init(void) {{
   auto *state = new ModelState;
 {init_body}
   return state;
@@ -1690,7 +1625,7 @@ extern "C" void model_destroy(void *ptr) {{
   delete state;
 }}
 
-extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) {{
+extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}, void **{ARG_INITIALIZER}) {{
   auto *state = static_cast<ModelState*>(state_ptr);
 "#
         )?;

@@ -906,6 +906,24 @@ impl Operator {
     pub fn is_elementwise(&self) -> bool {
         self.operator_type() == OperatorType::Elementwise
     }
+
+    pub fn is_attribute_input(&self, input_idx: usize) -> bool {
+        if input_idx == 0 {
+            return false;
+        }
+        matches!(
+            self,
+            Operator::Slice
+                | Operator::Resize(_)
+                | Operator::OneHot(_)
+                | Operator::ReduceMax(_)
+                | Operator::ReduceMean(_)
+                | Operator::ReduceSum(_)
+                | Operator::Clip(_)
+                | Operator::Expand
+                | Operator::Split(_)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
