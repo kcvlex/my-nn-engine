@@ -1,4 +1,16 @@
 #include "common.cuh"
+#include <cuda_runtime.h>
+
+extern "C" void *alloc_pinned(size_t bytes) {
+    void *p = nullptr;
+    cudaError_t err = cudaHostAlloc(&p, bytes, cudaHostAllocDefault);
+    if (err != cudaSuccess) return nullptr;
+    return p;
+}
+
+extern "C" void free_pinned(void *p) {
+    if (p) cudaFreeHost(p);
+}
 
 __device__ int to_tensor_idx2d(int flat_idx, int dim1, int stride0, int stride1) {
     int res = 0, i1;

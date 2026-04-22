@@ -1,8 +1,11 @@
 mod cpu;
 mod cuda;
 
+use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use log::info;
 use tempfile::TempDir;
@@ -28,7 +31,7 @@ use crate::tensor::types::UIntType;
 use crate::tensor::Tensor;
 use crate::transform::transform_graph;
 
-enum StrictTensor {
+pub(crate) enum StrictTensor {
     U8(Vec<u8>),
     I32(Vec<i32>),
     I64(Vec<i64>),
@@ -75,6 +78,17 @@ impl StrictTensor {
             StrictTensor::U64(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::F32(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::F64(v) => v.as_mut_ptr() as *mut u8,
+        }
+    }
+
+    fn byte_len(&self) -> usize {
+        match self {
+            StrictTensor::U8(v) => v.len(),
+            StrictTensor::I32(v) => v.len() * std::mem::size_of::<i32>(),
+            StrictTensor::I64(v) => v.len() * std::mem::size_of::<i64>(),
+            StrictTensor::U64(v) => v.len() * std::mem::size_of::<u64>(),
+            StrictTensor::F32(v) => v.len() * std::mem::size_of::<f32>(),
+            StrictTensor::F64(v) => v.len() * std::mem::size_of::<f64>(),
         }
     }
 
@@ -133,6 +147,56 @@ impl StrictTensor {
             DataType::UInt(UIntType::U64) => parse!(StrictTensor::U64, u64),
             DataType::Float(FloatType::F32) => parse!(StrictTensor::F32, f32),
             DataType::Float(FloatType::F64) => parse!(StrictTensor::F64, f64),
+        }
+    }
+}
+
+pub(crate) enum InitializerSource {
+    Inline(StrictTensor),
+    External {
+        file: Arc<File>,
+        offset: u64,
+        length: u64,
+        elem_type: DataType,
+    },
+}
+
+impl InitializerSource {
+    pub(crate) fn byte_len(&self) -> usize {
+        match self {
+            InitializerSource::Inline(t) => t.byte_len(),
+            InitializerSource::External { length, .. } => *length as usize,
+        }
+    }
+
+    pub(crate) fn load_into_strict(&self) -> Result<StrictTensor, ModelLoadError> {
+        match self {
+            InitializerSource::Inline(t) => Ok(t.clone_strict()),
+            InitializerSource::External {
+                file,
+                offset,
+                length,
+                elem_type,
+            } => {
+                use std::os::unix::fs::FileExt;
+                let mut buf = vec![0u8; *length as usize];
+                file.read_exact_at(&mut buf, *offset)
+                    .map_err(ModelLoadError::FileRead)?;
+                Ok(StrictTensor::from_bytes(*elem_type, &buf))
+            }
+        }
+    }
+}
+
+impl StrictTensor {
+    fn clone_strict(&self) -> Self {
+        match self {
+            StrictTensor::U8(v) => StrictTensor::U8(v.clone()),
+            StrictTensor::I32(v) => StrictTensor::I32(v.clone()),
+            StrictTensor::I64(v) => StrictTensor::I64(v.clone()),
+            StrictTensor::U64(v) => StrictTensor::U64(v.clone()),
+            StrictTensor::F32(v) => StrictTensor::F32(v.clone()),
+            StrictTensor::F64(v) => StrictTensor::F64(v.clone()),
         }
     }
 }
@@ -201,17 +265,40 @@ impl Session {
         let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
         let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
         let initializer_ids = model.graph.initializer_ids();
-        let initializer: Vec<StrictTensor> = initializer_ids
+        let mut file_cache: HashMap<PathBuf, Arc<File>> = HashMap::new();
+        let initializer: Vec<InitializerSource> = initializer_ids
             .iter()
-            .map(|&id| -> Result<StrictTensor, SessionError> {
+            .map(|&id| -> Result<InitializerSource, SessionError> {
                 if let Some(t) = model.graph.get_inline_initializer(id) {
-                    return Ok(StrictTensor::from(t));
+                    return Ok(InitializerSource::Inline(StrictTensor::from(t)));
                 }
-                model
+                let ext = model
                     .graph
-                    .with_external_bytes(id, StrictTensor::from_bytes)
-                    .expect("initializer missing")
-                    .map_err(SessionError::ModelLoadError)
+                    .get_external_ref(id)
+                    .expect("initializer missing");
+                let file = match file_cache.get(&ext.path) {
+                    Some(f) => Arc::clone(f),
+                    None => {
+                        let f = Arc::new(
+                            File::open(&ext.path)
+                                .map_err(ModelLoadError::FileRead)
+                                .map_err(SessionError::ModelLoadError)?,
+                        );
+                        file_cache.insert(ext.path.clone(), Arc::clone(&f));
+                        f
+                    }
+                };
+                let length = ext.length.ok_or_else(|| {
+                    SessionError::OtherError(
+                        "external initializer without length is unsupported".to_string(),
+                    )
+                })?;
+                Ok(InitializerSource::External {
+                    file,
+                    offset: ext.offset,
+                    length,
+                    elem_type: ext.elem_type,
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
 

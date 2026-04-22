@@ -247,33 +247,19 @@ impl Graph {
     }
 
     pub fn get_initializer(&self, value_id: ValueId) -> Option<Tensor> {
-        let src = self.resolve_initializer_source(value_id)?;
-        if let Some(t) = self.initializer.get(&src) {
+        if let Some(t) = self.initializer.get(&value_id) {
             return Some(t.clone());
         }
-        let r = self.external_refs.get(&src)?;
+        let r = self.external_refs.get(&value_id)?;
         self.load_external(r).ok()
-    }
-
-    fn resolve_initializer_source(&self, value_id: ValueId) -> Option<ValueId> {
-        let mut cur = value_id;
-        loop {
-            if self.initializer.contains_key(&cur) || self.external_refs.contains_key(&cur) {
-                return Some(cur);
-            }
-            let producer = self.nodes.iter().find_map(|(_, node)| {
-                matches!(node.op, Operator::Transfer(_))
-                    .then(|| node.outputs.first().copied())
-                    .flatten()
-                    .filter(|out| *out == cur)
-                    .and_then(|_| node.inputs.first().copied().flatten())
-            })?;
-            cur = producer;
-        }
     }
 
     pub fn get_inline_initializer(&self, value_id: ValueId) -> Option<&Tensor> {
         self.initializer.get(&value_id)
+    }
+
+    pub fn get_external_ref(&self, value_id: ValueId) -> Option<&ExternalTensorRef> {
+        self.external_refs.get(&value_id)
     }
 
     pub fn with_external_bytes<R>(

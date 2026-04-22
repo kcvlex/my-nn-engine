@@ -913,15 +913,15 @@ impl Operator {
         }
         matches!(
             self,
-            Operator::Slice
-                | Operator::Resize(_)
-                | Operator::OneHot(_)
-                | Operator::ReduceMax(_)
-                | Operator::ReduceMean(_)
-                | Operator::ReduceSum(_)
-                | Operator::Clip(_)
-                | Operator::Expand
-                | Operator::Split(_)
+            Operator::Slice |
+                Operator::Resize(_) |
+                Operator::OneHot(_) |
+                Operator::ReduceMax(_) |
+                Operator::ReduceMean(_) |
+                Operator::ReduceSum(_) |
+                Operator::Clip(_) |
+                Operator::Expand |
+                Operator::Split(_)
         )
     }
 }

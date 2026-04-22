@@ -59,11 +59,16 @@ impl SessionCPU {
     pub(super) fn new(
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
-        initializer: Vec<StrictTensor>,
+        initializer: Vec<super::InitializerSource>,
         schedule: Schedule,
         opt: &Options,
         build_dir: &Path,
     ) -> Result<Self, SessionError> {
+        let initializer: Vec<StrictTensor> = initializer
+            .into_iter()
+            .map(|src| src.load_into_strict())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(SessionError::ModelLoadError)?;
         info!("Load external libraries");
         let blas_backend = (|| {
             for b in [blas::Backend::MKL, blas::Backend::OpenBLAS] {

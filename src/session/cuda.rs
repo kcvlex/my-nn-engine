@@ -1,5 +1,6 @@
 use std::io::BufWriter;
 use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,33 +11,34 @@ use rayon::prelude::*;
 
 use crate::codegen::cuda::*;
 use crate::codegen::*;
+use crate::onnx::load::ModelLoadError;
 use crate::options::Options;
 use crate::schedule::Schedule;
+use crate::session::InitializerSource;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type InitType = unsafe extern "C" fn() -> *mut std::ffi::c_void;
-type RunType = unsafe extern "C" fn(
-    *mut std::ffi::c_void,
-    *const *mut u8,
-    *const *const u8,
-    *const *const u8,
-);
+type InitType = unsafe extern "C" fn(*const *const u8) -> *mut std::ffi::c_void;
+type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
+type AllocPinnedType = unsafe extern "C" fn(usize) -> *mut std::ffi::c_void;
+type FreePinnedType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
 pub struct SessionCUDA {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
-    initializer: Vec<StrictTensor>,
+    initializer: Vec<InitializerSource>,
 
     #[allow(dead_code)]
     lib: libloading::Library,
     init_func: InitType,
     run_func: RunType,
     destroy_func: DestroyType,
+    alloc_pinned: AllocPinnedType,
+    free_pinned: FreePinnedType,
     state: *mut std::ffi::c_void,
 }
 
@@ -44,7 +46,7 @@ impl SessionCUDA {
     pub(super) fn new(
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
-        initializer: Vec<StrictTensor>,
+        initializer: Vec<InitializerSource>,
         schedule: Schedule,
         opt: &Options,
         build_dir: &Path,
@@ -144,10 +146,16 @@ impl SessionCUDA {
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
         let destroy_func: libloading::Symbol<DestroyType> = unsafe { lib.get(b"model_destroy") }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        let alloc_pinned: libloading::Symbol<AllocPinnedType> = unsafe { lib.get(b"alloc_pinned") }
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+        let free_pinned: libloading::Symbol<FreePinnedType> = unsafe { lib.get(b"free_pinned") }
+            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
         let init_func = *init_func;
         let run_func = *run_func;
         let destroy_func = *destroy_func;
+        let alloc_pinned = *alloc_pinned;
+        let free_pinned = *free_pinned;
 
         info!("Loaded");
 
@@ -158,20 +166,73 @@ impl SessionCUDA {
             init_func,
             run_func,
             destroy_func,
+            alloc_pinned,
+            free_pinned,
             state: std::ptr::null_mut(),
             initializer,
         })
     }
 
-    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
-        if self.state.is_null() {
-            self.state = unsafe { (self.init_func)() };
-        }
-        let initializer_ptrs = self
+    fn load_initializers(&self) -> Result<*mut std::ffi::c_void, SessionError> {
+        let total_len: usize = self
             .initializer
             .iter()
-            .map(|t| t.as_ptr())
-            .collect::<Vec<_>>();
+            .map(InitializerSource::byte_len)
+            .sum();
+
+        let pinned = if total_len > 0 {
+            let p = unsafe { (self.alloc_pinned)(total_len) };
+            if p.is_null() {
+                return Err(SessionError::OtherError("cudaHostAlloc failed".to_string()));
+            }
+            p
+        } else {
+            std::ptr::null_mut()
+        };
+
+        let state_or_err = (|| -> Result<*mut std::ffi::c_void, SessionError> {
+            let mut initializer_ptrs: Vec<*const u8> = Vec::with_capacity(self.initializer.len());
+            let mut offset = 0usize;
+            for src in &self.initializer {
+                let len = src.byte_len();
+                let ptr = (pinned as *mut u8).wrapping_add(offset);
+                if len > 0 {
+                    let buf = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+                    match src {
+                        InitializerSource::Inline(t) => {
+                            buf.copy_from_slice(unsafe {
+                                std::slice::from_raw_parts(t.as_ptr(), len)
+                            });
+                        }
+                        InitializerSource::External {
+                            file,
+                            offset: ext_offset,
+                            ..
+                        } => {
+                            file.read_exact_at(buf, *ext_offset)
+                                .map_err(ModelLoadError::FileRead)
+                                .map_err(SessionError::ModelLoadError)?;
+                        }
+                    }
+                }
+                initializer_ptrs.push(ptr as *const u8);
+                offset += len;
+            }
+            let state = unsafe { (self.init_func)(initializer_ptrs.as_ptr()) };
+            Ok(state)
+        })();
+
+        if !pinned.is_null() {
+            unsafe { (self.free_pinned)(pinned) };
+        }
+
+        state_or_err
+    }
+
+    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
+        if self.state.is_null() {
+            self.state = self.load_initializers()?;
+        }
         let mut output_bufs = self
             .output_ty
             .iter()
@@ -183,14 +244,7 @@ impl SessionCUDA {
             .collect::<Vec<_>>();
         let input_bufs = inputs.iter().map(StrictTensor::from).collect::<Vec<_>>();
         let input_ptrs = input_bufs.iter().map(|t| t.as_ptr()).collect::<Vec<_>>();
-        unsafe {
-            (self.run_func)(
-                self.state,
-                output_ptrs.as_ptr(),
-                input_ptrs.as_ptr(),
-                initializer_ptrs.as_ptr(),
-            )
-        };
+        unsafe { (self.run_func)(self.state, output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
         let outputs = zip_eq(self.output_ty.iter(), output_bufs)
             .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
             .collect::<Vec<_>>();
