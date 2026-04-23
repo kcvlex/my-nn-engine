@@ -21,7 +21,6 @@ use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::ExpandBuilder;
 use crate::codegen::cuda::kernel::FuncQualifier;
-use crate::codegen::cuda::kernel::GatherBuilder;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
@@ -1185,21 +1184,35 @@ impl<'sched> HostCodeGenerator<'sched> {
                     )));
                 }
 
-                Operator::Gather(_) => {
-                    let indices_size = self
+                Operator::Gather(gather) => {
+                    self.includes.insert(Include::Local("gather.cuh"));
+                    if gather.axis.raw() != 0 {
+                        unimplemented!("Gather: only axis=0 is supported");
+                    }
+                    let input_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[0].unwrap())?
+                        .clone();
+                    let indices_ty = self
                         .get_resolved_tensor_type(kernel.inputs[1].unwrap())?
-                        .dims
-                        .size();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        GatherBuilder::new(sched, decl).build()
-                    })?;
-                    self.stmts.push(
-                        create_launch_kernel(
-                            kernel::CUDAKernel::GeneratedKernel(generated),
-                            indices_size,
-                        )?
-                        .into(),
-                    );
+                        .clone();
+                    let axis_dim = input_ty.dims[0];
+                    let repeat = input_ty.dims.size() / axis_dim;
+                    let size = indices_ty.dims.size();
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ = self.device_identifier(kernel.inputs[0].unwrap())?;
+                    let indices = self.device_identifier(kernel.inputs[1].unwrap())?;
+                    let cuda_kernel = kernel::CUDAKernel::GatherKernel(kernel::GatherKernel {
+                        data_ty: input_ty.elem_type,
+                        idx_ty: indices_ty.elem_type,
+                        axis_dim,
+                        repeat,
+                        size,
+                        out,
+                        in_,
+                        indices,
+                    });
+                    self.stmts
+                        .push(create_launch_kernel(cuda_kernel, size)?.into());
                 }
 
                 op @ (Operator::Gemm(_) | Operator::BatchedGemm(_)) => {

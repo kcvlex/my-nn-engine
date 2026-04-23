@@ -16,6 +16,7 @@ use crate::tensor::types::ResolvedTensorDims;
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
     ConcatKernel(ConcatKernel),
+    GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
     LayerNormKernel(LayerNormKernel),
     SoftmaxKernel(SoftmaxKernel),
@@ -159,6 +160,7 @@ impl LaunchKernel {
         to match &self.cuda_kernel {
             CUDAKernel::AttentionKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
+            CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::SoftmaxKernel(s) => s,
@@ -1120,60 +1122,30 @@ impl<'sched> OneHotBuilder<'sched> {
     }
 }
 
-pub struct GatherBuilder<'sched> {
-    ctx: BuilderContext<'sched>,
+pub struct GatherKernel {
+    pub data_ty: DataType,
+    pub idx_ty: DataType,
+    pub axis_dim: usize,
+    pub repeat: usize,
+    pub size: usize,
+
+    pub out: Expr,
+    pub in_: Expr,
+    pub indices: Expr,
 }
 
-impl<'sched> GatherBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
-        Self {
-            ctx: BuilderContext::new(schedule, decl),
-        }
-    }
-
-    pub fn build(&mut self) -> Result<String, BuildError> {
-        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::Opaque(Opaque {
-            op: Operator::Gather(gather),
-        }) = &kernel.body
-        else {
-            panic!("Expected Gather operator");
-        };
-
-        if gather.axis.raw() != 0 {
-            unimplemented!()
-        }
-
-        let input_ty = self
-            .ctx
-            .get_resolved_tensor_type(kernel.inputs[0].unwrap())?;
-        let indices_ty = self
-            .ctx
-            .get_resolved_tensor_type(kernel.inputs[1].unwrap())?;
-        let axis_dim = input_ty.dims[0];
-        let repeat = input_ty.dims.size() / axis_dim;
-
-        let in_ = KernelVar::Value(kernel.inputs[0].unwrap());
-        let indices = KernelVar::Value(kernel.inputs[1].unwrap());
-        let out = KernelVar::Value(kernel.outputs[0]);
-        let size = indices_ty.dims.size();
-        let gid = KernelVar::Gid;
-        let decl = self.ctx.decl.decl();
-
-        Ok(format!(
-            "
-{decl} {{
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
-    if ({size} <= {gid}) return;
-
-    int index = {indices}[{gid}];
-    if (index < 0) index += {axis_dim};
-    for (int i = 0; i < {repeat}; i++) {{
-        {out}[{gid} * {repeat} + i] = {in_}[index * {repeat} + i];
-    }}
-}}
-"
-        ))
+impl GatherKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!("gather_axis0_kernel<{}, {}>", self.data_ty, self.idx_ty);
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            cast!(self.idx_ty, self.indices),
+            self.axis_dim.to_string(),
+            self.repeat.to_string(),
+            self.size.to_string(),
+        ];
+        (id, args)
     }
 }
 
