@@ -16,7 +16,6 @@ use itertools::Itertools;
 use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::AttentionKernel;
-use crate::codegen::cuda::kernel::ConcatBuilder;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
@@ -1073,21 +1072,69 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                Operator::Concat(_) => {
-                    let output_size = self
-                        .get_resolved_tensor_type(kernel.outputs[0])?
-                        .dims
-                        .size();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        ConcatBuilder::new(sched, decl).build()
-                    })?;
-                    self.stmts.push(
-                        create_launch_kernel(
-                            kernel::CUDAKernel::GeneratedKernel(generated),
-                            output_size,
-                        )?
-                        .into(),
-                    );
+                Operator::Concat(Concat { axis }) => {
+                    self.includes.insert(Include::Local("concat.cuh"));
+                    let output_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.clone();
+                    if !output_ty.is_contiguous() {
+                        return Err(BuildError::NonContiguousTensor(kernel.outputs[0]));
+                    }
+                    let ndim = output_ty.dims.ndim();
+                    let axis = axis.index(ndim);
+                    let total_size = output_ty.dims.size();
+                    let input_ids: Vec<ValueId> =
+                        kernel.inputs.iter().map(|v| v.unwrap()).collect();
+                    let input_tys = input_ids
+                        .iter()
+                        .map(|id| self.get_resolved_tensor_type(*id).cloned())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let tensor_sizes: Vec<usize> =
+                        input_tys.iter().map(|ty| ty.dims.size()).collect();
+                    let axis_sizes: Vec<usize> = input_tys.iter().map(|ty| ty.dims[axis]).collect();
+                    let in_sizes_acc: Vec<usize> = std::iter::once(0)
+                        .chain(tensor_sizes.iter().scan(0usize, |s, v| {
+                            *s += v;
+                            Some(*s)
+                        }))
+                        .take(input_ids.len())
+                        .collect();
+                    let in_axis_sizes_acc: Vec<usize> = std::iter::once(0)
+                        .chain(axis_sizes.iter().scan(0usize, |s, v| {
+                            *s += v;
+                            Some(*s)
+                        }))
+                        .take(input_ids.len())
+                        .collect();
+                    let input_dims: Vec<Vec<usize>> = input_tys
+                        .iter()
+                        .map(|ty| ty.dims.iter().copied().collect())
+                        .collect();
+                    let input_strides: Vec<Vec<usize>> = input_tys
+                        .iter()
+                        .map(|ty| ty.strides().iter().copied().collect())
+                        .collect();
+                    let output_dims: Vec<usize> = output_ty.dims.iter().copied().collect();
+                    let ins: Vec<Expr> = input_ids
+                        .iter()
+                        .map(|id| self.device_identifier(*id))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let data_ty = output_ty.elem_type;
+                    let cuda_kernel = kernel::CUDAKernel::ConcatKernel(kernel::ConcatKernel {
+                        data_ty,
+                        ndim,
+                        n_inputs: input_ids.len(),
+                        axis,
+                        total_size,
+                        out,
+                        ins,
+                        in_sizes_acc,
+                        in_axis_sizes_acc,
+                        input_dims,
+                        input_strides,
+                        output_dims,
+                    });
+                    self.stmts
+                        .push(create_launch_kernel(cuda_kernel, total_size)?.into());
                 }
 
                 Operator::Contiguous(_) => {

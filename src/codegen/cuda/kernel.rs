@@ -15,6 +15,7 @@ use crate::tensor::types::ResolvedTensorDims;
 #[derive(From)]
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
+    ConcatKernel(ConcatKernel),
     GeneratedKernel(GeneratedKernel),
     LayerNormKernel(LayerNormKernel),
     SoftmaxKernel(SoftmaxKernel),
@@ -157,6 +158,7 @@ impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
             CUDAKernel::AttentionKernel(a) => a,
+            CUDAKernel::ConcatKernel(c) => c,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::SoftmaxKernel(s) => s,
@@ -738,147 +740,66 @@ impl<'sched> SplitBuilder<'sched> {
     }
 }
 
-pub struct ConcatBuilder<'sched> {
-    ctx: BuilderContext<'sched>,
+pub struct ConcatKernel {
+    pub data_ty: DataType,
+    pub ndim: usize,
+    pub n_inputs: usize,
+    pub axis: usize,
+    pub total_size: usize,
+
+    pub out: Expr,
+    pub ins: Vec<Expr>,
+    pub in_sizes_acc: Vec<usize>,
+    pub in_axis_sizes_acc: Vec<usize>,
+    pub input_dims: Vec<Vec<usize>>,
+    pub input_strides: Vec<Vec<usize>>,
+    pub output_dims: Vec<usize>,
 }
 
-impl<'sched> ConcatBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
-        Self {
-            ctx: BuilderContext::new(schedule, decl),
-        }
-    }
-
-    pub fn build(&mut self) -> Result<String, BuildError> {
-        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::Opaque(Opaque {
-            op: Operator::Concat(concat),
-        }) = &kernel.body
-        else {
-            panic!("Expected Concat operator");
+impl ConcatKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "concat_kernel<{}, {}, {}>",
+            self.data_ty, self.ndim, self.n_inputs
+        );
+        let ty = self.data_ty;
+        let join_usize = |v: &[usize]| {
+            v.iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
-
-        let output_id = kernel.outputs[0];
-        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
-        if !output_ty.is_contiguous() {
-            return Err(BuildError::NonContiguousTensor(output_id));
-        }
-        let size = output_ty.dims.size();
-        let value_ty: TypeSymbol = output_ty.elem_type.into();
-        let ptr_ty = value_ty.to_pointer();
-        let gid = KernelVar::Gid;
-        let axis = concat.axis.index(output_ty.dims.ndim());
-        let input_tensor_sizes = kernel
-            .inputs
+        let join_2d = |v: &[Vec<usize>]| {
+            v.iter()
+                .map(|row| format!("{{{}}}", join_usize(row)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let ins_list = self
+            .ins
             .iter()
-            .map(|id| {
-                self.ctx
-                    .get_resolved_tensor_type(id.unwrap())
-                    .map(|ty| ty.dims.size())
-            })
-            .collect::<Result<Vec<_>, BuildError>>()?;
-        let input_select = select_rec(&input_tensor_sizes[..], &gid);
-        let input_tensor_sizes_acc = acc_sizes(&input_tensor_sizes[..]);
-        let input_axis_sizes = kernel
-            .inputs
-            .iter()
-            .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
-                Ok(input_ty.dims[axis])
-            })
-            .collect::<Result<Vec<_>, BuildError>>()?;
-        let input_axis_sizes_acc = acc_sizes(&input_axis_sizes[..]);
-        let input_strides = kernel
-            .inputs
-            .iter()
-            .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
-                Ok(format!(
-                    "{{{}}}",
-                    input_ty
-                        .strides()
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            })
-            .collect::<Result<Vec<_>, BuildError>>()?
-            .join(", ");
-        let input_dims = kernel
-            .inputs
-            .iter()
-            .map(|id| {
-                let input_ty = self.ctx.get_resolved_tensor_type(id.unwrap())?;
-                Ok(format!(
-                    "{{{}}}",
-                    input_ty
-                        .dims
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            })
-            .collect::<Result<Vec<_>, BuildError>>()?
-            .join(", ");
-
-        let output_dims = output_ty
-            .dims
-            .iter()
-            .map(|d| d.to_string())
+            .map(|e| format!("(const {} *)({})", ty, e))
             .collect::<Vec<_>>()
             .join(", ");
-        let out = KernelVar::Value(output_id);
-        let ndim = output_ty.dims.ndim();
-        let ins = kernel
-            .inputs
-            .iter()
-            .map(|id| format!("{}", KernelVar::Value(id.unwrap())))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let input_tensor_sizes_acc = input_tensor_sizes_acc
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let input_axis_sizes_acc = input_axis_sizes_acc
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let decl = self.ctx.decl.decl();
-
-        Ok(format!(
-            "
-{decl} {{
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
-    if ({size} <= {gid}) return;
-    {ptr_ty} ins[] = {{{ins}}};
-    int in_sizes_acc[] = {{{input_tensor_sizes_acc}}};
-    int select = {input_select};
-    int in_offset = {gid} - in_sizes_acc[select];
-    {value_ty} load = ins[select][in_offset];
-    int input_dims[][{ndim}] = {{{input_dims}}};
-    int input_strides[][{ndim}] = {{{input_strides}}};
-    int indexes[{ndim}];
-    for (int i = 0; i < {ndim}; i++) {{
-        int stride = input_strides[select][i];
-        int dim = input_dims[select][i];
-        indexes[i] = (dim <= 1 || stride == 0) ? 0 : (in_offset / stride % dim);
-    }}
-    int input_axis_sizes_acc[] = {{{input_axis_sizes_acc}}};
-    indexes[{axis}] += input_axis_sizes_acc[select];
-    int output_dims[] = {{{output_dims}}};
-    int out_offset = 0;
-    for (int i = 0; i < {ndim}; i++) {{
-        out_offset *= output_dims[i];
-        out_offset += indexes[i];
-    }}
-    {out}[out_offset] = load;
-}}
-"
-        ))
+        let cfg = format!(
+            "ConcatInputs<{}, {}, {}>{{{{ {} }}, {{ {} }}, {{ {} }}, {{ {} }}, {{ {} }}, {{ {} }}}}",
+            ty,
+            self.ndim,
+            self.n_inputs,
+            ins_list,
+            join_usize(&self.in_sizes_acc),
+            join_usize(&self.in_axis_sizes_acc),
+            join_2d(&self.input_dims),
+            join_2d(&self.input_strides),
+            join_usize(&self.output_dims),
+        );
+        let args = vec![
+            cast!(ty, self.out),
+            cfg,
+            self.axis.to_string(),
+            self.total_size.to_string(),
+        ];
+        (id, args)
     }
 }
 
