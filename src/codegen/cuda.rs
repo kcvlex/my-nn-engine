@@ -28,7 +28,6 @@ use crate::codegen::cuda::kernel::OneHotBuilder;
 use crate::codegen::cuda::kernel::PoolBuilder;
 use crate::codegen::cuda::kernel::ReduceMatrixBuilder;
 use crate::codegen::cuda::kernel::ResizeBuilder;
-use crate::codegen::cuda::kernel::SliceBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::kernel::WhereBuilder;
@@ -1596,20 +1595,44 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Slice => {
-                    let output_size = self
-                        .get_resolved_tensor_type(kernel.outputs[0])?
-                        .dims
-                        .size();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        SliceBuilder::new(sched, decl).build()
-                    })?;
-                    self.stmts.push(
-                        create_launch_kernel(
-                            kernel::CUDAKernel::GeneratedKernel(generated),
-                            output_size,
-                        )?
-                        .into(),
-                    );
+                    self.includes.insert(Include::Local("slice.cuh"));
+                    let input_id = kernel.inputs[args::SLICE_DATA].unwrap();
+                    let output_id = kernel.outputs[0];
+                    let output_ty = self.get_resolved_tensor_type(output_id)?.clone();
+                    let input_ty = self.get_resolved_tensor_type(input_id)?.clone();
+                    let slices =
+                        operator::Slice::collect_from_inputs(self.schedule.graph(), &kernel.inputs)
+                            .expect("Failed to collect slices");
+                    let ndim = output_ty.dims.ndim();
+                    assert_eq!(ndim, input_ty.dims.ndim());
+                    let mut start_per_axis = vec![0isize; ndim];
+                    for slice in slices.iter() {
+                        if slice.step != 1 {
+                            panic!("Slice: only step=1 is supported, got step={}", slice.step);
+                        }
+                        start_per_axis[slice.axis] = slice.start;
+                    }
+                    let mut base_offset: isize = 0;
+                    for i in 0..ndim {
+                        base_offset += start_per_axis[i] * input_ty.stride(i) as isize;
+                    }
+                    let size = output_ty.dims.size();
+                    let output_dims: Vec<usize> = output_ty.dims.iter().copied().collect();
+                    let input_strides: Vec<usize> = (0..ndim).map(|i| input_ty.stride(i)).collect();
+                    let out = self.device_identifier(output_id)?;
+                    let in_ = self.device_identifier(input_id)?;
+                    let cuda_kernel = kernel::CUDAKernel::SliceKernel(kernel::SliceKernel {
+                        data_ty: output_ty.elem_type,
+                        ndim,
+                        size,
+                        base_offset,
+                        output_dims,
+                        input_strides,
+                        out,
+                        in_,
+                    });
+                    self.stmts
+                        .push(create_launch_kernel(cuda_kernel, size)?.into());
                 }
 
                 _ => {
