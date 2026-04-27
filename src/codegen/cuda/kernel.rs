@@ -16,6 +16,7 @@ use crate::tensor::types::ResolvedTensorDims;
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
     ConcatKernel(ConcatKernel),
+    ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
     LayerNormKernel(LayerNormKernel),
@@ -161,6 +162,7 @@ impl LaunchKernel {
         to match &self.cuda_kernel {
             CUDAKernel::AttentionKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
+            CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::LayerNormKernel(l) => l,
@@ -1535,67 +1537,39 @@ impl<'sched> WhereBuilder<'sched> {
     }
 }
 
-pub struct ExpandBuilder<'sched> {
-    ctx: BuilderContext<'sched>,
+pub struct ExpandKernel {
+    pub data_ty: DataType,
+    pub ndim: usize,
+    pub size: usize,
+    pub output_dims: Vec<usize>,
+    pub input_strides: Vec<usize>,
+
+    pub out: Expr,
+    pub in_: Expr,
 }
 
-impl<'sched> ExpandBuilder<'sched> {
-    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
-        Self {
-            ctx: BuilderContext::new(schedule, decl),
-        }
-    }
-
-    pub fn build(&mut self) -> Result<String, BuildError> {
-        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
-        let KernelBody::Opaque(Opaque {
-            op: Operator::Expand,
-        }) = &kernel.body
-        else {
-            panic!("Expected Expand operator");
+impl ExpandKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!("expand_kernel<{}, {}>", self.data_ty, self.ndim);
+        let join_usize = |v: &[usize]| {
+            v.iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
-
-        let input_id = kernel.inputs[0].unwrap();
-        let output_id = kernel.outputs[0];
-
-        let output_ty = self.ctx.get_resolved_tensor_type(output_id)?;
-        let input_ty = self.ctx.get_resolved_tensor_type(input_id)?;
-
-        let size = output_ty.dims.size();
-        let ndim = output_ty.dims.ndim();
-
-        let gid = KernelVar::Gid;
-        let out = KernelVar::Value(output_id);
-        let inp = KernelVar::Value(input_id);
-        let decl = self.ctx.decl.decl();
-
-        let src_bc = input_ty.broadcast(&output_ty.dims);
-
-        let mut lines = Vec::new();
-        lines.push(format!("int src_idx = 0;"));
-        lines.push("{ int rem = gid;".to_string());
-        for i in (0..ndim).rev() {
-            let out_dim = output_ty.dims[i];
-            let stride = src_bc.stride(i);
-            lines.push(format!("int idx_{i} = rem % {out_dim};"));
-            lines.push(format!("rem = rem / {out_dim};"));
-            if stride != 0 {
-                lines.push(format!("src_idx += idx_{i} * {stride};"));
-            }
-        }
-        lines.push("}".to_string());
-        let src_idx = lines.join("\n    ");
-
-        Ok(format!(
-            "
-{decl} {{
-    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
-    if ({size} <= {gid}) return;
-    {src_idx}
-    {out}[{gid}] = {inp}[src_idx];
-}}
-"
-        ))
+        let cfg = format!(
+            "ExpandConfig<{}>{{{{ {} }}, {{ {} }}}}",
+            self.ndim,
+            join_usize(&self.output_dims),
+            join_usize(&self.input_strides),
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            cfg,
+            self.size.to_string(),
+        ];
+        (id, args)
     }
 }
 

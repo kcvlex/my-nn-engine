@@ -19,7 +19,6 @@ use crate::codegen::cuda::kernel::AttentionKernel;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
 use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
-use crate::codegen::cuda::kernel::ExpandBuilder;
 use crate::codegen::cuda::kernel::FuncQualifier;
 use crate::codegen::cuda::kernel::GeneratedKernel;
 use crate::codegen::cuda::kernel::KernelDecl;
@@ -1578,20 +1577,29 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::Expand => {
-                    let output_size = self
-                        .get_resolved_tensor_type(kernel.outputs[0])?
-                        .dims
-                        .size();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        ExpandBuilder::new(sched, decl).build()
-                    })?;
-                    self.stmts.push(
-                        create_launch_kernel(
-                            kernel::CUDAKernel::GeneratedKernel(generated),
-                            output_size,
-                        )?
-                        .into(),
-                    );
+                    self.includes.insert(Include::Local("expand.cuh"));
+                    let input_id = kernel.inputs[0].unwrap();
+                    let output_id = kernel.outputs[0];
+                    let output_ty = self.get_resolved_tensor_type(output_id)?.clone();
+                    let input_ty = self.get_resolved_tensor_type(input_id)?.clone();
+                    let ndim = output_ty.dims.ndim();
+                    let size = output_ty.dims.size();
+                    let src_bc = input_ty.broadcast(&output_ty.dims);
+                    let output_dims: Vec<usize> = output_ty.dims.iter().copied().collect();
+                    let input_strides: Vec<usize> = (0..ndim).map(|i| src_bc.stride(i)).collect();
+                    let out = self.device_identifier(output_id)?;
+                    let in_ = self.device_identifier(input_id)?;
+                    let cuda_kernel = kernel::CUDAKernel::ExpandKernel(kernel::ExpandKernel {
+                        data_ty: output_ty.elem_type,
+                        ndim,
+                        size,
+                        output_dims,
+                        input_strides,
+                        out,
+                        in_,
+                    });
+                    self.stmts
+                        .push(create_launch_kernel(cuda_kernel, size)?.into());
                 }
 
                 Operator::Slice => {
