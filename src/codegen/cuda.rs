@@ -17,6 +17,7 @@ use crate::codegen::cuda::cublas::*;
 use crate::codegen::cuda::cudnn::*;
 use crate::codegen::cuda::kernel::AttentionKernel;
 use crate::codegen::cuda::kernel::ContiguousBuilder;
+use crate::codegen::cuda::kernel::CopyBuilder;
 use crate::codegen::cuda::kernel::ElementwiseKernelBuilder;
 use crate::codegen::cuda::kernel::FuncQualifier;
 use crate::codegen::cuda::kernel::GeneratedKernel;
@@ -931,21 +932,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                         _ => false,
                     };
                     if !same_chunk {
-                        self.includes.insert(Include::Local("copy.cuh"));
-                        let input_id = kernel.inputs[0].unwrap();
-                        let output_id = kernel.outputs[0];
-                        let input_ty = self.get_resolved_tensor_type(input_id)?.clone();
-                        let size = self.get_resolved_tensor_type(output_id)?.dims.size();
-                        let out = self.device_identifier(output_id)?;
-                        let in_ = self.device_identifier(input_id)?;
-                        let cuda_kernel = kernel::CUDAKernel::CopyKernel(kernel::CopyKernel {
-                            data_ty: input_ty.elem_type,
-                            size,
-                            out,
-                            in_,
-                        });
-                        self.stmts
-                            .push(create_launch_kernel(cuda_kernel, size)?.into());
+                        let output_size = self
+                            .get_resolved_tensor_type(kernel.outputs[0])?
+                            .dims
+                            .size();
+                        let generated = self.generate_kernel(kernel_id, |sched, decl| {
+                            CopyBuilder::new(sched, decl).build()
+                        })?;
+                        self.stmts.push(
+                            create_launch_kernel(
+                                kernel::CUDAKernel::GeneratedKernel(generated),
+                                output_size,
+                            )?
+                            .into(),
+                        );
                     }
                 }
 

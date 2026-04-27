@@ -16,7 +16,6 @@ use crate::tensor::types::ResolvedTensorDims;
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
     ConcatKernel(ConcatKernel),
-    CopyKernel(CopyKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -164,7 +163,6 @@ impl LaunchKernel {
         to match &self.cuda_kernel {
             CUDAKernel::AttentionKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
-            CUDAKernel::CopyKernel(c) => c,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1153,22 +1151,41 @@ impl GatherKernel {
     }
 }
 
-pub struct CopyKernel {
-    pub data_ty: DataType,
-    pub size: usize,
-    pub out: Expr,
-    pub in_: Expr,
+pub struct CopyBuilder<'sched> {
+    ctx: BuilderContext<'sched>,
 }
 
-impl CopyKernel {
-    pub fn fragment(&self) -> (String, Vec<String>) {
-        let id = format!("copy_kernel<{}>", self.data_ty);
-        let args = vec![
-            cast!(self.data_ty, self.out),
-            cast!(self.data_ty, self.in_),
-            self.size.to_string(),
-        ];
-        (id, args)
+impl<'sched> CopyBuilder<'sched> {
+    pub fn new(schedule: &'sched Schedule, decl: KernelDecl) -> Self {
+        Self {
+            ctx: BuilderContext::new(schedule, decl),
+        }
+    }
+
+    pub fn build(&mut self) -> Result<String, BuildError> {
+        let kernel = &self.ctx.schedule.kernels[self.ctx.decl.kernel_id];
+        assert!(matches_opaque!(
+            kernel,
+            Operator::Identity | Operator::Reinterpret(_)
+        ));
+
+        let gid = KernelVar::Gid;
+        let input = kernel.inputs[0].unwrap();
+        let output = kernel.outputs[0];
+        let size = self.ctx.get_resolved_tensor_type(input)?.dims.size();
+        let in_ = KernelVar::Value(input);
+        let out = KernelVar::Value(output);
+        let decl = self.ctx.decl.decl();
+
+        Ok(format!(
+            "
+{decl} {{
+    int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
+    if ({size} <= {gid}) return;
+    {out}[{gid}] = {in_}[{gid}];
+}}
+"
+        ))
     }
 }
 
