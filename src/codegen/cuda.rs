@@ -25,7 +25,6 @@ use crate::codegen::cuda::kernel::KernelDecl;
 use crate::codegen::cuda::kernel::KernelVar;
 use crate::codegen::cuda::kernel::OneHotBuilder;
 use crate::codegen::cuda::kernel::PoolBuilder;
-use crate::codegen::cuda::kernel::ReduceMatrixBuilder;
 use crate::codegen::cuda::kernel::ResizeBuilder;
 use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
@@ -1468,21 +1467,30 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
-                Operator::ReduceMatrix(_) => {
-                    self.includes
-                        .insert(Include::System("cooperative_groups.h"));
-                    let input_ty = self.get_resolved_tensor_type(kernel.inputs[0].unwrap())?;
+                Operator::ReduceMatrix(reduce_op) => {
+                    self.includes.insert(Include::Local("reduce.cuh"));
+                    let input_id = kernel.inputs[0].unwrap();
+                    let input_ty = self.get_resolved_tensor_type(input_id)?.clone();
+                    assert!(input_ty.is_contiguous());
                     let [row, col] = input_ty.dims[..] else {
                         panic!("Invalid ReduceMatrix output shape");
                     };
                     let block_size = min(DEFAULT_BLOCK_SIZE, ceil_pow2(col));
                     let grid_size = row.to_literal();
-                    let generated = self.generate_kernel(kernel_id, |sched, decl| {
-                        ReduceMatrixBuilder::new(sched, decl).build(block_size)
-                    })?;
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ = self.device_identifier(input_id)?;
+                    let cuda_kernel =
+                        kernel::CUDAKernel::ReduceMatrixKernel(kernel::ReduceMatrixKernel {
+                            data_ty: input_ty.elem_type,
+                            op: *reduce_op,
+                            block_size,
+                            col,
+                            out,
+                            in_,
+                        });
                     self.stmts.push(
                         kernel::LaunchKernel {
-                            cuda_kernel: kernel::CUDAKernel::GeneratedKernel(generated),
+                            cuda_kernel,
                             grid_size,
                             block_size: block_size.to_literal(),
                             shared_mem_bytes: None,
