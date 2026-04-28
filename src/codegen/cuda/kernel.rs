@@ -21,6 +21,7 @@ pub enum CUDAKernel {
     GeneratedKernel(GeneratedKernel),
     LayerNormKernel(LayerNormKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
+    RMSNormKernel(RMSNormKernel),
     SliceKernel(SliceKernel),
     SoftmaxKernel(SoftmaxKernel),
 }
@@ -124,6 +125,35 @@ impl LayerNormKernel {
     }
 }
 
+pub struct RMSNormKernel {
+    pub data_ty: DataType,
+    pub block_size: usize,
+    pub axis_dim: usize,
+
+    pub out: Expr,
+    pub in_: Expr,
+    pub scale: Expr,
+    pub size: Expr,
+    pub epsilon: f64,
+}
+
+impl RMSNormKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "rms_norm<{}, {}, {}>",
+            self.data_ty, self.block_size, self.axis_dim
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.in_),
+            cast!(self.data_ty, self.scale),
+            self.epsilon.to_string(),
+            self.size.to_string(),
+        ];
+        (id, args)
+    }
+}
+
 pub struct SoftmaxKernel {
     pub data_ty: DataType,
     pub block_size: usize,
@@ -168,6 +198,7 @@ impl LaunchKernel {
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::ReduceMatrixKernel(r) => r,
+            CUDAKernel::RMSNormKernel(r) => r,
             CUDAKernel::SliceKernel(s) => s,
             CUDAKernel::SoftmaxKernel(s) => s,
         } {

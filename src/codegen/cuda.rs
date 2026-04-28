@@ -1439,6 +1439,52 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
+                Operator::RMSNormalization(RMSNormalization { axis, epsilon }) => {
+                    self.includes.insert(Include::Local("rms_norm.cuh"));
+                    let input_ty = self
+                        .get_resolved_tensor_type(
+                            kernel.inputs[operator::args::RMS_NORM_DATA].unwrap(),
+                        )?
+                        .clone();
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let in_ =
+                        self.device_identifier(kernel.inputs[args::RMS_NORM_DATA].unwrap())?;
+                    let scale =
+                        self.device_identifier(kernel.inputs[args::RMS_NORM_SCALE].unwrap())?;
+                    let axis = axis.index(input_ty.dims.ndim());
+                    let epsilon = *epsilon;
+                    if input_ty.strides().last() != Some(&1) || axis != input_ty.dims.ndim() - 1 {
+                        unimplemented!(
+                            "RMSNormalization currently supports only last-axis normalization"
+                        );
+                    }
+                    let axis_dim = input_ty.dims[axis];
+                    let size = input_ty.dims.size();
+                    let block_size = min(DEFAULT_BLOCK_SIZE, ceil_pow2(axis_dim));
+                    let grid_size = size / axis_dim;
+                    let data_ty = input_ty.elem_type;
+                    let cuda_kernel = kernel::CUDAKernel::RMSNormKernel(kernel::RMSNormKernel {
+                        data_ty,
+                        block_size,
+                        axis_dim,
+                        out,
+                        in_,
+                        scale,
+                        size: size.to_literal(),
+                        epsilon,
+                    });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: grid_size.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::AveragePool(_) | Operator::MaxPool(_) => {
                     let size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?

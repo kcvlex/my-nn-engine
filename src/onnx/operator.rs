@@ -84,6 +84,7 @@ pub enum Operator {
     ReLU,
     Reshape,
     Resize(Resize),
+    RMSNormalization(RMSNormalization),
     Shape(Shape),
     Sigmoid,
     Sin,
@@ -316,6 +317,12 @@ pub struct GeLU {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerNormalization {
+    pub axis: TensorIndex,
+    pub epsilon: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RMSNormalization {
     pub axis: TensorIndex,
     pub epsilon: f64,
 }
@@ -806,6 +813,7 @@ impl Operator {
             Operator::ReLU => "Relu",
             Operator::Reshape => "Reshape",
             Operator::Resize(_) => "Resize",
+            Operator::RMSNormalization(_) => "RMSNormalization",
             Operator::Shape(_) => "Shape",
             Operator::Sigmoid => "Sigmoid",
             Operator::Sin => "Sin",
@@ -891,6 +899,7 @@ impl Operator {
             Operator::ReduceSum(_) |
             Operator::Reinterpret(_) |
             Operator::Resize(_) |
+            Operator::RMSNormalization(_) |
             Operator::Shape(_) |
             Operator::Slice |
             Operator::Softmax(_) |
@@ -970,6 +979,9 @@ pub mod args {
     pub const LAYER_NORM_DATA: usize = 0;
     pub const LAYER_NORM_SCALE: usize = 1;
     pub const LAYER_NORM_BIAS: usize = 2;
+
+    pub const RMS_NORM_DATA: usize = 0;
+    pub const RMS_NORM_SCALE: usize = 1;
 
     pub const RELU_DATA: usize = 0;
 

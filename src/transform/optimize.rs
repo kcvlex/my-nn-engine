@@ -9,6 +9,7 @@ pub mod gemm_transpose_fusion;
 pub mod identity_elimination;
 pub mod layer_norm_fusion;
 pub mod nodes_reorder;
+pub mod rms_norm_fusion;
 pub mod transpose_fusion;
 
 use crate::options::Options;
@@ -25,6 +26,7 @@ use crate::transform::optimize::gemm_transpose_fusion::GemmTransposeFusion;
 use crate::transform::optimize::identity_elimination::IdentityElimination;
 use crate::transform::optimize::layer_norm_fusion::LayerNormFusion;
 use crate::transform::optimize::nodes_reorder::ReorderNodes;
+use crate::transform::optimize::rms_norm_fusion::RMSNormFusion;
 use crate::transform::optimize::transpose_fusion::TransposeFusion;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
@@ -42,6 +44,9 @@ pub fn create_optimize_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp>
     }
     pass_manager.add_pass(Box::new(FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(LayerNormFusion::default()));
+    if matches!(opt.target, crate::options::Target::CUDA) {
+        pass_manager.add_pass(Box::new(RMSNormFusion::default()));
+    }
     pass_manager.add_pass(Box::new(AttentionFusion::default()));
     pass_manager.add_pass(Box::new(MatMul2BatchedGemm::default()));
     pass_manager.add_pass(Box::new(ReorderNodes::default()));

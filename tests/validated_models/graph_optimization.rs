@@ -107,6 +107,41 @@ fn load_and_transform_with_target(
     model
 }
 
+#[cfg(feature = "local")]
+#[test]
+fn test_tinyllama_graph_optimization() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/hf/tinyllama");
+    let mut model = Model::load_from_path(root.join("model.onnx")).unwrap();
+
+    let data_dir = root.join("test_data_set_0");
+    let mut input_types = Vec::new();
+    for i in 0.. {
+        let p = data_dir.join(format!("input_{i}.pb"));
+        if !p.exists() {
+            break;
+        }
+        input_types.push(Tensor::load_from_path(p).unwrap().tensor_type());
+    }
+    model.graph.resolve_input_types(&input_types).unwrap();
+    transform_graph(
+        &mut model.graph,
+        &Options::builder().target(Target::CUDA).build(),
+    );
+
+    let rms_norm = count_op(&model, |op| matches!(op, Operator::RMSNormalization(_)));
+    let reduce_mean = count_op(&model, |op| matches!(op, Operator::ReduceMean(_)));
+    let pow = count_op(&model, |op| matches!(op, Operator::Pow));
+    let sqrt = count_op(&model, |op| matches!(op, Operator::Sqrt));
+
+    // 22 transformer layers × 2 RMSNorms (input_layernorm + post_attention_layernorm)
+    //   + 1 final norm = 45
+    assert_eq!(rms_norm, 45);
+    // All ReduceMean / Pow / Sqrt should be absorbed into RMSNormalization
+    assert_eq!(reduce_mean, 0);
+    assert_eq!(pow, 0);
+    assert_eq!(sqrt, 0);
+}
+
 #[test]
 fn test_resnet18_nhwc_sink_cuda() {
     let model =

@@ -274,6 +274,11 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             attr_float("epsilon", l.epsilon as f32),
         ],
 
+        Operator::RMSNormalization(r) => vec![
+            attr_int("axis", r.axis.raw() as i64),
+            attr_float("epsilon", r.epsilon as f32),
+        ],
+
         Operator::LeakyReLU(l) => vec![attr_float("alpha", l.alpha as f32)],
 
         Operator::AveragePool(p) | Operator::MaxPool(p) => {

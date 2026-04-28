@@ -233,6 +233,7 @@ pub fn infer_node_output(
         Operator::Neg |
         Operator::Reciprocal |
         Operator::ReLU |
+        Operator::RMSNormalization(_) |
         Operator::Sigmoid |
         Operator::Sin |
         Operator::Softmax(_) |
