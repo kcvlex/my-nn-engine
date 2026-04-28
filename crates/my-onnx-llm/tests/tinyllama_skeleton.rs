@@ -37,7 +37,10 @@ fn tinyllama_skeleton_loads_and_runs_prefill() {
     assert_eq!(session.past_len(), 0);
 
     let outputs = session.run(&inputs).unwrap();
-    assert!(!outputs.is_empty(), "prefill should return at least one output");
+    assert!(
+        !outputs.is_empty(),
+        "prefill should return at least one output"
+    );
 
     assert!(matches!(
         session.decode(0),
