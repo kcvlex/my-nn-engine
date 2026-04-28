@@ -1294,6 +1294,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "my-onnx-llm"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "my-onnx",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "my-onnx-test-tools"
 version = "0.1.0"
 dependencies = [

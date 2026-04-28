@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/my-onnx-test-tools", "crates/my-onnx-ui"]
+members = [".", "crates/my-onnx-llm", "crates/my-onnx-test-tools", "crates/my-onnx-ui"]
 
 [package]
 name = "my-onnx"
