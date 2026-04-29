@@ -93,4 +93,25 @@ impl Builder {
         self.add_node(name, Operator::MatMul, vec![a, b], out);
         out
     }
+
+    pub fn rms_norm(
+        &mut self,
+        name: &str,
+        x: ValueId,
+        scale: ValueId,
+        axis: i64,
+        epsilon: f64,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(
+            name,
+            Operator::RMSNormalization(RMSNormalization {
+                axis: TensorIndex::new(axis as isize),
+                epsilon,
+            }),
+            vec![x, scale],
+            out,
+        );
+        out
+    }
 }
