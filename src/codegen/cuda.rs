@@ -989,6 +989,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                     assert!(q_dims.ndim() == 4);
                     assert!(k_dims.ndim() == 4);
                     assert!(v_dims.ndim() == 4);
+                    assert!(q_ty.is_contiguous());
+                    assert!(k_ty.is_contiguous());
+                    assert!(v_ty.is_contiguous());
                     assert!(q_dims[0] == k_dims[0] && k_dims[0] == v_dims[0]);
                     assert!(q_dims[1] == k_dims[1] && k_dims[1] == v_dims[1]);
 
