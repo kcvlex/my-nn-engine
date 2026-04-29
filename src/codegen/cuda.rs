@@ -1015,7 +1015,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 q: self.device_identifier(q)?,
                                 k: self.device_identifier(k)?,
                                 v: self.device_identifier(v)?,
-                                n: seq_k,
+                                seq_kv: seq_k,
                                 attn: *attn,
                             },
                         );

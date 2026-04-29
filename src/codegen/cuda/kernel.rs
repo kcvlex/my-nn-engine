@@ -88,7 +88,7 @@ pub struct AttentionDecodeKernel {
     pub q: Expr,
     pub k: Expr,
     pub v: Expr,
-    pub n: usize,
+    pub seq_kv: usize,
 
     pub attn: Attention,
 }
@@ -105,7 +105,7 @@ impl AttentionDecodeKernel {
             cast!(self.data_ty, self.k),
             cast!(self.data_ty, self.v),
             self.attn.scale.to_string(),
-            self.n.to_string(),
+            self.seq_kv.to_string(),
         ];
         (id, args)
     }
