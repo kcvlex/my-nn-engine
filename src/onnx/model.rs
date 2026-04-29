@@ -190,6 +190,7 @@ impl Graph {
             .iter()
             .map(|&n| match self.nodes[n].op {
                 Operator::Input(v) => v,
+                Operator::SessionState(v) => v,
                 _ => unreachable!("not input"),
             })
             .collect()

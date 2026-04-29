@@ -19,11 +19,12 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
         let inputs: Vec<_> = graph
             .inputs
             .iter()
-            .map(|&node_id| {
-                let Operator::Input(value_id) = graph.nodes[node_id].op else {
-                    unreachable!();
-                };
-                (node_id, value_id)
+            .filter_map(|&node_id| match graph.nodes[node_id].op {
+                Operator::Input(value_id) => Some((node_id, value_id)),
+                // SessionState values are device-resident state buffers that
+                // never receive a host argument; skip Transfer insertion.
+                Operator::SessionState(_) => None,
+                _ => unreachable!(),
             })
             .collect();
 

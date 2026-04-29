@@ -63,6 +63,7 @@ impl AssignStridesImpl {
             .iter()
             .map(|input| match graph.nodes[*input].op {
                 Operator::Input(id) => id,
+                Operator::SessionState(id) => id,
                 _ => unreachable!(),
             })
             .collect::<Vec<_>>();

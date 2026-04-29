@@ -119,7 +119,11 @@ mod test {
             )])
             .unwrap();
         let options = Options::builder().build();
-        transform_graph(&mut graph, &options);
+        transform_graph(
+            &mut graph,
+            &options,
+            &crate::session::SessionConfig::default(),
+        );
     }
 
     #[cfg(feature = "local")]

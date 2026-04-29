@@ -3,6 +3,7 @@ pub mod lower;
 pub mod modify;
 pub mod optimize;
 mod pattern;
+pub mod rewrite;
 pub mod shape;
 pub mod utils;
 
@@ -13,11 +14,13 @@ use modify::GraphOp;
 use modify::NodeDelete;
 use modify::SimpleGraphOp;
 pub use optimize::create_optimize_passes;
+pub use rewrite::create_rewrite_passes;
 pub use shape::create_infer_passes;
 
 use crate::onnx::model::Graph;
 use crate::onnx::operator::Operator;
 use crate::options::*;
+use crate::session::SessionConfig;
 
 pub trait Pass<T: GraphOp> {
     fn summary(&self) -> &str;
@@ -74,7 +77,7 @@ impl<T: GraphOp + NodeDelete> PassManager<T> for SimplePassManager<T> {
     }
 }
 
-pub fn transform_graph(graph: &mut Graph, options: &Options) {
+pub fn transform_graph(graph: &mut Graph, options: &Options, config: &SessionConfig) {
     let enable_nhwc = options.enable_nhwc_optimization.unwrap_or_else(|| {
         let has_conv = graph
             .nodes
@@ -93,6 +96,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options) {
     });
 
     let managers = [
+        create_rewrite_passes(config),
         create_infer_passes(options),
         create_optimize_passes(options),
         create_lower_passes(options, enable_nhwc),

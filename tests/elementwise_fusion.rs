@@ -9,6 +9,7 @@ use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::operator::*;
 use my_onnx::options::*;
 use my_onnx::schedule::*;
+use my_onnx::session::SessionConfig;
 use my_onnx::tensor::types::DataType;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::transform::transform_graph;
@@ -53,7 +54,7 @@ fn test_chain_single() {
     };
 
     let options = Options::builder().build();
-    transform_graph(&mut graph, &options);
+    transform_graph(&mut graph, &options, &SessionConfig::default());
     let schedule = Schedule::new(graph, options);
     assert_eq!(count_elementwise_kernels(&schedule), 1);
 }
@@ -82,7 +83,7 @@ fn test_chain_branch() {
     };
 
     let options = Options::builder().build();
-    transform_graph(&mut graph, &options);
+    transform_graph(&mut graph, &options, &SessionConfig::default());
     let schedule = Schedule::new(graph, options);
     assert_eq!(count_elementwise_kernels(&schedule), 2);
 }
@@ -119,7 +120,7 @@ fn test_elementwise_complex() {
     };
 
     let options = Options::builder().build();
-    transform_graph(&mut graph, &options);
+    transform_graph(&mut graph, &options, &SessionConfig::default());
     let schedule = Schedule::new(graph, options);
     assert_eq!(count_elementwise_kernels(&schedule), 1);
     assert_eq!(

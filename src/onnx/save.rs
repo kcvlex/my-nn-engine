@@ -458,7 +458,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         // TODO
         Operator::Reinterpret(_) => vec![],
 
-        Operator::Input(_) | Operator::Output(_) => unreachable!(),
+        Operator::Input(_) | Operator::Output(_) | Operator::SessionState(_) => unreachable!(),
     }
 }
 

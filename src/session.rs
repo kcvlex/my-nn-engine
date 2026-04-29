@@ -251,8 +251,6 @@ impl Session {
         options: &Options,
         config: &SessionConfig,
     ) -> Result<Self, SessionError> {
-        let _ = config; // TODO: consume in graph rewrite for SessionState
-
         let _ = env_logger::try_init();
         info!("Session starting");
 
@@ -266,7 +264,7 @@ impl Session {
                 .map_err(SessionError::TypeError)?;
         }
 
-        transform_graph(&mut model.graph, options);
+        transform_graph(&mut model.graph, options, config);
         info!("Transformed");
 
         let tmp_dir = TempDir::with_prefix("my_model_")

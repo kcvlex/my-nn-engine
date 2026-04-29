@@ -250,6 +250,7 @@ pub struct HostCodeGenerator<'sched> {
     devicemem2identifier: Vec<String>,
     initializer_plans: IndexMap<ValueId, InitializerPlan>,
     used_device_initializers: std::cell::RefCell<BTreeSet<ValueId>>,
+    session_state_devices: IndexMap<ValueId, String>,
 
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
@@ -494,6 +495,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             devicemem2identifier: Vec::new(),
             initializer_plans: IndexMap::new(),
             used_device_initializers: std::cell::RefCell::new(BTreeSet::new()),
+            session_state_devices: IndexMap::new(),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
@@ -548,6 +550,27 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
+        for value in self.schedule.session_states.iter() {
+            let rty = self.get_resolved_tensor_type(*value)?;
+            let mem_size = MemSize::from(rty).to_string();
+            let device_name = format!("d_session_state_{}", value.index());
+            self.state_fields
+                .push(format!("void *{device_name} = nullptr;"));
+            self.init_stmts.push(
+                Malloc {
+                    dst: Expr::Identifier(format!("state->{device_name}")),
+                    mem_size: MemSize::Raw(Expr::Identifier(mem_size.clone())),
+                }
+                .into(),
+            );
+            self.init_stmts.push(Statement::Raw(format!(
+                "cudaMemset(state->{device_name}, 0, {mem_size});"
+            )));
+            self.destroy_stmts
+                .push(Free(Expr::Identifier(format!("state->{device_name}"))).into());
+            self.session_state_devices.insert(*value, device_name);
+        }
+
         let mut mem_sizes = vec![
             ChunkMemSize::default();
             self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0)
@@ -559,10 +582,18 @@ impl<'sched> HostCodeGenerator<'sched> {
                 .get(&kernel_id)
                 .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
             for mem in mem_alloc.iter() {
-                let chunk_id = if let AllocateType::Chunk(chunk_id) = mem.ty {
-                    chunk_id
-                } else {
-                    unreachable!("non chunk");
+                let chunk_id = match mem.ty {
+                    AllocateType::Chunk(chunk_id) => chunk_id,
+                    AllocateType::SessionState(state_value) => {
+                        let device_name = self
+                            .session_state_devices
+                            .get(&state_value)
+                            .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?
+                            .clone();
+                        self.session_state_devices.insert(mem.value_id, device_name);
+                        continue;
+                    }
+                    _ => unreachable!("non chunk"),
                 };
 
                 match self.value2chunk.entry(mem.value_id) {
@@ -771,6 +802,9 @@ impl<'sched> HostCodeGenerator<'sched> {
         if let Some(plan) = self.initializer_plans.get(&value_id) {
             let name = plan.device_name.clone();
             self.used_device_initializers.borrow_mut().insert(value_id);
+            return Ok(Expr::Identifier(format!("state->{name}")));
+        }
+        if let Some(name) = self.session_state_devices.get(&value_id) {
             return Ok(Expr::Identifier(format!("state->{name}")));
         }
         let chunk_id = self
@@ -2018,7 +2052,11 @@ mod test {
         let model = Model::load_from_path(path).unwrap();
         let options = Options::builder().target(Target::CUDA).build();
         let mut graph = model.graph;
-        crate::transform::transform_graph(&mut graph, &options);
+        crate::transform::transform_graph(
+            &mut graph,
+            &options,
+            &crate::session::SessionConfig::default(),
+        );
         let mut schedule = Schedule::new(graph, options.clone());
         let schedule_passes = crate::schedule::create_schedule_passes(&options);
         schedule_passes.run(&mut schedule);

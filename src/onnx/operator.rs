@@ -125,6 +125,11 @@ pub enum Operator {
     // Dummy
     Input(ValueId),
     Output(ValueId),
+    // Like Input, but the value's storage is a device-resident buffer that
+    // persists across run() calls. Allocated once at session creation
+    // (zero-initialized or from a user tensor) and reused. Never receives a
+    // host-side argument at run() time.
+    SessionState(ValueId),
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -855,6 +860,7 @@ impl Operator {
             // Dummy
             Operator::Input(_) => "Input",
             Operator::Output(_) => "Output",
+            Operator::SessionState(_) => "SessionState",
         }
     }
 
@@ -926,7 +932,9 @@ impl Operator {
             Operator::Expand |
             Operator::Where => OperatorType::Opaque,
 
-            Operator::Input(_) | Operator::Output(_) => OperatorType::Dummy,
+            Operator::Input(_) | Operator::Output(_) | Operator::SessionState(_) => {
+                OperatorType::Dummy
+            }
         }
     }
 

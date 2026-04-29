@@ -5,6 +5,7 @@ use my_onnx::onnx::model::Model;
 use my_onnx::onnx::operator::Layout;
 use my_onnx::onnx::operator::Operator;
 use my_onnx::options::*;
+use my_onnx::session::SessionConfig;
 use my_onnx::tensor::Tensor;
 use my_onnx::transform::transform_graph;
 
@@ -27,6 +28,7 @@ fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> M
     transform_graph(
         &mut model.graph,
         &Options::builder().target(Target::CUDA).build(),
+        &SessionConfig::default(),
     );
     model
 }
@@ -103,7 +105,11 @@ fn load_and_transform_with_target(
         .collect();
     model.graph.resolve_input_types(&input_types).unwrap();
 
-    transform_graph(&mut model.graph, &Options::builder().target(target).build());
+    transform_graph(
+        &mut model.graph,
+        &Options::builder().target(target).build(),
+        &SessionConfig::default(),
+    );
     model
 }
 
@@ -126,6 +132,7 @@ fn test_tinyllama_graph_optimization() {
     transform_graph(
         &mut model.graph,
         &Options::builder().target(Target::CUDA).build(),
+        &SessionConfig::default(),
     );
 
     let rms_norm = count_op(&model, |op| matches!(op, Operator::RMSNormalization(_)));

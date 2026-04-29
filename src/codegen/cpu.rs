@@ -599,6 +599,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     AllocateType::Input(v) | AllocateType::Output(v) => {
                         *ptr_values.get(&v).unwrap()
                     }
+                    AllocateType::SessionState(_) => {
+                        unimplemented!("SessionState is not supported on CPU target")
+                    }
                 };
                 ptr_values.insert(alloc.value_id, dst_ptr);
             }

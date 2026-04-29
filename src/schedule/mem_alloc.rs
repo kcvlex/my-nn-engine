@@ -167,6 +167,10 @@ impl<'sched> MemoryPlanner<'sched> {
             self.allocations
                 .insert(*output, AllocateType::Output(*output));
         }
+        for state in self.schedule.session_states.iter() {
+            self.allocations
+                .insert(*state, AllocateType::SessionState(*state));
+        }
 
         let mut extra_inputs: HashMap<KernelId, Vec<ValueId>> = HashMap::new();
         for (kernel_id, _) in self.schedule.kernels.iter() {

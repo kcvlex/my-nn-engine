@@ -98,6 +98,7 @@ pub struct Schedule {
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,
     pub initializers: Vec<ValueId>,
+    pub session_states: Vec<ValueId>,
 
     pub kernels: Kernels,
     pub options: Options,
@@ -158,6 +159,7 @@ pub enum AllocateType {
     Chunk(ChunkId),
     Input(ValueId),
     Output(ValueId),
+    SessionState(ValueId),
 }
 
 impl Serialize for AllocateType {
@@ -175,6 +177,9 @@ impl Serialize for AllocateType {
             AllocateType::Output(id) => {
                 serializer.serialize_newtype_variant("AllocateType", 2, "Output", &id.index())
             }
+            AllocateType::SessionState(id) => {
+                serializer.serialize_newtype_variant("AllocateType", 3, "SessionState", &id.index())
+            }
         }
     }
 }
@@ -183,7 +188,9 @@ impl AllocateType {
     pub fn chunk_id(&self) -> Option<ChunkId> {
         match self {
             AllocateType::Chunk(id) => Some(*id),
-            AllocateType::Input(_) | AllocateType::Output(_) => None,
+            AllocateType::Input(_) | AllocateType::Output(_) | AllocateType::SessionState(_) => {
+                None
+            }
         }
     }
 }
@@ -214,14 +221,15 @@ impl IndexMut<KernelId> for Kernels {
 impl Schedule {
     pub fn new(mut graph: Graph, options: Options) -> Self {
         let mut graph_op = SimpleGraphOp::new(&graph);
-        let inputs = graph
-            .inputs
-            .iter()
-            .map(|x| match graph.nodes[*x].op {
-                Operator::Input(v) => v,
+        let mut inputs = Vec::new();
+        let mut session_states = Vec::new();
+        for &node_id in graph.inputs.iter() {
+            match graph.nodes[node_id].op {
+                Operator::Input(v) => inputs.push(v),
+                Operator::SessionState(v) => session_states.push(v),
                 _ => unreachable!(),
-            })
-            .collect::<Vec<_>>();
+            }
+        }
         let outputs = graph
             .outputs
             .iter()
@@ -236,6 +244,7 @@ impl Schedule {
             inputs,
             outputs,
             initializers,
+            session_states,
 
             kernels,
             options,

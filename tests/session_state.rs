@@ -1,0 +1,118 @@
+#![cfg(feature = "cuda")]
+
+mod common;
+
+use std::path::PathBuf;
+
+use my_onnx::options::Options;
+use my_onnx::options::Target;
+use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
+use my_onnx::session::SessionError;
+use my_onnx::session::SessionStateSpec;
+use my_onnx::session::StateInit;
+use my_onnx::tensor::data::CompPolicy;
+use my_onnx::tensor::data::TensorData;
+use my_onnx::tensor::types::FloatType;
+use my_onnx::tensor::types::ResolvedTensorDims;
+use my_onnx::tensor::types::SIntType;
+use my_onnx::tensor::Tensor;
+
+type TestResult = Result<(), SessionError>;
+
+const B: usize = 1;
+const H: usize = 2;
+const S_MAX: usize = 8;
+const D: usize = 4;
+const S_NEW: usize = 1;
+
+fn make_f32(dims: &[usize], data: Vec<f64>) -> Tensor {
+    Tensor::new(
+        ResolvedTensorDims::new(dims),
+        TensorData::Float(FloatType::F32, data),
+    )
+    .unwrap()
+}
+
+fn make_i64_scalar(v: i64) -> Tensor {
+    Tensor::new(
+        ResolvedTensorDims::new(&[]),
+        TensorData::SInt(SIntType::I64, vec![v]),
+    )
+    .unwrap()
+}
+
+fn sigmoid(x: f64) -> f64 {
+    1.0 / (1.0 + (-x).exp())
+}
+
+// Verify that:
+// 1. A graph input named "cache" is converted to SessionState by the rewrite
+//    pass driven by SessionConfig (run() takes the remaining inputs only).
+// 2. The state buffer is zero-initialized at session creation.
+// 3. KVCacheUpdate writes into the state buffer in place (mandatory in-place
+//    aliases through SessionState).
+// 4. The state buffer persists across run() calls — successive scatters
+//    accumulate into the same buffer.
+//
+// Graph (reused from single_op/kv_cache_update fixture):
+//   inputs:  cache [1,2,8,4] f32, src [1,2,1,4] f32, offset [] i64
+//   ops:     cache_new = KVCacheUpdate(cache, src, offset)
+//            out       = Sigmoid(cache_new)
+//   output:  out [1,2,8,4] f32
+#[test]
+fn kv_cache_state_persistence() -> TestResult {
+    let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("models/test/single_op/kv_cache_update/model.onnx");
+
+    let config = SessionConfig {
+        session_states: vec![SessionStateSpec {
+            name: "cache".to_string(),
+            init: StateInit::Zero,
+        }],
+    };
+
+    let opts = Options::builder().target(Target::CUDA).build();
+    let _guard = common::cuda_lock(Target::CUDA);
+
+    let mut session = Session::new(&model_path, None, &opts, &config)?;
+
+    // Host-side reference cache, mirroring the device session-state buffer.
+    let mut ref_cache = vec![0.0f64; B * H * S_MAX * D];
+
+    for step in 0..3usize {
+        // Distinct values per step so state mixing is observable.
+        let src_values: Vec<f64> = (0..(B * H * S_NEW * D))
+            .map(|i| (i as f64) * 0.1 + (step as f64) + 1.0)
+            .collect();
+        let offset = step as i64;
+
+        // Reference: scatter src at row=offset along the seq axis.
+        for b in 0..B {
+            for h in 0..H {
+                for d in 0..D {
+                    let cache_idx =
+                        b * (H * S_MAX * D) + h * (S_MAX * D) + (offset as usize) * D + d;
+                    let src_idx = b * (H * S_NEW * D) + h * (S_NEW * D) + d;
+                    ref_cache[cache_idx] = src_values[src_idx];
+                }
+            }
+        }
+
+        let src = make_f32(&[B, H, S_NEW, D], src_values);
+        let offset_t = make_i64_scalar(offset);
+
+        let outputs = session.run(&[src, offset_t])?;
+        assert_eq!(outputs.len(), 1);
+
+        let expected_data: Vec<f64> = ref_cache.iter().map(|&x| sigmoid(x)).collect();
+        let expected = make_f32(&[B, H, S_MAX, D], expected_data);
+
+        assert!(
+            outputs[0].eq_with_epsilon(&expected, 1e-5, CompPolicy::Either),
+            "step {step}: output != sigmoid(reference cache)"
+        );
+    }
+
+    Ok(())
+}
