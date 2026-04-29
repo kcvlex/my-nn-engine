@@ -13,7 +13,6 @@ use id_arena::Arena;
 use id_arena::Id;
 use log::info;
 use serde::Serialize;
-use serde_derive::Serialize;
 
 use crate::onnx::model::Graph;
 use crate::onnx::model::ValueId;
