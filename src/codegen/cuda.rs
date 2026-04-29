@@ -1424,6 +1424,57 @@ impl<'sched> HostCodeGenerator<'sched> {
                     todo!("MatMul with broadcast should be lowered to BatchedGemm or loop of Gemm")
                 }
 
+                Operator::KVCacheUpdate => {
+                    self.includes.insert(Include::Local("kvcache_update.cuh"));
+                    let cache_id = kernel.inputs[args::KVCACHE_UPDATE_CACHE].unwrap();
+                    let new_id = kernel.inputs[args::KVCACHE_UPDATE_NEW].unwrap();
+                    let offset_id = kernel.inputs[args::KVCACHE_UPDATE_OFFSET].unwrap();
+
+                    let cache_ty = self.get_resolved_tensor_type(cache_id)?;
+                    let new_ty = self.get_resolved_tensor_type(new_id)?;
+
+                    assert!(cache_ty.is_contiguous());
+                    assert!(new_ty.is_contiguous());
+                    assert_eq!(cache_ty.dims.ndim(), 4);
+                    assert_eq!(new_ty.dims.ndim(), 4);
+                    assert_eq!(cache_ty.dims[0], new_ty.dims[0]);
+                    assert_eq!(cache_ty.dims[1], new_ty.dims[1]);
+                    assert_eq!(cache_ty.dims[3], new_ty.dims[3]);
+
+                    let batch_heads = cache_ty.dims[0] * cache_ty.dims[1];
+                    let cache_seq_len = cache_ty.dims[2];
+                    let new_seq_len = new_ty.dims[2];
+                    let head_dim = cache_ty.dims[3];
+
+                    let offset_host = self
+                        .hostmem2identifier
+                        .get(&offset_id)
+                        .ok_or(BuildError::NoHostVariable(offset_id))?;
+                    let offset_expr = Expr::Identifier(format!("(int)(*{})", offset_host));
+
+                    let block_size = DEFAULT_BLOCK_SIZE.min(new_seq_len * head_dim).max(32);
+                    let cuda_kernel =
+                        kernel::CUDAKernel::KVCacheUpdateKernel(kernel::KVCacheUpdateKernel {
+                            data_ty: cache_ty.elem_type,
+                            head_dim,
+                            cache_seq_len,
+                            new_seq_len,
+                            cache: self.device_identifier(kernel.outputs[0])?,
+                            new_kv: self.device_identifier(new_id)?,
+                            offset: offset_expr,
+                        });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: batch_heads.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::LayerNormalization(LayerNormalization { axis, epsilon }) => {
                     self.includes.insert(Include::Local("layer_norm.cuh"));
                     let input_ty = self.get_resolved_tensor_type(

@@ -1402,6 +1402,16 @@ fn attention_decode() -> TestResult {
     })
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn kv_cache_update() -> TestResult {
+    with_cuda_session_and_tensors("kv_cache_update", (3, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-5);
+        Ok(())
+    })
+}
+
 // Transpose generates Contiguous with non-empty ops after FoldContiguous:
 // Transpose -> Output => Reinterpret -> Contiguous -> Output => Contiguous(transpose) -> Output
 #[test]

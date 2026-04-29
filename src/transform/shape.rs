@@ -227,6 +227,7 @@ pub fn infer_node_output(
         Operator::Exp |
         Operator::GeLU(_) |
         Operator::Identity |
+        Operator::KVCacheUpdate |
         Operator::LayerNormalization(_) |
         Operator::LeakyReLU(_) |
         Operator::Log |

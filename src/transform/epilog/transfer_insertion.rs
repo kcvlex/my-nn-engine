@@ -2,6 +2,8 @@ use crate::onnx::model::Graph;
 use crate::onnx::model::Node;
 use crate::onnx::model::NodeMeta;
 use crate::onnx::operator::*;
+use crate::tensor::types::DataType;
+use crate::tensor::types::SIntType;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 
@@ -27,6 +29,11 @@ impl<T: GraphOp> Pass<T> for TransferInsertion {
 
         for (_, value_id) in inputs {
             let ty = graph.get_resolved_tensor_type(value_id).unwrap().clone();
+            // Skip H2D for 0-d i64 scalars (host-resident runtime values like past_len/offset).
+            // These flow as kernel-launch arguments by host-side dereference (see codegen/cuda.rs).
+            if ty.dims.is_scalar() && matches!(ty.elem_type, DataType::SInt(SIntType::I64)) {
+                continue;
+            }
             let device_value = modifier.register_new_value(
                 graph,
                 format!("Transfer_H2D_{}", value_id.index()),

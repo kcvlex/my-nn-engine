@@ -310,12 +310,21 @@ impl<'sched> MemoryPlanner<'sched> {
     // TODO: Identity and Reinterpret assume that the computation MUST be in-place. If the source
     // is not contiguous, we need to allocate a new chunk.
     fn try_in_place(&self, value_id: ValueId) -> Option<ValueId> {
+        let kernel_id = self.deps.value2defined[&value_id];
+        let kernel = &self.schedule.kernels.0[kernel_id];
+
+        // Mandatory in-place: certain ops require the output to alias a specific input,
+        // regardless of the input's liveness count. Ordering correctness is the graph
+        // author's responsibility.
+        if let KernelBody::Opaque(Opaque { op }) = &kernel.body {
+            if let Some(idx) = must_in_place_input(op) {
+                return kernel.inputs[idx];
+            }
+        }
+
         if !self.can_in_place(value_id) {
             return None;
         }
-
-        let kernel_id = self.deps.value2defined[&value_id];
-        let kernel = &self.schedule.kernels.0[kernel_id];
         for input in kernel.inputs.iter().flatten() {
             let is_input = match self.allocations.get(input) {
                 Some(AllocateType::Input(_)) => true,
@@ -393,6 +402,15 @@ impl<'sched> MemoryPlanner<'sched> {
     }
 }
 
+// Returns Some(input_index) if the op requires its output to alias the given input
+// regardless of liveness count.
+fn must_in_place_input(op: &Operator) -> Option<usize> {
+    match op {
+        Operator::KVCacheUpdate => Some(args::KVCACHE_UPDATE_CACHE),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::Error;
@@ -444,6 +462,45 @@ mod test {
         }
 
         let model = load_model("diamond.onnx")?;
+        let schedule = Schedule::new(model.graph, Options::builder().build());
+        let mem = MemoryPlanner::new(&schedule)
+            .run()
+            .iter()
+            .zip_eq(schedule.kernels.iter().map(|(_, k)| k.name.clone()))
+            .flat_map(|(allocs, name)| {
+                allocs.iter().map(
+                    move |AllocateInfo {
+                              ty, is_first_use, ..
+                          }| Test {
+                        ty: *ty,
+                        is_first_use: *is_first_use,
+                        name: name.clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        insta::assert_yaml_snapshot!(&mem);
+        Ok(())
+    }
+
+    // Graph:
+    //   inputs: cache [4,8] f32, src [4,4] f32, offset [] i64
+    //   KVCacheUpdate(cache, src, offset) -> cache_new   ← intermediate
+    //   Sqrt(cache_new)                   -> out         ← graph output
+    //
+    // KVCacheUpdate is mandatory-in-place on inputs[0] (cache), so cache_new
+    // must share allocation with cache regardless of liveness. The snapshot
+    // captures this: cache_new appears with `Input(cache)` allocation type.
+    #[test]
+    fn kv_cache_update_mandatory_in_place() -> Result<()> {
+        #[derive(Debug, PartialEq, Serialize)]
+        struct Test {
+            ty: AllocateType,
+            is_first_use: bool,
+            name: String,
+        }
+
+        let model = load_model("kv_cache_update_in_place.onnx")?;
         let schedule = Schedule::new(model.graph, Options::builder().build());
         let mem = MemoryPlanner::new(&schedule)
             .run()

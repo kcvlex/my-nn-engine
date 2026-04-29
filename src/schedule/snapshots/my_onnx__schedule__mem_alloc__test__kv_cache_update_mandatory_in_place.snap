@@ -1,0 +1,16 @@
+---
+source: src/schedule/mem_alloc.rs
+expression: "&mem"
+---
+- ty:
+    Input: 0
+  is_first_use: false
+  name: ""
+- ty:
+    Chunk: 0
+  is_first_use: true
+  name: ""
+- ty:
+    Output: 5
+  is_first_use: false
+  name: Contiguous_out

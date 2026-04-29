@@ -20,6 +20,7 @@ pub enum CUDAKernel {
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
+    KVCacheUpdateKernel(KVCacheUpdateKernel),
     LayerNormKernel(LayerNormKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
     RMSNormKernel(RMSNormKernel),
@@ -113,6 +114,31 @@ impl AttentionDecodeKernel {
 pub struct GeneratedKernel {
     pub decl: KernelDecl,
     pub args: Vec<Expr>,
+}
+
+pub struct KVCacheUpdateKernel {
+    pub data_ty: DataType,
+    pub head_dim: usize,
+    pub cache_seq_len: usize,
+    pub new_seq_len: usize,
+
+    pub cache: Expr,
+    pub new_kv: Expr,
+    pub offset: Expr,
+}
+
+impl KVCacheUpdateKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!("kvcache_update<{}, {}>", self.data_ty, self.head_dim);
+        let args = vec![
+            cast!(self.data_ty, self.cache),
+            cast!(self.data_ty, self.new_kv),
+            self.cache_seq_len.to_string(),
+            self.new_seq_len.to_string(),
+            self.offset.to_string(),
+        ];
+        (id, args)
+    }
 }
 
 impl GeneratedKernel {
@@ -230,6 +256,7 @@ impl LaunchKernel {
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
+            CUDAKernel::KVCacheUpdateKernel(k) => k,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::ReduceMatrixKernel(r) => r,
             CUDAKernel::RMSNormKernel(r) => r,

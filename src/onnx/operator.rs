@@ -101,6 +101,22 @@ pub enum Operator {
 
     // Custom
     Contiguous(Contiguous),
+    // Write `new` into `cache` at sequence offset `offset`, in place.
+    //
+    //   inputs:  cache [B, H, MAX_SEQ, D]   (also output buffer; mutated)
+    //            new   [B, H, NEW_SEQ, D]
+    //            offset                  []  i64  (runtime scalar, host-resident)
+    //   output:  cache shape, aliasing inputs[0] (mandatory in-place; see
+    //            schedule::mem_alloc::must_in_place_input)
+    //
+    // Semantics: cache[..., offset:offset+NEW_SEQ, :] = new. The remaining cache
+    // contents are preserved. Caller must ensure offset + NEW_SEQ <= MAX_SEQ;
+    // out-of-range writes are not bounds-checked by the kernel.
+    //
+    // Designed for KV-cache materialization in autoregressive LLM decode: a
+    // pre-allocated cache buffer keeps state across run() calls, and each step
+    // writes the newly produced K/V slice at past_len.
+    KVCacheUpdate,
     Transfer(TransferKind),
     NHWC2NCHW,
     ReduceMatrix(ReduceOp),
@@ -830,6 +846,7 @@ impl Operator {
 
             // Custom
             Operator::Contiguous(_) => "Contiguous",
+            Operator::KVCacheUpdate => "KVCacheUpdate",
             Operator::Transfer(_) => "Transfer",
             Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
@@ -887,6 +904,7 @@ impl Operator {
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
+            Operator::KVCacheUpdate |
             Operator::LayerNormalization(_) |
             Operator::MatMul |
             Operator::MaxPool(_) |
@@ -996,6 +1014,10 @@ pub mod args {
     pub const GEMM_A: usize = 0;
     pub const GEMM_B: usize = 1;
     pub const GEMM_C: usize = 2;
+
+    pub const KVCACHE_UPDATE_CACHE: usize = 0;
+    pub const KVCACHE_UPDATE_NEW: usize = 1;
+    pub const KVCACHE_UPDATE_OFFSET: usize = 2;
 
     pub const BATCHNORM_DATA: usize = 0;
     pub const BATCHNORM_SCALE: usize = 1;
