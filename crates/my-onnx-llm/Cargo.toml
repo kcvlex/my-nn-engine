@@ -12,3 +12,4 @@ local = ["my-onnx/local"]
 my-onnx = { path = "../.." }
 log = "0.4.29"
 thiserror = "2"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
