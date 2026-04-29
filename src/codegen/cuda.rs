@@ -2084,7 +2084,7 @@ mod test {
 
     #[test]
     fn test_cuda_two_conv_codegen() {
-        let code = generate_cuda_code("models/test/single_op/two_conv.onnx");
+        let code = generate_cuda_code("models/test/single_op/two_conv/model.onnx");
         insta::assert_snapshot!(code);
     }
 }
