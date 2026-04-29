@@ -65,6 +65,21 @@ jobs:
       - name: Run tests
         run: cargo test -p my-onnx-ui --no-default-features --verbose
 
+  llm-test:
+    name: LLM Crate Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          models: ""
+
+      - name: Run tests
+        run: cargo test -p my-onnx-llm --no-default-features --verbose
+
   frontend-lint:
     name: Frontend Lint & Format
     runs-on: ubuntu-latest
