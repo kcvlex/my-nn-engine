@@ -254,17 +254,34 @@ impl Session {
         let _ = env_logger::try_init();
         info!("Session starting");
 
-        let mut model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
+        let model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
         info!("Model loaded");
 
+        Self::from_graph_inner(model.graph, input_ty, options, config)
+    }
+
+    pub fn from_graph(
+        graph: Graph,
+        options: &Options,
+        config: &SessionConfig,
+    ) -> Result<Self, SessionError> {
+        let _ = env_logger::try_init();
+        Self::from_graph_inner(graph, None, options, config)
+    }
+
+    fn from_graph_inner(
+        mut graph: Graph,
+        input_ty: Option<&[ResolvedTensorType]>,
+        options: &Options,
+        config: &SessionConfig,
+    ) -> Result<Self, SessionError> {
         if let Some(input_ty) = input_ty {
-            model
-                .graph
+            graph
                 .resolve_input_types(input_ty)
                 .map_err(SessionError::TypeError)?;
         }
 
-        transform_graph(&mut model.graph, options, config);
+        transform_graph(&mut graph, options, config);
         info!("Transformed");
 
         let tmp_dir = TempDir::with_prefix("my_model_")
@@ -274,26 +291,21 @@ impl Session {
 
         if options.save_transformed_model {
             let path = build_dir.join("transformed.onnx");
-            model
-                .save_to_path(&path)
-                .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+            crate::onnx::save::save_graph(&graph, &path);
             info!("Transformed model saved to {:?}", path);
         }
 
-        let inputs_ty = get_argument_types(&model.graph, &model.graph.input_values())?;
-        let outputs_ty = get_argument_types(&model.graph, &model.graph.output_values())?;
-        let initializer_ids = model.graph.initializer_ids();
+        let inputs_ty = get_argument_types(&graph, &graph.input_values())?;
+        let outputs_ty = get_argument_types(&graph, &graph.output_values())?;
+        let initializer_ids = graph.initializer_ids();
         let mut file_cache: HashMap<PathBuf, Arc<File>> = HashMap::new();
         let initializer: Vec<InitializerSource> = initializer_ids
             .iter()
             .map(|&id| -> Result<InitializerSource, SessionError> {
-                if let Some(t) = model.graph.get_inline_initializer(id) {
+                if let Some(t) = graph.get_inline_initializer(id) {
                     return Ok(InitializerSource::Inline(StrictTensor::from(t)));
                 }
-                let ext = model
-                    .graph
-                    .get_external_ref(id)
-                    .expect("initializer missing");
+                let ext = graph.get_external_ref(id).expect("initializer missing");
                 let file = match file_cache.get(&ext.path) {
                     Some(f) => Arc::clone(f),
                     None => {
@@ -320,7 +332,7 @@ impl Session {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut schedule = Schedule::new(model.graph, options.clone());
+        let mut schedule = Schedule::new(graph, options.clone());
         let schedule_passes = create_schedule_passes(options);
         schedule_passes.run(&mut schedule);
         info!("Scheduled");

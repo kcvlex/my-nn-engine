@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod session;
 
 pub use session::LlmConfig;
