@@ -158,10 +158,10 @@ fn argmax_logits(logits: &Tensor) -> Result<u32, LlmError> {
         return Err(LlmError::InvalidOutput("empty logits"));
     }
 
-    let (_, idx) = data
+    let (idx, _) = data
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
-    Ok(*idx as u32)
+    Ok(idx as u32)
 }
