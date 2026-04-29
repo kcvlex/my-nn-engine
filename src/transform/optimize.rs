@@ -44,9 +44,7 @@ pub fn create_optimize_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp>
     }
     pass_manager.add_pass(Box::new(FastGeLUFusion::default()));
     pass_manager.add_pass(Box::new(LayerNormFusion::default()));
-    if matches!(opt.target, crate::options::Target::CUDA) {
-        pass_manager.add_pass(Box::new(RMSNormFusion::default()));
-    }
+    pass_manager.add_pass(Box::new(RMSNormFusion::default()));
     pass_manager.add_pass(Box::new(AttentionFusion::default()));
     pass_manager.add_pass(Box::new(MatMul2BatchedGemm::default()));
     pass_manager.add_pass(Box::new(ReorderNodes::default()));

@@ -4029,6 +4029,137 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    pub fn build_rms_norm(
+        &self,
+        dst: TensorPtr<'ctx>,
+        src: TensorPtr<'ctx>,
+        scale: TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+        rn: &operator::RMSNormalization,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(src.ty.is_contiguous() && dst.ty.is_contiguous());
+
+        let axis = rn.axis.index(src.ty.dims.ndim());
+        assert_eq!(axis, src.ty.dims.ndim() - 1);
+
+        let val_ty = match src.ty.elem_type {
+            DataType::Float(t) => t,
+            _ => unimplemented!(),
+        };
+        let sqrt = self.intrinsics.sqrt.get(val_ty);
+        let val_ty = val_ty.llvm_type(self.context);
+
+        let inner_bound = src.ty.dims[axis] as u64;
+        let outer_bound = src.ty.dims.size() as u64 / inner_bound;
+        let i64_ty = self.context.i64_type();
+
+        let outer_hdr = self.context.append_basic_block(*self.func, "outer.hdr");
+        let sumsq_hdr = self.context.append_basic_block(*self.func, "sumsq.hdr");
+        let sumsq_done = self.context.append_basic_block(*self.func, "sumsq.done");
+        let norm_hdr = self.context.append_basic_block(*self.func, "norm.hdr");
+        let outer_latch = self.context.append_basic_block(*self.func, "outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "exit");
+
+        let epsilon = val_ty.const_float(rn.epsilon);
+        let inner_bound_f = val_ty.const_float(inner_bound as f64);
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(outer_hdr)?;
+
+        let (outer_phi, outer_i) = self.init_counted_loop(outer_hdr)?;
+        let outer_offset = self.builder.build_int_mul(
+            outer_i,
+            i64_ty.const_int(inner_bound, false),
+            "outer.offset",
+        )?;
+        self.builder.build_unconditional_branch(sumsq_hdr)?;
+
+        // Pass 1: sum of x^2
+        let (sumsq_idx_phi, sumsq_idx) = self.init_counted_loop(sumsq_hdr)?;
+        let sumsq_acc = self.builder.build_phi(val_ty, "sumsq.acc")?;
+        let offset = self
+            .builder
+            .build_int_add(outer_offset, sumsq_idx, "offset")?;
+        let src_val = self
+            .build_load(&src.clone().set_offset(offset))?
+            .into_float_value();
+        let sq = self.builder.build_float_mul(src_val, src_val, "sq")?;
+        let sumsq_next = self.builder.build_float_add(
+            sumsq_acc.as_basic_value().into_float_value(),
+            sq,
+            "sumsq.next",
+        )?;
+        self.finalize_counted_loop(
+            sumsq_idx_phi,
+            outer_hdr,
+            i64_ty.const_int(inner_bound, false),
+            sumsq_hdr,
+            sumsq_done,
+            sumsq_hdr,
+        )?;
+        sumsq_acc.add_incoming(&[
+            (&val_ty.const_float(0.0), outer_hdr),
+            (&sumsq_next, sumsq_hdr),
+        ]);
+
+        // sumsq_done: inv_rms = 1 / sqrt(mean_sq + epsilon)
+        self.builder.position_at_end(sumsq_done);
+        let mean_sq = self
+            .builder
+            .build_float_div(sumsq_next, inner_bound_f, "mean.sq")?;
+        let mean_sq_eps = self
+            .builder
+            .build_float_add(mean_sq, epsilon, "mean.sq.eps")?;
+        let rms = self
+            .build_tail_call(sqrt, &[mean_sq_eps.into()], "rms")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let inv_rms = self
+            .builder
+            .build_float_div(val_ty.const_float(1.0), rms, "inv.rms")?;
+        self.builder.build_unconditional_branch(norm_hdr)?;
+
+        // Pass 2: dst[i] = src[i] * inv_rms * scale[i]
+        let (norm_idx_phi, norm_idx) = self.init_counted_loop(norm_hdr)?;
+        let offset = self
+            .builder
+            .build_int_add(outer_offset, norm_idx, "offset")?;
+        let src_val = self
+            .build_load(&src.clone().set_offset(offset))?
+            .into_float_value();
+        let scale_val = self
+            .build_load(&scale.clone().set_offset(norm_idx))?
+            .into_float_value();
+        let scaled = self.builder.build_float_mul(src_val, inv_rms, "scaled")?;
+        let result = self.builder.build_float_mul(scaled, scale_val, "result")?;
+        self.build_store(
+            &dst.clone().set_offset(offset),
+            result.as_basic_value_enum(),
+        )?;
+        self.finalize_counted_loop(
+            norm_idx_phi,
+            sumsq_done,
+            i64_ty.const_int(inner_bound, false),
+            norm_hdr,
+            outer_latch,
+            norm_hdr,
+        )?;
+
+        self.finalize_counted_loop(
+            outer_phi,
+            entry,
+            i64_ty.const_int(outer_bound, false),
+            outer_hdr,
+            exit,
+            outer_latch,
+        )?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_gather(
         &self,
         dst: TensorPtr<'ctx>,

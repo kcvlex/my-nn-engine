@@ -994,6 +994,13 @@ impl<'ll> CodeGen<'ll, '_> {
                     entry,
                     ln,
                 ),
+                Operator::RMSNormalization(ref rn) => translator.build_rms_norm(
+                    ptrs[0].clone(),
+                    ptrs[1 + args::RMS_NORM_DATA].clone(),
+                    ptrs[1 + args::RMS_NORM_SCALE].clone(),
+                    entry,
+                    rn,
+                ),
                 Operator::Split(ref split) => translator.build_split(
                     &ptrs[..ptrs.len() - 1],
                     ptrs.last().unwrap().clone(),
