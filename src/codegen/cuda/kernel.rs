@@ -15,6 +15,7 @@ use crate::tensor::types::ResolvedTensorDims;
 #[derive(From)]
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
+    AttentionDecodeKernel(AttentionDecodeKernel),
     ConcatKernel(ConcatKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
@@ -71,6 +72,38 @@ impl AttentionKernel {
             cast!(self.data_ty, mask),
             self.mask_outer_stride.to_string(),
             self.mask_row_stride.to_string(),
+            self.n.to_string(),
+        ];
+        (id, args)
+    }
+}
+
+pub struct AttentionDecodeKernel {
+    pub data_ty: DataType,
+    pub head_dim: usize,
+    pub block_size: usize,
+
+    pub out: Expr,
+    pub q: Expr,
+    pub k: Expr,
+    pub v: Expr,
+    pub n: usize,
+
+    pub attn: Attention,
+}
+
+impl AttentionDecodeKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "attention_decode<{}, {}, {}>",
+            self.data_ty, self.head_dim, self.block_size,
+        );
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.q),
+            cast!(self.data_ty, self.k),
+            cast!(self.data_ty, self.v),
+            self.attn.scale.to_string(),
             self.n.to_string(),
         ];
         (id, args)
@@ -192,6 +225,7 @@ impl LaunchKernel {
     delegate! {
         to match &self.cuda_kernel {
             CUDAKernel::AttentionKernel(a) => a,
+            CUDAKernel::AttentionDecodeKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,

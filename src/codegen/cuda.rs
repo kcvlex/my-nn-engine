@@ -994,81 +994,114 @@ impl<'sched> HostCodeGenerator<'sched> {
                     assert!(v_ty.is_contiguous());
                     assert!(q_dims[0] == k_dims[0] && k_dims[0] == v_dims[0]);
                     assert!(q_dims[1] == k_dims[1] && k_dims[1] == v_dims[1]);
-
-                    // TODO: Maybe `q_dims[2] == k_dims[2]` is unnecessary.
-                    assert!(q_dims[2] == k_dims[2] && k_dims[2] == v_dims[2]);
+                    assert!(k_dims[2] == v_dims[2]);
                     assert!(q_dims[3] == k_dims[3] && k_dims[3] == v_dims[3]);
 
                     let seq_q = q_dims[2];
+                    let seq_k = k_dims[2];
 
-                    let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
-                        kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
-                    {
-                        let mask_ty = self.get_resolved_tensor_type(mask_id)?;
-                        let md = &mask_ty.dims;
-                        let mndim = md.ndim();
-                        let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
-                        let mask_last_col = md[mndim - 1];
-                        let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
-                        let mask_slice_size = mask_last_row * mask_last_col;
-                        let mask_outer_size: usize = if mndim > 2 {
-                            md[..mndim - 2].iter().product()
+                    if seq_q == 1 && seq_k > 1 {
+                        let batch_size = q_dims[0];
+                        let num_heads = q_dims[1];
+                        let head_size = q_dims[3];
+                        let block_size = DEFAULT_BLOCK_SIZE;
+                        let grid_size = batch_size * num_heads;
+                        let cuda_kernel = kernel::CUDAKernel::AttentionDecodeKernel(
+                            kernel::AttentionDecodeKernel {
+                                data_ty: q_ty.elem_type,
+                                head_dim: head_size,
+                                block_size,
+                                out: self.device_identifier(kernel.outputs[0])?,
+                                q: self.device_identifier(q)?,
+                                k: self.device_identifier(k)?,
+                                v: self.device_identifier(v)?,
+                                n: seq_k,
+                                attn: *attn,
+                            },
+                        );
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: grid_size.to_literal(),
+                                block_size: block_size.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        assert!(seq_q == seq_k);
+
+                        let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
+                            kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
+                        {
+                            let mask_ty = self.get_resolved_tensor_type(mask_id)?;
+                            let md = &mask_ty.dims;
+                            let mndim = md.ndim();
+                            let mask_last_row = if mndim >= 2 { md[mndim - 2] } else { 1 };
+                            let mask_last_col = md[mndim - 1];
+                            let mask_row_stride = if mask_last_row > 1 { mask_last_col } else { 0 };
+                            let mask_slice_size = mask_last_row * mask_last_col;
+                            let mask_outer_size: usize = if mndim > 2 {
+                                md[..mndim - 2].iter().product()
+                            } else {
+                                1
+                            };
+                            let mask_outer_stride = if mask_outer_size > 1 {
+                                mask_slice_size
+                            } else {
+                                0
+                            };
+                            (
+                                Some(self.device_identifier(mask_id)?),
+                                mask_outer_stride,
+                                mask_row_stride,
+                            )
                         } else {
-                            1
+                            (None, 0, 0)
                         };
-                        let mask_outer_stride = if mask_outer_size > 1 {
-                            mask_slice_size
-                        } else {
-                            0
+
+                        let batch_size = q_dims[0];
+                        let num_heads = q_dims[1];
+                        let head_size = q_dims[3];
+                        let threads_per_row = (head_size / 8).clamp(1, 32);
+                        let br = ceil_pow2(seq_q / threads_per_row).clamp(1, 256 / threads_per_row);
+                        let bc =
+                            ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
+                        let block_size = br * threads_per_row;
+                        let grid_size = {
+                            let y = batch_size * num_heads;
+                            let x = seq_q.div_ceil(br);
+                            format!("dim3({x}, {y})")
                         };
-                        (
-                            Some(self.device_identifier(mask_id)?),
+                        let cuda_kernel = kernel::CUDAKernel::AttentionKernel(AttentionKernel {
+                            data_ty: q_ty.elem_type,
+                            br,
+                            bc,
+                            threads_per_row,
+                            head_dim: head_size,
+                            q: self.device_identifier(q)?,
+                            k: self.device_identifier(k)?,
+                            v: self.device_identifier(v)?,
+                            mask: mask_expr,
+                            n: seq_q,
                             mask_outer_stride,
                             mask_row_stride,
-                        )
-                    } else {
-                        (None, 0, 0)
-                    };
+                            out: self.device_identifier(kernel.outputs[0])?,
+                            attn: *attn,
+                        });
 
-                    let batch_size = q_dims[0];
-                    let num_heads = q_dims[1];
-                    let head_size = q_dims[3];
-                    let threads_per_row = (head_size / 8).clamp(1, 32);
-                    let br = ceil_pow2(seq_q / threads_per_row).clamp(1, 256 / threads_per_row);
-                    let bc = ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
-                    let block_size = br * threads_per_row;
-                    let grid_size = {
-                        let y = batch_size * num_heads;
-                        let x = seq_q.div_ceil(br);
-                        format!("dim3({x}, {y})")
-                    };
-                    let cuda_kernel = kernel::CUDAKernel::AttentionKernel(AttentionKernel {
-                        data_ty: q_ty.elem_type,
-                        br,
-                        bc,
-                        threads_per_row,
-                        head_dim: head_size,
-                        q: self.device_identifier(q)?,
-                        k: self.device_identifier(k)?,
-                        v: self.device_identifier(v)?,
-                        mask: mask_expr,
-                        n: seq_q,
-                        mask_outer_stride,
-                        mask_row_stride,
-                        out: self.device_identifier(kernel.outputs[0])?,
-                        attn: *attn,
-                    });
-
-                    self.stmts.push(
-                        kernel::LaunchKernel {
-                            cuda_kernel,
-                            grid_size: grid_size.to_literal(),
-                            block_size: block_size.to_literal(),
-                            shared_mem_bytes: None,
-                            stream_id,
-                        }
-                        .into(),
-                    );
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: grid_size.to_literal(),
+                                block_size: block_size.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    }
                 }
 
                 Operator::Concat(Concat { axis }) => {

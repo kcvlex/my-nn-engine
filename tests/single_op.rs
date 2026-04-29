@@ -198,6 +198,15 @@ where
     with_session_and_tensors(p, targets, nums, f)
 }
 
+#[cfg(feature = "cuda")]
+fn with_cuda_session_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
+where
+    P: AsRef<std::path::Path>,
+    F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
+{
+    with_session_and_tensors(p, &[Target::CUDA], nums, f)
+}
+
 trait Sigmoid {
     fn sigmoid(self) -> Self;
 }
@@ -1381,6 +1390,16 @@ fn attention_causal_large() -> TestResult {
             Ok(())
         },
     )
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn attention_decode() -> TestResult {
+    with_cuda_session_and_tensors("attention_decode", (3, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
+        Ok(())
+    })
 }
 
 // Transpose generates Contiguous with non-empty ops after FoldContiguous:

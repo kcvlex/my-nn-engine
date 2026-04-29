@@ -120,4 +120,69 @@ __global__ void attention(
     }
 }
 
+template <typename T, int HEAD_DIM, int BLOCK_SIZE>
+__global__ void attention_decode(
+    T *out,
+    T *Q,
+    T *K,
+    T *V,
+    T scale,
+    int seq_kv
+) {
+    __shared__ T s_Q[HEAD_DIM];
+    __shared__ T s_O[HEAD_DIM];
+    __shared__ T dot_buf[BLOCK_SIZE];
+
+    out += blockIdx.x * HEAD_DIM;
+    Q += blockIdx.x * HEAD_DIM;
+    K += blockIdx.x * seq_kv * HEAD_DIM;
+    V += blockIdx.x * seq_kv * HEAD_DIM;
+
+    cg::thread_block cta = cg::this_thread_block();
+    cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);
+
+    for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+        s_Q[i] = Q[i];
+        s_O[i] = 0;
+    }
+
+
+    T row_max = -INFINITY;
+    T row_sum = 0;
+    for (int row_K = 0; row_K < seq_kv; row_K++) {
+        T old_max = row_max;
+        T dot = 0;
+        for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+            dot += s_Q[i] * K[row_K * HEAD_DIM + i];
+        }
+
+        for (int s = tile.size() / 2; 0 < s; s /= 2) {
+            T other_dot = tile.shfl_down(dot, s);
+            dot += other_dot;
+        }
+        dot_buf[threadIdx.x] = dot * scale;
+        cg::sync(cta);
+        for (int s = BLOCK_SIZE / 2; tile.size() <= s; s /= 2) {
+            if (threadIdx.x < s) {
+                dot_buf[threadIdx.x] += dot_buf[threadIdx.x + s];
+            }
+            cg::sync(cta);
+        }
+
+        row_max = max(row_max, dot_buf[0]);
+        T score = exp(dot_buf[0] - row_max);
+        T coeff = exp(old_max - row_max);
+        row_sum = row_sum * coeff  + score;
+
+        for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+            s_O[i] *= coeff;
+            s_O[i] += score * V[row_K * HEAD_DIM + i];
+        }
+    }
+
+    for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+        out[i] = s_O[i] / row_sum;
+    }
+}
+
 #endif
