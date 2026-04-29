@@ -8,7 +8,7 @@ static CUDA_MUTEX: Mutex<()> = Mutex::new(());
 
 pub fn cuda_lock(target: Target) -> Option<MutexGuard<'static, ()>> {
     if matches!(target, Target::CUDA) {
-        Some(CUDA_MUTEX.lock().unwrap())
+        Some(CUDA_MUTEX.lock().unwrap_or_else(|e| e.into_inner()))
     } else {
         None
     }
