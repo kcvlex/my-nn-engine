@@ -5,6 +5,7 @@ use my_onnx::onnx::load::*;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
@@ -114,7 +115,7 @@ where
                 .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
-        let mut session = Session::new(&path, None, &opt)?;
+        let mut session = Session::new(&path, None, &opt, &SessionConfig::default())?;
         let _guard = common::cuda_lock(target);
         f(&mut session)?;
     }
@@ -159,7 +160,12 @@ where
                 .build(),
             Target::CUDA => Options::builder().target(target).build(),
         };
-        let mut session = Session::new(dir.join("model.onnx"), None, &opt)?;
+        let mut session = Session::new(
+            dir.join("model.onnx"),
+            None,
+            &opt,
+            &SessionConfig::default(),
+        )?;
         let _guard = common::cuda_lock(target);
         f(&mut session, (&inputs, &outputs))?;
     }

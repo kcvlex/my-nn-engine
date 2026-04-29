@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::tensor::Tensor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,8 +79,13 @@ impl ModelRegistry {
         let options = Options::builder().target(target).build();
 
         let types = inputs.iter().map(|t| t.tensor_type()).collect::<Vec<_>>();
-        let session = Session::new(&model_path, Some(types.as_slice()), &options)
-            .map_err(|e| format!("Failed to load {}: {:?}", model_id.display_name(), e))?;
+        let session = Session::new(
+            &model_path,
+            Some(types.as_slice()),
+            &options,
+            &SessionConfig::default(),
+        )
+        .map_err(|e| format!("Failed to load {}: {:?}", model_id.display_name(), e))?;
 
         let session = Arc::new(Mutex::new(session));
         self.models.insert((model_id, target), session.clone());

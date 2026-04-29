@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_onnx::onnx::load::LoadProto;
 use my_onnx::options::*;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::tensor::Tensor;
 
 fn cuda_profiler_start() {
@@ -119,7 +120,13 @@ fn run(
             .build(),
     };
 
-    let mut session = Session::new(model_path, Some(&input_types), &options).unwrap();
+    let mut session = Session::new(
+        model_path,
+        Some(&input_types),
+        &options,
+        &SessionConfig::default(),
+    )
+    .unwrap();
 
     let _ = session.run(&inputs).unwrap();
 

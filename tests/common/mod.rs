@@ -22,6 +22,7 @@ use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::options::*;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::data::TensorData;
@@ -98,6 +99,7 @@ pub fn run_validated_model(
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),
+        &SessionConfig::default(),
     )?;
     let _guard = cuda_lock(target);
 

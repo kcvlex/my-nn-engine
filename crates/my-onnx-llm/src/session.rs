@@ -4,6 +4,7 @@ use log::info;
 use my_onnx::onnx::load::ModelLoadError;
 use my_onnx::options::Options;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::types::ResolvedTensorType;
 use my_onnx::tensor::Tensor;
@@ -36,7 +37,12 @@ impl LlmSession {
         opts: &Options,
     ) -> Result<Self, LlmError> {
         info!("LlmSession: loading {:?}", model_path.as_ref());
-        let session = Session::new(model_path, Some(input_types), opts)?;
+        let session = Session::new(
+            model_path,
+            Some(input_types),
+            opts,
+            &SessionConfig::default(),
+        )?;
         Ok(Self {
             session,
             past_len: 0,

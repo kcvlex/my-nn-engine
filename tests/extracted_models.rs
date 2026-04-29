@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_onnx::onnx::load::*;
 use my_onnx::options::*;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
@@ -36,6 +37,7 @@ fn run_test(root_dir: &PathBuf, epsilon: f64, target: Target) -> Result {
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),
+        &SessionConfig::default(),
     )?;
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)

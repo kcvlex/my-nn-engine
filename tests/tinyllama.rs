@@ -8,6 +8,7 @@ use my_onnx::onnx::load::LoadProto;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
@@ -38,7 +39,12 @@ fn run_tinyllama(target: Target) -> TestResult {
 
     let input_types: Vec<_> = inputs.iter().map(|t| t.tensor_type()).collect();
     let opt = Options::builder().target(target).build();
-    let mut session = Session::new(&model_path, Some(&input_types), &opt)?;
+    let mut session = Session::new(
+        &model_path,
+        Some(&input_types),
+        &opt,
+        &SessionConfig::default(),
+    )?;
     let _guard = common::cuda_lock(target);
     let outputs = session.run(&inputs)?;
 

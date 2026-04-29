@@ -6,6 +6,7 @@ use my_onnx::onnx::load::LoadProto;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
@@ -21,7 +22,7 @@ fn run_external(target: Target) -> TestResult {
         Tensor::load_from_path(dir.join("output_0.pb")).map_err(SessionError::ModelLoadError)?;
 
     let opt = Options::builder().target(target).build();
-    let mut session = Session::new(&model_path, None, &opt)?;
+    let mut session = Session::new(&model_path, None, &opt, &SessionConfig::default())?;
     let _guard = common::cuda_lock(target);
     let outputs = session.run(&[input])?;
 

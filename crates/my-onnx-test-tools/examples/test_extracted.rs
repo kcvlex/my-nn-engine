@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_onnx::onnx::load::*;
 use my_onnx::options::*;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
 
@@ -75,6 +76,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),
+        &SessionConfig::default(),
     )
     .map_err(|e| format!("Failed to create session: {:?}", e))?;
 

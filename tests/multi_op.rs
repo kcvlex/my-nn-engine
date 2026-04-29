@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use my_onnx::onnx::load::*;
 use my_onnx::options::*;
 use my_onnx::session::Session;
+use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::Tensor;
@@ -28,7 +29,12 @@ fn run_test(dir: &str, epsilon: f64, options: &Options, nums: (usize, usize)) ->
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let mut session = Session::new(&model_path, Some(&input_types), options)?;
+    let mut session = Session::new(
+        &model_path,
+        Some(&input_types),
+        options,
+        &SessionConfig::default(),
+    )?;
     let _guard = common::cuda_lock(options.target);
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)

@@ -216,6 +216,23 @@ pub enum Session {
     CUDA(SessionCUDA),
 }
 
+#[derive(Debug, Clone)]
+pub enum StateInit {
+    Zero,
+    FromTensor(Tensor),
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionStateSpec {
+    pub name: String,
+    pub init: StateInit,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionConfig {
+    pub session_states: Vec<SessionStateSpec>,
+}
+
 fn get_argument_types(
     graph: &Graph,
     values: &[ValueId],
@@ -232,7 +249,10 @@ impl Session {
         p: P,
         input_ty: Option<&[ResolvedTensorType]>,
         options: &Options,
+        config: &SessionConfig,
     ) -> Result<Self, SessionError> {
+        let _ = config; // TODO: consume in graph rewrite for SessionState
+
         let _ = env_logger::try_init();
         info!("Session starting");
 
