@@ -116,3 +116,109 @@ fn kv_cache_state_persistence() -> TestResult {
 
     Ok(())
 }
+
+fn ref_attention(q: &[f64], k: &[f64], v: &[f64], active: usize) -> Vec<f64> {
+    let scale = 1.0 / (D as f64).sqrt();
+    let mut out = vec![0.0f64; B * H * 1 * D];
+    for b in 0..B {
+        for h in 0..H {
+            let mut logits = vec![0.0f64; active];
+            for i in 0..active {
+                let mut dot = 0.0f64;
+                for d in 0..D {
+                    dot += q[b * (H * D) + h * D + d] *
+                        k[b * (H * S_MAX * D) + h * (S_MAX * D) + i * D + d];
+                }
+                logits[i] = dot * scale;
+            }
+            let max = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let exps: Vec<f64> = logits.iter().map(|x| (x - max).exp()).collect();
+            let sum: f64 = exps.iter().sum();
+            let probs: Vec<f64> = exps.iter().map(|e| e / sum).collect();
+            for d in 0..D {
+                let mut acc = 0.0f64;
+                for i in 0..active {
+                    acc += probs[i] * v[b * (H * S_MAX * D) + h * (S_MAX * D) + i * D + d];
+                }
+                out[b * (H * D) + h * D + d] = acc;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn kv_cache_attention_decode_e2e() -> TestResult {
+    let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("models/test/session_state/kv_cache_attention_decode/model.onnx");
+
+    let config = SessionConfig {
+        session_states: vec![
+            SessionStateSpec {
+                name: "K_cache".to_string(),
+                init: StateInit::Zero,
+            },
+            SessionStateSpec {
+                name: "V_cache".to_string(),
+                init: StateInit::Zero,
+            },
+        ],
+    };
+
+    let opts = Options::builder().target(Target::CUDA).build();
+    let _guard = common::cuda_lock(Target::CUDA);
+
+    let mut session = Session::new(&model_path, None, &opts, &config)?;
+
+    let mut k_ref = vec![0.0f64; B * H * S_MAX * D];
+    let mut v_ref = vec![0.0f64; B * H * S_MAX * D];
+
+    let make_data = |step: usize, kind: usize| -> Vec<f64> {
+        (0..(B * H * D))
+            .map(|i| {
+                let s = step as f64;
+                let f = i as f64;
+                let k = kind as f64;
+                ((f * 0.31 + s * 1.7 + k * 2.4).sin() * 0.5).clamp(-1.0, 1.0)
+            })
+            .collect()
+    };
+
+    for step in 0..3usize {
+        let q_data = make_data(step, 0);
+        let src_k = make_data(step, 1);
+        let src_v = make_data(step, 2);
+        let offset = step as i64;
+        let active = (step + 1) as i64;
+
+        for b in 0..B {
+            for h in 0..H {
+                for d in 0..D {
+                    let cache_idx =
+                        b * (H * S_MAX * D) + h * (S_MAX * D) + (offset as usize) * D + d;
+                    let src_idx = b * (H * D) + h * D + d;
+                    k_ref[cache_idx] = src_k[src_idx];
+                    v_ref[cache_idx] = src_v[src_idx];
+                }
+            }
+        }
+        let expected_data = ref_attention(&q_data, &k_ref, &v_ref, active as usize);
+        let expected = make_f32(&[B, H, 1, D], expected_data);
+
+        let q_t = make_f32(&[B, H, 1, D], q_data);
+        let src_k_t = make_f32(&[B, H, 1, D], src_k);
+        let src_v_t = make_f32(&[B, H, 1, D], src_v);
+        let offset_t = make_i64_scalar(offset);
+        let active_t = make_i64_scalar(active);
+
+        let outputs = session.run(&[q_t, src_k_t, src_v_t, offset_t, active_t])?;
+        assert_eq!(outputs.len(), 1);
+
+        assert!(
+            outputs[0].eq_with_epsilon(&expected, 1e-4, CompPolicy::Either),
+            "step {step}: attention output mismatch"
+        );
+    }
+
+    Ok(())
+}

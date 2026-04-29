@@ -977,6 +977,7 @@ pub mod args {
     pub const ATTENTION_K: usize = 1;
     pub const ATTENTION_V: usize = 2;
     pub const ATTENTION_MASK: usize = 3;
+    pub const ATTENTION_ACTIVE_SEQ_KV: usize = 4;
 
     pub const EQUAL_A: usize = 0;
     pub const EQUAL_B: usize = 1;

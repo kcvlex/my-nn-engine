@@ -120,6 +120,9 @@ __global__ void attention(
     }
 }
 
+// cache_seq_len: K/V buffer's per-(batch,head) seq stride (static dim of K).
+// active_seq_kv: number of K/V rows to actually attend over (runtime, 0 <= active <= cache_seq_len).
+// For static-shape attention these are equal; for KV-cache decode active_seq_kv = past_len + 1.
 template <typename T, int HEAD_DIM, int BLOCK_SIZE>
 __global__ void attention_decode(
     T *out,
@@ -127,7 +130,8 @@ __global__ void attention_decode(
     T *K,
     T *V,
     T scale,
-    int seq_kv
+    int cache_seq_len,
+    int active_seq_kv
 ) {
     __shared__ T s_Q[HEAD_DIM];
     __shared__ T s_O[HEAD_DIM];
@@ -135,8 +139,8 @@ __global__ void attention_decode(
 
     out += blockIdx.x * HEAD_DIM;
     Q += blockIdx.x * HEAD_DIM;
-    K += blockIdx.x * seq_kv * HEAD_DIM;
-    V += blockIdx.x * seq_kv * HEAD_DIM;
+    K += blockIdx.x * cache_seq_len * HEAD_DIM;
+    V += blockIdx.x * cache_seq_len * HEAD_DIM;
 
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);
@@ -149,7 +153,7 @@ __global__ void attention_decode(
 
     T row_max = -INFINITY;
     T row_sum = 0;
-    for (int row_K = 0; row_K < seq_kv; row_K++) {
+    for (int row_K = 0; row_K < active_seq_kv; row_K++) {
         T old_max = row_max;
         T dot = 0;
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {

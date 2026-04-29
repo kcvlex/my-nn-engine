@@ -1040,6 +1040,19 @@ impl<'sched> HostCodeGenerator<'sched> {
                         let head_size = q_dims[3];
                         let block_size = DEFAULT_BLOCK_SIZE;
                         let grid_size = batch_size * num_heads;
+                        let active_seq_kv_expr = if let Some(active_id) = kernel
+                            .inputs
+                            .get(args::ATTENTION_ACTIVE_SEQ_KV)
+                            .and_then(|x| *x)
+                        {
+                            let host_name = self
+                                .hostmem2identifier
+                                .get(&active_id)
+                                .ok_or(BuildError::NoHostVariable(active_id))?;
+                            Expr::Identifier(format!("(int)(*{host_name})"))
+                        } else {
+                            seq_k.to_literal()
+                        };
                         let cuda_kernel = kernel::CUDAKernel::AttentionDecodeKernel(
                             kernel::AttentionDecodeKernel {
                                 data_ty: q_ty.elem_type,
@@ -1049,7 +1062,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 q: self.device_identifier(q)?,
                                 k: self.device_identifier(k)?,
                                 v: self.device_identifier(v)?,
-                                seq_kv: seq_k,
+                                cache_seq_len: seq_k,
+                                active_seq_kv: active_seq_kv_expr,
                                 attn: *attn,
                             },
                         );
