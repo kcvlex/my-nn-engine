@@ -2,11 +2,13 @@ use std::path::Path;
 
 use log::info;
 use my_onnx::onnx::load::ModelLoadError;
+use my_onnx::onnx::model::Graph;
 use my_onnx::options::Options;
 use my_onnx::session::Session;
 use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::session::SessionStateSpec;
+use my_onnx::session::StateInit;
 use my_onnx::tensor::data::TensorData;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
@@ -34,6 +36,12 @@ impl From<SessionError> for LlmError {
     }
 }
 
+#[derive(Debug)]
+pub struct KVCache {
+    pub k_name: String,
+    pub v_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub max_seq_len: usize,
@@ -41,11 +49,21 @@ pub struct LlmConfig {
     pub session_states: Vec<SessionStateSpec>,
 }
 
+/// Per-step input convention. Selected by which constructor is used.
+enum DecodeKind {
+    /// `[input_ids: i64[1], past_len: i64[]]` — used by simple test fixtures.
+    Mock,
+    /// `[input_ids: i64[1,1], position_id: i64[1], past_len: i64[], active_seq_kv: i64[]]`
+    /// + SessionState K/V caches — produced by [`crate::build_llama`].
+    Llama,
+}
+
 pub struct LlmSession {
     session: Session,
     tokenizer: Tokenizer,
     config: LlmConfig,
     past_len: usize,
+    kind: DecodeKind,
 }
 
 impl LlmSession {
@@ -76,6 +94,49 @@ impl LlmSession {
             tokenizer,
             config,
             past_len: 0,
+            kind: DecodeKind::Mock,
+        })
+    }
+
+    /// Construct a session for a LLaMA-family graph built via [`crate::build_llama`].
+    /// Wires the K/V cache inputs as zero-initialized `SessionState` buffers and
+    /// sets the per-step input convention to `[input_ids, position_id, past_len, active_seq_kv]`.
+    pub fn for_llama(
+        graph: Graph,
+        kv_cache_names: Vec<KVCache>,
+        tokenizer: Tokenizer,
+        opts: &Options,
+        max_seq_len: usize,
+        eos_token_id: u32,
+    ) -> Result<Self, LlmError> {
+        let session_config = SessionConfig {
+            session_states: kv_cache_names
+                .into_iter()
+                .flat_map(|KVCache { k_name, v_name }| {
+                    [
+                        SessionStateSpec {
+                            name: k_name,
+                            init: StateInit::Zero,
+                        },
+                        SessionStateSpec {
+                            name: v_name,
+                            init: StateInit::Zero,
+                        },
+                    ]
+                })
+                .collect(),
+        };
+        let session = Session::from_graph(graph, opts, &session_config)?;
+        Ok(Self {
+            session,
+            tokenizer,
+            config: LlmConfig {
+                max_seq_len,
+                eos_token_id,
+                session_states: vec![],
+            },
+            past_len: 0,
+            kind: DecodeKind::Llama,
         })
     }
 
@@ -130,17 +191,19 @@ impl LlmSession {
     }
 
     fn decode_step(&mut self, token: u32) -> Result<u32, LlmError> {
-        let input_ids = Tensor::new(
-            ResolvedTensorDims::new(&[1]),
-            TensorData::SInt(SIntType::I64, vec![token as i64]),
-        )
-        .unwrap();
-        let past_len_t = Tensor::new(
-            ResolvedTensorDims::new(&[]),
-            TensorData::SInt(SIntType::I64, vec![self.past_len as i64]),
-        )
-        .unwrap();
-        let outputs = self.session.run(&[input_ids, past_len_t])?;
+        let inputs = match self.kind {
+            DecodeKind::Mock => vec![
+                make_i64(&[1], vec![token as i64]),
+                make_i64(&[], vec![self.past_len as i64]),
+            ],
+            DecodeKind::Llama => vec![
+                make_i64(&[1, 1], vec![token as i64]),
+                make_i64(&[1], vec![self.past_len as i64]),
+                make_i64(&[], vec![self.past_len as i64]),
+                make_i64(&[], vec![self.past_len as i64 + 1]),
+            ],
+        };
+        let outputs = self.session.run(&inputs)?;
         let logits = outputs
             .first()
             .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
@@ -148,6 +211,14 @@ impl LlmSession {
         self.past_len += 1;
         Ok(next)
     }
+}
+
+fn make_i64(dims: &[usize], values: Vec<i64>) -> Tensor {
+    Tensor::new(
+        ResolvedTensorDims::new(dims),
+        TensorData::SInt(SIntType::I64, values),
+    )
+    .unwrap()
 }
 
 fn argmax_logits(logits: &Tensor) -> Result<u32, LlmError> {

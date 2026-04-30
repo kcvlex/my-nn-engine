@@ -9,6 +9,7 @@ use crate::builder::Builder;
 use crate::hf_config::HfConfig;
 use crate::hf_weights::HfWeights;
 use crate::hf_weights::HfWeightsError;
+use crate::session::KVCache;
 
 pub struct LlamaGraph {
     pub graph: Graph,
@@ -17,9 +18,7 @@ pub struct LlamaGraph {
     pub past_len: ValueId,
     pub active_seq_kv: ValueId,
     pub logits: ValueId,
-    /// K/V cache input names in layer order: `[layer0.K, layer0.V, layer1.K, ...]`.
-    /// Pass these to `SessionConfig::session_states` (init=Zero).
-    pub kv_cache_names: Vec<String>,
+    pub kv_cache_names: Vec<KVCache>,
 }
 
 pub struct LlamaWeights {
@@ -134,7 +133,9 @@ pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize
 
     for (li, lw) in weights.layers.iter().enumerate() {
         let prefix = format!("model.layers.{li}");
-        x = build_layer(&mut b, &ctx, &prefix, x, lw, &mut kv_cache_names);
+        let (x_, kv_cache) = build_layer(&mut b, &ctx, &prefix, x, lw);
+        x = x_;
+        kv_cache_names.push(kv_cache);
     }
 
     let final_norm_w = b.external_initializer("model.norm.weight", weights.final_norm.clone());
@@ -161,8 +162,7 @@ fn build_layer(
     prefix: &str,
     x_in: ValueId,
     lw: &LlamaLayerWeights,
-    kv_cache_names: &mut Vec<String>,
-) -> ValueId {
+) -> (ValueId, KVCache) {
     // Pre-attention RMSNorm
     let in_norm_w = b.external_initializer(
         &format!("{prefix}.input_layernorm.weight"),
@@ -238,8 +238,11 @@ fn build_layer(
         ctx.f32_ty,
         &[1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim],
     );
-    kv_cache_names.push(k_cache_name);
-    kv_cache_names.push(v_cache_name);
+
+    let kv_cache = KVCache {
+        k_name: k_cache_name.clone(),
+        v_name: v_cache_name.clone(),
+    };
 
     let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
     let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
@@ -301,5 +304,8 @@ fn build_layer(
     let mlp_in = b.mul(&format!("{prefix}_swiglu"), gate, up);
     let mlp_out = b.matmul(&format!("{prefix}_down_proj"), mlp_in, down_w);
 
-    b.add(&format!("{prefix}_mlp_resid"), attn_residual, mlp_out)
+    (
+        b.add(&format!("{prefix}_mlp_resid"), attn_residual, mlp_out),
+        kv_cache,
+    )
 }
