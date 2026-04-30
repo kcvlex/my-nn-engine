@@ -1080,10 +1080,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                         );
                     } else {
                         assert!(seq_q == seq_k);
-                        assert!(
-                            q_dims[1] == k_dims[1],
-                            "GQA prefill (Q heads != K/V heads) is not yet supported by the prefill kernel"
-                        );
 
                         let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
                             kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
@@ -1115,7 +1111,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                         };
 
                         let batch_size = q_dims[0];
-                        let num_heads = q_dims[1];
+                        let num_q_heads = q_dims[1];
+                        let num_kv_heads = k_dims[1];
                         let head_size = q_dims[3];
                         let threads_per_row = (head_size / 8).clamp(1, 32);
                         let br = ceil_pow2(seq_q / threads_per_row).clamp(1, 256 / threads_per_row);
@@ -1123,7 +1120,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
                         let block_size = br * threads_per_row;
                         let grid_size = {
-                            let y = batch_size * num_heads;
+                            let y = batch_size * num_q_heads;
                             let x = seq_q.div_ceil(br);
                             format!("dim3({x}, {y})")
                         };
@@ -1140,6 +1137,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                             n: seq_q,
                             mask_outer_stride,
                             mask_row_stride,
+                            num_q_heads,
+                            num_kv_heads,
                             out: self.device_identifier(kernel.outputs[0])?,
                             attn: *attn,
                         });

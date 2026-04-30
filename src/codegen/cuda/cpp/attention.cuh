@@ -17,7 +17,9 @@ __global__ void attention(
     T *mask,
     int mask_outer_stride,
     int mask_row_stride,
-    int N
+    int N,
+    int num_q_heads,
+    int num_kv_heads
 ) {
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
     __shared__ T s_Q[Br][HEAD_DIM + 1];
@@ -29,8 +31,13 @@ __global__ void attention(
     assert(Br * THREADS_PER_ROW <= blockDim.x);
     assert(Bc * THREADS_PER_ROW <= blockDim.x);
 
-    K += blockIdx.y * N * HEAD_DIM;
-    V += blockIdx.y * N * HEAD_DIM;
+    int b = blockIdx.y / num_q_heads;
+    int q_head = blockIdx.y % num_q_heads;
+    int group_size = num_q_heads / num_kv_heads;
+    int kv_bh = b * num_kv_heads + (q_head / group_size);
+
+    K += kv_bh * N * HEAD_DIM;
+    V += kv_bh * N * HEAD_DIM;
     out += blockIdx.y * N * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     Q += blockIdx.y * N * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     int num_q_row = min(Br, N - blockIdx.x * Br);

@@ -49,6 +49,8 @@ pub struct AttentionKernel {
     pub n: usize,
     pub mask_outer_stride: usize,
     pub mask_row_stride: usize,
+    pub num_q_heads: usize,
+    pub num_kv_heads: usize,
 
     pub attn: Attention,
 }
@@ -74,6 +76,8 @@ impl AttentionKernel {
             self.mask_outer_stride.to_string(),
             self.mask_row_stride.to_string(),
             self.n.to_string(),
+            self.num_q_heads.to_string(),
+            self.num_kv_heads.to_string(),
         ];
         (id, args)
     }
