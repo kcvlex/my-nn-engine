@@ -232,7 +232,7 @@ impl Builder {
         out
     }
 
-    fn i64_initializer(&mut self, name: &str, values: Vec<i64>) -> ValueId {
+    pub fn i64_initializer(&mut self, name: &str, values: Vec<i64>) -> ValueId {
         let len = values.len();
         let t = Tensor::new(
             ResolvedTensorDims::new(&[len]),
