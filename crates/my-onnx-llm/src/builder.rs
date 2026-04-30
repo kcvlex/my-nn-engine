@@ -1,3 +1,4 @@
+use my_onnx::onnx::model::ExternalTensorRef;
 use my_onnx::onnx::model::Graph;
 use my_onnx::onnx::model::Node;
 use my_onnx::onnx::model::ValueId;
@@ -59,6 +60,16 @@ impl Builder {
             ty: Some(TensorType::Resolved(ty)),
         });
         self.graph.set_initializer(value, tensor);
+        value
+    }
+
+    pub fn external_initializer(&mut self, name: &str, r: ExternalTensorRef) -> ValueId {
+        let ty = ResolvedTensorType::new(r.elem_type, r.dims.clone());
+        let value = self.graph.values.alloc(ValueInfo {
+            name: name.to_string(),
+            ty: Some(TensorType::Resolved(ty)),
+        });
+        self.graph.set_external_ref(value, r);
         value
     }
 

@@ -311,6 +311,11 @@ impl Graph {
         self.initializer.insert(value_id, tensor);
     }
 
+    pub fn set_external_ref(&mut self, value_id: ValueId, r: ExternalTensorRef) {
+        self.initializer.remove(&value_id);
+        self.external_refs.insert(value_id, r);
+    }
+
     pub fn has_initializer(&self, value_id: ValueId) -> bool {
         self.initializer.contains_key(&value_id) || self.external_refs.contains_key(&value_id)
     }
