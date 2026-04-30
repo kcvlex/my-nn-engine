@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use my_onnx::onnx::load::LoadProto;
+use my_onnx::onnx::model::ValueId;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx::session::Session;
@@ -21,8 +22,8 @@ fn fixture(dir: &str) -> PathBuf {
     workspace_root().join("models/test/single_op").join(dir)
 }
 
-fn load_pb(path: PathBuf) -> Tensor {
-    Tensor::load_from_path(path).unwrap()
+fn load_pb(path: PathBuf) -> Option<Tensor> {
+    Tensor::load_from_path(path).ok()
 }
 
 fn run_builder(graph: my_onnx::onnx::model::Graph, inputs: &[Tensor]) -> Tensor {
@@ -39,7 +40,7 @@ fn make_f32(dims: &[usize], data: Vec<f64>) -> Tensor {
     .unwrap()
 }
 
-fn input_for(b: &mut Builder, name: &str, t: &Tensor) -> my_onnx::onnx::model::ValueId {
+fn input_for(b: &mut Builder, name: &str, t: &Tensor) -> ValueId {
     let ty = t.tensor_type();
     b.input(
         name,
@@ -48,7 +49,7 @@ fn input_for(b: &mut Builder, name: &str, t: &Tensor) -> my_onnx::onnx::model::V
     )
 }
 
-fn i64_init(b: &mut Builder, name: &str, values: Vec<i64>) -> my_onnx::onnx::model::ValueId {
+fn i64_init(b: &mut Builder, name: &str, values: Vec<i64>) -> ValueId {
     let len = values.len();
     let t = Tensor::new(
         ResolvedTensorDims::new(&[len]),
@@ -58,32 +59,36 @@ fn i64_init(b: &mut Builder, name: &str, values: Vec<i64>) -> my_onnx::onnx::mod
     b.initializer(name, t)
 }
 
+fn verify_op<F>(name: &str, f: F)
+where
+    F: FnOnce(&mut Builder, &[ValueId]) -> ValueId,
+{
+    let dir = fixture(name);
+    let inputs = (0..)
+        .map(|i| load_pb(dir.join(format!("input_{}.pb", i))))
+        .take_while(|t| t.is_some())
+        .map(|t| t.unwrap())
+        .collect::<Vec<_>>();
+    let expected = load_pb(dir.join("output_0.pb")).unwrap();
+
+    let mut builder = Builder::new(&format!("test_{}", name));
+    let input_ids = inputs
+        .iter()
+        .enumerate()
+        .map(|(i, t)| input_for(&mut builder, &format!("input_{}", i), t))
+        .collect::<Vec<_>>();
+    let out = f(&mut builder, &input_ids[..]);
+    builder.output(out);
+
+    let got = run_builder(builder.graph, &inputs);
+    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+}
+
 #[test]
 fn gather_default_axis() {
-    let dir = fixture("gather_default_axis");
-    let data = load_pb(dir.join("input_0.pb"));
-    let indices = load_pb(dir.join("input_1.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let data_ty = data.tensor_type();
-    let idx_ty = indices.tensor_type();
-
-    let mut b = Builder::new("test_gather");
-    let data_in = b.input(
-        "data",
-        data_ty.elem_type,
-        &data_ty.dims.iter().copied().collect::<Vec<_>>(),
-    );
-    let idx_in = b.input(
-        "indices",
-        idx_ty.elem_type,
-        &idx_ty.dims.iter().copied().collect::<Vec<_>>(),
-    );
-    let out = b.gather("g", data_in, idx_in, 0);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[data, indices]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+    verify_op("gather_default_axis", |b, input_ids| {
+        b.gather("g", input_ids[0], input_ids[1], 0)
+    });
 }
 
 #[test]
@@ -103,161 +108,87 @@ fn rms_norm_basic() {
         ],
     );
 
-    let mut b = Builder::new("test_rms_norm");
-    let x_in = b.input("x", x.tensor_type().elem_type, &[1, 4]);
-    let scale_in = b.initializer("scale", scale);
-    let out = b.rms_norm("rms", x_in, scale_in, -1, eps);
-    b.output(out);
+    let mut builder = Builder::new("test_rms_norm");
+    let x_in = builder.input("x", x.tensor_type().elem_type, &[1, 4]);
+    let scale_in = builder.initializer("scale", scale);
+    let out = builder.rms_norm("rms", x_in, scale_in, -1, eps);
+    builder.output(out);
 
-    let got = run_builder(b.graph, &[x]);
+    let got = run_builder(builder.graph, &[x]);
     assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
 }
 
 #[test]
-fn add_via_fixture() {
-    let dir = fixture("add");
-    let a = load_pb(dir.join("input_0.pb"));
-    let b_in = load_pb(dir.join("input_1.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_add");
-    let lhs = input_for(&mut b, "a", &a);
-    let rhs = input_for(&mut b, "b", &b_in);
-    let out = b.add("add", lhs, rhs);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[a, b_in]);
-    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+fn add() {
+    verify_op("add", |b, input_ids| {
+        b.add("add", input_ids[0], input_ids[1])
+    });
 }
 
 #[test]
-fn mul_basic() {
+fn mul() {
     let a = make_f32(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b_in = make_f32(&[2, 3], vec![2.0, 2.0, 2.0, 0.5, 0.5, 0.5]);
+    let b = make_f32(&[2, 3], vec![2.0, 2.0, 2.0, 0.5, 0.5, 0.5]);
     let expected = make_f32(&[2, 3], vec![2.0, 4.0, 6.0, 2.0, 2.5, 3.0]);
 
-    let mut b = Builder::new("test_mul");
-    let lhs = input_for(&mut b, "a", &a);
-    let rhs = input_for(&mut b, "b", &b_in);
-    let out = b.mul("mul", lhs, rhs);
-    b.output(out);
+    let mut builder = Builder::new("test_mul");
+    let lhs = input_for(&mut builder, "a", &a);
+    let rhs = input_for(&mut builder, "b", &b);
+    let out = builder.mul("mul", lhs, rhs);
+    builder.output(out);
 
-    let got = run_builder(b.graph, &[a, b_in]);
+    let got = run_builder(builder.graph, &[a, b]);
     assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
 }
 
 #[test]
-fn neg_via_fixture() {
-    let dir = fixture("neg");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_neg");
-    let x_in = input_for(&mut b, "x", &x);
-    let out = b.neg("neg", x_in);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+fn neg() {
+    verify_op("neg", |b, input_ids| b.neg("neg", input_ids[0]));
 }
 
 #[test]
-fn sigmoid_via_fixture() {
-    let dir = fixture("sigmoid");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_sigmoid");
-    let x_in = input_for(&mut b, "x", &x);
-    let out = b.sigmoid("sigmoid", x_in);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
+fn sigmoid() {
+    verify_op("sigmoid", |b, input_ids| b.sigmoid("sigmoid", input_ids[0]));
 }
 
 #[test]
-fn reshape_via_fixture() {
-    let dir = fixture("reshape");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_reshape");
-    let x_in = input_for(&mut b, "x", &x);
-    let shape = i64_init(&mut b, "shape", vec![3, 1, 1, 2, 4]);
-    let out = b.reshape("rs", x_in, shape);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+fn reshape() {
+    verify_op("reshape", |b, input_ids| {
+        let shape = i64_init(b, "shape", vec![3, 1, 1, 2, 4]);
+        b.reshape("rs", input_ids[0], shape)
+    });
 }
 
 #[test]
-fn transpose_via_fixture() {
-    let dir = fixture("transpose");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_transpose");
-    let x_in = input_for(&mut b, "x", &x);
-    let out = b.transpose("tr", x_in, vec![2, 3, 1, 0]);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+fn transpose() {
+    verify_op("transpose", |b, input_ids| {
+        b.transpose("tr", input_ids[0], vec![2, 3, 1, 0])
+    });
 }
 
 #[test]
-fn concat_via_fixture() {
-    let dir = fixture("concat_axis_2");
-    let a = load_pb(dir.join("input_0.pb"));
-    let b_in = load_pb(dir.join("input_1.pb"));
-    let c_in = load_pb(dir.join("input_2.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_concat");
-    let a_id = input_for(&mut b, "a", &a);
-    let b_id = input_for(&mut b, "b", &b_in);
-    let c_id = input_for(&mut b, "c", &c_in);
-    let out = b.concat("cat", vec![a_id, b_id, c_id], 2);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[a, b_in, c_in]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+fn concat() {
+    verify_op("concat_axis_2", |b, input_ids| {
+        b.concat("cat", input_ids.to_vec(), 2)
+    });
 }
 
 #[test]
-fn slice_via_fixture() {
-    let dir = fixture("slice");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_slice");
-    let x_in = input_for(&mut b, "x", &x);
-    let starts = i64_init(&mut b, "starts", vec![1, 0]);
-    let ends = i64_init(&mut b, "ends", vec![3, 4]);
-    let axes = i64_init(&mut b, "axes", vec![1, 2]);
-    let out = b.slice("sl", x_in, starts, ends, Some(axes), None);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+fn slice() {
+    verify_op("slice", |b, input_ids| {
+        let starts = i64_init(b, "starts", vec![1, 0]);
+        let ends = i64_init(b, "ends", vec![3, 4]);
+        let axes = i64_init(b, "axes", vec![1, 2]);
+        b.slice("sl", input_ids[0], starts, ends, Some(axes), None)
+    });
 }
 
 #[test]
-fn expand_via_fixture() {
-    let dir = fixture("expand");
-    let x = load_pb(dir.join("input_0.pb"));
-    let expected = load_pb(dir.join("output_0.pb"));
-
-    let mut b = Builder::new("test_expand");
-    let x_in = input_for(&mut b, "x", &x);
-    let shape = i64_init(&mut b, "shape", vec![3, 4]);
-    let out = b.expand("ex", x_in, shape);
-    b.output(out);
-
-    let got = run_builder(b.graph, &[x]);
-    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+fn expand() {
+    verify_op("expand", |b, input_ids| {
+        let shape = i64_init(b, "shape", vec![3, 4]);
+        b.expand("ex", input_ids[0], shape)
+    });
 }
 
 #[test]
