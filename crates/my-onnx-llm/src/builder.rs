@@ -142,6 +142,13 @@ impl Builder {
         out
     }
 
+    /// SiLU activation: `x * sigmoid(x)`. Equivalent to ONNX Swish with `alpha = 1.0`.
+    pub fn silu(&mut self, name: &str, x: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Swish(Swish { alpha: 1.0 }), vec![x], out);
+        out
+    }
+
     pub fn reshape(&mut self, name: &str, x: ValueId, shape: ValueId) -> ValueId {
         let out = self.alloc_value(name);
         self.add_node(name, Operator::Reshape, vec![x, shape], out);

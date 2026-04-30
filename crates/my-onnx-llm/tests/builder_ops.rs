@@ -238,6 +238,30 @@ fn kv_cache_update() {
 }
 
 #[test]
+fn silu_basic() {
+    // SiLU(x) = x * sigmoid(x)
+    let x = make_f32(&[4], vec![1.0, -1.0, 0.0, 2.0]);
+    let sigmoid = |v: f64| 1.0 / (1.0 + (-v).exp());
+    let expected = make_f32(
+        &[4],
+        vec![
+            1.0 * sigmoid(1.0),
+            -1.0 * sigmoid(-1.0),
+            0.0 * sigmoid(0.0),
+            2.0 * sigmoid(2.0),
+        ],
+    );
+
+    let mut builder = Builder::new("test_silu");
+    let x_in = input_for(&mut builder, "x", &x);
+    let out = builder.silu("silu", x_in);
+    builder.output(out);
+
+    let got = run_builder(builder.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
+}
+
+#[test]
 fn rope_basic() {
     // x = [1, 2, 3, 4], cos = [0.5, 0.5, 0.5, 0.5], sin = [1, 1, 1, 1]
     // half-split rotation with head_dim=4:
