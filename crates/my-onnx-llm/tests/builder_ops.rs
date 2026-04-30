@@ -38,6 +38,15 @@ fn make_f32(dims: &[usize], data: Vec<f64>) -> Tensor {
     .unwrap()
 }
 
+fn input_for(b: &mut Builder, name: &str, t: &Tensor) -> my_onnx::onnx::model::ValueId {
+    let ty = t.tensor_type();
+    b.input(
+        name,
+        ty.elem_type,
+        &ty.dims.iter().copied().collect::<Vec<_>>(),
+    )
+}
+
 #[test]
 fn gather_default_axis() {
     let dir = fixture("gather_default_axis");
@@ -91,6 +100,69 @@ fn rms_norm_basic() {
 
     let got = run_builder(b.graph, &[x]);
     assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+}
+
+#[test]
+fn add_via_fixture() {
+    let dir = fixture("add");
+    let a = load_pb(dir.join("input_0.pb"));
+    let b_in = load_pb(dir.join("input_1.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_add");
+    let lhs = input_for(&mut b, "a", &a);
+    let rhs = input_for(&mut b, "b", &b_in);
+    let out = b.add("add", lhs, rhs);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[a, b_in]);
+    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+}
+
+#[test]
+fn mul_basic() {
+    let a = make_f32(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b_in = make_f32(&[2, 3], vec![2.0, 2.0, 2.0, 0.5, 0.5, 0.5]);
+    let expected = make_f32(&[2, 3], vec![2.0, 4.0, 6.0, 2.0, 2.5, 3.0]);
+
+    let mut b = Builder::new("test_mul");
+    let lhs = input_for(&mut b, "a", &a);
+    let rhs = input_for(&mut b, "b", &b_in);
+    let out = b.mul("mul", lhs, rhs);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[a, b_in]);
+    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+}
+
+#[test]
+fn neg_via_fixture() {
+    let dir = fixture("neg");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_neg");
+    let x_in = input_for(&mut b, "x", &x);
+    let out = b.neg("neg", x_in);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
+}
+
+#[test]
+fn sigmoid_via_fixture() {
+    let dir = fixture("sigmoid");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_sigmoid");
+    let x_in = input_for(&mut b, "x", &x);
+    let out = b.sigmoid("sigmoid", x_in);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
 }
 
 #[test]

@@ -114,4 +114,28 @@ impl Builder {
         );
         out
     }
+
+    pub fn add(&mut self, name: &str, a: ValueId, b: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Add, vec![a, b], out);
+        out
+    }
+
+    pub fn mul(&mut self, name: &str, a: ValueId, b: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Mul, vec![a, b], out);
+        out
+    }
+
+    pub fn neg(&mut self, name: &str, x: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Neg, vec![x], out);
+        out
+    }
+
+    pub fn sigmoid(&mut self, name: &str, x: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Sigmoid, vec![x], out);
+        out
+    }
 }
