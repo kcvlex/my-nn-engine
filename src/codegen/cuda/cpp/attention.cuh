@@ -123,6 +123,12 @@ __global__ void attention(
 // cache_seq_len: K/V buffer's per-(batch,head) seq stride (static dim of K).
 // active_seq_kv: number of K/V rows to actually attend over (runtime, 0 <= active <= cache_seq_len).
 // For static-shape attention these are equal; for KV-cache decode active_seq_kv = past_len + 1.
+//
+// Grouped-Query Attention (GQA): Q has num_q_heads heads, K/V have num_kv_heads heads.
+// Each group of (num_q_heads / num_kv_heads) Q-heads shares the same K/V head.
+// MHA is the special case num_kv_heads == num_q_heads.
+//
+// Grid layout: blockIdx.x = batch_idx * num_q_heads + q_head_idx, one block per (batch, q_head).
 template <typename T, int HEAD_DIM, int BLOCK_SIZE>
 __global__ void attention_decode(
     T *out,
@@ -131,16 +137,23 @@ __global__ void attention_decode(
     T *V,
     T scale,
     int cache_seq_len,
-    int active_seq_kv
+    int active_seq_kv,
+    int num_q_heads,
+    int num_kv_heads
 ) {
     __shared__ T s_Q[HEAD_DIM];
     __shared__ T s_O[HEAD_DIM];
     __shared__ T dot_buf[BLOCK_SIZE];
 
+    int b = blockIdx.x / num_q_heads;
+    int q_head = blockIdx.x % num_q_heads;
+    int group_size = num_q_heads / num_kv_heads;
+    int kv_bh = b * num_kv_heads + (q_head / group_size);
+
     out += blockIdx.x * HEAD_DIM;
     Q += blockIdx.x * HEAD_DIM;
-    K += blockIdx.x * cache_seq_len * HEAD_DIM;
-    V += blockIdx.x * cache_seq_len * HEAD_DIM;
+    K += kv_bh * cache_seq_len * HEAD_DIM;
+    V += kv_bh * cache_seq_len * HEAD_DIM;
 
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);

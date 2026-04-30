@@ -178,7 +178,12 @@ pub fn infer_node_output(
             let q_num_heads = q.dims[1];
             let kv_num_heads = k.dims[1];
 
-            assert!(q_num_heads == kv_num_heads);
+            assert!(
+                q_num_heads % kv_num_heads == 0,
+                "Q heads ({}) must be a multiple of K/V heads ({})",
+                q_num_heads,
+                kv_num_heads,
+            );
             assert!(k.dims[0] == batch_size);
             assert!(v.dims[0] == batch_size);
             assert!(k.dims[1] == kv_num_heads);

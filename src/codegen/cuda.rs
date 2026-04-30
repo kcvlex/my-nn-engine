@@ -1028,7 +1028,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                     assert!(k_ty.is_contiguous());
                     assert!(v_ty.is_contiguous());
                     assert!(q_dims[0] == k_dims[0] && k_dims[0] == v_dims[0]);
-                    assert!(q_dims[1] == k_dims[1] && k_dims[1] == v_dims[1]);
+                    assert!(k_dims[1] == v_dims[1]);
+                    assert!(
+                        q_dims[1] % k_dims[1] == 0,
+                        "Q heads ({}) must be a multiple of K/V heads ({})",
+                        q_dims[1],
+                        k_dims[1],
+                    );
                     assert!(k_dims[2] == v_dims[2]);
                     assert!(q_dims[3] == k_dims[3] && k_dims[3] == v_dims[3]);
 
@@ -1037,10 +1043,11 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     if seq_q == 1 && seq_k > 1 {
                         let batch_size = q_dims[0];
-                        let num_heads = q_dims[1];
+                        let num_q_heads = q_dims[1];
+                        let num_kv_heads = k_dims[1];
                         let head_size = q_dims[3];
                         let block_size = DEFAULT_BLOCK_SIZE;
-                        let grid_size = batch_size * num_heads;
+                        let grid_size = batch_size * num_q_heads;
                         let active_seq_kv_expr = if let Some(active_id) = kernel
                             .inputs
                             .get(args::ATTENTION_ACTIVE_SEQ_KV)
@@ -1065,6 +1072,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 v: self.device_identifier(v)?,
                                 cache_seq_len: seq_k,
                                 active_seq_kv: active_seq_kv_expr,
+                                num_q_heads,
+                                num_kv_heads,
                                 attn: *attn,
                             },
                         );
@@ -1080,6 +1089,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                         );
                     } else {
                         assert!(seq_q == seq_k);
+                        assert!(
+                            q_dims[1] == k_dims[1],
+                            "GQA prefill (Q heads != K/V heads) is not yet supported by the prefill kernel"
+                        );
 
                         let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
                             kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)

@@ -48,6 +48,11 @@ impl<T: GraphOp> Pass<T> for AttentionDecomposition {
             let q_ty = graph.get_resolved_tensor_type(q).unwrap().clone();
             let k_ty = graph.get_resolved_tensor_type(k).unwrap().clone();
             let out_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
+            assert!(
+                q_ty.dims[1] == k_ty.dims[1],
+                "CPU Attention decomposition does not yet support GQA \
+                 (Q heads != K/V heads). Use CUDA target for GQA."
+            );
 
             // Q: [b, h, seq_q, d], K: [b, h, seq_k, d]
             // BatchedGemm(Q, K, trans_b=true, alpha=scale) → [b, h, seq_q, seq_k]

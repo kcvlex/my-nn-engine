@@ -90,6 +90,8 @@ pub struct AttentionDecodeKernel {
     pub v: Expr,
     pub cache_seq_len: usize,
     pub active_seq_kv: Expr,
+    pub num_q_heads: usize,
+    pub num_kv_heads: usize,
 
     pub attn: Attention,
 }
@@ -108,6 +110,8 @@ impl AttentionDecodeKernel {
             self.attn.scale.to_string(),
             self.cache_seq_len.to_string(),
             self.active_seq_kv.to_string(),
+            self.num_q_heads.to_string(),
+            self.num_kv_heads.to_string(),
         ];
         (id, args)
     }
