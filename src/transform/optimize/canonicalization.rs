@@ -157,22 +157,30 @@ impl Canonicalization {
                     let k = l_ty.dims[ldim - 1];
                     let n = r_ty.dims[rdim - 1];
 
-                    let lhs_2d = ReshapeGenerator::default()
-                        .set_input(lhs)
-                        .set_dims(&[m, k])
-                        .set_allow_contiguous(false)
-                        .set_node_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
-                        .set_value_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
-                        .generate(graph, modifier)
-                        .unwrap();
-                    let rhs_2d = ReshapeGenerator::default()
-                        .set_input(rhs)
-                        .set_dims(&[k, n])
-                        .set_allow_contiguous(false)
-                        .set_node_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
-                        .set_value_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
-                        .generate(graph, modifier)
-                        .unwrap();
+                    let lhs_2d = if ldim == 2 {
+                        lhs
+                    } else {
+                        ReshapeGenerator::default()
+                            .set_input(lhs)
+                            .set_dims(&[m, k])
+                            .set_allow_contiguous(false)
+                            .set_node_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
+                            .set_value_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
+                            .generate(graph, modifier)
+                            .unwrap()
+                    };
+                    let rhs_2d = if rdim == 2 {
+                        rhs
+                    } else {
+                        ReshapeGenerator::default()
+                            .set_input(rhs)
+                            .set_dims(&[k, n])
+                            .set_allow_contiguous(false)
+                            .set_node_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
+                            .set_value_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
+                            .generate(graph, modifier)
+                            .unwrap()
+                    };
 
                     let gemm_out_ty =
                         ResolvedTensorType::new(ty.elem_type, ResolvedTensorDims::new(&[m, n]));
