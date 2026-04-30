@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+pub use cuda::cuda_lock;
 pub use device_buffer::CudaError;
 pub use device_buffer::DeviceBuffer;
 use log::info;
@@ -237,7 +238,11 @@ impl InitializerBuffers {
         Self::default()
     }
 
-    fn get_or_insert_with<F>(&self, name: &str, f: F) -> Result<Arc<DeviceBuffer>, SessionError>
+    pub(crate) fn get_or_insert_with<F>(
+        &self,
+        name: &str,
+        f: F,
+    ) -> Result<Arc<DeviceBuffer>, SessionError>
     where
         F: FnOnce() -> Result<Arc<DeviceBuffer>, SessionError>,
     {
@@ -257,7 +262,7 @@ pub struct SessionConfig {
     pub initializer_buffers: Option<Arc<InitializerBuffers>>,
 }
 
-fn send_initializer_to_device(
+pub(crate) fn send_initializer_to_device(
     src: &InitializerSource,
     buf: &DeviceBuffer,
 ) -> Result<(), SessionError> {
@@ -438,39 +443,18 @@ impl Session {
                 )
                 .map(Session::CPU)
             }
-            Target::CUDA => {
-                let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer
-                    .iter()
-                    .zip(initializer_names.iter())
-                    .map(|(src, name)| -> Result<Arc<DeviceBuffer>, SessionError> {
-                        let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
-                            let len = src.byte_len();
-                            let buf =
-                                Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
-                                    SessionError::OtherError(format!("cudaMalloc: {:?}", e))
-                                })?);
-                            if len > 0 {
-                                send_initializer_to_device(src, &buf)?;
-                            }
-                            Ok(buf)
-                        };
-                        match config.initializer_buffers.as_ref() {
-                            Some(cache) => cache.get_or_insert_with(name, upload),
-                            None => upload(),
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                SessionCUDA::new(
-                    inputs_ty,
-                    outputs_ty,
-                    initializer_buffers,
-                    session_state_buffers,
-                    schedule,
-                    options,
-                    &build_dir,
-                )
-                .map(Session::CUDA)
-            }
+            Target::CUDA => SessionCUDA::new(
+                inputs_ty,
+                outputs_ty,
+                initializer,
+                initializer_names,
+                config.initializer_buffers.clone(),
+                session_state_buffers,
+                schedule,
+                options,
+                &build_dir,
+            )
+            .map(Session::CUDA),
         }
     }
 

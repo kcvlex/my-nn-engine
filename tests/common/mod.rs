@@ -1,18 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-
-static CUDA_MUTEX: Mutex<()> = Mutex::new(());
-
-pub fn cuda_lock(target: Target) -> Option<MutexGuard<'static, ()>> {
-    if matches!(target, Target::CUDA) {
-        Some(CUDA_MUTEX.lock().unwrap_or_else(|e| e.into_inner()))
-    } else {
-        None
-    }
-}
 
 use my_onnx::onnx::load::*;
 use my_onnx::onnx::model::Graph;
@@ -95,7 +83,6 @@ pub fn run_validated_model(
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
-    let _guard = cuda_lock(target);
     let mut session = Session::new(
         &model_path,
         Some(&input_types),

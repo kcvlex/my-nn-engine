@@ -45,7 +45,6 @@ fn run_tinyllama(target: Target) -> TestResult {
         &opt,
         &SessionConfig::default(),
     )?;
-    let _guard = common::cuda_lock(target);
     let outputs = session.run(&inputs)?;
 
     assert_eq!(outputs.len(), expected.len(), "output count mismatch");

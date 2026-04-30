@@ -76,7 +76,6 @@ fn kv_cache_state_persistence() -> TestResult {
     };
 
     let opts = Options::builder().target(Target::CUDA).build();
-    let _guard = common::cuda_lock(Target::CUDA);
 
     let mut session = Session::new(&model_path, None, &opts, &config)?;
 
@@ -173,7 +172,6 @@ fn kv_cache_attention_decode_e2e() -> TestResult {
     };
 
     let opts = Options::builder().target(Target::CUDA).build();
-    let _guard = common::cuda_lock(Target::CUDA);
 
     let mut session = Session::new(&model_path, None, &opts, &config)?;
 

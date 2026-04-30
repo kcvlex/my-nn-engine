@@ -4,6 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use itertools::zip_eq;
 use log::info;
@@ -13,11 +15,20 @@ use crate::codegen::cuda::*;
 use crate::codegen::*;
 use crate::options::Options;
 use crate::schedule::Schedule;
+use crate::session::send_initializer_to_device;
 use crate::session::DeviceBuffer;
+use crate::session::InitializerBuffers;
+use crate::session::InitializerSource;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
+
+static CUDA_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn cuda_lock() -> MutexGuard<'static, ()> {
+    CUDA_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 type InitType =
     unsafe extern "C" fn(*const *const u8, *const *mut std::ffi::c_void) -> *mut std::ffi::c_void;
@@ -43,7 +54,9 @@ impl SessionCUDA {
     pub(super) fn new(
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
-        initializer_buffers: Vec<Arc<DeviceBuffer>>,
+        initializer_sources: Vec<InitializerSource>,
+        initializer_names: Vec<String>,
+        initializer_cache: Option<Arc<InitializerBuffers>>,
         session_state_buffers: Vec<Arc<DeviceBuffer>>,
         schedule: Schedule,
         opt: &Options,
@@ -135,6 +148,30 @@ impl SessionCUDA {
 
         info!("Compiled");
 
+        let _lock = cuda_lock();
+
+        let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
+            .iter()
+            .zip(initializer_names.iter())
+            .map(|(src, name)| -> Result<Arc<DeviceBuffer>, SessionError> {
+                let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                    let len = src.byte_len();
+                    let buf =
+                        Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
+                            SessionError::OtherError(format!("cudaMalloc: {:?}", e))
+                        })?);
+                    if len > 0 {
+                        send_initializer_to_device(src, &buf)?;
+                    }
+                    Ok(buf)
+                };
+                match initializer_cache.as_ref() {
+                    Some(cache) => cache.get_or_insert_with(name, upload),
+                    None => upload(),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
             .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
 
@@ -178,6 +215,7 @@ impl SessionCUDA {
     }
 
     pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
+        let _lock = cuda_lock();
         if self.state.is_null() {
             self.state = self.init_state()?;
         }

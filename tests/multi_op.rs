@@ -35,7 +35,6 @@ fn run_test(dir: &str, epsilon: f64, options: &Options, nums: (usize, usize)) ->
         options,
         &SessionConfig::default(),
     )?;
-    let _guard = common::cuda_lock(options.target);
     let outputs = session.run(&inputs)?;
     let expected = (0..num_outputs)
         .map(|i| {

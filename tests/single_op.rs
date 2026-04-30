@@ -53,7 +53,6 @@ where
             Target::CUDA => Options::builder().target(target).build(),
         };
         let mut session = Session::new(&path, None, &opt, &SessionConfig::default())?;
-        let _guard = common::cuda_lock(target);
         f(&mut session)?;
     }
     Ok(())
@@ -103,7 +102,6 @@ where
             &opt,
             &SessionConfig::default(),
         )?;
-        let _guard = common::cuda_lock(target);
         f(&mut session, (&inputs, &outputs))?;
     }
     Ok(())
