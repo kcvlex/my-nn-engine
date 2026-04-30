@@ -72,6 +72,7 @@ fn kv_cache_state_persistence() -> TestResult {
             name: "cache".to_string(),
             buffer: cache_buf,
         }],
+        ..SessionConfig::default()
     };
 
     let opts = Options::builder().target(Target::CUDA).build();
@@ -168,6 +169,7 @@ fn kv_cache_attention_decode_e2e() -> TestResult {
                 buffer: v_buf,
             },
         ],
+        ..SessionConfig::default()
     };
 
     let opts = Options::builder().target(Target::CUDA).build();

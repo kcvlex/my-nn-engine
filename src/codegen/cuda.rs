@@ -469,9 +469,6 @@ fn ceil_pow2(mut x: usize) -> usize {
 #[derive(Clone)]
 struct InitializerPlan {
     arg_idx: usize,
-    elem_ty: String,
-    mem_size: String,
-    host_name: String,
     device_name: String,
 }
 
@@ -534,18 +531,11 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
 
         for (idx, value) in self.schedule.initializers.iter().enumerate() {
-            let rty = self.get_resolved_tensor_type(*value)?;
-            let elem_ty = rty.elem_type.to_string();
-            let mem_size = MemSize::from(rty).to_string();
-            let host_name = format!("h_{}_{}", ARG_INITIALIZER, value.index());
             let device_name = format!("d_init_{}", value.index());
             self.initializer_plans.insert(
                 *value,
                 InitializerPlan {
                     arg_idx: idx,
-                    elem_ty,
-                    mem_size,
-                    host_name,
                     device_name,
                 },
             );
@@ -646,34 +636,14 @@ impl<'sched> HostCodeGenerator<'sched> {
         for value in used {
             let InitializerPlan {
                 arg_idx,
-                elem_ty,
-                mem_size,
-                host_name,
                 device_name,
+                ..
             } = self.initializer_plans[&value].clone();
-            self.init_stmts.push(Statement::Raw(format!(
-                "{elem_ty} *{host_name} = ({elem_ty} *)({ARG_INITIALIZER}[{arg_idx}]);"
-            )));
             self.state_fields
                 .push(format!("void *{device_name} = nullptr;"));
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier(format!("state->{device_name}")),
-                    mem_size: MemSize::Raw(Expr::Identifier(mem_size.clone())),
-                }
-                .into(),
-            );
-            self.init_stmts.push(
-                MemcpySync {
-                    dst: Expr::Identifier(format!("state->{device_name}")),
-                    src: Expr::Identifier(host_name),
-                    mem_size: MemSize::Raw(Expr::Identifier(mem_size)),
-                    kind: CudaMemcpyKind::HostToDevice,
-                }
-                .into(),
-            );
-            self.destroy_stmts
-                .push(Free(Expr::Identifier(format!("state->{device_name}"))).into());
+            self.init_stmts.push(Statement::Raw(format!(
+                "state->{device_name} = {ARG_INITIALIZER}[{arg_idx}];"
+            )));
         }
     }
 

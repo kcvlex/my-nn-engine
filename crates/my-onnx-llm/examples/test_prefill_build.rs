@@ -60,6 +60,7 @@ fn main() {
                 ]
             })
             .collect(),
+        ..SessionConfig::default()
     };
 
     let opts = Options::builder().target(Target::CUDA).build();

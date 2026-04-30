@@ -4,9 +4,11 @@ mod device_buffer;
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub use device_buffer::CudaError;
 pub use device_buffer::DeviceBuffer;
@@ -225,9 +227,60 @@ pub struct SessionStateSpec {
     pub buffer: Arc<DeviceBuffer>,
 }
 
+#[derive(Debug, Default)]
+pub struct InitializerBuffers {
+    buffers: Mutex<HashMap<String, Arc<DeviceBuffer>>>,
+}
+
+impl InitializerBuffers {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn get_or_insert_with<F>(&self, name: &str, f: F) -> Result<Arc<DeviceBuffer>, SessionError>
+    where
+        F: FnOnce() -> Result<Arc<DeviceBuffer>, SessionError>,
+    {
+        let mut buffers = self.buffers.lock().unwrap();
+        if let Some(buf) = buffers.get(name) {
+            return Ok(Arc::clone(buf));
+        }
+        let buf = f()?;
+        buffers.insert(name.to_string(), Arc::clone(&buf));
+        Ok(buf)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionConfig {
     pub session_states: Vec<SessionStateSpec>,
+    pub initializer_buffers: Option<Arc<InitializerBuffers>>,
+}
+
+fn send_initializer_to_device(
+    src: &InitializerSource,
+    buf: &DeviceBuffer,
+) -> Result<(), SessionError> {
+    let len = src.byte_len();
+    if len == 0 {
+        return Ok(());
+    }
+    match src {
+        InitializerSource::Inline(t) => unsafe {
+            buf.host_to_device(t.as_ptr() as *const _, len)
+                .map_err(|e| SessionError::OtherError(format!("cudaMemcpy: {:?}", e)))
+        },
+        InitializerSource::External { file, offset, .. } => {
+            let mut tmp = vec![0u8; len];
+            file.read_exact_at(&mut tmp, *offset)
+                .map_err(ModelLoadError::FileRead)
+                .map_err(SessionError::ModelLoadError)?;
+            unsafe {
+                buf.host_to_device(tmp.as_ptr() as *const _, len)
+                    .map_err(|e| SessionError::OtherError(format!("cudaMemcpy: {:?}", e)))
+            }
+        }
+    }
 }
 
 fn get_argument_types(
@@ -295,6 +348,10 @@ impl Session {
         let inputs_ty = get_argument_types(&graph, &graph.input_values())?;
         let outputs_ty = get_argument_types(&graph, &graph.output_values())?;
         let initializer_ids = graph.initializer_ids();
+        let initializer_names: Vec<String> = initializer_ids
+            .iter()
+            .map(|&id| graph.values[id].name.clone())
+            .collect();
         let mut file_cache: HashMap<PathBuf, Arc<File>> = HashMap::new();
         let initializer: Vec<InitializerSource> = initializer_ids
             .iter()
@@ -366,6 +423,11 @@ impl Session {
                         "SessionState is not supported on CPU target".to_string(),
                     ));
                 }
+                if config.initializer_buffers.is_some() {
+                    return Err(SessionError::OtherError(
+                        "InitializerBuffers is not supported on CPU target".to_string(),
+                    ));
+                }
                 SessionCPU::new(
                     inputs_ty,
                     outputs_ty,
@@ -376,16 +438,39 @@ impl Session {
                 )
                 .map(Session::CPU)
             }
-            Target::CUDA => SessionCUDA::new(
-                inputs_ty,
-                outputs_ty,
-                initializer,
-                session_state_buffers,
-                schedule,
-                options,
-                &build_dir,
-            )
-            .map(Session::CUDA),
+            Target::CUDA => {
+                let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer
+                    .iter()
+                    .zip(initializer_names.iter())
+                    .map(|(src, name)| -> Result<Arc<DeviceBuffer>, SessionError> {
+                        let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                            let len = src.byte_len();
+                            let buf =
+                                Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
+                                    SessionError::OtherError(format!("cudaMalloc: {:?}", e))
+                                })?);
+                            if len > 0 {
+                                send_initializer_to_device(src, &buf)?;
+                            }
+                            Ok(buf)
+                        };
+                        match config.initializer_buffers.as_ref() {
+                            Some(cache) => cache.get_or_insert_with(name, upload),
+                            None => upload(),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                SessionCUDA::new(
+                    inputs_ty,
+                    outputs_ty,
+                    initializer_buffers,
+                    session_state_buffers,
+                    schedule,
+                    options,
+                    &build_dir,
+                )
+                .map(Session::CUDA)
+            }
         }
     }
 

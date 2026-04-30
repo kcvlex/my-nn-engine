@@ -6,6 +6,7 @@ use my_onnx::onnx::load::ModelLoadError;
 use my_onnx::onnx::model::Graph;
 use my_onnx::options::Options;
 use my_onnx::session::DeviceBuffer;
+use my_onnx::session::InitializerBuffers;
 use my_onnx::session::Session;
 use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
@@ -95,6 +96,7 @@ impl LlmSession {
         info!("LlmSession: loading {:?}", model_path.as_ref());
         let session_config = SessionConfig {
             session_states: config.session_states.clone(),
+            ..SessionConfig::default()
         };
         let session = Session::new(model_path.as_ref(), None, opts, &session_config)?;
         Ok(Self {
@@ -146,6 +148,7 @@ impl LlmSession {
                     },
                 )
                 .collect(),
+            ..SessionConfig::default()
         };
         let session = Session::from_graph(graph, opts, &session_config)?;
         Ok(Self {
@@ -210,11 +213,13 @@ impl LlmSession {
                 .collect()
         };
 
+        let initializer_buffers = Arc::new(InitializerBuffers::new());
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: make_specs(),
+                initializer_buffers: Some(Arc::clone(&initializer_buffers)),
             },
         )?;
         let prefill_session = Session::from_graph(
@@ -222,6 +227,7 @@ impl LlmSession {
             opts,
             &SessionConfig {
                 session_states: make_specs(),
+                initializer_buffers: Some(initializer_buffers),
             },
         )?;
 

@@ -40,12 +40,8 @@ extern "C" void* model_init(void **initializer, void **session_state) {
   auto *state = new ModelState;
   (void)session_state;
   cudaCheckErr(cudaMalloc(&state->d_arena, 32768));
-  float *h_initializer_0 = (float *)(initializer[0]);
-  cudaCheckErr(cudaMalloc(&state->d_init_0, 216 * sizeof(float)));
-  cudaCheckErr(cudaMemcpy(state->d_init_0, h_initializer_0, 216 * sizeof(float), cudaMemcpyHostToDevice));
-  float *h_initializer_1 = (float *)(initializer[1]);
-  cudaCheckErr(cudaMalloc(&state->d_init_1, 1152 * sizeof(float)));
-  cudaCheckErr(cudaMemcpy(state->d_init_1, h_initializer_1, 1152 * sizeof(float), cudaMemcpyHostToDevice));
+  state->d_init_0 = initializer[0];
+  state->d_init_1 = initializer[1];
   cudaCheckErr(cudaStreamCreate(&state->stream_0));
   cudnnCheckErr(cudnnCreate(&state->cudnn_handler_ctx0.handle));
   cudnnCheckErr(cudnnSetStream(state->cudnn_handler_ctx0.handle, state->stream_0));
@@ -59,8 +55,6 @@ extern "C" void* model_init(void **initializer, void **session_state) {
 extern "C" void model_destroy(void *ptr) {
   auto *state = static_cast<ModelState*>(ptr);
   cudaCheckErr(cudaFree(state->d_arena));
-  cudaCheckErr(cudaFree(state->d_init_0));
-  cudaCheckErr(cudaFree(state->d_init_1));
   cudaCheckErr(cudaStreamDestroy(state->stream_0));
   cudnnCheckErr(cudnnDestroy(state->cudnn_handler_ctx0.handle));
   cudaCheckErr(cudaFree(state->cudnn_setting1.workspace));

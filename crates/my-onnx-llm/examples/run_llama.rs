@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_onnx::options::Options;
 use my_onnx::options::Target;
 use my_onnx_llm::build_llama;
+use my_onnx_llm::llama::build_llama_prefill;
 use my_onnx_llm::HfConfig;
 use my_onnx_llm::HfWeights;
 use my_onnx_llm::LlamaWeights;
@@ -21,20 +22,28 @@ fn main() {
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = 256;
+    let prefill_len = 32;
     let n_generate = 16;
 
-    println!("building graph...");
+    println!("building decode graph...");
     let t0 = std::time::Instant::now();
     let r = build_llama(&config, &weights, max_seq_len);
-    println!("  graph built in {:.2?}", t0.elapsed());
+    println!("  decode graph built in {:.2?}", t0.elapsed());
 
-    println!("compiling session (CUDA)...");
+    println!("building prefill graph...");
+    let t0 = std::time::Instant::now();
+    let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
+    println!("  prefill graph built in {:.2?}", t0.elapsed());
+
+    println!("compiling sessions (CUDA)...");
     let t0 = std::time::Instant::now();
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
-    let mut llm = LlmSession::for_llama(
+    let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
+        p.graph,
         r.kv_cache_names,
+        prefill_len,
         tokenizer,
         &opts,
         max_seq_len,

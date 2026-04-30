@@ -3,6 +3,8 @@ use std::ffi::c_void;
 use cuda_runtime_sys::cudaError_t;
 use cuda_runtime_sys::cudaFree;
 use cuda_runtime_sys::cudaMalloc;
+use cuda_runtime_sys::cudaMemcpy;
+use cuda_runtime_sys::cudaMemcpyKind;
 use cuda_runtime_sys::cudaMemset;
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +49,17 @@ impl DeviceBuffer {
 
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// # Safety
+    /// The caller must ensure that `src` points to a valid memory region of at least `len` bytes,
+    /// and that the data is properly initialized.
+    pub unsafe fn host_to_device(&self, src: *const c_void, len: usize) -> Result<(), CudaError> {
+        let err = unsafe { cudaMemcpy(self.ptr, src, len, cudaMemcpyKind::cudaMemcpyHostToDevice) };
+        if err != cudaError_t::cudaSuccess {
+            return Err(CudaError(err));
+        }
+        Ok(())
     }
 }
 
