@@ -198,4 +198,42 @@ impl Builder {
         self.add_node(name, Operator::Expand, vec![x, shape], out);
         out
     }
+
+    pub fn kv_cache_update(
+        &mut self,
+        name: &str,
+        cache: ValueId,
+        new: ValueId,
+        offset: ValueId,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::KVCacheUpdate, vec![cache, new, offset], out);
+        out
+    }
+
+    pub fn attention(
+        &mut self,
+        name: &str,
+        q: ValueId,
+        k: ValueId,
+        v: ValueId,
+        mask: Option<ValueId>,
+        active_seq_kv: Option<ValueId>,
+        is_causal: bool,
+        scale: f32,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        let inputs: Vec<Option<ValueId>> = match (mask, active_seq_kv) {
+            (None, None) => vec![Some(q), Some(k), Some(v)],
+            (Some(m), None) => vec![Some(q), Some(k), Some(v), Some(m)],
+            (m, Some(a)) => vec![Some(q), Some(k), Some(v), m, Some(a)],
+        };
+        self.graph.nodes.alloc(Node::create_node(
+            inputs,
+            vec![out],
+            name.to_string(),
+            Operator::Attention(Attention { is_causal, scale }),
+        ));
+        out
+    }
 }

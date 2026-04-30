@@ -27,7 +27,15 @@ fn load_pb(path: PathBuf) -> Option<Tensor> {
 }
 
 fn run_builder(graph: my_onnx::onnx::model::Graph, inputs: &[Tensor]) -> Tensor {
-    let opts = Options::builder().target(Target::CPU).build();
+    run_builder_with_target(graph, inputs, Target::CPU)
+}
+
+fn run_builder_with_target(
+    graph: my_onnx::onnx::model::Graph,
+    inputs: &[Tensor],
+    target: Target,
+) -> Tensor {
+    let opts = Options::builder().target(target).build();
     let mut session = Session::from_graph(graph, &opts, &SessionConfig::default()).unwrap();
     session.run(inputs).unwrap().into_iter().next().unwrap()
 }
@@ -189,6 +197,44 @@ fn expand() {
         let shape = i64_init(b, "shape", vec![3, 4]);
         b.expand("ex", input_ids[0], shape)
     });
+}
+
+#[test]
+fn attention_no_causal() {
+    verify_op("attention_no_causal", |b, input_ids| {
+        let scale = 1.0_f32 / (8.0_f32).sqrt();
+        b.attention(
+            "attn",
+            input_ids[0],
+            input_ids[1],
+            input_ids[2],
+            None,
+            None,
+            false,
+            scale,
+        )
+    });
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn kv_cache_update() {
+    let dir = fixture("kv_cache_update");
+    let inputs: Vec<Tensor> = (0..3)
+        .map(|i| load_pb(dir.join(format!("input_{}.pb", i))).unwrap())
+        .collect();
+    let expected = load_pb(dir.join("output_0.pb")).unwrap();
+
+    let mut builder = Builder::new("test_kv_cache_update");
+    let cache_in = input_for(&mut builder, "cache", &inputs[0]);
+    let src_in = input_for(&mut builder, "src", &inputs[1]);
+    let offset_in = input_for(&mut builder, "offset", &inputs[2]);
+    let updated = builder.kv_cache_update("kvu", cache_in, src_in, offset_in);
+    let out = builder.sigmoid("sig", updated);
+    builder.output(out);
+
+    let got = run_builder_with_target(builder.graph, &inputs, Target::CUDA);
+    assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
 }
 
 #[test]
