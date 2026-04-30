@@ -5,6 +5,7 @@ use crate::onnx::operator::BatchNormalization;
 use crate::onnx::operator::Clip;
 use crate::onnx::operator::GeLU;
 use crate::onnx::operator::LeakyReLU;
+use crate::onnx::operator::Swish;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
@@ -99,6 +100,7 @@ pub enum SingleOpcode {
     Sin,
     Sqrt,
     Sub,
+    Swish(Swish),
     Tanh,
     Transfer,
 }

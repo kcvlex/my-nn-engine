@@ -436,6 +436,15 @@ fn sigmoid() -> TestResult {
 }
 
 #[test]
+fn swish() -> TestResult {
+    with_all_sessions_and_tensors("swish", (1, 1), |session, (inputs, expected)| {
+        let outputs = session.run(inputs)?;
+        assert_eq_epsilon!(outputs[0], expected[0], 1e-6);
+        Ok(())
+    })
+}
+
+#[test]
 fn resize_downsample_sizes_nearest() -> TestResult {
     with_all_sessions_and_tensors(
         "resize_downsample_sizes_nearest",

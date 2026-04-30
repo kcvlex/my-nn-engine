@@ -239,6 +239,7 @@ pub fn infer_node_output(
         Operator::Sin |
         Operator::Softmax(_) |
         Operator::Sqrt |
+        Operator::Swish(_) |
         Operator::Tanh |
         Operator::Transfer(_) => {
             res.push(inputs[0].clone());

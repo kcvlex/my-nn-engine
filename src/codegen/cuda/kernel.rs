@@ -528,6 +528,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Reciprocal => format!("(1.0 / {})", x),
             Operator::ReLU => format!("((0 <= {}) ? {} : 0)", x, x),
             Operator::Sigmoid => format!("(1.0 / (1.0 + exp(-{})))", x),
+            Operator::Swish(Swish { alpha }) => format!("({x} / (1.0 + exp(-{alpha} * {x})))"),
             Operator::Sin => format!("sinf({})", x),
             Operator::Sqrt => format!("sqrt({})", x),
             Operator::Tanh => format!("tanh({})", x),
@@ -577,6 +578,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
             Operator::Sigmoid |
             Operator::Sin |
             Operator::Sqrt |
+            Operator::Swish(_) |
             Operator::Tanh) => {
                 let [a] = inputs else {
                     panic!("Expected 1 input for unary operator")

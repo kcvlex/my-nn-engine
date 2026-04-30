@@ -846,6 +846,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sigmoid |
                 Operator::Sin |
                 Operator::Sqrt |
+                Operator::Swish(_) |
                 Operator::Tanh => (),
 
                 _ => unreachable!(),
@@ -884,6 +885,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sin => SingleOpcode::Sin,
                 Operator::Sqrt => SingleOpcode::Sqrt,
                 Operator::Sub => SingleOpcode::Sub,
+                Operator::Swish(v) => SingleOpcode::Swish(*v),
                 Operator::Tanh => SingleOpcode::Tanh,
                 _ => unreachable!(),
             }
@@ -911,6 +913,7 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::Sin |
                 Operator::Sqrt |
                 Operator::Sub |
+                Operator::Swish(_) |
                 Operator::Tanh => unreachable!(),
 
                 Operator::Contiguous(Contiguous { ref ops }) => {

@@ -94,6 +94,7 @@ pub enum Operator {
     Sqrt,
     Squeeze(Squeeze),
     Sub,
+    Swish(Swish),
     Tanh,
     Transpose(Transpose),
     Unsqueeze(Unsqueeze),
@@ -620,6 +621,11 @@ pub struct Squeeze {
     pub axes: Option<Vec<TensorIndex>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Swish {
+    pub alpha: f32,
+}
+
 impl Reduce {
     pub fn normalize_axes(&self, rank: usize) -> Option<Vec<usize>> {
         let res: Vec<_> = self
@@ -844,6 +850,7 @@ impl Operator {
             Operator::Sqrt => "Sqrt",
             Operator::Squeeze(_) => "Squeeze",
             Operator::Sub => "Sub",
+            Operator::Swish(_) => "Swish",
             Operator::Tanh => "Tanh",
             Operator::Transpose(_) => "Transpose",
             Operator::Unsqueeze(_) => "Unsqueeze",
@@ -890,6 +897,7 @@ impl Operator {
             Operator::Sin |
             Operator::Sqrt |
             Operator::Sub |
+            Operator::Swish(_) |
             Operator::Tanh => OperatorType::Elementwise,
 
             Operator::Contiguous(_) |

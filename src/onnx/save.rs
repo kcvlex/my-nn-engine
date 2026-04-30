@@ -422,6 +422,14 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
             attrs
         }
 
+        Operator::Swish(s) => {
+            let mut attrs = vec![];
+            if s.alpha != 1.0 {
+                attrs.push(attr_float("alpha", s.alpha as f32));
+            }
+            attrs
+        }
+
         Operator::Transpose(t) => {
             let mut attrs = vec![];
             if let Some(ref perm) = t.perm {

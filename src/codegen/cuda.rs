@@ -1005,6 +1005,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Sin |
                 Operator::Sqrt |
                 Operator::Sub |
+                Operator::Swish(_) |
                 Operator::Tanh => unreachable!(),
 
                 Operator::Attention(attn) => {

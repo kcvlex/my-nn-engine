@@ -1090,6 +1090,17 @@ impl Squeeze {
     }
 }
 
+impl Swish {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let alpha = attributes
+            .get("alpha")
+            .map(|x| x.f())
+            .transpose()?
+            .unwrap_or(1.0);
+        Ok(Self { alpha })
+    }
+}
+
 impl Transpose {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let perm = attributes.get("perm").map(|x| x.ints()).transpose()?;
@@ -1179,6 +1190,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Sqrt" => Ok(Operator::Sqrt),
         "Squeeze" => Ok(Operator::Squeeze(Squeeze::load(attributes)?)),
         "Sub" => Ok(Operator::Sub),
+        "Swish" => Ok(Operator::Swish(Swish::load(attributes)?)),
         "Tanh" => Ok(Operator::Tanh),
         "Transpose" => Ok(Operator::Transpose(Transpose::load(attributes)?)),
         "Unsqueeze" => Ok(Operator::Unsqueeze(Unsqueeze::load(attributes)?)),

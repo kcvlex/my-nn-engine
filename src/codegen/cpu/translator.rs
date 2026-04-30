@@ -158,6 +158,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(call)
     }
 
+    fn sigmoid(
+        &self,
+        src: FloatValue<'ctx>,
+        ty: FloatType,
+    ) -> Result<FloatValue<'ctx>, BuilderError> {
+        let exp = self.intrinsics.exp.get(ty);
+        let ty = ty.llvm_type(self.context);
+        let src = self.builder.build_float_neg(src, "neg")?;
+        let exp = self
+            .build_tail_call(exp, &[src.into()], "exp")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let one = ty.const_float(1.0);
+        let den = self.builder.build_float_add(one, exp, "den")?;
+        self.builder.build_float_div(one, den, "res")
+    }
+
     fn build_single_op(
         &self,
         opcode: SingleOpcode,
@@ -669,20 +688,18 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
 
             SingleOpcode::Sigmoid => {
-                let ty = ty.float_type().unwrap();
-                let exp = self.intrinsics.exp.get(ty);
-                let ty = ty.llvm_type(self.context);
                 let src = unary_op!(operands).into_float_value();
-                let src = self.builder.build_float_neg(src, "neg")?;
-                let exp = self
-                    .build_tail_call(exp, &[src.into()], "exp")?
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_float_value();
-                let one = ty.const_float(1.0);
-                let den = self.builder.build_float_add(one, exp, "den")?;
-                self.builder.build_float_div(one, den, "res")?.into()
+                let ty = ty.float_type().unwrap();
+                self.sigmoid(src, ty)?.into()
+            }
+
+            SingleOpcode::Swish(operator::Swish { alpha }) => {
+                let ty = ty.float_type().unwrap();
+                let src = unary_op!(operands).into_float_value();
+                let alpha = ty.llvm_type(self.context).const_float(alpha as f64);
+                let x = self.builder.build_float_mul(src, alpha, "x")?;
+                let sigmoid = self.sigmoid(x, ty)?;
+                self.builder.build_float_mul(src, sigmoid, "res")?.into()
             }
 
             SingleOpcode::Tanh => {
