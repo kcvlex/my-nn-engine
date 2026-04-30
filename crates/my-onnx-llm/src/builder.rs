@@ -3,9 +3,12 @@ use my_onnx::onnx::model::Node;
 use my_onnx::onnx::model::ValueId;
 use my_onnx::onnx::model::ValueInfo;
 use my_onnx::onnx::operator::*;
+use my_onnx::tensor::data::TensorData;
 use my_onnx::tensor::types::DataType;
+use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
 use my_onnx::tensor::types::ResolvedTensorType;
+use my_onnx::tensor::types::SIntType;
 use my_onnx::tensor::types::TensorType;
 use my_onnx::tensor::Tensor;
 
@@ -209,6 +212,101 @@ impl Builder {
         let out = self.alloc_value(name);
         self.add_node(name, Operator::KVCacheUpdate, vec![cache, new, offset], out);
         out
+    }
+
+    fn i64_initializer(&mut self, name: &str, values: Vec<i64>) -> ValueId {
+        let len = values.len();
+        let t = Tensor::new(
+            ResolvedTensorDims::new(&[len]),
+            TensorData::SInt(SIntType::I64, values),
+        )
+        .unwrap();
+        self.initializer(name, t)
+    }
+
+    /// Build the LLaMA-style RoPE cos/sin tables as f32 initializers of shape
+    /// `[max_seq, head_dim]`. Each row `p` holds the cos/sin of the angles
+    /// `p * inv_freq[j % (head_dim/2)]` where `inv_freq[i] = 1 / base^(2i/head_dim)`.
+    /// The dim layout matches the half-split rotation in [`Self::rope`]:
+    /// dim `j` and `j + head_dim/2` share the same frequency.
+    pub fn rope_table(
+        &mut self,
+        name: &str,
+        max_seq: usize,
+        head_dim: usize,
+        base: f32,
+    ) -> (ValueId, ValueId) {
+        let half = head_dim / 2;
+        let inv_freq: Vec<f64> = (0..half)
+            .map(|i| 1.0 / (base as f64).powf(2.0 * i as f64 / head_dim as f64))
+            .collect();
+        let mut cos_data = Vec::with_capacity(max_seq * head_dim);
+        let mut sin_data = Vec::with_capacity(max_seq * head_dim);
+        for p in 0..max_seq {
+            for j in 0..head_dim {
+                let angle = p as f64 * inv_freq[j % half];
+                cos_data.push(angle.cos());
+                sin_data.push(angle.sin());
+            }
+        }
+        let cos_t = Tensor::new(
+            ResolvedTensorDims::new(&[max_seq, head_dim]),
+            TensorData::Float(FloatType::F32, cos_data),
+        )
+        .unwrap();
+        let sin_t = Tensor::new(
+            ResolvedTensorDims::new(&[max_seq, head_dim]),
+            TensorData::Float(FloatType::F32, sin_data),
+        )
+        .unwrap();
+        let cos = self.initializer(&format!("{name}_cos"), cos_t);
+        let sin = self.initializer(&format!("{name}_sin"), sin_t);
+        (cos, sin)
+    }
+
+    /// Apply rotary position embedding to `x` of shape `[..., head_dim]` using
+    /// pre-positioned `cos` and `sin` tables (broadcastable to `x`'s shape).
+    /// Implements the standard half-split rotation:
+    ///     x_low  = x[..., :head_dim/2]
+    ///     x_high = x[..., head_dim/2:]
+    ///     rotated = concat(-x_high, x_low, axis=-1)
+    ///     out = x * cos + rotated * sin
+    pub fn rope(
+        &mut self,
+        name: &str,
+        x: ValueId,
+        cos: ValueId,
+        sin: ValueId,
+        head_dim: usize,
+    ) -> ValueId {
+        let half = (head_dim / 2) as i64;
+        let head_dim_i = head_dim as i64;
+        let starts_low = self.i64_initializer(&format!("{name}_starts_low"), vec![0]);
+        let ends_low = self.i64_initializer(&format!("{name}_ends_low"), vec![half]);
+        let starts_high = self.i64_initializer(&format!("{name}_starts_high"), vec![half]);
+        let ends_high = self.i64_initializer(&format!("{name}_ends_high"), vec![head_dim_i]);
+        let axes = self.i64_initializer(&format!("{name}_axes"), vec![-1]);
+        let x_low = self.slice(
+            &format!("{name}_low"),
+            x,
+            starts_low,
+            ends_low,
+            Some(axes),
+            None,
+        );
+        let x_high = self.slice(
+            &format!("{name}_high"),
+            x,
+            starts_high,
+            ends_high,
+            Some(axes),
+            None,
+        );
+        let neg_high = self.neg(&format!("{name}_neg_high"), x_high);
+        let rotated = self.concat(&format!("{name}_rot"), vec![neg_high, x_low], -1);
+        let x_cos = self.mul(&format!("{name}_xcos"), x, cos);
+        let r_sin = self.mul(&format!("{name}_rsin"), rotated, sin);
+        self.add(name, x_cos, r_sin)
     }
 
     pub fn attention(

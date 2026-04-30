@@ -238,6 +238,80 @@ fn kv_cache_update() {
 }
 
 #[test]
+fn rope_basic() {
+    // x = [1, 2, 3, 4], cos = [0.5, 0.5, 0.5, 0.5], sin = [1, 1, 1, 1]
+    // half-split rotation with head_dim=4:
+    //   x_low = [1, 2], x_high = [3, 4]
+    //   rotated = [-3, -4, 1, 2]
+    //   out = x * cos + rotated * sin
+    //       = [0.5, 1.0, 1.5, 2.0] + [-3, -4, 1, 2]
+    //       = [-2.5, -3.0, 2.5, 4.0]
+    let x = make_f32(&[1, 1, 1, 4], vec![1.0, 2.0, 3.0, 4.0]);
+    let cos = make_f32(&[1, 1, 1, 4], vec![0.5, 0.5, 0.5, 0.5]);
+    let sin = make_f32(&[1, 1, 1, 4], vec![1.0, 1.0, 1.0, 1.0]);
+    let expected = make_f32(&[1, 1, 1, 4], vec![-2.5, -3.0, 2.5, 4.0]);
+
+    let mut builder = Builder::new("test_rope");
+    let x_in = input_for(&mut builder, "x", &x);
+    let cos_in = input_for(&mut builder, "cos", &cos);
+    let sin_in = input_for(&mut builder, "sin", &sin);
+    let out = builder.rope("rope", x_in, cos_in, sin_in, 4);
+    builder.output(out);
+
+    let got = run_builder(builder.graph, &[x, cos, sin]);
+    assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
+}
+
+#[test]
+fn rope_table_with_gather_and_rope() {
+    // max_seq=2, head_dim=4, base=10000
+    //   inv_freq = [1.0, 0.01]
+    //   row 1: angles = [1, 0.01, 1, 0.01]
+    //   cos[1] = [cos(1), cos(0.01), cos(1), cos(0.01)]
+    //   sin[1] = [sin(1), sin(0.01), sin(1), sin(0.01)]
+    //
+    // x = [1, 2, 3, 4]; rotated = [-3, -4, 1, 2]
+    //   out[0] = 1*cos(1)    + (-3)*sin(1)
+    //   out[1] = 2*cos(0.01) + (-4)*sin(0.01)
+    //   out[2] = 3*cos(1)    + 1*sin(1)
+    //   out[3] = 4*cos(0.01) + 2*sin(0.01)
+    let head_dim = 4;
+    let base = 10000.0f32;
+    let x = make_f32(&[1, 1, 1, 4], vec![1.0, 2.0, 3.0, 4.0]);
+
+    let mut builder = Builder::new("test_rope_table");
+    let x_in = input_for(&mut builder, "x", &x);
+    let (cos_table, sin_table) = builder.rope_table("rt", 2, head_dim, base);
+    let pos = Tensor::new(
+        ResolvedTensorDims::new(&[1]),
+        TensorData::SInt(SIntType::I64, vec![1]),
+    )
+    .unwrap();
+    let pos_in = builder.initializer("pos", pos);
+    let cos_row = builder.gather("cos_g", cos_table, pos_in, 0);
+    let sin_row = builder.gather("sin_g", sin_table, pos_in, 0);
+    let out = builder.rope("rope", x_in, cos_row, sin_row, head_dim);
+    builder.output(out);
+
+    let c1 = 1.0_f64.cos();
+    let s1 = 1.0_f64.sin();
+    let c01 = 0.01_f64.cos();
+    let s01 = 0.01_f64.sin();
+    let expected = make_f32(
+        &[1, 1, 1, 4],
+        vec![
+            1.0 * c1 + (-3.0) * s1,
+            2.0 * c01 + (-4.0) * s01,
+            3.0 * c1 + 1.0 * s1,
+            4.0 * c01 + 2.0 * s01,
+        ],
+    );
+
+    let got = run_builder(builder.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
+}
+
+#[test]
 fn matmul_basic() {
     // A: [4, 3] @ B: [3, 2] -> C: [4, 2]
     // A = [[1..3], [4..6], [7..9], [10..12]]
