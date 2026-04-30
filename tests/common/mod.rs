@@ -95,13 +95,13 @@ pub fn run_validated_model(
         .iter()
         .map(|input| input.tensor_type())
         .collect::<Vec<_>>();
+    let _guard = cuda_lock(target);
     let mut session = Session::new(
         &model_path,
         Some(&input_types),
         &Options::builder().target(target).build(),
         &SessionConfig::default(),
     )?;
-    let _guard = cuda_lock(target);
 
     for (set_idx, data_dir) in data_dirs.iter().enumerate() {
         let inputs = if set_idx == 0 {
