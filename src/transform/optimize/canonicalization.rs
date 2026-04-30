@@ -118,8 +118,10 @@ impl Canonicalization {
             Operator::MatMul => {
                 let lhs = inputs[args::MATMUL_LHS].unwrap();
                 let rhs = inputs[args::MATMUL_RHS].unwrap();
-                let ldim = graph.get_resolved_tensor_type(lhs).unwrap().dims.ndim();
-                let rdim = graph.get_resolved_tensor_type(rhs).unwrap().dims.ndim();
+                let l_ty = graph.get_resolved_tensor_type(lhs).unwrap().clone();
+                let r_ty = graph.get_resolved_tensor_type(rhs).unwrap().clone();
+                let ldim = l_ty.dims.ndim();
+                let rdim = r_ty.dims.ndim();
                 let old_output = outputs[0];
                 let ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
                 if ldim == 2 && rdim == 2 {
@@ -139,6 +141,68 @@ impl Canonicalization {
                         },
                     );
                     modifier.replace_input_value(graph, old_output, new_output);
+                    return;
+                }
+
+                // lhs: [1, 1, ..., M, K]
+                // rhs: [1, 1, ..., K, N]
+                //
+                // Then,
+                //
+                // MatMul(lhs, rhs) -> Unsqueeze(Gemm(Squeeze(lhs), Squeeze(rhs))))
+                if l_ty.dims.iter().take(ldim - 2).all(|&d| d == 1) &&
+                    r_ty.dims.iter().take(rdim - 2).all(|&d| d == 1)
+                {
+                    let m = l_ty.dims[ldim - 2];
+                    let k = l_ty.dims[ldim - 1];
+                    let n = r_ty.dims[rdim - 1];
+
+                    let lhs_2d = ReshapeGenerator::default()
+                        .set_input(lhs)
+                        .set_dims(&[m, k])
+                        .set_allow_contiguous(false)
+                        .set_node_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
+                        .set_value_name(format!("MatMul2Gemm_LhsSqueeze_{:?}", id))
+                        .generate(graph, modifier)
+                        .unwrap();
+                    let rhs_2d = ReshapeGenerator::default()
+                        .set_input(rhs)
+                        .set_dims(&[k, n])
+                        .set_allow_contiguous(false)
+                        .set_node_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
+                        .set_value_name(format!("MatMul2Gemm_RhsSqueeze_{:?}", id))
+                        .generate(graph, modifier)
+                        .unwrap();
+
+                    let gemm_out_ty =
+                        ResolvedTensorType::new(ty.elem_type, ResolvedTensorDims::new(&[m, n]));
+                    let gemm_out = modifier.register_new_value(
+                        graph,
+                        format!("MatMul2Gemm_GemmOut_{:?}", id),
+                        gemm_out_ty,
+                    );
+                    modifier.register_new_node(
+                        graph,
+                        Node {
+                            inputs: vec![Some(lhs_2d), Some(rhs_2d)],
+                            outputs: vec![gemm_out],
+                            name: format!("MatMul2Gemm_{:?}", id),
+                            op: Operator::Gemm(Gemm::default()),
+                            meta: NodeMeta::default(),
+                        },
+                    );
+
+                    let target_dims: Vec<usize> = ty.dims.iter().copied().collect();
+                    let final_out = ReshapeGenerator::default()
+                        .set_input(gemm_out)
+                        .set_dims(&target_dims)
+                        .set_allow_contiguous(false)
+                        .set_node_name(format!("MatMul2Gemm_OutUnsqueeze_{:?}", id))
+                        .set_value_name(format!("MatMul2Gemm_OutUnsqueeze_{:?}", id))
+                        .generate(graph, modifier)
+                        .unwrap();
+
+                    modifier.replace_input_value(graph, old_output, final_out);
                     return;
                 }
                 // Pre-scaled Q/K: MatMul(Mul(Q, s_q), Mul(K, s_k)) is
