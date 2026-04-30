@@ -9,6 +9,7 @@ use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::data::TensorData;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
+use my_onnx::tensor::types::SIntType;
 use my_onnx::tensor::Tensor;
 use my_onnx_llm::builder::Builder;
 
@@ -45,6 +46,16 @@ fn input_for(b: &mut Builder, name: &str, t: &Tensor) -> my_onnx::onnx::model::V
         ty.elem_type,
         &ty.dims.iter().copied().collect::<Vec<_>>(),
     )
+}
+
+fn i64_init(b: &mut Builder, name: &str, values: Vec<i64>) -> my_onnx::onnx::model::ValueId {
+    let len = values.len();
+    let t = Tensor::new(
+        ResolvedTensorDims::new(&[len]),
+        TensorData::SInt(SIntType::I64, values),
+    )
+    .unwrap();
+    b.initializer(name, t)
 }
 
 #[test]
@@ -163,6 +174,90 @@ fn sigmoid_via_fixture() {
 
     let got = run_builder(b.graph, &[x]);
     assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
+}
+
+#[test]
+fn reshape_via_fixture() {
+    let dir = fixture("reshape");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_reshape");
+    let x_in = input_for(&mut b, "x", &x);
+    let shape = i64_init(&mut b, "shape", vec![3, 1, 1, 2, 4]);
+    let out = b.reshape("rs", x_in, shape);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+}
+
+#[test]
+fn transpose_via_fixture() {
+    let dir = fixture("transpose");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_transpose");
+    let x_in = input_for(&mut b, "x", &x);
+    let out = b.transpose("tr", x_in, vec![2, 3, 1, 0]);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+}
+
+#[test]
+fn concat_via_fixture() {
+    let dir = fixture("concat_axis_2");
+    let a = load_pb(dir.join("input_0.pb"));
+    let b_in = load_pb(dir.join("input_1.pb"));
+    let c_in = load_pb(dir.join("input_2.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_concat");
+    let a_id = input_for(&mut b, "a", &a);
+    let b_id = input_for(&mut b, "b", &b_in);
+    let c_id = input_for(&mut b, "c", &c_in);
+    let out = b.concat("cat", vec![a_id, b_id, c_id], 2);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[a, b_in, c_in]);
+    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+}
+
+#[test]
+fn slice_via_fixture() {
+    let dir = fixture("slice");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_slice");
+    let x_in = input_for(&mut b, "x", &x);
+    let starts = i64_init(&mut b, "starts", vec![1, 0]);
+    let ends = i64_init(&mut b, "ends", vec![3, 4]);
+    let axes = i64_init(&mut b, "axes", vec![1, 2]);
+    let out = b.slice("sl", x_in, starts, ends, Some(axes), None);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
+}
+
+#[test]
+fn expand_via_fixture() {
+    let dir = fixture("expand");
+    let x = load_pb(dir.join("input_0.pb"));
+    let expected = load_pb(dir.join("output_0.pb"));
+
+    let mut b = Builder::new("test_expand");
+    let x_in = input_for(&mut b, "x", &x);
+    let shape = i64_init(&mut b, "shape", vec![3, 4]);
+    let out = b.expand("ex", x_in, shape);
+    b.output(out);
+
+    let got = run_builder(b.graph, &[x]);
+    assert!(got.eq_with_epsilon(&expected, 1e-7, CompPolicy::Either));
 }
 
 #[test]

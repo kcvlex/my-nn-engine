@@ -138,4 +138,64 @@ impl Builder {
         self.add_node(name, Operator::Sigmoid, vec![x], out);
         out
     }
+
+    pub fn reshape(&mut self, name: &str, x: ValueId, shape: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Reshape, vec![x, shape], out);
+        out
+    }
+
+    pub fn transpose(&mut self, name: &str, x: ValueId, perm: Vec<usize>) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(
+            name,
+            Operator::Transpose(Transpose { perm: Some(perm) }),
+            vec![x],
+            out,
+        );
+        out
+    }
+
+    pub fn concat(&mut self, name: &str, inputs: Vec<ValueId>, axis: isize) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(
+            name,
+            Operator::Concat(Concat {
+                axis: TensorIndex::new(axis),
+            }),
+            inputs,
+            out,
+        );
+        out
+    }
+
+    pub fn slice(
+        &mut self,
+        name: &str,
+        x: ValueId,
+        starts: ValueId,
+        ends: ValueId,
+        axes: Option<ValueId>,
+        steps: Option<ValueId>,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        let inputs: Vec<Option<ValueId>> = match (axes, steps) {
+            (None, None) => vec![Some(x), Some(starts), Some(ends)],
+            (Some(a), None) => vec![Some(x), Some(starts), Some(ends), Some(a)],
+            (a, Some(s)) => vec![Some(x), Some(starts), Some(ends), a, Some(s)],
+        };
+        self.graph.nodes.alloc(Node::create_node(
+            inputs,
+            vec![out],
+            name.to_string(),
+            Operator::Slice,
+        ));
+        out
+    }
+
+    pub fn expand(&mut self, name: &str, x: ValueId, shape: ValueId) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(name, Operator::Expand, vec![x, shape], out);
+        out
+    }
 }
