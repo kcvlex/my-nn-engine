@@ -67,6 +67,25 @@ impl LlamaWeights {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Mode {
+    Decode,
+    Prefill { len: usize },
+}
+
+impl Mode {
+    fn seq_q(&self) -> usize {
+        match self {
+            Mode::Decode => 1,
+            Mode::Prefill { len } => *len,
+        }
+    }
+
+    fn is_prefill(&self) -> bool {
+        matches!(self, Mode::Prefill { .. })
+    }
+}
+
 struct LayerCtx {
     cos_4d: ValueId,
     sin_4d: ValueId,
@@ -77,11 +96,36 @@ struct LayerCtx {
     head_dim: usize,
     hidden: usize,
     max_seq_len: usize,
+    seq_q: usize,
+    is_prefill: bool,
     eps: f64,
     f32_ty: DataType,
 }
 
 pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize) -> LlamaGraph {
+    build_llama_inner(config, weights, max_seq_len, Mode::Decode)
+}
+
+pub fn build_llama_prefill(
+    config: &HfConfig,
+    weights: &LlamaWeights,
+    max_seq_len: usize,
+    prefill_len: usize,
+) -> LlamaGraph {
+    build_llama_inner(
+        config,
+        weights,
+        max_seq_len,
+        Mode::Prefill { len: prefill_len },
+    )
+}
+
+fn build_llama_inner(
+    config: &HfConfig,
+    weights: &LlamaWeights,
+    max_seq_len: usize,
+    mode: Mode,
+) -> LlamaGraph {
     assert!(max_seq_len <= config.max_position_embeddings);
     assert_eq!(config.hidden_act, "silu");
     assert_eq!(
@@ -96,11 +140,13 @@ pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize
     let f32_ty = DataType::Float(FloatType::F32);
     let i64_ty = DataType::SInt(SIntType::I64);
     let head_dim = config.head_dim();
+    let seq_q = mode.seq_q();
+    let is_prefill = mode.is_prefill();
 
-    let mut b = Builder::new("llama");
+    let mut b = Builder::new(if is_prefill { "llama_prefill" } else { "llama" });
 
-    let input_ids = b.input("input_ids", i64_ty, &[1, 1]);
-    let position_id = b.input("position_id", i64_ty, &[1]);
+    let input_ids = b.input("input_ids", i64_ty, &[1, seq_q]);
+    let position_id = b.input("position_id", i64_ty, &[seq_q]);
     let past_len = b.input("past_len", i64_ty, &[]);
     let active_seq_kv = b.input("active_seq_kv", i64_ty, &[]);
 
@@ -111,7 +157,10 @@ pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize
     let (cos_table, sin_table) = b.rope_table("rope", max_seq_len, head_dim, config.rope_theta);
     let cos_row = b.gather("rope_cos_row", cos_table, position_id, 0);
     let sin_row = b.gather("rope_sin_row", sin_table, position_id, 0);
-    let rope_4d_shape = b.i64_initializer("rope_row_4d_shape", vec![1, 1, 1, head_dim as i64]);
+    let rope_4d_shape = b.i64_initializer(
+        "rope_row_4d_shape",
+        vec![1, 1, seq_q as i64, head_dim as i64],
+    );
     let cos_4d = b.reshape("rope_cos_4d", cos_row, rope_4d_shape);
     let sin_4d = b.reshape("rope_sin_4d", sin_row, rope_4d_shape);
 
@@ -125,6 +174,8 @@ pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize
         head_dim,
         hidden: config.hidden_size,
         max_seq_len,
+        seq_q,
+        is_prefill,
         eps: config.rms_norm_eps,
         f32_ty,
     };
@@ -197,14 +248,24 @@ fn build_layer(
     let k = b.matmul(&format!("{prefix}_k_proj"), n1, k_w);
     let v = b.matmul(&format!("{prefix}_v_proj"), n1, v_w);
 
-    // Reshape and transpose to [1, H, 1, D]
+    // Reshape and transpose to [1, H, S, D] (S = 1 for decode, prefill_len for prefill)
     let q_shape = b.i64_initializer(
         &format!("{prefix}_q_shape"),
-        vec![1, 1, ctx.num_q_heads as i64, ctx.head_dim as i64],
+        vec![
+            1,
+            ctx.seq_q as i64,
+            ctx.num_q_heads as i64,
+            ctx.head_dim as i64,
+        ],
     );
     let kv_shape = b.i64_initializer(
         &format!("{prefix}_kv_shape"),
-        vec![1, 1, ctx.num_kv_heads as i64, ctx.head_dim as i64],
+        vec![
+            1,
+            ctx.seq_q as i64,
+            ctx.num_kv_heads as i64,
+            ctx.head_dim as i64,
+        ],
     );
     let q = b.reshape(&format!("{prefix}_q_rs"), q, q_shape);
     let k = b.reshape(&format!("{prefix}_k_rs"), k, kv_shape);
@@ -249,25 +310,32 @@ fn build_layer(
         bytes_per_buffer: ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * 4,
     };
 
-    let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
-    let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
-
     let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;
-    let attn_out = b.attention(
-        &format!("{prefix}_attn"),
-        q,
-        k_updated,
-        v_updated,
-        None,
-        Some(ctx.active_seq_kv),
-        false,
-        scale,
-    );
+    let attn_out = if ctx.is_prefill {
+        // Prefill: KVCacheUpdate as side-effect for future decode; attention reads
+        // fresh K/V (square seq_q==seq_k, causal mask).
+        let _k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
+        let _v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
+        b.attention(&format!("{prefix}_attn"), q, k, v, None, None, true, scale)
+    } else {
+        let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
+        let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
+        b.attention(
+            &format!("{prefix}_attn"),
+            q,
+            k_updated,
+            v_updated,
+            None,
+            Some(ctx.active_seq_kv),
+            false,
+            scale,
+        )
+    };
 
     let attn_out = b.transpose(&format!("{prefix}_attn_tr"), attn_out, vec![0, 2, 1, 3]);
     let attn_back_shape = b.i64_initializer(
         &format!("{prefix}_attn_shape"),
-        vec![1, 1, ctx.hidden as i64],
+        vec![1, ctx.seq_q as i64, ctx.hidden as i64],
     );
     let attn_out = b.reshape(&format!("{prefix}_attn_rs"), attn_out, attn_back_shape);
 

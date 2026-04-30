@@ -62,10 +62,16 @@ enum DecodeKind {
 
 pub struct LlmSession {
     session: Session,
+    prefill: Option<PrefillSession>,
     tokenizer: Tokenizer,
     config: LlmConfig,
     past_len: usize,
     kind: DecodeKind,
+}
+
+struct PrefillSession {
+    session: Session,
+    prefill_len: usize,
 }
 
 impl LlmSession {
@@ -93,6 +99,7 @@ impl LlmSession {
         let session = Session::new(model_path.as_ref(), None, opts, &session_config)?;
         Ok(Self {
             session,
+            prefill: None,
             tokenizer,
             config,
             past_len: 0,
@@ -143,6 +150,87 @@ impl LlmSession {
         let session = Session::from_graph(graph, opts, &session_config)?;
         Ok(Self {
             session,
+            prefill: None,
+            tokenizer,
+            config: LlmConfig {
+                max_seq_len,
+                eos_token_id,
+                session_states: vec![],
+            },
+            past_len: 0,
+            kind: DecodeKind::Llama,
+        })
+    }
+
+    pub fn for_llama_with_prefill(
+        decode_graph: Graph,
+        prefill_graph: Graph,
+        kv_cache_names: Vec<KVCache>,
+        prefill_len: usize,
+        tokenizer: Tokenizer,
+        opts: &Options,
+        max_seq_len: usize,
+        eos_token_id: u32,
+    ) -> Result<Self, LlmError> {
+        let kv_buffers: Vec<(String, String, Arc<DeviceBuffer>, Arc<DeviceBuffer>)> =
+            kv_cache_names
+                .into_iter()
+                .map(
+                    |KVCache {
+                         k_name,
+                         v_name,
+                         bytes_per_buffer,
+                     }| {
+                        let k = Arc::new(
+                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc K"),
+                        );
+                        let v = Arc::new(
+                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc V"),
+                        );
+                        (k_name, v_name, k, v)
+                    },
+                )
+                .collect();
+
+        let make_specs = || -> Vec<SessionStateSpec> {
+            kv_buffers
+                .iter()
+                .flat_map(|(k_name, v_name, k_buf, v_buf)| {
+                    [
+                        SessionStateSpec {
+                            name: k_name.clone(),
+                            buffer: Arc::clone(k_buf),
+                        },
+                        SessionStateSpec {
+                            name: v_name.clone(),
+                            buffer: Arc::clone(v_buf),
+                        },
+                    ]
+                })
+                .collect()
+        };
+
+        let decode_session = Session::from_graph(
+            decode_graph,
+            opts,
+            &SessionConfig {
+                session_states: make_specs(),
+            },
+        )?;
+        let prefill_session = Session::from_graph(
+            prefill_graph,
+            opts,
+            &SessionConfig {
+                session_states: make_specs(),
+            },
+        )?;
+
+        Ok(Self {
+            session: decode_session,
+            prefill: Some(PrefillSession {
+                session: prefill_session,
+                prefill_len,
+            }),
             tokenizer,
             config: LlmConfig {
                 max_seq_len,
@@ -174,15 +262,29 @@ impl LlmSession {
         let prompt_ids: Vec<u32> = encoded.get_ids().to_vec();
 
         let mut new_ids: Vec<u32> = Vec::new();
-        let Some(&last_prompt) = prompt_ids.last() else {
+        if prompt_ids.is_empty() {
             return Ok(new_ids);
-        };
-        for &tok in &prompt_ids[..prompt_ids.len() - 1] {
-            self.decode_step(tok)?;
         }
-        let mut last_token = last_prompt;
 
-        for _ in 0..max_new_tokens {
+        let prefill_runs = self.prefill.is_some() &&
+            self.past_len == 0 &&
+            prompt_ids.len() <= self.prefill.as_ref().unwrap().prefill_len;
+
+        let mut last_token = if prefill_runs {
+            self.run_prefill(&prompt_ids)?
+        } else {
+            for &tok in &prompt_ids[..prompt_ids.len() - 1] {
+                self.decode_step(tok)?;
+            }
+            let last_prompt = *prompt_ids.last().unwrap();
+            self.decode_step(last_prompt)?
+        };
+        new_ids.push(last_token);
+        if last_token == self.config.eos_token_id {
+            return Ok(new_ids);
+        }
+
+        for _ in 1..max_new_tokens {
             if self.past_len + 1 > self.config.max_seq_len {
                 break;
             }
@@ -195,6 +297,46 @@ impl LlmSession {
         }
 
         Ok(new_ids)
+    }
+
+    fn run_prefill(&mut self, prompt_ids: &[u32]) -> Result<u32, LlmError> {
+        let prefill = self.prefill.as_mut().unwrap();
+        let m = prompt_ids.len();
+        let prefill_len = prefill.prefill_len;
+        debug_assert!(m <= prefill_len);
+
+        let mut padded: Vec<i64> = prompt_ids.iter().map(|&t| t as i64).collect();
+        padded.resize(prefill_len, 0);
+        let positions: Vec<i64> = (0..prefill_len as i64).collect();
+
+        let inputs = vec![
+            make_i64(&[1, prefill_len], padded),
+            make_i64(&[prefill_len], positions),
+            make_i64(&[], vec![0]),
+            make_i64(&[], vec![prefill_len as i64]),
+        ];
+        let outputs = prefill.session.run(&inputs)?;
+        let logits = outputs
+            .first()
+            .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
+
+        let TensorData::Float(FloatType::F32, ref data) = logits.data else {
+            return Err(LlmError::InvalidOutput("logits must be f32"));
+        };
+        let dims = &logits.dims;
+        let vocab_size = dims[dims.ndim() - 1];
+        let last_pos = m - 1;
+        let start = last_pos * vocab_size;
+        let end = (last_pos + 1) * vocab_size;
+        let slice = &data[start..end];
+        let (idx, _) = slice
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap();
+
+        self.past_len += m;
+        Ok(idx as u32)
     }
 
     pub fn generate(&mut self, prompt: &str, max_new_tokens: usize) -> Result<String, LlmError> {
