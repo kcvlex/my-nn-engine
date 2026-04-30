@@ -398,7 +398,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
             Some(vec![input.reshape(&dims)])
         }
         Operator::Transpose(Transpose { ref perm }) => {
-            let input = graph.get_initializer(inputs[0].unwrap())?;
+            let input = graph.get_inline_initializer(inputs[0].unwrap())?;
             let perm = perm.as_ref()?;
             Some(vec![input.transpose(perm)])
         }

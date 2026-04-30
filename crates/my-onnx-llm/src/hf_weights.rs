@@ -39,26 +39,6 @@ pub struct HfWeights {
     entries: HashMap<String, WeightEntry>,
 }
 
-/// Names whose 2D weight tensors should be pre-transposed from HF's
-/// `[out_features, in_features]` to `[in, out]` for direct use with MatMul.
-fn needs_transpose(name: &str) -> bool {
-    if !name.ends_with(".weight") {
-        return false;
-    }
-    [
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-        "lm_head",
-    ]
-    .iter()
-    .any(|p| name.contains(p))
-}
-
 fn bf16_bytes_to_f32_bytes(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len() * 2);
     for c in src.chunks_exact(2) {
@@ -69,23 +49,12 @@ fn bf16_bytes_to_f32_bytes(src: &[u8]) -> Vec<u8> {
     out
 }
 
-fn transpose_2d_f32(bytes: &[u8], rows: usize, cols: usize) -> Vec<u8> {
-    let mut out = vec![0u8; bytes.len()];
-    for r in 0..rows {
-        for c in 0..cols {
-            let src = (r * cols + c) * 4;
-            let dst = (c * rows + r) * 4;
-            out[dst..dst + 4].copy_from_slice(&bytes[src..src + 4]);
-        }
-    }
-    out
-}
-
 impl HfWeights {
     /// Convert a safetensors file (BF16/F32) into a flat F32 binary plus a JSON
     /// index. Idempotent: returns immediately if both outputs already exist.
-    /// 2D matmul-style weights are pre-transposed from HF's `[out, in]` to
-    /// `[in, out]`.
+    /// Weights are stored in their HF-natural layout (no transpose); ONNX
+    /// MatMul callers should insert an explicit `Transpose` upstream and rely
+    /// on `Canonicalization` to absorb it into the `Gemm.trans_b` flag.
     pub fn preprocess_safetensors(
         src: impl AsRef<Path>,
         bin_out: impl AsRef<Path>,
@@ -106,24 +75,15 @@ impl HfWeights {
         let mut offset = 0u64;
 
         for (name, view) in st.tensors() {
-            let mut shape: Vec<usize> = view.shape().to_vec();
+            let shape: Vec<usize> = view.shape().to_vec();
             let f32_bytes = match view.dtype() {
                 Dtype::F32 => view.data().to_vec(),
                 Dtype::BF16 => bf16_bytes_to_f32_bytes(view.data()),
                 d => return Err(HfWeightsError::UnsupportedDtype(d)),
             };
 
-            let final_bytes = if needs_transpose(&name) && shape.len() == 2 {
-                let (out_dim, in_dim) = (shape[0], shape[1]);
-                let t = transpose_2d_f32(&f32_bytes, out_dim, in_dim);
-                shape = vec![in_dim, out_dim];
-                t
-            } else {
-                f32_bytes
-            };
-
-            let len = final_bytes.len() as u64;
-            bin.write_all(&final_bytes)?;
+            let len = f32_bytes.len() as u64;
+            bin.write_all(&f32_bytes)?;
             index.insert(
                 name.to_string(),
                 WeightEntry {

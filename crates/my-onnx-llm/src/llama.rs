@@ -142,6 +142,7 @@ pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize
     let final_norm = b.rms_norm("final_norm", x, final_norm_w, -1, ctx.eps);
 
     let lm_head_w = b.external_initializer("lm_head.weight", weights.lm_head.clone());
+    let lm_head_w = b.transpose("lm_head_t", lm_head_w, vec![1, 0]);
     let logits = b.matmul("lm_head", final_norm, lm_head_w);
     b.output(logits);
 
@@ -189,6 +190,9 @@ fn build_layer(
         &format!("{prefix}.self_attn.v_proj.weight"),
         lw.v_proj.clone(),
     );
+    let q_w = b.transpose(&format!("{prefix}_q_w_t"), q_w, vec![1, 0]);
+    let k_w = b.transpose(&format!("{prefix}_k_w_t"), k_w, vec![1, 0]);
+    let v_w = b.transpose(&format!("{prefix}_v_w_t"), v_w, vec![1, 0]);
     let q = b.matmul(&format!("{prefix}_q_proj"), n1, q_w);
     let k = b.matmul(&format!("{prefix}_k_proj"), n1, k_w);
     let v = b.matmul(&format!("{prefix}_v_proj"), n1, v_w);
@@ -270,6 +274,7 @@ fn build_layer(
         &format!("{prefix}.self_attn.o_proj.weight"),
         lw.o_proj.clone(),
     );
+    let o_w = b.transpose(&format!("{prefix}_o_w_t"), o_w, vec![1, 0]);
     let o = b.matmul(&format!("{prefix}_o_proj"), attn_out, o_w);
 
     let attn_residual = b.add(&format!("{prefix}_attn_resid"), x_in, o);
@@ -297,6 +302,9 @@ fn build_layer(
         &format!("{prefix}.mlp.down_proj.weight"),
         lw.down_proj.clone(),
     );
+    let gate_w = b.transpose(&format!("{prefix}_gate_w_t"), gate_w, vec![1, 0]);
+    let up_w = b.transpose(&format!("{prefix}_up_w_t"), up_w, vec![1, 0]);
+    let down_w = b.transpose(&format!("{prefix}_down_w_t"), down_w, vec![1, 0]);
 
     let gate = b.matmul(&format!("{prefix}_gate_proj"), n2, gate_w);
     let gate = b.silu(&format!("{prefix}_silu"), gate);
