@@ -276,6 +276,7 @@ pub struct HostCode {
 const ARG_INPUT: &str = "input";
 const ARG_OUTPUT: &str = "output";
 const ARG_INITIALIZER: &str = "initializer";
+const ARG_SESSION_STATE: &str = "session_state";
 const DEFAULT_BLOCK_SIZE: usize = 256;
 
 struct CudnnCodeGenerator<'sched> {
@@ -550,24 +551,14 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
-        for value in self.schedule.session_states.iter() {
-            let rty = self.get_resolved_tensor_type(*value)?;
-            let mem_size = MemSize::from(rty).to_string();
+        for (idx, value) in self.schedule.session_states.iter().enumerate() {
+            let _rty = self.get_resolved_tensor_type(*value)?;
             let device_name = format!("d_session_state_{}", value.index());
             self.state_fields
                 .push(format!("void *{device_name} = nullptr;"));
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier(format!("state->{device_name}")),
-                    mem_size: MemSize::Raw(Expr::Identifier(mem_size.clone())),
-                }
-                .into(),
-            );
             self.init_stmts.push(Statement::Raw(format!(
-                "cudaMemset(state->{device_name}, 0, {mem_size});"
+                "state->{device_name} = {ARG_SESSION_STATE}[{idx}];"
             )));
-            self.destroy_stmts
-                .push(Free(Expr::Identifier(format!("state->{device_name}"))).into());
             self.session_state_devices.insert(*value, device_name);
         }
 
@@ -1984,8 +1975,9 @@ impl HostCode {
 
         write!(
             writer,
-            r#"extern "C" void* model_init(void **{ARG_INITIALIZER}) {{
+            r#"extern "C" void* model_init(void **{ARG_INITIALIZER}, void **{ARG_SESSION_STATE}) {{
   auto *state = new ModelState;
+  (void){ARG_SESSION_STATE};
 {init_body}
   return state;
 }}

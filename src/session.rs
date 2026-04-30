@@ -1,5 +1,6 @@
 mod cpu;
 mod cuda;
+mod device_buffer;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -7,6 +8,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use device_buffer::CudaError;
+pub use device_buffer::DeviceBuffer;
 use log::info;
 use tempfile::TempDir;
 
@@ -217,15 +220,9 @@ pub enum Session {
 }
 
 #[derive(Debug, Clone)]
-pub enum StateInit {
-    Zero,
-    FromTensor(Tensor),
-}
-
-#[derive(Debug, Clone)]
 pub struct SessionStateSpec {
     pub name: String,
-    pub init: StateInit,
+    pub buffer: Arc<DeviceBuffer>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -337,25 +334,53 @@ impl Session {
         schedule_passes.run(&mut schedule);
         info!("Scheduled");
 
+        let session_state_buffers: Vec<Arc<DeviceBuffer>> = {
+            schedule
+                .session_states
+                .iter()
+                .map(|&value_id| -> Result<Arc<DeviceBuffer>, SessionError> {
+                    let name = &schedule.graph().values[value_id].name;
+                    config
+                        .session_states
+                        .iter()
+                        .find(|s| &s.name == name)
+                        .map(|s| Arc::clone(&s.buffer))
+                        .ok_or_else(|| {
+                            SessionError::OtherError(format!(
+                                "no DeviceBuffer provided for session state {name:?}"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
         if options.save_build_dir {
             let path = tmp_dir.keep();
             info!("Build directory saved at {:?}", path);
         }
 
         match options.target {
-            Target::CPU => SessionCPU::new(
-                inputs_ty,
-                outputs_ty,
-                initializer,
-                schedule,
-                options,
-                &build_dir,
-            )
-            .map(Session::CPU),
+            Target::CPU => {
+                if !session_state_buffers.is_empty() {
+                    return Err(SessionError::OtherError(
+                        "SessionState is not supported on CPU target".to_string(),
+                    ));
+                }
+                SessionCPU::new(
+                    inputs_ty,
+                    outputs_ty,
+                    initializer,
+                    schedule,
+                    options,
+                    &build_dir,
+                )
+                .map(Session::CPU)
+            }
             Target::CUDA => SessionCUDA::new(
                 inputs_ty,
                 outputs_ty,
                 initializer,
+                session_state_buffers,
                 schedule,
                 options,
                 &build_dir,

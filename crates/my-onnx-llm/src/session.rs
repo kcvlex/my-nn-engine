@@ -1,14 +1,15 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use log::info;
 use my_onnx::onnx::load::ModelLoadError;
 use my_onnx::onnx::model::Graph;
 use my_onnx::options::Options;
+use my_onnx::session::DeviceBuffer;
 use my_onnx::session::Session;
 use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::session::SessionStateSpec;
-use my_onnx::session::StateInit;
 use my_onnx::tensor::data::TensorData;
 use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
@@ -40,6 +41,7 @@ impl From<SessionError> for LlmError {
 pub struct KVCache {
     pub k_name: String,
     pub v_name: String,
+    pub bytes_per_buffer: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -112,18 +114,30 @@ impl LlmSession {
         let session_config = SessionConfig {
             session_states: kv_cache_names
                 .into_iter()
-                .flat_map(|KVCache { k_name, v_name }| {
-                    [
-                        SessionStateSpec {
-                            name: k_name,
-                            init: StateInit::Zero,
-                        },
-                        SessionStateSpec {
-                            name: v_name,
-                            init: StateInit::Zero,
-                        },
-                    ]
-                })
+                .flat_map(
+                    |KVCache {
+                         k_name,
+                         v_name,
+                         bytes_per_buffer,
+                     }| {
+                        let k_buf = Arc::new(
+                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc K cache"),
+                        );
+                        let v_buf = Arc::new(
+                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc V cache"),
+                        );
+                        [
+                            SessionStateSpec {
+                                name: k_name,
+                                buffer: k_buf,
+                            },
+                            SessionStateSpec {
+                                name: v_name,
+                                buffer: v_buf,
+                            },
+                        ]
+                    },
+                )
                 .collect(),
         };
         let session = Session::from_graph(graph, opts, &session_config)?;

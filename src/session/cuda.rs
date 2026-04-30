@@ -4,6 +4,7 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use itertools::zip_eq;
 use log::info;
@@ -14,13 +15,15 @@ use crate::codegen::*;
 use crate::onnx::load::ModelLoadError;
 use crate::options::Options;
 use crate::schedule::Schedule;
+use crate::session::DeviceBuffer;
 use crate::session::InitializerSource;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type InitType = unsafe extern "C" fn(*const *const u8) -> *mut std::ffi::c_void;
+type InitType =
+    unsafe extern "C" fn(*const *const u8, *const *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 type AllocPinnedType = unsafe extern "C" fn(usize) -> *mut std::ffi::c_void;
@@ -31,6 +34,7 @@ pub struct SessionCUDA {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer: Vec<InitializerSource>,
+    session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
     lib: libloading::Library,
@@ -47,6 +51,7 @@ impl SessionCUDA {
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
         initializer: Vec<InitializerSource>,
+        session_state_buffers: Vec<Arc<DeviceBuffer>>,
         schedule: Schedule,
         opt: &Options,
         build_dir: &Path,
@@ -170,6 +175,7 @@ impl SessionCUDA {
             free_pinned,
             state: std::ptr::null_mut(),
             initializer,
+            session_state_buffers,
         })
     }
 
@@ -218,7 +224,10 @@ impl SessionCUDA {
                 initializer_ptrs.push(ptr as *const u8);
                 offset += len;
             }
-            let state = unsafe { (self.init_func)(initializer_ptrs.as_ptr()) };
+            let session_state_ptrs: Vec<*mut std::ffi::c_void> =
+                self.session_state_buffers.iter().map(|b| b.ptr()).collect();
+            let state =
+                unsafe { (self.init_func)(initializer_ptrs.as_ptr(), session_state_ptrs.as_ptr()) };
             Ok(state)
         })();
 

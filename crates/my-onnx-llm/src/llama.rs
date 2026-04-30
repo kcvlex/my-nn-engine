@@ -246,6 +246,7 @@ fn build_layer(
     let kv_cache = KVCache {
         k_name: k_cache_name.clone(),
         v_name: v_cache_name.clone(),
+        bytes_per_buffer: ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * 4,
     };
 
     let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);

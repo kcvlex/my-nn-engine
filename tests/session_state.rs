@@ -3,14 +3,15 @@
 mod common;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use my_onnx::options::Options;
 use my_onnx::options::Target;
+use my_onnx::session::DeviceBuffer;
 use my_onnx::session::Session;
 use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::session::SessionStateSpec;
-use my_onnx::session::StateInit;
 use my_onnx::tensor::data::CompPolicy;
 use my_onnx::tensor::data::TensorData;
 use my_onnx::tensor::types::FloatType;
@@ -65,10 +66,11 @@ fn kv_cache_state_persistence() -> TestResult {
     let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/test/single_op/kv_cache_update/model.onnx");
 
+    let cache_buf = Arc::new(DeviceBuffer::alloc_zeroed(B * H * S_MAX * D * 4).unwrap());
     let config = SessionConfig {
         session_states: vec![SessionStateSpec {
             name: "cache".to_string(),
-            init: StateInit::Zero,
+            buffer: cache_buf,
         }],
     };
 
@@ -152,15 +154,18 @@ fn kv_cache_attention_decode_e2e() -> TestResult {
     let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/test/session_state/kv_cache_attention_decode/model.onnx");
 
+    let cache_size = B * H * S_MAX * D * 4;
+    let k_buf = Arc::new(DeviceBuffer::alloc_zeroed(cache_size).unwrap());
+    let v_buf = Arc::new(DeviceBuffer::alloc_zeroed(cache_size).unwrap());
     let config = SessionConfig {
         session_states: vec![
             SessionStateSpec {
                 name: "K_cache".to_string(),
-                init: StateInit::Zero,
+                buffer: k_buf,
             },
             SessionStateSpec {
                 name: "V_cache".to_string(),
-                init: StateInit::Zero,
+                buffer: v_buf,
             },
         ],
     };
