@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use log::info;
 use my_onnx::onnx::load::ModelLoadError;
 use my_onnx::onnx::model::Graph;
@@ -272,11 +273,9 @@ impl LlmSession {
             return Ok(new_ids);
         }
 
-        let prefill_runs = self.prefill.is_some() &&
-            self.past_len == 0 &&
-            prompt_ids.len() <= self.prefill.as_ref().unwrap().prefill_len;
+        let prefill_runs = self.prefill.is_some() && self.past_len == 0;
 
-        let mut last_token = if prefill_runs {
+        let last_token = if prefill_runs {
             self.run_prefill(&prompt_ids)?
         } else {
             for &tok in &prompt_ids[..prompt_ids.len() - 1] {
@@ -290,8 +289,9 @@ impl LlmSession {
             return Ok(new_ids);
         }
 
+        let mut last_token = last_token;
         for _ in 1..max_new_tokens {
-            if self.past_len + 1 > self.config.max_seq_len {
+            if self.config.max_seq_len < self.past_len + 1 {
                 break;
             }
             let next = self.decode_step(last_token)?;
@@ -305,44 +305,58 @@ impl LlmSession {
         Ok(new_ids)
     }
 
-    fn run_prefill(&mut self, prompt_ids: &[u32]) -> Result<u32, LlmError> {
-        let prefill = self.prefill.as_mut().unwrap();
-        let m = prompt_ids.len();
-        let prefill_len = prefill.prefill_len;
-        debug_assert!(m <= prefill_len);
+    fn run_prefill_rec(&mut self, prompt_ids: &[u32]) -> Result<Vec<f64>, LlmError> {
+        let prefill_len = self.prefill.as_ref().unwrap().prefill_len;
+        let total_m = prompt_ids.len();
+        assert!(0 < total_m);
 
-        let mut padded: Vec<i64> = prompt_ids.iter().map(|&t| t as i64).collect();
-        padded.resize(prefill_len, 0);
-        let positions: Vec<i64> = (0..prefill_len as i64).collect();
+        let chunk_size = total_m.min(prefill_len);
+        let is_last = chunk_size == total_m;
 
+        let mut padded: Vec<i64> = vec![0; prefill_len];
+        for i in 0..chunk_size {
+            padded[i] = prompt_ids[i] as i64;
+        }
+        let positions = (0..prefill_len as i64)
+            .map(|i| self.past_len as i64 + i)
+            .collect_vec();
+        let active_seq_kv = (self.past_len + prefill_len) as i64;
         let inputs = vec![
             make_i64(&[1, prefill_len], padded),
             make_i64(&[prefill_len], positions),
-            make_i64(&[], vec![0]),
-            make_i64(&[], vec![prefill_len as i64]),
+            make_i64(&[], vec![self.past_len as i64]),
+            make_i64(&[], vec![active_seq_kv]),
         ];
-        let outputs = prefill.session.run(&inputs)?;
-        let logits = outputs
-            .first()
-            .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
+        let outputs = self.prefill.as_mut().unwrap().session.run(&inputs)?;
+        self.past_len += chunk_size;
 
-        let TensorData::Float(FloatType::F32, ref data) = logits.data else {
-            return Err(LlmError::InvalidOutput("logits must be f32"));
-        };
-        let dims = &logits.dims;
-        let vocab_size = dims[dims.ndim() - 1];
-        let last_pos = m - 1;
-        let start = last_pos * vocab_size;
-        let end = (last_pos + 1) * vocab_size;
-        let slice = &data[start..end];
-        let (idx, _) = slice
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            .unwrap();
+        if is_last {
+            let logits = outputs
+                .into_iter()
+                .next()
+                .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
+            let TensorData::Float(FloatType::F32, data) = logits.data else {
+                return Err(LlmError::InvalidOutput("logits must be f32"));
+            };
+            let vocab_size = logits
+                .dims
+                .last()
+                .copied()
+                .ok_or(LlmError::InvalidOutput("logits have no dims"))?;
+            Ok(data
+                .iter()
+                .skip((chunk_size - 1) * vocab_size)
+                .take(vocab_size)
+                .copied()
+                .collect_vec())
+        } else {
+            self.run_prefill_rec(&prompt_ids[chunk_size..])
+        }
+    }
 
-        self.past_len += m;
-        Ok(idx as u32)
+    fn run_prefill(&mut self, prompt_ids: &[u32]) -> Result<u32, LlmError> {
+        let logits = self.run_prefill_rec(prompt_ids)?;
+        argmax_logits(&logits)
     }
 
     pub fn generate(&mut self, prompt: &str, max_new_tokens: usize) -> Result<String, LlmError> {
@@ -369,6 +383,12 @@ impl LlmSession {
         let logits = outputs
             .first()
             .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
+        let TensorData::Float(FloatType::F32, ref logits) = logits.data else {
+            return Err(LlmError::InvalidOutput("logits must be f32"));
+        };
+        if logits.is_empty() {
+            return Err(LlmError::InvalidOutput("empty logits"));
+        }
         let next = argmax_logits(logits)?;
         self.past_len += 1;
         Ok(next)
@@ -383,15 +403,8 @@ fn make_i64(dims: &[usize], values: Vec<i64>) -> Tensor {
     .unwrap()
 }
 
-fn argmax_logits(logits: &Tensor) -> Result<u32, LlmError> {
-    let TensorData::Float(FloatType::F32, ref data) = logits.data else {
-        return Err(LlmError::InvalidOutput("logits must be f32"));
-    };
-    if data.is_empty() {
-        return Err(LlmError::InvalidOutput("empty logits"));
-    }
-
-    let (idx, _) = data
+fn argmax_logits(logits: &[f64]) -> Result<u32, LlmError> {
+    let (idx, _) = logits
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())

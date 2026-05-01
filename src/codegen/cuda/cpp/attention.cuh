@@ -6,6 +6,16 @@
 
 namespace cg = cooperative_groups;
 
+// Flash-attention-style tiled attention with optional cache-shaped K/V.
+//
+// q_seq_len:       Q rows per (batch, head).
+// kv_active_seq:   K/V rows actually attended over.
+// kv_cache_stride: K/V buffer's per-(batch, head) seq stride. For self-attention with
+//                  fresh K/V, equal to kv_active_seq. For chunked prefill against the KV
+//                  cache, equal to the cache's static seq dim (max_seq_len) and
+//                  kv_active_seq = past_len + q_seq_len.
+// q_pos_offset:    absolute position of Q[0] (= past_len). Used by the causal mask so
+//                  row q_pos sees K[0..q_pos_offset+q_pos+1]. 0 for square self-attention.
 template <typename T, int Br, int Bc, int THREADS_PER_ROW, int HEAD_DIM>
 __global__ void attention(
     T *out,
@@ -17,7 +27,10 @@ __global__ void attention(
     T *mask,
     int mask_outer_stride,
     int mask_row_stride,
-    int N,
+    int q_seq_len,
+    int kv_active_seq,
+    int kv_cache_stride,
+    int q_pos_offset,
     int num_q_heads,
     int num_kv_heads
 ) {
@@ -36,11 +49,11 @@ __global__ void attention(
     int group_size = num_q_heads / num_kv_heads;
     int kv_bh = b * num_kv_heads + (q_head / group_size);
 
-    K += kv_bh * N * HEAD_DIM;
-    V += kv_bh * N * HEAD_DIM;
-    out += blockIdx.y * N * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
-    Q += blockIdx.y * N * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
-    int num_q_row = min(Br, N - blockIdx.x * Br);
+    K += kv_bh * kv_cache_stride * HEAD_DIM;
+    V += kv_bh * kv_cache_stride * HEAD_DIM;
+    out += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
+    Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
+    int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<THREADS_PER_ROW> tile = cg::tiled_partition<THREADS_PER_ROW>(cta);
@@ -58,8 +71,8 @@ __global__ void attention(
     T block_O[ELEMENTS_PER_THREAD] = {};
     int local_row = threadIdx.x / THREADS_PER_ROW;
 
-    for (int i = 0; i < (N + Bc - 1) / Bc; i++) {
-        int num_kv_row = min(Bc, N - i * Bc);
+    for (int i = 0; i < (kv_active_seq + Bc - 1) / Bc; i++) {
+        int num_kv_row = min(Bc, kv_active_seq - i * Bc);
         for (int j = threadIdx.x; j < num_kv_row * HEAD_DIM; j += blockDim.x) {
             int kv_row = j / HEAD_DIM;
             int kv_col = j % HEAD_DIM;
@@ -77,7 +90,7 @@ __global__ void attention(
             }
             int g_row = blockIdx.x * Br + local_row;
             int g_col = i * Bc + j;
-            bool masked_out = is_causal && g_row < g_col;
+            bool masked_out = is_causal && (q_pos_offset + g_row) < g_col;
             T val;
             if (masked_out) {
                 val = -INFINITY;

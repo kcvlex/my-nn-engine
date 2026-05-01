@@ -22,7 +22,7 @@ fn main() {
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = 256;
-    let prefill_len = 32;
+    let prefill_len = 16;
     let n_generate = 16;
 
     println!("building decode graph...");

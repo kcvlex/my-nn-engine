@@ -311,26 +311,18 @@ fn build_layer(
     };
 
     let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;
-    let attn_out = if ctx.is_prefill {
-        // Prefill: KVCacheUpdate as side-effect for future decode; attention reads
-        // fresh K/V (square seq_q==seq_k, causal mask).
-        let _k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
-        let _v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
-        b.attention(&format!("{prefix}_attn"), q, k, v, None, None, true, scale)
-    } else {
-        let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
-        let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
-        b.attention(
-            &format!("{prefix}_attn"),
-            q,
-            k_updated,
-            v_updated,
-            None,
-            Some(ctx.active_seq_kv),
-            false,
-            scale,
-        )
-    };
+    let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
+    let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
+    let attn_out = b.attention(
+        &format!("{prefix}_attn"),
+        q,
+        k_updated,
+        v_updated,
+        None,
+        Some(ctx.active_seq_kv),
+        ctx.is_prefill,
+        scale,
+    );
 
     let attn_out = b.transpose(&format!("{prefix}_attn_tr"), attn_out, vec![0, 2, 1, 3]);
     let attn_back_shape = b.i64_initializer(

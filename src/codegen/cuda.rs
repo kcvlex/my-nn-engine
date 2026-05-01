@@ -1049,8 +1049,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .into(),
                         );
                     } else {
-                        assert!(seq_q == seq_k);
-
                         let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
                             kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
                         {
@@ -1088,12 +1086,32 @@ impl<'sched> HostCodeGenerator<'sched> {
                         let br = ceil_pow2(seq_q / threads_per_row).clamp(1, 256 / threads_per_row);
                         let bc =
                             ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
-                        let block_size = br * threads_per_row;
+                        let block_size = br.max(bc) * threads_per_row;
                         let grid_size = {
                             let y = batch_size * num_q_heads;
                             let x = seq_q.div_ceil(br);
                             format!("dim3({x}, {y})")
                         };
+
+                        let kv_active_seq_expr = if let Some(active_id) = kernel
+                            .inputs
+                            .get(args::ATTENTION_ACTIVE_SEQ_KV)
+                            .and_then(|x| *x)
+                        {
+                            let host_name = self
+                                .hostmem2identifier
+                                .get(&active_id)
+                                .ok_or(BuildError::NoHostVariable(active_id))?;
+                            Expr::Identifier(format!("(int)(*{host_name})"))
+                        } else {
+                            seq_k.to_literal()
+                        };
+                        let q_pos_offset_expr = if seq_q == seq_k {
+                            "0".to_literal()
+                        } else {
+                            Expr::Identifier(format!("({kv_active_seq_expr} - {seq_q})"))
+                        };
+
                         let cuda_kernel = kernel::CUDAKernel::AttentionKernel(AttentionKernel {
                             data_ty: q_ty.elem_type,
                             br,
@@ -1104,7 +1122,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                             k: self.device_identifier(k)?,
                             v: self.device_identifier(v)?,
                             mask: mask_expr,
-                            n: seq_q,
+                            q_seq_len: seq_q,
+                            kv_active_seq: kv_active_seq_expr,
+                            kv_cache_stride: seq_k,
+                            q_pos_offset: q_pos_offset_expr,
                             mask_outer_stride,
                             mask_row_stride,
                             num_q_heads,

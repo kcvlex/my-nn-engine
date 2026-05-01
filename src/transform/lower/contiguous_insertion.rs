@@ -26,7 +26,8 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
                         Operator::Attention(_) |
                         Operator::AveragePool(_) |
                         Operator::Conv(_) |
-                        Operator::MaxPool(_)
+                        Operator::MaxPool(_) |
+                        Operator::KVCacheUpdate
                 )
             })
             .map(|(id, _)| id)
@@ -39,6 +40,7 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
                 Operator::AveragePool(_) | Operator::Conv(_) | Operator::MaxPool(_) => {
                     self.handle_conv_pool(graph, modifier, id)
                 }
+                Operator::KVCacheUpdate => self.handle_kv_cache_update(graph, modifier, id),
                 _ => unreachable!(),
             }
         }
@@ -108,6 +110,20 @@ impl ContiguousInsertion {
         let new_value =
             find_or_create_contiguous(graph, modifier, input, &format!("{}_input_0", node_name));
 
+        modifier
+            .replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| id == id2);
+    }
+
+    // TODO: extend the kvcache_update CUDA kernel to handle a strided/non-contiguous
+    // `new` input directly (e.g., accept stride params or do an internal gather), so we
+    // can drop this Contiguous insertion and avoid the extra copy on each prefill chunk.
+    fn handle_kv_cache_update<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
+        let node = &graph.nodes[id];
+        assert!(matches!(node.op, Operator::KVCacheUpdate));
+        let name = node.name.clone();
+        let input = node.inputs[args::KVCACHE_UPDATE_NEW].unwrap();
+        let new_value =
+            find_or_create_contiguous(graph, modifier, input, &format!("{}_input_new", name));
         modifier
             .replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| id == id2);
     }
