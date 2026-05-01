@@ -19,3 +19,4 @@ safetensors = "0.7.0"
 memmap2 = "0.9.10"
 libloading = "0.9.0"
 itertools = "0.14.0"
+minijinja = { version = "2.19.0", default-features = false, features = ["builtins", "serde"] }
