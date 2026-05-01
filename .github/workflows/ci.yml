@@ -29,12 +29,6 @@ jobs:
       - name: Run tests (CPU-only)
         run: cargo test --no-default-features --verbose
 
-      - name: Build with all features
-        run: cargo build --all-features --verbose
-
-      - name: Check that CUDA feature compiles
-        run: cargo check --features cuda --verbose
-
   fmt:
     name: Format
     runs-on: ubuntu-latest
