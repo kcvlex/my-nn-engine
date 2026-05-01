@@ -99,7 +99,7 @@ struct LayerCtx {
     seq_q: usize,
     is_prefill: bool,
     eps: f64,
-    f32_ty: DataType,
+    activation_ty: DataType,
 }
 
 pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize) -> LlamaGraph {
@@ -137,7 +137,10 @@ fn build_llama_inner(
         .is_multiple_of(config.num_key_value_heads));
     assert_eq!(weights.layers.len(), config.num_hidden_layers);
 
-    let f32_ty = DataType::Float(FloatType::F32);
+    let weight_float_ty = match weights.embed_tokens.elem_type {
+        DataType::Float(t) => t,
+        _ => panic!("expected float weights"),
+    };
     let i64_ty = DataType::SInt(SIntType::I64);
     let head_dim = config.head_dim();
     let seq_q = mode.seq_q();
@@ -154,7 +157,13 @@ fn build_llama_inner(
     let mut x = b.gather("embed", embed_w, input_ids, 0);
 
     // RoPE table, shared across layers
-    let (cos_table, sin_table) = b.rope_table("rope", max_seq_len, head_dim, config.rope_theta);
+    let (cos_table, sin_table) = b.rope_table(
+        "rope",
+        max_seq_len,
+        head_dim,
+        config.rope_theta,
+        weight_float_ty,
+    );
     let cos_row = b.gather("rope_cos_row", cos_table, position_id, 0);
     let sin_row = b.gather("rope_sin_row", sin_table, position_id, 0);
     let rope_4d_shape = b.i64_initializer(
@@ -177,7 +186,7 @@ fn build_llama_inner(
         seq_q,
         is_prefill,
         eps: config.rms_norm_eps,
-        f32_ty,
+        activation_ty: DataType::Float(weight_float_ty),
     };
 
     let mut kv_cache_names = Vec::new();
@@ -295,19 +304,20 @@ fn build_layer(
     let v_cache_name = format!("{prefix}.past_value");
     let k_cache = b.input(
         &k_cache_name,
-        ctx.f32_ty,
+        ctx.activation_ty,
         &[1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim],
     );
     let v_cache = b.input(
         &v_cache_name,
-        ctx.f32_ty,
+        ctx.activation_ty,
         &[1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim],
     );
 
+    let elem_bytes = ctx.activation_ty.bit_width() / 8;
     let kv_cache = KVCache {
         k_name: k_cache_name.clone(),
         v_name: v_cache_name.clone(),
-        bytes_per_buffer: ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * 4,
+        bytes_per_buffer: ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * elem_bytes,
     };
 
     let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;

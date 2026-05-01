@@ -253,6 +253,7 @@ impl Builder {
         max_seq: usize,
         head_dim: usize,
         base: f32,
+        dtype: FloatType,
     ) -> (ValueId, ValueId) {
         let half = head_dim / 2;
         let inv_freq: Vec<f64> = (0..half)
@@ -269,12 +270,12 @@ impl Builder {
         }
         let cos_t = Tensor::new(
             ResolvedTensorDims::new(&[max_seq, head_dim]),
-            TensorData::Float(FloatType::F32, cos_data),
+            TensorData::Float(dtype, cos_data),
         )
         .unwrap();
         let sin_t = Tensor::new(
             ResolvedTensorDims::new(&[max_seq, head_dim]),
-            TensorData::Float(FloatType::F32, sin_data),
+            TensorData::Float(dtype, sin_data),
         )
         .unwrap();
         let cos = self.initializer(&format!("{name}_cos"), cos_t);

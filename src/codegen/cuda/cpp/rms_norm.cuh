@@ -6,32 +6,31 @@
 
 namespace cg = cooperative_groups;
 
-// y = x / sqrt(mean(x^2) + epsilon) * scale
 template <typename T, int BLOCK_SIZE, int DIM>
 __global__ void rms_norm(
     T *out,
     T *in,
     T *scale,
-    T epsilon,
+    float epsilon,
     int input_size
 ) {
-    __shared__ T buf[BLOCK_SIZE];
-    __shared__ T mean_sq;
+    __shared__ float buf[BLOCK_SIZE];
+    __shared__ float mean_sq;
     constexpr int REPEAT = (DIM + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     int tid = threadIdx.x;
     if (input_size <= blockIdx.x * DIM) return;
 
-    T inputs[REPEAT] = {};
+    float inputs[REPEAT] = {};
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
 
     for (int i = 0, offset = tid; i < REPEAT && offset < DIM; i++, offset += BLOCK_SIZE) {
-        inputs[i] = in[blockIdx.x * DIM + offset];
+        inputs[i] = (float)in[blockIdx.x * DIM + offset];
     }
 
     {
-        T sum_acc = 0;
+        float sum_acc = 0.0f;
         for (int i = 0; i < REPEAT; i++) {
             sum_acc += inputs[i] * inputs[i];
         }
@@ -50,12 +49,12 @@ __global__ void rms_norm(
         cg::sync(cta);
     }
 
-    T inv_std = T(1) / sqrt(mean_sq + epsilon);
+    float inv_std = 1.0f / sqrtf(mean_sq + epsilon);
 
     for (int i = 0, offset = tid; i < REPEAT && offset < DIM; i++, offset += BLOCK_SIZE) {
-        T y = inputs[i] * inv_std;
-        y *= scale[offset];
-        out[blockIdx.x * DIM + offset] = y;
+        float y = inputs[i] * inv_std;
+        y *= (float)scale[offset];
+        out[blockIdx.x * DIM + offset] = (T)y;
     }
 }
 

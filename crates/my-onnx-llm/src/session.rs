@@ -13,7 +13,6 @@ use my_onnx::session::SessionConfig;
 use my_onnx::session::SessionError;
 use my_onnx::session::SessionStateSpec;
 use my_onnx::tensor::data::TensorData;
-use my_onnx::tensor::types::FloatType;
 use my_onnx::tensor::types::ResolvedTensorDims;
 use my_onnx::tensor::types::SIntType;
 use my_onnx::tensor::Tensor;
@@ -335,8 +334,8 @@ impl LlmSession {
                 .into_iter()
                 .next()
                 .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
-            let TensorData::Float(FloatType::F32, data) = logits.data else {
-                return Err(LlmError::InvalidOutput("logits must be f32"));
+            let TensorData::Float(_, data) = logits.data else {
+                return Err(LlmError::InvalidOutput("logits must be float"));
             };
             let vocab_size = logits
                 .dims
@@ -383,8 +382,8 @@ impl LlmSession {
         let logits = outputs
             .first()
             .ok_or(LlmError::InvalidOutput("model returned no outputs"))?;
-        let TensorData::Float(FloatType::F32, ref logits) = logits.data else {
-            return Err(LlmError::InvalidOutput("logits must be f32"));
+        let TensorData::Float(_, ref logits) = logits.data else {
+            return Err(LlmError::InvalidOutput("logits must be float"));
         };
         if logits.is_empty() {
             return Err(LlmError::InvalidOutput("empty logits"));

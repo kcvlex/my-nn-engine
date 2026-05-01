@@ -1315,12 +1315,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                     };
 
                     let elem_ty = self.get_resolved_tensor_type(kernel.outputs[0])?.elem_type;
-                    let c_data_ty = elem_ty.to_string();
+                    let scalar_ty = match elem_ty {
+                        DataType::Float(FloatType::BF16) => DataType::Float(FloatType::F32),
+                        other => other,
+                    };
+                    let scalar_ty_str = scalar_ty.to_string();
                     let alpha = {
                         let var_name = format!("alpha_{}", kernel_id.index());
                         self.stmts.push(Statement::Raw(format!(
                             "{ty} {name} = {value};",
-                            ty = c_data_ty,
+                            ty = scalar_ty_str,
                             name = var_name,
                             value = alpha,
                         )));
@@ -1330,7 +1334,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                         let var_name = format!("beta_{}", kernel_id.index());
                         self.stmts.push(Statement::Raw(format!(
                             "{ty} {name} = {value};",
-                            ty = c_data_ty,
+                            ty = scalar_ty_str,
                             name = var_name,
                             value = beta,
                         )));

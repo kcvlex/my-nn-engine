@@ -305,7 +305,7 @@ fn rope_table_with_gather_and_rope() {
 
     let mut builder = Builder::new("test_rope_table");
     let x_in = input_for(&mut builder, "x", &x);
-    let (cos_table, sin_table) = builder.rope_table("rt", 2, head_dim, base);
+    let (cos_table, sin_table) = builder.rope_table("rt", 2, head_dim, base, FloatType::F32);
     let pos = Tensor::new(
         ResolvedTensorDims::new(&[1]),
         TensorData::SInt(SIntType::I64, vec![1]),

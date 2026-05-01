@@ -113,6 +113,148 @@ fn bf16_sigmoid_smoke() -> TestResult {
 }
 
 #[test]
+fn bf16_rms_norm_smoke() -> TestResult {
+    let bf16_ty: DataType = FloatType::BF16.into();
+    let dim_size = 8usize;
+    let dims = &[1usize, dim_size];
+
+    let mut graph = Graph::empty_graph("bf16_rms".to_string());
+
+    let x = create_value(&mut graph, "x".to_string(), dims, bf16_ty);
+    let node = graph.nodes.alloc(Node::create_node(
+        vec![],
+        vec![x],
+        "Input_x".to_string(),
+        Operator::Input(x),
+    ));
+    graph.inputs.push(node);
+
+    let scale_vals: Vec<f64> = (0..dim_size).map(|_| bf16_round(1.0) as f64).collect();
+    let scale_tensor = Tensor::new(
+        ResolvedTensorDims::new(&[dim_size]),
+        TensorData::Float(FloatType::BF16, scale_vals),
+    )
+    .unwrap();
+    let scale = graph.values.alloc(ValueInfo {
+        name: "scale".to_string(),
+        ty: Some(TensorType::Resolved(scale_tensor.tensor_type())),
+    });
+    graph.set_initializer(scale, scale_tensor);
+
+    let y = graph.values.alloc(ValueInfo {
+        name: "y".to_string(),
+        ty: Some(TensorType::Resolved(ResolvedTensorType::new(
+            bf16_ty,
+            ResolvedTensorDims::new(dims),
+        ))),
+    });
+    graph.nodes.alloc(Node::create_node(
+        vec![Some(x), Some(scale)],
+        vec![y],
+        "rms".to_string(),
+        Operator::RMSNormalization(RMSNormalization {
+            axis: TensorIndex::new(-1),
+            epsilon: 1e-6,
+        }),
+    ));
+    let node = graph.nodes.alloc(Node::create_node(
+        vec![Some(y)],
+        vec![],
+        "Output_y".to_string(),
+        Operator::Output(y),
+    ));
+    graph.outputs.push(node);
+
+    let opts = Options::builder().target(Target::CUDA).build();
+    let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
+
+    let x_vals: Vec<f32> = vec![1.0, 2.0, -1.5, 0.5, 0.0, 3.0, -2.0, 1.0];
+    let inputs = vec![make_bf16_tensor(dims, &x_vals)];
+    let outputs = session.run(&inputs)?;
+    let got = extract_bf16(&outputs[0]);
+
+    let xs: Vec<f32> = x_vals.iter().map(|&x| bf16_round(x)).collect();
+    let mean_sq: f32 = xs.iter().map(|&x| x * x).sum::<f32>() / dim_size as f32;
+    let inv_std = 1.0 / (mean_sq + 1e-6f32).sqrt();
+    let expected: Vec<f32> = xs.iter().map(|&x| bf16_round(x * inv_std)).collect();
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (g - e).abs() < 5e-2,
+            "bf16 rms_norm[{i}]: got {g}, expected {e}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn bf16_matmul_smoke() -> TestResult {
+    let bf16_ty: DataType = FloatType::BF16.into();
+    let a_dims = &[1usize, 4];
+    let b_dims = &[4usize, 4];
+    let out_dims = &[1usize, 4];
+
+    let mut graph = Graph::empty_graph("bf16_matmul".to_string());
+
+    let a = create_value(&mut graph, "a".to_string(), a_dims, bf16_ty);
+    let node = graph.nodes.alloc(Node::create_node(
+        vec![],
+        vec![a],
+        "Input_a".to_string(),
+        Operator::Input(a),
+    ));
+    graph.inputs.push(node);
+    let b = create_value(&mut graph, "b".to_string(), b_dims, bf16_ty);
+    let node = graph.nodes.alloc(Node::create_node(
+        vec![],
+        vec![b],
+        "Input_b".to_string(),
+        Operator::Input(b),
+    ));
+    graph.inputs.push(node);
+
+    let c = graph.values.alloc(ValueInfo {
+        name: "c".to_string(),
+        ty: Some(TensorType::Resolved(ResolvedTensorType::new(
+            bf16_ty,
+            ResolvedTensorDims::new(out_dims),
+        ))),
+    });
+    graph.nodes.alloc(Node::create_node(
+        vec![Some(a), Some(b)],
+        vec![c],
+        "matmul".to_string(),
+        Operator::MatMul,
+    ));
+    let node = graph.nodes.alloc(Node::create_node(
+        vec![Some(c)],
+        vec![],
+        "Output_c".to_string(),
+        Operator::Output(c),
+    ));
+    graph.outputs.push(node);
+
+    let opts = Options::builder().target(Target::CUDA).build();
+    let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
+
+    let a_vals = [1.0f32, 0.5, -1.0, 2.0];
+    let b_vals = [
+        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let inputs = vec![
+        make_bf16_tensor(a_dims, &a_vals),
+        make_bf16_tensor(b_dims, &b_vals),
+    ];
+    let outputs = session.run(&inputs)?;
+    let got = extract_bf16(&outputs[0]);
+    let expected: Vec<f32> = a_vals.iter().map(|&x| bf16_round(x)).collect();
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!((g - e).abs() < 1e-2, "bf16 matmul[{i}]: got {g}, expected {e}");
+    }
+    Ok(())
+}
+
+#[test]
 fn bf16_add_smoke() -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let dims = &[4usize];

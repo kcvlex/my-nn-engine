@@ -127,14 +127,34 @@ impl Display for CublasApi {
                 beta,
                 data_ty,
             }) => {
-                let (c_ty, prefix) = match data_ty {
-                    DataType::Float(FloatType::F32) => ("float", 'S'),
-                    DataType::Float(FloatType::F64) => ("double", 'D'),
-                    _ => panic!("Unsupported data type for cuBLAS GEMM"),
-                };
-                write!(
-                    f,
-                    "
+                if matches!(data_ty, DataType::Float(FloatType::BF16)) {
+                    write!(
+                        f,
+                        "
+cublasGemmEx(
+    {handler},
+    {trans_a},
+    {trans_b},
+    {m}, {n}, {k},
+    &{alpha},
+    {a}, CUDA_R_16BF, {lda},
+    {b}, CUDA_R_16BF, {ldb},
+    &{beta},
+    {c}, CUDA_R_16BF, {ldc},
+    CUBLAS_COMPUTE_32F,
+    CUBLAS_GEMM_DEFAULT
+)
+",
+                    )
+                } else {
+                    let (c_ty, prefix) = match data_ty {
+                        DataType::Float(FloatType::F32) => ("float", 'S'),
+                        DataType::Float(FloatType::F64) => ("double", 'D'),
+                        _ => panic!("Unsupported data type for cuBLAS GEMM"),
+                    };
+                    write!(
+                        f,
+                        "
 cublas{prefix}gemm(
     {handler},
     {trans_a},
@@ -147,7 +167,8 @@ cublas{prefix}gemm(
     ({c_ty} *){c}, {ldc}
 )
 ",
-                )
+                    )
+                }
             }
             Self::BatchedGemm(BatchedGemmArgs {
                 gemm,
@@ -173,14 +194,35 @@ cublas{prefix}gemm(
                     beta,
                     data_ty,
                 } = gemm;
-                let (c_ty, prefix) = match data_ty {
-                    DataType::Float(FloatType::F32) => ("float", 'S'),
-                    DataType::Float(FloatType::F64) => ("double", 'D'),
-                    _ => panic!("Unsupported data type for cuBLAS GEMM"),
-                };
-                write!(
-                    f,
-                    "
+                if matches!(data_ty, DataType::Float(FloatType::BF16)) {
+                    write!(
+                        f,
+                        "
+cublasGemmStridedBatchedEx(
+    {handler},
+    {trans_a},
+    {trans_b},
+    {m}, {n}, {k},
+    &{alpha},
+    {a}, CUDA_R_16BF, {lda}, {stride_a},
+    {b}, CUDA_R_16BF, {ldb}, {stride_b},
+    &{beta},
+    {c}, CUDA_R_16BF, {ldc}, {stride_c},
+    {batch_count},
+    CUBLAS_COMPUTE_32F,
+    CUBLAS_GEMM_DEFAULT
+)
+",
+                    )
+                } else {
+                    let (c_ty, prefix) = match data_ty {
+                        DataType::Float(FloatType::F32) => ("float", 'S'),
+                        DataType::Float(FloatType::F64) => ("double", 'D'),
+                        _ => panic!("Unsupported data type for cuBLAS GEMM"),
+                    };
+                    write!(
+                        f,
+                        "
 cublas{prefix}gemmStridedBatched(
     {handler},
     {trans_a},
@@ -194,7 +236,8 @@ cublas{prefix}gemmStridedBatched(
     {batch_count}
 )
 ",
-                )
+                    )
+                }
             }
         }
     }

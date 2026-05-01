@@ -6,50 +6,37 @@
 
 namespace cg = cooperative_groups;
 
-// From https://onnx.ai/onnx/operators/onnx__LayerNormalization.html
-//
-//   Mean = ReduceMean<axes=normalized_axes>(X)
-//   D = Sub(X, Mean)
-//   DD = Mul(D, D)
-//   Var = ReduceMean<axes=normalized_axes>(DD)
-//   VarEps = Add(Var, epsilon)
-//   StdDev = Sqrt(VarEps)
-//   InvStdDev = Reciprocal(StdDev)
-//   Normalized = Mul(D, InvStdDev)
-//   NormalizedScaled = Mul(Normalized, Scale)
-//   Y = Add(NormalizedScaled, B)
 template <typename T, int BLOCK_SIZE, int DIM>
 __global__ void layer_norm(
     T *out,
     T *in,
     T *scale,
     T *bias,
-    T epsilon,
+    float epsilon,
     int input_size
 ) {
-    __shared__ T buf[BLOCK_SIZE];
-    __shared__ T mean;
+    __shared__ float buf[BLOCK_SIZE];
+    __shared__ float mean;
     constexpr int REPEAT = (DIM + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     int tid = threadIdx.x;
     if (input_size <= blockIdx.x * DIM) return;
 
-    T inputs[REPEAT] = {};
+    float inputs[REPEAT] = {};
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
 
     for (int i = 0, offset = tid; i < REPEAT && offset < DIM; i++, offset += BLOCK_SIZE) {
-        inputs[i] = in[blockIdx.x * DIM + offset];
+        inputs[i] = (float)in[blockIdx.x * DIM + offset];
     }
 
-    // Mean = ReduceMean<axes=normalized_axes>(X)
     {
-        T sum_acc = 0;
+        float sum_acc = 0.0f;
         for (int i = 0; i < REPEAT; i++) {
             sum_acc += inputs[i];
         }
         for (int s = tile32.size() / 2; 0 < s; s /= 2) {
-            T other = tile32.shfl_down(sum_acc, s);
+            float other = tile32.shfl_down(sum_acc, s);
             sum_acc += other;
         }
         buf[tid] = sum_acc;
@@ -64,22 +51,19 @@ __global__ void layer_norm(
         cg::sync(cta);
     }
 
-    // D = Sub(X, Mean)
-    // DD = Mul(D, D)
-    T vars[REPEAT] = {};
+    float vars[REPEAT] = {};
     for (int i = 0; i < REPEAT && i * BLOCK_SIZE + tid < DIM; i++) {
         inputs[i] -= mean;
         vars[i] = inputs[i] * inputs[i];
     }
 
-    // Var = ReduceMean<axes=normalized_axes>(DD)
     {
-        T sum_acc = 0;
+        float sum_acc = 0.0f;
         for (int i = 0; i < REPEAT; i++) {
             sum_acc += vars[i];
         }
         for (int s = tile32.size() / 2; 0 < s; s /= 2) {
-            T other = tile32.shfl_down(sum_acc, s);
+            float other = tile32.shfl_down(sum_acc, s);
             sum_acc += other;
         }
         buf[tid] = sum_acc;
@@ -94,19 +78,13 @@ __global__ void layer_norm(
         cg::sync(cta);
     }
 
-    // VarEps = Add(Var, epsilon)
-    // StdDev = Sqrt(VarEps)
-    T std_dev = sqrt(mean + epsilon);
+    float std_dev = sqrtf(mean + epsilon);
 
-    // InvStdDev = Reciprocal(StdDev)
-    // Normalized = Mul(D, InvStdDev)
-    // NormalizedScaled = Mul(Normalized, Scale)
-    // Y = Add(NormalizedScaled, B)
     for (int i = 0, offset = tid; i < REPEAT && offset < DIM; i++, offset += BLOCK_SIZE) {
-        T y = inputs[i] / std_dev;
-        y *= scale[offset];
-        y += bias[offset];
-        out[blockIdx.x * DIM + offset] = y;
+        float y = inputs[i] / std_dev;
+        y *= (float)scale[offset];
+        y += (float)bias[offset];
+        out[blockIdx.x * DIM + offset] = (T)y;
     }
 }
 

@@ -6,23 +6,13 @@
 
 namespace cg = cooperative_groups;
 
-// Flash-attention-style tiled attention with optional cache-shaped K/V.
-//
-// q_seq_len:       Q rows per (batch, head).
-// kv_active_seq:   K/V rows actually attended over.
-// kv_cache_stride: K/V buffer's per-(batch, head) seq stride. For self-attention with
-//                  fresh K/V, equal to kv_active_seq. For chunked prefill against the KV
-//                  cache, equal to the cache's static seq dim (max_seq_len) and
-//                  kv_active_seq = past_len + q_seq_len.
-// q_pos_offset:    absolute position of Q[0] (= past_len). Used by the causal mask so
-//                  row q_pos sees K[0..q_pos_offset+q_pos+1]. 0 for square self-attention.
 template <typename T, int Br, int Bc, int THREADS_PER_ROW, int HEAD_DIM>
 __global__ void attention(
     T *out,
     T *Q,
     T *K,
     T *V,
-    T scale,
+    float scale,
     bool is_causal,
     T *mask,
     int mask_outer_stride,
@@ -66,9 +56,9 @@ __global__ void attention(
 
     cg::sync(cta);
 
-    T row_max = -INFINITY;
-    T row_sum = 0;
-    T block_O[ELEMENTS_PER_THREAD] = {};
+    float row_max = -INFINITY;
+    float row_sum = 0.0f;
+    float block_O[ELEMENTS_PER_THREAD] = {};
     int local_row = threadIdx.x / THREADS_PER_ROW;
 
     for (int i = 0; i < (kv_active_seq + Bc - 1) / Bc; i++) {
@@ -81,40 +71,40 @@ __global__ void attention(
         }
         cg::sync(cta);
 
-        T P[Bc];
-        T old_max = row_max;
+        float P[Bc];
+        float old_max = row_max;
         for (int j = 0; j < num_kv_row; j++) {
-            T sum = 0;
+            float sum = 0.0f;
             for (int k = tile.thread_rank(); k < HEAD_DIM; k += THREADS_PER_ROW) {
-                sum += s_Q[local_row][k] * s_K[j][k];
+                sum += (float)s_Q[local_row][k] * (float)s_K[j][k];
             }
             int g_row = blockIdx.x * Br + local_row;
             int g_col = i * Bc + j;
             bool masked_out = is_causal && (q_pos_offset + g_row) < g_col;
-            T val;
+            float val;
             if (masked_out) {
                 val = -INFINITY;
             } else {
                 for (int s = tile.size() / 2; 0 < s; s /= 2) {
-                    T other = tile.shfl_down(sum, s);
+                    float other = tile.shfl_down(sum, s);
                     sum += other;
                 }
                 sum = tile.shfl(sum, 0);
                 val = sum * scale;
                 if (mask) {
-                    val += mask[blockIdx.y * mask_outer_stride + g_row * mask_row_stride + g_col];
+                    val += (float)mask[blockIdx.y * mask_outer_stride + g_row * mask_row_stride + g_col];
                 }
             }
             P[j] = val;
             row_max = max(row_max, val);
         }
 
-        T p_sum = 0;
+        float p_sum = 0.0f;
         for (int j = 0; j < num_kv_row; j++) {
-            P[j] = exp(P[j] - row_max);
+            P[j] = expf(P[j] - row_max);
             p_sum += P[j];
         }
-        T coeff = exp(old_max - row_max);
+        float coeff = expf(old_max - row_max);
         row_sum = coeff * row_sum + p_sum;
 
         for (int j = 0; j < ELEMENTS_PER_THREAD; j++) {
@@ -122,14 +112,14 @@ __global__ void attention(
         }
         for (int j = 0; j < num_kv_row; j++) {
             for (int k = 0, idx = tile.thread_rank(); idx < HEAD_DIM; k++, idx += THREADS_PER_ROW) {
-                block_O[k] += P[j] * s_V[j][idx];
+                block_O[k] += P[j] * (float)s_V[j][idx];
             }
         }
         cg::sync(cta);
     }
 
     for (int i = 0, idx = tile.thread_rank(); idx < HEAD_DIM; i++, idx += THREADS_PER_ROW) {
-        s_Q[local_row][idx] = block_O[i] / row_sum;
+        s_Q[local_row][idx] = (T)(block_O[i] / row_sum);
     }
     cg::sync(cta);
 
@@ -140,30 +130,21 @@ __global__ void attention(
     }
 }
 
-// cache_seq_len: K/V buffer's per-(batch,head) seq stride (static dim of K).
-// active_seq_kv: number of K/V rows to actually attend over (runtime, 0 <= active <= cache_seq_len).
-// For static-shape attention these are equal; for KV-cache decode active_seq_kv = past_len + 1.
-//
-// Grouped-Query Attention (GQA): Q has num_q_heads heads, K/V have num_kv_heads heads.
-// Each group of (num_q_heads / num_kv_heads) Q-heads shares the same K/V head.
-// MHA is the special case num_kv_heads == num_q_heads.
-//
-// Grid layout: blockIdx.x = batch_idx * num_q_heads + q_head_idx, one block per (batch, q_head).
 template <typename T, int HEAD_DIM, int BLOCK_SIZE>
 __global__ void attention_decode(
     T *out,
     T *Q,
     T *K,
     T *V,
-    T scale,
+    float scale,
     int cache_seq_len,
     int active_seq_kv,
     int num_q_heads,
     int num_kv_heads
 ) {
     __shared__ T s_Q[HEAD_DIM];
-    __shared__ T s_O[HEAD_DIM];
-    __shared__ T dot_buf[BLOCK_SIZE];
+    __shared__ float s_O[HEAD_DIM];
+    __shared__ float dot_buf[BLOCK_SIZE];
 
     int b = blockIdx.x / num_q_heads;
     int q_head = blockIdx.x % num_q_heads;
@@ -180,21 +161,21 @@ __global__ void attention_decode(
 
     for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
         s_Q[i] = Q[i];
-        s_O[i] = 0;
+        s_O[i] = 0.0f;
     }
 
 
-    T row_max = -INFINITY;
-    T row_sum = 0;
+    float row_max = -INFINITY;
+    float row_sum = 0.0f;
     for (int row_K = 0; row_K < active_seq_kv; row_K++) {
-        T old_max = row_max;
-        T dot = 0;
+        float old_max = row_max;
+        float dot = 0.0f;
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
-            dot += s_Q[i] * K[row_K * HEAD_DIM + i];
+            dot += (float)s_Q[i] * (float)K[row_K * HEAD_DIM + i];
         }
 
         for (int s = tile.size() / 2; 0 < s; s /= 2) {
-            T other_dot = tile.shfl_down(dot, s);
+            float other_dot = tile.shfl_down(dot, s);
             dot += other_dot;
         }
         dot_buf[threadIdx.x] = dot * scale;
@@ -207,18 +188,18 @@ __global__ void attention_decode(
         }
 
         row_max = max(row_max, dot_buf[0]);
-        T score = exp(dot_buf[0] - row_max);
-        T coeff = exp(old_max - row_max);
-        row_sum = row_sum * coeff  + score;
+        float score = expf(dot_buf[0] - row_max);
+        float coeff = expf(old_max - row_max);
+        row_sum = row_sum * coeff + score;
 
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
             s_O[i] *= coeff;
-            s_O[i] += score * V[row_K * HEAD_DIM + i];
+            s_O[i] += score * (float)V[row_K * HEAD_DIM + i];
         }
     }
 
     for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
-        out[i] = s_O[i] / row_sum;
+        out[i] = (T)(s_O[i] / row_sum);
     }
 }
 
