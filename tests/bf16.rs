@@ -249,7 +249,10 @@ fn bf16_matmul_smoke() -> TestResult {
     let got = extract_bf16(&outputs[0]);
     let expected: Vec<f32> = a_vals.iter().map(|&x| bf16_round(x)).collect();
     for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
-        assert!((g - e).abs() < 1e-2, "bf16 matmul[{i}]: got {g}, expected {e}");
+        assert!(
+            (g - e).abs() < 1e-2,
+            "bf16 matmul[{i}]: got {g}, expected {e}"
+        );
     }
     Ok(())
 }
