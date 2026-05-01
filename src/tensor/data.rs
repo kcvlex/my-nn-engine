@@ -166,6 +166,17 @@ impl TensorData {
             DataType::UInt(ty @ UIntType::U64) => TensorData::UInt(ty, convert!(raw, u64, u64)),
             DataType::Float(ty @ FloatType::F32) => TensorData::Float(ty, convert!(raw, f32, f64)),
             DataType::Float(ty @ FloatType::F64) => TensorData::Float(ty, convert!(raw, f64, f64)),
+            DataType::Float(ty @ FloatType::BF16) => {
+                let v: Vec<f64> = raw
+                    .chunks_exact(2)
+                    .map(|c| {
+                        let bits = u16::from_le_bytes([c[0], c[1]]);
+                        let f32_bits = (bits as u32) << 16;
+                        f32::from_bits(f32_bits) as f64
+                    })
+                    .collect();
+                TensorData::Float(ty, v)
+            }
         }
     }
 

@@ -104,6 +104,7 @@ impl<'ctx> Routines<'ctx> {
         let prefix = match fp_ty {
             FloatType::F32 => 's',
             FloatType::F64 => 'd',
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         };
         let fp_ty = fp_ty.llvm_type(ctx);
 
@@ -330,6 +331,7 @@ impl<'ctx> BLAS<'ctx> {
         match ty {
             FloatType::F32 => self.s_routines.call_gemm(gemm, builder),
             FloatType::F64 => self.d_routines.call_gemm(gemm, builder),
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 
@@ -342,6 +344,7 @@ impl<'ctx> BLAS<'ctx> {
         match ty {
             FloatType::F32 => self.s_routines.call_gemm_batch_strided(gemm, builder),
             FloatType::F64 => self.d_routines.call_gemm_batch_strided(gemm, builder),
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 
@@ -361,6 +364,7 @@ impl<'ctx> BLAS<'ctx> {
         match ty {
             FloatType::F32 => self.s_routines.call_dot(dot, builder),
             FloatType::F64 => self.d_routines.call_dot(dot, builder),
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 }

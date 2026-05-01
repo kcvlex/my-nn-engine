@@ -28,6 +28,7 @@ impl DataType {
             DataType::SInt(SIntType::I64) => "CUDNN_DATA_INT64",
             DataType::UInt(UIntType::U8) => "CUDNN_DATA_UINT8",
             DataType::UInt(UIntType::U64) => "CUDNN_DATA_UINT64",
+            DataType::Float(FloatType::BF16) => "CUDNN_DATA_BFLOAT16",
             DataType::Float(FloatType::F32) => "CUDNN_DATA_FLOAT",
             DataType::Float(FloatType::F64) => "CUDNN_DATA_DOUBLE",
         }

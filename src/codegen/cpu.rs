@@ -163,6 +163,7 @@ fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
         DataType::SInt(SIntType::I64) => 8,
         DataType::UInt(UIntType::U8) => 1,
         DataType::UInt(UIntType::U64) => 8,
+        DataType::Float(FloatType::BF16) => 2,
         DataType::Float(FloatType::F32) => 4,
         DataType::Float(FloatType::F64) => 8,
     };

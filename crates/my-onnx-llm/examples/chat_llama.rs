@@ -21,11 +21,7 @@ fn main() {
     let template = std::fs::read_to_string(model_dir.join("chat_template.jinja")).unwrap();
 
     let config = HfConfig::from_path(model_dir.join("config.json")).unwrap();
-    let hf = HfWeights::from_index(
-        model_dir.join("weights.f32.bin"),
-        model_dir.join("weights.f32.json"),
-    )
-    .unwrap();
+    let hf = HfWeights::from_dir(&model_dir).unwrap();
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = 512;

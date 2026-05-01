@@ -70,6 +70,7 @@ impl std::fmt::Display for DataType {
                 DataType::SInt(SIntType::I64) => "i64",
                 DataType::UInt(UIntType::U8) => "uint8_t",
                 DataType::UInt(UIntType::U64) => "u64",
+                DataType::Float(FloatType::BF16) => "__nv_bfloat16",
                 DataType::Float(FloatType::F32) => "float",
                 DataType::Float(FloatType::F64) => "double",
             }
@@ -153,6 +154,7 @@ impl ChunkMemSize {
             .map(|s| {
                 let elem_size = match s.ty {
                     DataType::Bool | DataType::UInt(UIntType::U8) => 1,
+                    DataType::Float(FloatType::BF16) => 2,
                     DataType::Float(FloatType::F32) | DataType::SInt(SIntType::I32) => 4,
                     DataType::Float(FloatType::F64) |
                     DataType::SInt(SIntType::I64) |
@@ -497,7 +499,11 @@ impl<'sched> HostCodeGenerator<'sched> {
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
-            includes: BTreeSet::from([Include::Local("common.cuh"), Include::System("cuda.h")]),
+            includes: BTreeSet::from([
+                Include::Local("common.cuh"),
+                Include::System("cuda.h"),
+                Include::System("cuda_bf16.h"),
+            ]),
         }
     }
 

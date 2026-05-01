@@ -271,6 +271,7 @@ impl UIntType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum FloatType {
+    BF16,
     F32,
     F64,
 }
@@ -278,6 +279,7 @@ pub enum FloatType {
 impl FloatType {
     pub fn bit_width(&self) -> usize {
         match self {
+            FloatType::BF16 => 16,
             FloatType::F32 => 32,
             FloatType::F64 => 64,
         }

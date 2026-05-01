@@ -464,6 +464,13 @@ fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tenso
                 TensorData::Float(ty, tensor.float_data.into_iter().map(f64::from).collect())
             }
             DataType::Float(ty @ FloatType::F64) => TensorData::Float(ty, tensor.double_data),
+            DataType::Float(FloatType::BF16) => {
+                return Err(ModelLoadError::TypeError(
+                    crate::tensor::types::TypeError::InferError(
+                        "inline BF16 data without raw_data is unsupported".to_string(),
+                    ),
+                ));
+            }
         }
     } else {
         TensorData::from_bytes(elem_type, tensor.raw_data.as_slice())
@@ -484,6 +491,7 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
         DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
         DataType::UInt(UIntType::U64) => tensor_proto::DataType::Uint64 as i32,
+        DataType::Float(FloatType::BF16) => tensor_proto::DataType::Bfloat16 as i32,
         DataType::Float(FloatType::F32) => tensor_proto::DataType::Float as i32,
         DataType::Float(FloatType::F64) => tensor_proto::DataType::Double as i32,
     };
@@ -506,6 +514,7 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
             vec![],
         ),
         TensorData::Float(FloatType::F64, v) => (vec![], v.clone(), vec![], vec![], vec![]),
+        TensorData::Float(FloatType::BF16, _) => unimplemented!("BF16 inline tensor save"),
         TensorData::SInt(SIntType::I32, v) => (
             vec![],
             vec![],
@@ -580,6 +589,7 @@ impl TryFrom<i32> for DataType {
             .map_err(|e| ModelLoadError::Unexpected(format!("Invalid DataType: {:?}", e)))?;
         match value {
             tensor_proto::DataType::Bool => Ok(DataType::Bool),
+            tensor_proto::DataType::Bfloat16 => Ok(FloatType::BF16.into()),
             tensor_proto::DataType::Float => Ok(FloatType::F32.into()),
             tensor_proto::DataType::Double => Ok(FloatType::F64.into()),
             tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),

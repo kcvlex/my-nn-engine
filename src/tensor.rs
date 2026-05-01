@@ -119,6 +119,7 @@ macro_rules! apply_ndarray_ops {
             TensorData::UInt(UIntType::U64, _) => $func(into_raw_tensor!($self, u64), $($args,)*).try_into(),
             TensorData::Float(FloatType::F32, _) => $func(into_raw_tensor!($self, f32), $($args,)*).try_into(),
             TensorData::Float(FloatType::F64, _) => $func(into_raw_tensor!($self, f64), $($args,)*).try_into(),
+            TensorData::Float(FloatType::BF16, _) => unimplemented!("BF16 inline ndarray ops"),
         }
     }};
 }
@@ -187,6 +188,7 @@ impl Tensor {
             TensorData::UInt(UIntType::U64, _) => collect_slices!(u64),
             TensorData::Float(FloatType::F32, _) => collect_slices!(f32),
             TensorData::Float(FloatType::F64, _) => collect_slices!(f64),
+            TensorData::Float(FloatType::BF16, _) => unimplemented!("BF16 inline concat"),
         }
     }
 

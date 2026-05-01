@@ -22,6 +22,7 @@ impl<'ctx> FloatIntrinsics<'ctx> {
         match ty {
             FloatType::F32 => self.f_f32,
             FloatType::F64 => self.f_f64,
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 }
@@ -175,6 +176,7 @@ impl FloatType {
         match self {
             FloatType::F32 => ctx.f32_type(),
             FloatType::F64 => ctx.f64_type(),
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 }

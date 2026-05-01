@@ -10,6 +10,7 @@ use crate::onnx::operator;
 use crate::onnx::operator::args;
 use crate::onnx::operator::ReinterpretType;
 use crate::tensor::types::DataType;
+use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
 
 #[derive(From)]
@@ -624,6 +625,11 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         };
 
         assert!(kernel.outputs.len() == 1);
+        let storage_dt = self
+            .ctx
+            .get_resolved_tensor_type(kernel.outputs[0])?
+            .elem_type;
+        let compute_dt = compute_dtype(storage_dt);
         let output: KernelVar = {
             let mut outputs = Vec::new();
             for (op, args) in ops.iter() {
@@ -637,11 +643,7 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                     }
                 }
                 let var = self.ctx.new_local_var();
-                let ty = TypeSymbol::Primitive(
-                    self.ctx
-                        .get_resolved_tensor_type(kernel.outputs[0])?
-                        .elem_type,
-                );
+                let ty = TypeSymbol::Primitive(compute_dt);
                 let rhs = self.single_op(op, &inputs);
                 stmts.push(format!("{ty} {var} = {rhs};"));
                 outputs.push(var)
@@ -653,21 +655,20 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         let device_decl = {
             let mut res = self.ctx.decl.clone();
             assert!(matches!(res.qualifier, FuncQualifier::Global));
-            res.qualifier = FuncQualifier::Device(
-                self.ctx
-                    .get_resolved_tensor_type(kernel.outputs[0])?
-                    .elem_type,
-            );
+            res.qualifier = FuncQualifier::Device(compute_dt);
             res.params = res
                 .params
                 .iter()
                 .skip(1)
                 .map(|(var, ty)| {
                     assert!(matches!(var, KernelVar::Value(_)));
-                    let TypeSymbol::Pointer(ty) = ty else {
+                    let TypeSymbol::Pointer(inner) = ty else {
                         panic!();
                     };
-                    (*var, *ty.clone())
+                    let TypeSymbol::Primitive(dt) = **inner else {
+                        panic!();
+                    };
+                    (*var, TypeSymbol::Primitive(compute_dtype(dt)))
                 })
                 .collect_vec();
             res
@@ -683,6 +684,13 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
         let gid = KernelVar::Gid;
         let decl = self.ctx.decl.decl();
         let device_decl_name = device_decl.name();
+        let storage_dt = output_ty.elem_type;
+        let compute_dt = compute_dtype(storage_dt);
+        let out_cast = if storage_dt != compute_dt {
+            format!("({})", storage_dt)
+        } else {
+            String::new()
+        };
         let args = device_decl
             .params
             .iter()
@@ -690,10 +698,17 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
                 let KernelVar::Value(value_id) = var else {
                     panic!();
                 };
+                let in_storage = self.ctx.get_resolved_tensor_type(*value_id)?.elem_type;
+                let in_compute = compute_dtype(in_storage);
+                let in_cast = if in_storage != in_compute {
+                    format!("({})", in_compute)
+                } else {
+                    String::new()
+                };
                 let idx = self
                     .ctx
                     .tensor_idx(*value_id, KernelVar::Gid, Some(&output_ty.dims))?;
-                Ok(format!("{}[{}]", var, idx))
+                Ok(format!("{in_cast}{}[{}]", var, idx))
             })
             .collect::<Result<Vec<_>, BuildError>>()?
             .join(", ");
@@ -710,10 +725,17 @@ impl<'sched> ElementwiseKernelBuilder<'sched> {
 {decl} {{
     int {gid} = blockIdx.x * blockDim.x + threadIdx.x;
     if ({size} <= {gid}) return;
-    {out} = {device_decl_name}({args});
+    {out} = {out_cast}{device_decl_name}({args});
 }}
 "
         ))
+    }
+}
+
+fn compute_dtype(storage: DataType) -> DataType {
+    match storage {
+        DataType::Float(FloatType::BF16) => DataType::Float(FloatType::F32),
+        other => other,
     }
 }
 

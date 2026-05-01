@@ -833,6 +833,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let v = match ft {
                     FloatType::F32 => f32::NEG_INFINITY as f64,
                     FloatType::F64 => f64::NEG_INFINITY,
+                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 };
                 ft.llvm_type(self.context)
                     .const_float(v)
@@ -1612,6 +1613,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_float(match fp_ty {
                     FloatType::F32 => f32::NEG_INFINITY as f64,
                     FloatType::F64 => f64::NEG_INFINITY,
+                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 })
                 .as_basic_value_enum(),
         };
@@ -1895,6 +1897,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             PoolMode::Max => match fp_ty {
                 FloatType::F32 => f32::NEG_INFINITY as f64,
                 FloatType::F64 => f64::NEG_INFINITY,
+                FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
             },
         };
 
@@ -2454,6 +2457,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let id_v = match ty {
                     FloatType::F32 => f32::MIN as f64,
                     FloatType::F64 => f64::MIN,
+                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 };
                 let ty = ty.llvm_type(self.context);
                 let id_v = ty.const_float(id_v);
@@ -3185,6 +3189,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let ty = match ty {
                     FloatType::F32 => self.context.f32_type(),
                     FloatType::F64 => self.context.f64_type(),
+                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 };
                 ty.const_float(*v).into()
             }
@@ -3540,6 +3545,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let fmax_id = match val_ty {
             FloatType::F32 => f32::MIN as f64,
             FloatType::F64 => f64::MIN,
+            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         };
 
         let outer_bound = {

@@ -81,6 +81,7 @@ fn data_type_to_i32(dt: DataType) -> i32 {
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
         DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
         DataType::UInt(UIntType::U64) => tensor_proto::DataType::Uint64 as i32,
+        DataType::Float(FloatType::BF16) => tensor_proto::DataType::Bfloat16 as i32,
         DataType::Float(FloatType::F32) => tensor_proto::DataType::Float as i32,
         DataType::Float(FloatType::F64) => tensor_proto::DataType::Double as i32,
     }
@@ -106,6 +107,7 @@ fn scalar_to_tensor_proto(scalar: &ScalarData) -> TensorProto {
             double_data: vec![*v],
             ..Default::default()
         },
+        ScalarData::Float(FloatType::BF16, _) => unimplemented!("BF16 scalar save"),
         ScalarData::SInt(SIntType::I32, v) => TensorProto {
             dims: vec![1],
             data_type: tensor_proto::DataType::Int32 as i32,

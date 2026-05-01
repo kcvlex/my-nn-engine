@@ -42,6 +42,7 @@ pub(crate) enum StrictTensor {
     I32(Vec<i32>),
     I64(Vec<i64>),
     U64(Vec<u64>),
+    BF16(Vec<u16>),
     F32(Vec<f32>),
     F64(Vec<f64>),
 }
@@ -60,6 +61,7 @@ impl StrictTensor {
             DataType::SInt(SIntType::I32) => StrictTensor::I32(vec![0; sz]),
             DataType::SInt(SIntType::I64) => StrictTensor::I64(vec![0; sz]),
             DataType::UInt(UIntType::U64) => StrictTensor::U64(vec![0; sz]),
+            DataType::Float(FloatType::BF16) => StrictTensor::BF16(vec![0; sz]),
             DataType::Float(FloatType::F32) => StrictTensor::F32(vec![0.0; sz]),
             DataType::Float(FloatType::F64) => StrictTensor::F64(vec![0.0; sz]),
         }
@@ -71,6 +73,7 @@ impl StrictTensor {
             StrictTensor::I32(v) => v.as_ptr() as *const u8,
             StrictTensor::I64(v) => v.as_ptr() as *const u8,
             StrictTensor::U64(v) => v.as_ptr() as *const u8,
+            StrictTensor::BF16(v) => v.as_ptr() as *const u8,
             StrictTensor::F32(v) => v.as_ptr() as *const u8,
             StrictTensor::F64(v) => v.as_ptr() as *const u8,
         }
@@ -82,6 +85,7 @@ impl StrictTensor {
             StrictTensor::I32(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::I64(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::U64(v) => v.as_mut_ptr() as *mut u8,
+            StrictTensor::BF16(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::F32(v) => v.as_mut_ptr() as *mut u8,
             StrictTensor::F64(v) => v.as_mut_ptr() as *mut u8,
         }
@@ -93,6 +97,7 @@ impl StrictTensor {
             StrictTensor::I32(v) => v.len() * std::mem::size_of::<i32>(),
             StrictTensor::I64(v) => v.len() * std::mem::size_of::<i64>(),
             StrictTensor::U64(v) => v.len() * std::mem::size_of::<u64>(),
+            StrictTensor::BF16(v) => v.len() * std::mem::size_of::<u16>(),
             StrictTensor::F32(v) => v.len() * std::mem::size_of::<f32>(),
             StrictTensor::F64(v) => v.len() * std::mem::size_of::<f64>(),
         }
@@ -116,6 +121,13 @@ impl StrictTensor {
             StrictTensor::F64(v) => {
                 Tensor::new(dims, TensorData::Float(FloatType::F64, v)).unwrap()
             }
+            StrictTensor::BF16(v) => {
+                let f64_vec: Vec<f64> = v
+                    .iter()
+                    .map(|&bits| f32::from_bits((bits as u32) << 16) as f64)
+                    .collect();
+                Tensor::new(dims, TensorData::Float(FloatType::BF16, f64_vec)).unwrap()
+            }
         }
     }
 }
@@ -130,6 +142,11 @@ impl From<&Tensor> for StrictTensor {
             TensorData::UInt(UIntType::U64, v) => StrictTensor::U64(v.clone()),
             TensorData::Float(FloatType::F32, v) => StrictTensor::F32(cast_vec!(v, f32)),
             TensorData::Float(FloatType::F64, v) => StrictTensor::F64(v.clone()),
+            TensorData::Float(FloatType::BF16, v) => StrictTensor::BF16(
+                v.iter()
+                    .map(|&x| ((x as f32).to_bits() >> 16) as u16)
+                    .collect(),
+            ),
         }
     }
 }
@@ -151,6 +168,7 @@ impl StrictTensor {
             DataType::SInt(SIntType::I32) => parse!(StrictTensor::I32, i32),
             DataType::SInt(SIntType::I64) => parse!(StrictTensor::I64, i64),
             DataType::UInt(UIntType::U64) => parse!(StrictTensor::U64, u64),
+            DataType::Float(FloatType::BF16) => parse!(StrictTensor::BF16, u16),
             DataType::Float(FloatType::F32) => parse!(StrictTensor::F32, f32),
             DataType::Float(FloatType::F64) => parse!(StrictTensor::F64, f64),
         }
@@ -201,6 +219,7 @@ impl StrictTensor {
             StrictTensor::I32(v) => StrictTensor::I32(v.clone()),
             StrictTensor::I64(v) => StrictTensor::I64(v.clone()),
             StrictTensor::U64(v) => StrictTensor::U64(v.clone()),
+            StrictTensor::BF16(v) => StrictTensor::BF16(v.clone()),
             StrictTensor::F32(v) => StrictTensor::F32(v.clone()),
             StrictTensor::F64(v) => StrictTensor::F64(v.clone()),
         }
