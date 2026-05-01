@@ -29,8 +29,8 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
     let outputs = graph.nodes[node_id].outputs.clone();
     match &op {
         op @ (Operator::Add | Operator::Mul | Operator::Div | Operator::Sub) => {
-            let left = graph.get_initializer(inputs[0].unwrap())?.clone();
-            let right = graph.get_initializer(inputs[1].unwrap())?.clone();
+            let left = graph.get_inline_initializer(inputs[0].unwrap())?.clone();
+            let right = graph.get_inline_initializer(inputs[1].unwrap())?.clone();
 
             let ty = broadcast_shape(&left.dims, &right.dims).ok()?;
             let left = left.broadcast(&ty);
@@ -73,7 +73,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
             Some(vec![tensor])
         }
         Operator::Cast(Cast { ref to }) => {
-            let Tensor { data, dims } = graph.get_initializer(inputs[0].unwrap())?.clone();
+            let Tensor { data, dims } = graph.get_inline_initializer(inputs[0].unwrap())?.clone();
             let data = &data;
             let dims = &dims;
             macro_rules! cast {
@@ -130,7 +130,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
         Operator::Concat(Concat { ref axis }) => {
             let mut tensors: Vec<Tensor> = Vec::new();
             for input in inputs.iter() {
-                tensors.push(graph.get_initializer(input.unwrap())?.clone());
+                tensors.push(graph.get_inline_initializer(input.unwrap())?.clone());
             }
             let axis = axis.index(tensors[0].dims.ndim());
             let refs: Vec<&Tensor> = tensors.iter().collect();
@@ -138,7 +138,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
         }
         Operator::NonZero => {
             let input = inputs[0].unwrap();
-            let input = graph.get_initializer(input)?;
+            let input = graph.get_inline_initializer(input)?;
             let dims = &input.dims;
 
             fn calc<T: Zero>(data: &[T], dims: &ResolvedTensorDims) -> Vec<Vec<i64>> {
@@ -353,7 +353,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
         Operator::Slice => {
             let input_id = inputs[0].unwrap();
             let slices = Slice::collect_slices(graph, node_id)?;
-            let input = graph.get_initializer(input_id)?;
+            let input = graph.get_inline_initializer(input_id)?;
             let (mut starts, mut ends) = all_slice_indices(&input.dims);
             for Slice {
                 start,
@@ -372,7 +372,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
         }
         Operator::Split(ref split) => {
             let input = inputs[0].unwrap();
-            let input = graph.get_initializer(input)?;
+            let input = graph.get_inline_initializer(input)?;
             let (mut starts, mut ends) = all_slice_indices(&input.dims);
             let axis = split.axis.index(input.dims.ndim());
             let mut res = Vec::new();
@@ -387,14 +387,14 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
             Some(res)
         }
         Operator::Gather(Gather { ref axis }) => {
-            let indices = graph.get_initializer(inputs[1].unwrap())?.clone();
-            let input = graph.get_initializer(inputs[0].unwrap())?;
+            let indices = graph.get_inline_initializer(inputs[1].unwrap())?.clone();
+            let input = graph.get_inline_initializer(inputs[0].unwrap())?;
             let axis = axis.index(input.dims.ndim());
             Some(vec![input.gather(&indices, axis)])
         }
         Operator::Reshape | Operator::Squeeze(_) | Operator::Unsqueeze(_) => {
             let dims = graph.get_resolved_tensor_type(outputs[0])?.dims.clone();
-            let input = graph.get_initializer(inputs[0].unwrap())?;
+            let input = graph.get_inline_initializer(inputs[0].unwrap())?;
             Some(vec![input.reshape(&dims)])
         }
         Operator::Transpose(Transpose { ref perm }) => {
@@ -403,7 +403,7 @@ pub fn fold_constant(graph: &mut Graph, node_id: NodeId) -> Option<Vec<Tensor>> 
             Some(vec![input.transpose(perm)])
         }
         Operator::Contiguous(Contiguous { ref ops }) => {
-            let mut tensor = graph.get_initializer(inputs[0].unwrap())?.clone();
+            let mut tensor = graph.get_inline_initializer(inputs[0].unwrap())?.clone();
             for op in ops {
                 match op {
                     ReinterpretType::Reshape { after, .. } => {
