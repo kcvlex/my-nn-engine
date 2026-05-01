@@ -9,7 +9,7 @@ cuda = ["my-onnx/cuda"]
 local = ["my-onnx/local"]
 
 [dependencies]
-my-onnx = { path = "../.." }
+my-onnx = { path = "../..", default-features = false }
 log = "0.4.29"
 thiserror = "2"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
