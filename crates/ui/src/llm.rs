@@ -301,3 +301,94 @@ impl ChatRegistry {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TINYLLAMA_TEMPLATE: &str = r#"{% for message in messages %}
+{% if message['role'] == 'user' %}
+{{ '<|user|>
+' + message['content'] + eos_token }}
+{% elif message['role'] == 'system' %}
+{{ '<|system|>
+' + message['content'] + eos_token }}
+{% elif message['role'] == 'assistant' %}
+{{ '<|assistant|>
+'  + message['content'] + eos_token }}
+{% endif %}
+{% if loop.last and add_generation_prompt %}
+{{ '<|assistant|>' }}
+{% endif %}
+{% endfor %}"#;
+
+    #[test]
+    fn token_spec_deserializes_string_form() {
+        let spec: TokenSpec = serde_json::from_str(r#""</s>""#).unwrap();
+        assert_eq!(spec.as_str(), "</s>");
+    }
+
+    #[test]
+    fn token_spec_deserializes_object_form() {
+        let spec: TokenSpec = serde_json::from_str(
+            r#"{"content": "</s>", "lstrip": false, "normalized": false, "rstrip": false, "single_word": false}"#,
+        )
+        .unwrap();
+        assert_eq!(spec.as_str(), "</s>");
+    }
+
+    #[test]
+    fn llm_model_id_helpers() {
+        assert_eq!(LlmModelId::TinyLlama.dir_name(), "tinyllama");
+        assert_eq!(LlmModelId::TinyLlama.display_name(), "TinyLlama");
+    }
+
+    #[test]
+    fn chat_error_display_strips_debug_wrappers() {
+        let e = ChatError::UnknownSession;
+        assert_eq!(e.to_string(), "unknown chat session");
+
+        let e = ChatError::LoadConfig("missing config.json".to_string());
+        assert_eq!(e.to_string(), "config load failed: missing config.json");
+    }
+
+    /// KV-cache reuse correctness invariant: rendering the conversation
+    /// without the new turn must be a prefix of rendering it with the new
+    /// turn appended. If this breaks, the chat() delta extraction would feed
+    /// wrong tokens to the model.
+    #[test]
+    fn template_prefix_invariant_holds_for_tinyllama() {
+        let history = vec![
+            ChatMessage::user("Hello"),
+            ChatMessage::assistant("Hi there!"),
+        ];
+        let mut with_new = history.clone();
+        with_new.push(ChatMessage::user("How are you?"));
+
+        let prev = apply_chat_template(TINYLLAMA_TEMPLATE, &history, "</s>", "<s>", false).unwrap();
+        let with_new_rendered =
+            apply_chat_template(TINYLLAMA_TEMPLATE, &with_new, "</s>", "<s>", true).unwrap();
+
+        assert!(
+            with_new_rendered.starts_with(&prev),
+            "template not append-only:\n--- prev ---\n{prev}\n--- with_new ---\n{with_new_rendered}"
+        );
+        // The suffix should contain the new user message.
+        let suffix = &with_new_rendered[prev.len()..];
+        assert!(
+            suffix.contains("How are you?"),
+            "suffix missing new user content: {suffix:?}"
+        );
+    }
+
+    #[test]
+    fn template_first_turn_has_no_prior_state() {
+        let history: Vec<ChatMessage> = vec![];
+        let mut with_first = history.clone();
+        with_first.push(ChatMessage::user("Hello"));
+        let with_first_rendered =
+            apply_chat_template(TINYLLAMA_TEMPLATE, &with_first, "</s>", "<s>", true).unwrap();
+        assert!(with_first_rendered.contains("Hello"));
+        assert!(with_first_rendered.contains("<|assistant|>"));
+    }
+}
