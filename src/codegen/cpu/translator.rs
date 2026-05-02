@@ -203,6 +203,111 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_truncate(high, i16_ty, "bf16.trunc")?)
     }
 
+    // Returns ptr = workspace.ptr + workspace.offset + offset_elems (in f32 elements).
+    fn workspace_offset(
+        &self,
+        workspace: &TensorPtr<'ctx>,
+        offset_elems: u64,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, BuilderError> {
+        let i64_ty = self.context.i64_type();
+        let off = self.builder.build_int_add(
+            workspace.offset,
+            i64_ty.const_int(offset_elems, false),
+            "ws.off",
+        )?;
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(self.context.f32_type(), workspace.ptr, &[off], name)
+        }
+    }
+
+    fn bf16_buf_to_f32(
+        &self,
+        src_bf16: PointerValue<'ctx>,
+        dst_f32: PointerValue<'ctx>,
+        count: u64,
+    ) -> Result<(), BuilderError> {
+        if count == 0 {
+            return Ok(());
+        }
+        let i16_ty = self.context.i16_type();
+        let f32_ty = self.context.f32_type();
+        let i64_ty = self.context.i64_type();
+        let preheader = self.builder.get_insert_block().unwrap();
+        let header = self.context.append_basic_block(*self.func, "bf16.h2f.h");
+        let after = self.context.append_basic_block(*self.func, "bf16.h2f.x");
+        self.builder.build_unconditional_branch(header)?;
+        let (phi, idx) = self.init_counted_loop(header)?;
+        let src_gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(i16_ty, src_bf16, &[idx], "h2f.src")?
+        };
+        let bits = self
+            .builder
+            .build_load(i16_ty, src_gep, "h2f.bits")?
+            .into_int_value();
+        let f = self.bf16_bits_to_f32(bits)?;
+        let dst_gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(f32_ty, dst_f32, &[idx], "h2f.dst")?
+        };
+        self.builder.build_store(dst_gep, f)?;
+        self.finalize_counted_loop(
+            phi,
+            preheader,
+            i64_ty.const_int(count, false),
+            header,
+            after,
+            header,
+        )?;
+        self.builder.position_at_end(after);
+        Ok(())
+    }
+
+    fn f32_buf_to_bf16(
+        &self,
+        src_f32: PointerValue<'ctx>,
+        dst_bf16: PointerValue<'ctx>,
+        count: u64,
+    ) -> Result<(), BuilderError> {
+        if count == 0 {
+            return Ok(());
+        }
+        let i16_ty = self.context.i16_type();
+        let f32_ty = self.context.f32_type();
+        let i64_ty = self.context.i64_type();
+        let preheader = self.builder.get_insert_block().unwrap();
+        let header = self.context.append_basic_block(*self.func, "bf16.f2h.h");
+        let after = self.context.append_basic_block(*self.func, "bf16.f2h.x");
+        self.builder.build_unconditional_branch(header)?;
+        let (phi, idx) = self.init_counted_loop(header)?;
+        let src_gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(f32_ty, src_f32, &[idx], "f2h.src")?
+        };
+        let f = self
+            .builder
+            .build_load(f32_ty, src_gep, "f2h.val")?
+            .into_float_value();
+        let bits = self.f32_to_bf16_bits(f)?;
+        let dst_gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(i16_ty, dst_bf16, &[idx], "f2h.dst")?
+        };
+        self.builder.build_store(dst_gep, bits)?;
+        self.finalize_counted_loop(
+            phi,
+            preheader,
+            i64_ty.const_int(count, false),
+            header,
+            after,
+            header,
+        )?;
+        self.builder.position_at_end(after);
+        Ok(())
+    }
+
     fn build_tail_call(
         &self,
         function: FunctionValue<'ctx>,
@@ -1207,6 +1312,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             &im2col_ptr,
             &weight_ptr,
             bias_broadcast.as_ref(),
+            None,
             cur_bb,
             &gemm_op,
         )?;
@@ -2183,6 +2289,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         a: &TensorPtr<'ctx>,
         b: &TensorPtr<'ctx>,
         c: Option<&TensorPtr<'ctx>>,
+        workspace: Option<&TensorPtr<'ctx>>,
         entry: BasicBlock<'ctx>,
         gemm: &operator::Gemm,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
@@ -2212,7 +2319,34 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let a_gep = self.build_gep(a)?;
         let b_gep = self.build_gep(b)?;
         let c_gep = self.build_gep(dst)?;
-        let gemm = GemmArgs {
+
+        let fp_ty = dst.ty.elem_type.float_type().unwrap();
+        if fp_ty == FloatType::BF16 {
+            let workspace = workspace.expect("bf16 Gemm requires GEMM_WORKSPACE input");
+            let ws_a = self.build_gep(workspace)?;
+            let ws_b = self.workspace_offset(workspace, m * k, "gemm.ws_b")?;
+            let ws_c = self.workspace_offset(workspace, m * k + k * n, "gemm.ws_c")?;
+            self.bf16_buf_to_f32(a_gep, ws_a, m * k)?;
+            self.bf16_buf_to_f32(b_gep, ws_b, k * n)?;
+            if beta != 0.0 {
+                self.bf16_buf_to_f32(c_gep, ws_c, m * n)?;
+            }
+            let gemm_args = GemmArgs {
+                a: (ws_a, trans_a),
+                b: (ws_b, trans_b),
+                c: ws_c,
+                alpha: gemm.alpha,
+                beta,
+                m,
+                n,
+                k,
+            };
+            self.blas
+                .call_gemm(FloatType::F32, &gemm_args, self.builder)?;
+            self.f32_buf_to_bf16(ws_c, c_gep, m * n)?;
+            return Ok(self.builder.get_insert_block().unwrap());
+        }
+        let gemm_args = GemmArgs {
             a: (a_gep, trans_a),
             b: (b_gep, trans_b),
             c: c_gep,
@@ -2222,8 +2356,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             n,
             k,
         };
-        self.blas
-            .call_gemm(dst.ty.elem_type.float_type().unwrap(), &gemm, self.builder)?;
+        self.blas.call_gemm(fp_ty, &gemm_args, self.builder)?;
         Ok(entry)
     }
 
@@ -2232,6 +2365,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         dst: &TensorPtr<'ctx>,
         a: &TensorPtr<'ctx>,
         b: &TensorPtr<'ctx>,
+        workspace: Option<&TensorPtr<'ctx>>,
         entry: BasicBlock<'ctx>,
         gemm: &operator::BatchedGemm,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
@@ -2262,6 +2396,99 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let a_ptr = self.build_gep(a)?;
         let b_ptr = self.build_gep(b)?;
         let dst_ptr = self.build_gep(dst)?;
+
+        if fp_ty == FloatType::BF16 {
+            let total_a = batch_count as u64 * stride_a;
+            let total_b = batch_count as u64 * stride_b;
+            let total_c = batch_count as u64 * stride_c;
+            let workspace =
+                workspace.expect("bf16 BatchedGemm requires BATCHED_GEMM_WORKSPACE input");
+            let ws_a = self.build_gep(workspace)?;
+            let ws_b = self.workspace_offset(workspace, total_a, "bgemm.ws_b")?;
+            let ws_c = self.workspace_offset(workspace, total_a + total_b, "bgemm.ws_c")?;
+            self.bf16_buf_to_f32(a_ptr, ws_a, total_a)?;
+            self.bf16_buf_to_f32(b_ptr, ws_b, total_b)?;
+            if gemm.beta != 0.0 {
+                self.bf16_buf_to_f32(dst_ptr, ws_c, total_c)?;
+            }
+
+            let body = self
+                .context
+                .append_basic_block(*self.func, "bgemm.bf16.body");
+            let after = self
+                .context
+                .append_basic_block(*self.func, "bgemm.bf16.after");
+            let guard = self.builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                i64_ty.const_int(batch_count as u64, false),
+                i64_ty.const_zero(),
+                "bgemm.bf16.guard",
+            )?;
+            self.builder.build_conditional_branch(guard, after, body)?;
+            let (ind, idx) = self.init_counted_loop(body)?;
+            let f32_ty = self.context.f32_type();
+            let a_slice = unsafe {
+                self.builder.build_in_bounds_gep(
+                    f32_ty,
+                    ws_a,
+                    &[self.builder.build_int_mul(
+                        idx,
+                        i64_ty.const_int(stride_a, false),
+                        "a.off",
+                    )?],
+                    "a.slice",
+                )?
+            };
+            let b_slice = unsafe {
+                self.builder.build_in_bounds_gep(
+                    f32_ty,
+                    ws_b,
+                    &[self.builder.build_int_mul(
+                        idx,
+                        i64_ty.const_int(stride_b, false),
+                        "b.off",
+                    )?],
+                    "b.slice",
+                )?
+            };
+            let c_slice = unsafe {
+                self.builder.build_in_bounds_gep(
+                    f32_ty,
+                    ws_c,
+                    &[self.builder.build_int_mul(
+                        idx,
+                        i64_ty.const_int(stride_c, false),
+                        "c.off",
+                    )?],
+                    "c.slice",
+                )?
+            };
+            self.blas.call_gemm(
+                FloatType::F32,
+                &GemmArgs {
+                    a: (a_slice, gemm.trans_a),
+                    b: (b_slice, gemm.trans_b),
+                    c: c_slice,
+                    m: m as u64,
+                    n: n as u64,
+                    k: k as u64,
+                    alpha: gemm.alpha,
+                    beta: gemm.beta,
+                },
+                self.builder,
+            )?;
+            self.finalize_counted_loop(
+                ind,
+                entry,
+                i64_ty.const_int(batch_count as u64, false),
+                body,
+                after,
+                body,
+            )?;
+            self.builder.position_at_end(after);
+            self.f32_buf_to_bf16(ws_c, dst_ptr, total_c)?;
+            return Ok(self.builder.get_insert_block().unwrap());
+        }
 
         if self.blas.has_batch_strided() {
             self.blas.call_gemm_batch_strided(
@@ -2441,7 +2668,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 name: dst.name.clone(),
             }
         };
-        self.build_gemm(&dst, &a, &b, c.as_ref(), header, &gemm)?;
+        self.build_gemm(&dst, &a, &b, c.as_ref(), None, header, &gemm)?;
         self.builder.build_unconditional_branch(latch)?;
 
         self.finalize_counted_loop(

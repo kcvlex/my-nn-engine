@@ -233,6 +233,68 @@ impl KernelsBuilder {
                         (body, node.name.clone())
                     };
                     if matches!(target, crate::options::Target::CPU) {
+                        let n = &graph.nodes[node_id];
+                        let bf16_workspace = match &n.op {
+                            Operator::Gemm(_) => {
+                                let a_ty = graph
+                                    .get_resolved_tensor_type(n.inputs[args::GEMM_A].unwrap())
+                                    .unwrap();
+                                if matches!(
+                                    a_ty.elem_type,
+                                    crate::tensor::types::DataType::Float(
+                                        crate::tensor::types::FloatType::BF16,
+                                    )
+                                ) {
+                                    let m = a_ty.dims[0];
+                                    let k = a_ty.dims[1];
+                                    let b_ty = graph
+                                        .get_resolved_tensor_type(n.inputs[args::GEMM_B].unwrap())
+                                        .unwrap();
+                                    let n_dim = b_ty.dims[1];
+                                    Some((args::GEMM_WORKSPACE, m * k + k * n_dim + m * n_dim))
+                                } else {
+                                    None
+                                }
+                            }
+                            Operator::BatchedGemm(_) => {
+                                let a_ty = graph
+                                    .get_resolved_tensor_type(n.inputs[0].unwrap())
+                                    .unwrap();
+                                if matches!(
+                                    a_ty.elem_type,
+                                    crate::tensor::types::DataType::Float(
+                                        crate::tensor::types::FloatType::BF16,
+                                    )
+                                ) {
+                                    let b_ty = graph
+                                        .get_resolved_tensor_type(n.inputs[1].unwrap())
+                                        .unwrap();
+                                    let out_ty =
+                                        graph.get_resolved_tensor_type(n.outputs[0]).unwrap();
+                                    Some((
+                                        args::BATCHED_GEMM_WORKSPACE,
+                                        a_ty.dims.size() + b_ty.dims.size() + out_ty.dims.size(),
+                                    ))
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some((idx, ws_elems)) = bf16_workspace {
+                            let ws_ty = ResolvedTensorType::new(
+                                crate::tensor::types::DataType::Float(
+                                    crate::tensor::types::FloatType::F32,
+                                ),
+                                ResolvedTensorDims::new(&[ws_elems]),
+                            );
+                            let ws_value = graph_op.register_new_value(
+                                graph,
+                                format!("bf16_gemm_workspace_{}", node_id.index()),
+                                ws_ty,
+                            );
+                            graph_op.set_node_input(graph, node_id, idx, ws_value);
+                        }
                         if let Operator::Conv(ref conv) = graph.nodes[node_id].op {
                             let c_out = graph
                                 .get_resolved_tensor_type(

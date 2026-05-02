@@ -965,7 +965,25 @@ impl<'ll> CodeGen<'ll, '_> {
                     gather,
                 ),
                 Operator::Gemm(ref gemm) => {
-                    translator.build_gemm(&ptrs[0], &ptrs[1], &ptrs[2], ptrs.get(3), entry, gemm)
+                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
+                    let mut ptr_idx = 1;
+                    for (i, inp) in kernel.inputs.iter().enumerate() {
+                        if inp.is_some() {
+                            input_ptrs[i] = Some(ptr_idx);
+                            ptr_idx += 1;
+                        }
+                    }
+                    let a = &ptrs[input_ptrs[args::GEMM_A].unwrap()];
+                    let b = &ptrs[input_ptrs[args::GEMM_B].unwrap()];
+                    let c = input_ptrs
+                        .get(args::GEMM_C)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    let workspace = input_ptrs
+                        .get(args::GEMM_WORKSPACE)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    translator.build_gemm(&ptrs[0], a, b, c, workspace, entry, gemm)
                 }
                 Operator::AveragePool(ref pooling) | Operator::MaxPool(ref pooling) => {
                     let mode = match op {
@@ -1081,7 +1099,21 @@ impl<'ll> CodeGen<'ll, '_> {
                     translator.build_attention(&ptrs[0], q, kk, vv, mask_p, active_p, attn, entry)
                 }
                 Operator::BatchedGemm(ref gemm) => {
-                    translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)
+                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
+                    let mut ptr_idx = 1;
+                    for (i, inp) in kernel.inputs.iter().enumerate() {
+                        if inp.is_some() {
+                            input_ptrs[i] = Some(ptr_idx);
+                            ptr_idx += 1;
+                        }
+                    }
+                    let a = &ptrs[input_ptrs[0].unwrap()];
+                    let b = &ptrs[input_ptrs[1].unwrap()];
+                    let workspace = input_ptrs
+                        .get(args::BATCHED_GEMM_WORKSPACE)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    translator.build_batched_gemm(&ptrs[0], a, b, workspace, entry, gemm)
                 }
                 Operator::KVCacheUpdate => {
                     translator.build_kv_cache_update(&ptrs[1], &ptrs[2], &ptrs[3], entry)

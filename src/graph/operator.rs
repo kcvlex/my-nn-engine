@@ -1070,6 +1070,11 @@ pub mod args {
     pub const GEMM_A: usize = 0;
     pub const GEMM_B: usize = 1;
     pub const GEMM_C: usize = 2;
+    // CPU bf16 only: an f32 scratch buffer of size m*k + k*n + m*n.
+    pub const GEMM_WORKSPACE: usize = 3;
+
+    // CPU bf16 only: an f32 scratch buffer of size batch*(stride_a + stride_b + stride_c).
+    pub const BATCHED_GEMM_WORKSPACE: usize = 2;
 
     pub const DEQUANTIZE_X: usize = 0;
     pub const DEQUANTIZE_SCALE: usize = 1;

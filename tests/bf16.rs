@@ -183,7 +183,6 @@ fn run_bf16_rms_norm(target: Target) -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
 fn run_bf16_matmul(target: Target) -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let a_dims = &[1usize, 4];
@@ -339,6 +338,11 @@ fn bf16_rms_norm_cpu() -> TestResult {
 #[test]
 fn bf16_add_cpu() -> TestResult {
     run_bf16_add(Target::CPU)
+}
+
+#[test]
+fn bf16_matmul_cpu() -> TestResult {
+    run_bf16_matmul(Target::CPU)
 }
 
 #[test]
