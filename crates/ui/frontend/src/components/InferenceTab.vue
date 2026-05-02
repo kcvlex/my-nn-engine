@@ -43,6 +43,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, type Component } from 'vue';
+
 import { useQuery } from '@tanstack/vue-query';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { grpcClient } from '../api/grpc_client';
@@ -89,19 +90,16 @@ type ModelEntry = {
   props: (backend: Backend) => Record<string, unknown>;
 };
 
-const lazy = (loader: () => Promise<unknown>): Component =>
-  defineAsyncComponent(loader as Parameters<typeof defineAsyncComponent>[0]);
-
 const imageNetEntry = (modelId: ModelId, label: string): ModelEntry => ({
   label,
-  component: lazy(() => import('./ImageNetClassifier.vue')),
+  component: defineAsyncComponent(() => import('./ImageNetClassifier.vue')),
   props: (backend) => ({ backend, modelId, ...IMAGENET_CONFIGS[modelId]! }),
 });
 
 const MODELS: Record<ModelId, ModelEntry> = {
   [ModelId.MNIST]: {
     label: 'MNIST',
-    component: lazy(() => import('./MNIST.vue')),
+    component: defineAsyncComponent(() => import('./MNIST.vue')),
     props: (backend) => ({ backend }),
   },
   [ModelId.RESNET]: imageNetEntry(ModelId.RESNET, 'ResNet18'),
@@ -113,17 +111,17 @@ const MODELS: Record<ModelId, ModelEntry> = {
   ),
   [ModelId.YOLO]: {
     label: 'YOLO',
-    component: lazy(() => import('./YOLO.vue')),
+    component: defineAsyncComponent(() => import('./YOLO.vue')),
     props: (backend) => ({ backend }),
   },
   [ModelId.BERT]: {
     label: 'BERT',
-    component: lazy(() => import('./BERT.vue')),
+    component: defineAsyncComponent(() => import('./BERT.vue')),
     props: (backend) => ({ backend }),
   },
   [ModelId.GPT2]: {
     label: 'GPT-2',
-    component: lazy(() => import('./GPT2.vue')),
+    component: defineAsyncComponent(() => import('./GPT2.vue')),
     props: (backend) => ({ backend }),
   },
 };
