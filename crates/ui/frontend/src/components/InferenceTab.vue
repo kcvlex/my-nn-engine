@@ -42,22 +42,11 @@
 </template>
 
 <script setup lang="ts">
-import {
-  computed,
-  defineAsyncComponent,
-  ref,
-  watch,
-  type Component,
-} from 'vue';
+import { computed, defineAsyncComponent, ref, type Component } from 'vue';
+import { useQuery } from '@tanstack/vue-query';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { grpcClient } from '../api/grpc_client';
 import { type Layout, type Normalization } from './ImageNetClassifier.vue';
-
-type WarmupState =
-  | { state: 'idle' }
-  | { state: 'compiling' }
-  | { state: 'ready'; buildMs: number }
-  | { state: 'error'; message: string };
 
 type ImageNetConfig = {
   inputName: string;
@@ -155,8 +144,35 @@ const backend = ref<Backend>(Backend.CPU);
 
 const activeEntry = computed(() => MODELS[modelId.value]);
 
-const warmup = ref<WarmupState>({ state: 'idle' });
-let warmupSeq = 0;
+// Pre-build the session whenever (modelId, backend) changes. The server caches
+// per (model, target), so the query is `staleTime: Infinity`. Vue Query
+// auto-cancels in-flight requests when the queryKey changes, so we don't need
+// a manual sequence ticket.
+const warmupQuery = useQuery({
+  queryKey: ['warmup', modelId, backend] as const,
+  queryFn: () =>
+    grpcClient.warmUp({ modelId: modelId.value, backend: backend.value }),
+  staleTime: Infinity,
+  retry: false,
+});
+
+const warmup = computed(() => {
+  if (warmupQuery.isPending.value) return { state: 'compiling' as const };
+  if (warmupQuery.error.value) {
+    const err = warmupQuery.error.value;
+    return {
+      state: 'error' as const,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (warmupQuery.data.value) {
+    return {
+      state: 'ready' as const,
+      buildMs: warmupQuery.data.value.buildTimeMs,
+    };
+  }
+  return { state: 'idle' as const };
+});
 
 const warmupStatusText = computed(() => {
   switch (warmup.value.state) {
@@ -170,26 +186,6 @@ const warmupStatusText = computed(() => {
       return `error: ${warmup.value.message}`;
   }
 });
-
-watch(
-  [modelId, backend],
-  async ([m, b]) => {
-    const ticket = ++warmupSeq;
-    warmup.value = { state: 'compiling' };
-    try {
-      const resp = await grpcClient.warmUp({ modelId: m, backend: b });
-      if (ticket !== warmupSeq) return;
-      warmup.value = { state: 'ready', buildMs: resp.buildTimeMs };
-    } catch (e) {
-      if (ticket !== warmupSeq) return;
-      warmup.value = {
-        state: 'error',
-        message: e instanceof Error ? e.message : String(e),
-      };
-    }
-  },
-  { immediate: true },
-);
 
 type Runner = { runInference: (backend: Backend) => Promise<void> };
 const activeRef = ref<Runner | null>(null);
