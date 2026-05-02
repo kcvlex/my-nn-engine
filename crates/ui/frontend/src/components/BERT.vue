@@ -187,18 +187,18 @@ async function runInference(backend?: Backend) {
       backend: backend ?? props.backend,
     });
 
-    // Find start/end logits outputs
-    // unstack:0 = start logits, unstack:1 = end logits
-    let startLogits: number[] = [];
-    let endLogits: number[] = [];
-    for (const t of response.outputs) {
-      const data =
-        t.floatData.length > 0
-          ? Array.from(t.floatData)
-          : Array.from(t.doubleData);
-      if (t.name === 'unstack:0') startLogits = data;
-      else if (t.name === 'unstack:1') endLogits = data;
-    }
+    // bertsquad-12 graph output order: [unstack:1, unstack:0, unique_ids:0],
+    // i.e. [end_logits, start_logits, unique_ids]. We index by position because
+    // the engine does not currently propagate output tensor names through gRPC.
+    const toFloat = (t: {
+      floatData: readonly number[];
+      doubleData: readonly number[];
+    }) =>
+      t.floatData.length > 0
+        ? Array.from(t.floatData)
+        : Array.from(t.doubleData);
+    const endLogits = toFloat(response.outputs[0]);
+    const startLogits = toFloat(response.outputs[1]);
 
     // Find best answer span within context tokens
     const effContextEnd = Math.min(contextEnd, seqLen);
