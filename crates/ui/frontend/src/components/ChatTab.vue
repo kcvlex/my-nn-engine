@@ -164,7 +164,8 @@ function onKeydown(event: KeyboardEvent) {
 .meta-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* Match .form-group label margin-bottom so labels align with siblings. */
+  gap: 6px;
 }
 
 .meta-label {
@@ -182,6 +183,10 @@ function onKeydown(event: KeyboardEvent) {
 .meta-value {
   color: var(--fg);
   font-weight: 500;
+  /* Match input box visual height (8px padding + 1px border, top and bottom)
+   * so the bottom-aligned row keeps every label at the same y. */
+  padding: 9px 0;
+  line-height: 1;
 }
 
 .max-tokens {
