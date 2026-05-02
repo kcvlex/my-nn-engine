@@ -2,7 +2,6 @@ use my_nn_engine::onnx::model::ExternalTensorRef;
 use my_nn_engine::onnx::model::Graph;
 use my_nn_engine::onnx::model::ValueId;
 use my_nn_engine::tensor::types::DataType;
-use my_nn_engine::tensor::types::FloatType;
 use my_nn_engine::tensor::types::SIntType;
 
 use crate::builder::Builder;
