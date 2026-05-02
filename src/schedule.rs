@@ -1,7 +1,11 @@
+pub mod execution_plan;
+pub mod ir;
 pub mod kernel;
 pub mod mem_alloc;
 pub mod omp;
 pub mod stream;
+
+pub use ir::*;
 
 use std::any::Any;
 use std::any::TypeId;
@@ -80,6 +84,7 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
         }));
     }
     manager.add_pass(Box::new(mem_alloc::MemAllocPass));
+    manager.add_pass(Box::new(execution_plan::BuildExecutionPlanPass));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
@@ -102,6 +107,7 @@ pub struct Schedule {
     pub kernels: Kernels,
     pub options: Options,
     pub analysis: AnalysisResults,
+    pub execution_plan: Option<ExecutionPlan>,
 
     graph: Graph,
 }
@@ -248,6 +254,7 @@ impl Schedule {
             kernels,
             options,
             analysis: AnalysisResults::default(),
+            execution_plan: None,
 
             graph,
         }

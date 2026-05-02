@@ -38,36 +38,6 @@ impl SchedulePass for StreamAllocPass {
     }
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug, Ord, PartialOrd)]
-pub struct StreamId(usize);
-
-impl StreamId {
-    pub fn index(&self) -> usize {
-        self.0
-    }
-}
-
-impl std::fmt::Display for StreamId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "stream_{}", self.0)
-    }
-}
-
-#[derive(Clone, Copy, Hash, Eq, PartialEq, Debug, Ord, PartialOrd)]
-pub struct EventId(usize);
-
-impl EventId {
-    pub fn index(&self) -> usize {
-        self.0
-    }
-}
-
-impl std::fmt::Display for EventId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "event_{}", self.0)
-    }
-}
-
 struct EventTracker {
     num_streams: usize,
     event2stream: Vec<StreamId>,
