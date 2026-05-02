@@ -3216,6 +3216,516 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.build_flat_loop(op, entry, false)
     }
 
+    // FlashAttention-style streaming softmax (no materialized [seq_q, seq_k] buffer).
+    //
+    //   for each (b, h, sq):                                         // [A] outer loop
+    //       m = -inf;  s = 0;  o[D] = 0                              // [B] init
+    //       k_bound = active_seq_kv (clamped by causal upper bound)  // [C] bound
+    //       for k in 0..k_bound:                                     // [D] k loop
+    //           qk = scale * <Q[b,h,sq,:], K[b,h,k,:]>               // [E] qk
+    //           qk += mask[b, h, sq, k]                              // [F] mask
+    //           m_new   = max(m, qk)                                 // [G] running max
+    //           factor  = exp(m - m_new)                             // [G] rescale prev
+    //           e       = exp(qk - m_new)                            // [G] new contribution
+    //           s       = s * factor + e                             // [G] running sum
+    //           o[d]    = o[d] * factor + e * V[b,h,k,d]   for d     // [H] running out
+    //           m       = m_new
+    //       out[b,h,sq,d] = o[d] / s                       for d     // [I] normalize
+    pub fn build_attention(
+        &self,
+        out: &TensorPtr<'ctx>,
+        q: &TensorPtr<'ctx>,
+        k: &TensorPtr<'ctx>,
+        v: &TensorPtr<'ctx>,
+        mask: Option<&TensorPtr<'ctx>>,
+        active_seq_kv: Option<&TensorPtr<'ctx>>,
+        attn: &operator::Attention,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(q.ty.is_contiguous());
+        assert!(k.ty.is_contiguous());
+        assert!(v.ty.is_contiguous());
+        assert!(out.ty.is_contiguous());
+        assert_eq!(q.ty.dims.ndim(), 4);
+        let b_dim = q.ty.dims[0];
+        let hq = q.ty.dims[1];
+        let seq_q = q.ty.dims[2];
+        let d_dim = q.ty.dims[3];
+        let hkv = k.ty.dims[1];
+        let seq_k = k.ty.dims[2];
+        assert_eq!(
+            hq, hkv,
+            "GQA (Q heads != K/V heads) not yet supported on CPU Attention"
+        );
+        let DataType::Float(float_ty) = q.ty.elem_type else {
+            panic!("Attention requires float input");
+        };
+        let llvm_float = float_ty.llvm_type(self.context);
+        let i64_ty = self.context.i64_type();
+
+        let qk_dims = ResolvedTensorDims::new(&[b_dim, hq, seq_q, seq_k]);
+        let mask_bc = mask.map(|m| m.ty.broadcast(&qk_dims));
+
+        let neg_inf = llvm_float.const_float(f64::NEG_INFINITY);
+        let zero_f = llvm_float.const_zero();
+        let scale_const = llvm_float.const_float(attn.scale as f64);
+
+        let exp_fn = self.intrinsics.exp.get(float_ty);
+        let fmax_fn = self.intrinsics.fmax.get(float_ty);
+
+        self.builder.position_at_end(entry);
+        let array_ty = llvm_float.array_type(d_dim as u32);
+        let o_arr = self.builder.build_alloca(array_ty, "attn.o")?;
+
+        let active_val = if let Some(aptr) = active_seq_kv {
+            let gep = unsafe {
+                self.builder.build_in_bounds_gep(
+                    aptr.ty.elem_type.llvm_type(self.context),
+                    aptr.ptr,
+                    &[aptr.offset],
+                    "attn.active.gep",
+                )?
+            };
+            self.builder
+                .build_load(i64_ty, gep, "attn.active")?
+                .into_int_value()
+        } else {
+            i64_ty.const_int(seq_k as u64, false)
+        };
+
+        let past_len = if attn.is_causal {
+            Some(self.builder.build_int_sub(
+                active_val,
+                i64_ty.const_int(seq_q as u64, false),
+                "attn.past_len",
+            )?)
+        } else {
+            None
+        };
+
+        let bh_total = (b_dim * hq) as u64;
+        let outer_total = bh_total * (seq_q as u64);
+
+        let q_stride_bh = (seq_q * d_dim) as u64;
+        let q_stride_sq = d_dim as u64;
+        let k_stride_bh = (seq_k * d_dim) as u64;
+        let k_stride_sk = d_dim as u64;
+        let v_stride_bh = (seq_k * d_dim) as u64;
+        let v_stride_sk = d_dim as u64;
+        let out_stride_bh = (seq_q * d_dim) as u64;
+        let out_stride_sq = d_dim as u64;
+
+        let bb = |name: &str| self.context.append_basic_block(*self.func, name);
+
+        // [A]: outer loop over (b, h, sq), flattened.
+        let outer_header = bb("attn.outer.header");
+        let outer_body = bb("attn.outer.body");
+        let outer_latch = bb("attn.outer.latch");
+        let outer_exit = bb("attn.outer.exit");
+
+        self.builder.build_unconditional_branch(outer_header)?;
+        let (outer_phi, outer_idx) = self.init_counted_loop(outer_header)?;
+        self.builder.build_unconditional_branch(outer_body)?;
+
+        self.builder.position_at_end(outer_body);
+        let bh_idx = self.builder.build_int_unsigned_div(
+            outer_idx,
+            i64_ty.const_int(seq_q as u64, false),
+            "bh_idx",
+        )?;
+        let sq_idx = self.builder.build_int_unsigned_rem(
+            outer_idx,
+            i64_ty.const_int(seq_q as u64, false),
+            "sq_idx",
+        )?;
+        let b_idx = self.builder.build_int_unsigned_div(
+            bh_idx,
+            i64_ty.const_int(hq as u64, false),
+            "b_idx",
+        )?;
+        let h_idx = self.builder.build_int_unsigned_rem(
+            bh_idx,
+            i64_ty.const_int(hq as u64, false),
+            "h_idx",
+        )?;
+
+        let q_base_off = self.builder.build_int_mul(
+            bh_idx,
+            i64_ty.const_int(q_stride_bh, false),
+            "q.base.bh",
+        )?;
+        let q_sq_off = self.builder.build_int_mul(
+            sq_idx,
+            i64_ty.const_int(q_stride_sq, false),
+            "q.base.sq",
+        )?;
+        let q_local = self
+            .builder
+            .build_int_add(q_base_off, q_sq_off, "q.local")?;
+        let q_total = self.builder.build_int_add(q.offset, q_local, "q.total")?;
+        let q_row_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, q.ptr, &[q_total], "q.row")?
+        };
+
+        let k_base_off = self.builder.build_int_mul(
+            bh_idx,
+            i64_ty.const_int(k_stride_bh, false),
+            "k.base.bh",
+        )?;
+        let k_total = self
+            .builder
+            .build_int_add(k.offset, k_base_off, "k.total")?;
+        let k_head_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, k.ptr, &[k_total], "k.head")?
+        };
+
+        let v_base_off = self.builder.build_int_mul(
+            bh_idx,
+            i64_ty.const_int(v_stride_bh, false),
+            "v.base.bh",
+        )?;
+        let v_total = self
+            .builder
+            .build_int_add(v.offset, v_base_off, "v.total")?;
+        let v_head_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, v.ptr, &[v_total], "v.head")?
+        };
+
+        let mask_bh_sq_off = if let (Some(mptr), Some(mty)) = (mask, mask_bc.as_ref()) {
+            let mut total: IntValue<'ctx> = mptr.offset;
+            let stride_b = mty.stride(0);
+            if stride_b != 0 {
+                let term = self.builder.build_int_mul(
+                    b_idx,
+                    i64_ty.const_int(stride_b as u64, false),
+                    "m.b.term",
+                )?;
+                total = self.builder.build_int_add(total, term, "m.off.b")?;
+            }
+            let stride_h = mty.stride(1);
+            if stride_h != 0 {
+                let term = self.builder.build_int_mul(
+                    h_idx,
+                    i64_ty.const_int(stride_h as u64, false),
+                    "m.h.term",
+                )?;
+                total = self.builder.build_int_add(total, term, "m.off.h")?;
+            }
+            let stride_sq = mty.stride(2);
+            if stride_sq != 0 {
+                let term = self.builder.build_int_mul(
+                    sq_idx,
+                    i64_ty.const_int(stride_sq as u64, false),
+                    "m.sq.term",
+                )?;
+                total = self.builder.build_int_add(total, term, "m.off.sq")?;
+            }
+            Some(total)
+        } else {
+            None
+        };
+
+        let out_base_off = self.builder.build_int_mul(
+            bh_idx,
+            i64_ty.const_int(out_stride_bh, false),
+            "out.base.bh",
+        )?;
+        let out_sq_off = self.builder.build_int_mul(
+            sq_idx,
+            i64_ty.const_int(out_stride_sq, false),
+            "out.base.sq",
+        )?;
+        let out_local = self
+            .builder
+            .build_int_add(out_base_off, out_sq_off, "out.local")?;
+        let out_total = self
+            .builder
+            .build_int_add(out.offset, out_local, "out.total")?;
+        let out_row_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, out.ptr, &[out_total], "out.row")?
+        };
+
+        // [B]: init o[d] = 0. m and s are init via PHI at k_loop_header below.
+        let o_d_ptrs: Vec<PointerValue<'ctx>> = (0..d_dim)
+            .map(|d| -> Result<PointerValue<'ctx>, BuilderError> {
+                Ok(unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_ty,
+                        o_arr,
+                        &[i64_ty.const_zero(), i64_ty.const_int(d as u64, false)],
+                        &format!("o.d{}", d),
+                    )?
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for ptr in &o_d_ptrs {
+            self.builder.build_store(*ptr, zero_f)?;
+        }
+
+        // [C]: k_bound = min(active_seq_kv, causal_cap, seq_k).
+        let k_bound = if let Some(past_len) = past_len {
+            let cap0 = self
+                .builder
+                .build_int_add(past_len, sq_idx, "k.cap.add_sq")?;
+            let cap = self
+                .builder
+                .build_int_add(cap0, i64_ty.const_int(1, false), "k.cap")?;
+            let cmp = self.builder.build_int_compare(
+                inkwell::IntPredicate::SLT,
+                cap,
+                active_val,
+                "k.bound.cmp",
+            )?;
+            self.builder
+                .build_select(cmp, cap, active_val, "k.bound")?
+                .into_int_value()
+        } else {
+            active_val
+        };
+        let seq_k_const = i64_ty.const_int(seq_k as u64, false);
+        let cmp_max = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            k_bound,
+            seq_k_const,
+            "k.bound.cmp_max",
+        )?;
+        let k_bound = self
+            .builder
+            .build_select(cmp_max, k_bound, seq_k_const, "k.bound.clamped")?
+            .into_int_value();
+
+        // [D]: k loop. m and s are loop-carried via PHI; o[d] lives in alloca.
+        let k_loop_header = bb("attn.k.header");
+        let k_loop_body = bb("attn.k.body");
+        let k_loop_latch = bb("attn.k.latch");
+        let after_k = bb("attn.after_k");
+
+        let k_guard = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            k_bound,
+            i64_ty.const_zero(),
+            "k.guard",
+        )?;
+        let pre_loop_bb = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_conditional_branch(k_guard, after_k, k_loop_header)?;
+
+        self.builder.position_at_end(k_loop_header);
+        let m_phi = self.builder.build_phi(llvm_float, "m")?;
+        let s_phi = self.builder.build_phi(llvm_float, "s")?;
+        let k_phi = self.builder.build_phi(i64_ty, "k.idx")?;
+        let m_val = m_phi.as_basic_value().into_float_value();
+        let s_val = s_phi.as_basic_value().into_float_value();
+        let k_idx = k_phi.as_basic_value().into_int_value();
+        self.builder.build_unconditional_branch(k_loop_body)?;
+
+        self.builder.position_at_end(k_loop_body);
+        let k_row_off =
+            self.builder
+                .build_int_mul(k_idx, i64_ty.const_int(k_stride_sk, false), "k.row.off")?;
+        let k_row_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, k_head_ptr, &[k_row_off], "k.row.gep")?
+        };
+        let v_row_off =
+            self.builder
+                .build_int_mul(k_idx, i64_ty.const_int(v_stride_sk, false), "v.row.off")?;
+        let v_row_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(llvm_float, v_head_ptr, &[v_row_off], "v.row.gep")?
+        };
+
+        // [E]: qk = scale * <Q[b,h,sq,:], K[b,h,k,:]>. D is unrolled.
+        let mut sum = zero_f;
+        for d in 0..d_dim {
+            let d_const = i64_ty.const_int(d as u64, false);
+            let q_d_ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    llvm_float,
+                    q_row_ptr,
+                    &[d_const],
+                    &format!("q.d{}.gep", d),
+                )?
+            };
+            let k_d_ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    llvm_float,
+                    k_row_ptr,
+                    &[d_const],
+                    &format!("k.d{}.gep", d),
+                )?
+            };
+            let q_v = self
+                .builder
+                .build_load(llvm_float, q_d_ptr, &format!("q.d{}", d))?
+                .into_float_value();
+            let k_v = self
+                .builder
+                .build_load(llvm_float, k_d_ptr, &format!("k.d{}", d))?
+                .into_float_value();
+            let prod = self
+                .builder
+                .build_float_mul(q_v, k_v, &format!("dot.prod{}", d))?;
+            sum = self
+                .builder
+                .build_float_add(sum, prod, &format!("dot.sum{}", d))?;
+        }
+        let qk = self.builder.build_float_mul(sum, scale_const, "qk")?;
+
+        // [F]: qk += mask[b,h,sq,k] using broadcast strides on the mask tensor.
+        let qk = if let (Some(mptr), Some(mty), Some(base_off)) =
+            (mask, mask_bc.as_ref(), mask_bh_sq_off)
+        {
+            let stride_k = mty.stride(3);
+            let m_off = if stride_k == 0 {
+                base_off
+            } else {
+                let k_term = self.builder.build_int_mul(
+                    k_idx,
+                    i64_ty.const_int(stride_k as u64, false),
+                    "m.k.term",
+                )?;
+                self.builder.build_int_add(base_off, k_term, "m.off.k")?
+            };
+            let m_gep = unsafe {
+                self.builder.build_in_bounds_gep(
+                    mptr.ty.elem_type.llvm_type(self.context),
+                    mptr.ptr,
+                    &[m_off],
+                    "m.gep",
+                )?
+            };
+            let m_v = self
+                .builder
+                .build_load(llvm_float, m_gep, "m.load")?
+                .into_float_value();
+            self.builder.build_float_add(qk, m_v, "qk.masked")?
+        } else {
+            qk
+        };
+
+        // [G]: streaming softmax update of (m, s).
+        //   m_new  = max(m, qk)
+        //   factor = exp(m - m_new)              (rescale prior contributions)
+        //   e      = exp(qk - m_new)             (current contribution)
+        //   s      = s * factor + e
+        let m_new = self
+            .builder
+            .build_call(fmax_fn, &[m_val.into(), qk.into()], "m.new")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let m_diff = self.builder.build_float_sub(m_val, m_new, "m.diff")?;
+        let factor = self
+            .builder
+            .build_call(exp_fn, &[m_diff.into()], "factor")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let qk_diff = self.builder.build_float_sub(qk, m_new, "qk.diff")?;
+        let e = self
+            .builder
+            .build_call(exp_fn, &[qk_diff.into()], "e")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let s_scaled = self.builder.build_float_mul(s_val, factor, "s.scaled")?;
+        let s_new = self.builder.build_float_add(s_scaled, e, "s.new")?;
+
+        // [H]: o[d] = o[d] * factor + e * V[b,h,k,d]. D is unrolled.
+        for d in 0..d_dim {
+            let d_const = i64_ty.const_int(d as u64, false);
+            let v_d_ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    llvm_float,
+                    v_row_ptr,
+                    &[d_const],
+                    &format!("v.d{}.gep", d),
+                )?
+            };
+            let v_d_val = self
+                .builder
+                .build_load(llvm_float, v_d_ptr, &format!("v.d{}", d))?
+                .into_float_value();
+            let o_d_val = self
+                .builder
+                .build_load(llvm_float, o_d_ptrs[d], &format!("o.d{}.load", d))?
+                .into_float_value();
+            let o_scaled =
+                self.builder
+                    .build_float_mul(o_d_val, factor, &format!("o.d{}.scaled", d))?;
+            let e_v = self
+                .builder
+                .build_float_mul(e, v_d_val, &format!("o.d{}.ev", d))?;
+            let o_new = self
+                .builder
+                .build_float_add(o_scaled, e_v, &format!("o.d{}.new", d))?;
+            self.builder.build_store(o_d_ptrs[d], o_new)?;
+        }
+
+        self.builder.build_unconditional_branch(k_loop_latch)?;
+
+        self.builder.position_at_end(k_loop_latch);
+        let k_next = self
+            .builder
+            .build_int_add(k_idx, i64_ty.const_int(1, false), "k.next")?;
+        let k_done =
+            self.builder
+                .build_int_compare(inkwell::IntPredicate::EQ, k_next, k_bound, "k.done")?;
+        self.builder
+            .build_conditional_branch(k_done, after_k, k_loop_header)?;
+
+        m_phi.add_incoming(&[(&neg_inf, pre_loop_bb), (&m_new, k_loop_latch)]);
+        s_phi.add_incoming(&[(&zero_f, pre_loop_bb), (&s_new, k_loop_latch)]);
+        k_phi.add_incoming(&[(&i64_ty.const_zero(), pre_loop_bb), (&k_next, k_loop_latch)]);
+
+        self.builder.position_at_end(after_k);
+        let s_final_phi = self.builder.build_phi(llvm_float, "s.final")?;
+        s_final_phi.add_incoming(&[(&zero_f, pre_loop_bb), (&s_new, k_loop_latch)]);
+        let s_final = s_final_phi.as_basic_value().into_float_value();
+
+        for d in 0..d_dim {
+            let d_const = i64_ty.const_int(d as u64, false);
+            let o_d_val = self
+                .builder
+                .build_load(llvm_float, o_d_ptrs[d], &format!("o.final.d{}", d))?
+                .into_float_value();
+            let normalized =
+                self.builder
+                    .build_float_div(o_d_val, s_final, &format!("o.norm.d{}", d))?;
+            let out_d_ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    llvm_float,
+                    out_row_ptr,
+                    &[d_const],
+                    &format!("out.d{}.gep", d),
+                )?
+            };
+            self.builder.build_store(out_d_ptr, normalized)?;
+        }
+
+        self.builder.build_unconditional_branch(outer_latch)?;
+
+        self.finalize_counted_loop(
+            outer_phi,
+            entry,
+            i64_ty.const_int(outer_total, false),
+            outer_header,
+            outer_exit,
+            outer_latch,
+        )?;
+        self.builder.position_at_end(outer_exit);
+        Ok(outer_exit)
+    }
+
     fn scalar_to_llvm_value(
         &self,
         value: &ScalarData,

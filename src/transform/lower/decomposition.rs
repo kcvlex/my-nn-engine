@@ -1,180 +1,18 @@
 use crate::graph::operator::*;
 use crate::graph::Graph;
 use crate::graph::Node;
-use crate::graph::NodeId;
 use crate::graph::NodeMeta;
-use crate::tensor::data::TensorData;
-use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
-use crate::tensor::Tensor;
 use crate::transform::modify::GraphOp;
 use crate::transform::utils::ReshapeGenerator;
 use crate::transform::utils::*;
 use crate::transform::Pass;
 
 #[derive(Default)]
-pub struct AttentionDecomposition {}
-#[derive(Default)]
 pub struct ReduceDecomposition {}
 #[derive(Default)]
 pub struct GlobalAvgPoolDecomposition {}
-
-impl<T: GraphOp> Pass<T> for AttentionDecomposition {
-    fn summary(&self) -> &'static str {
-        "Decompose Attention into BatchedGemm + Softmax (CPU)"
-    }
-
-    fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let attn_ids: Vec<NodeId> = graph
-            .nodes
-            .iter()
-            .filter(|(_, node)| matches!(&node.op, Operator::Attention(_)))
-            .map(|(id, _)| id)
-            .collect();
-
-        for attn_id in attn_ids {
-            let node = &graph.nodes[attn_id];
-            let Operator::Attention(attn) = &node.op else {
-                unreachable!()
-            };
-            let attn = *attn;
-            let q = node.inputs[args::ATTENTION_Q].unwrap();
-            let k = node.inputs[args::ATTENTION_K].unwrap();
-            let v = node.inputs[args::ATTENTION_V].unwrap();
-            let mask = node.inputs.get(args::ATTENTION_MASK).and_then(|x| *x);
-            let old_output = node.outputs[0];
-
-            let q_ty = graph.get_resolved_tensor_type(q).unwrap().clone();
-            let k_ty = graph.get_resolved_tensor_type(k).unwrap().clone();
-            let out_ty = graph.get_resolved_tensor_type(old_output).unwrap().clone();
-            assert!(
-                q_ty.dims[1] == k_ty.dims[1],
-                "CPU Attention decomposition does not yet support GQA \
-                 (Q heads != K/V heads). Use CUDA target for GQA."
-            );
-
-            // Q: [b, h, seq_q, d], K: [b, h, seq_k, d]
-            // BatchedGemm(Q, K, trans_b=true, alpha=scale) → [b, h, seq_q, seq_k]
-            let ndim = q_ty.dims.ndim();
-            let seq_q = q_ty.dims[ndim - 2];
-            let seq_k = k_ty.dims[ndim - 2];
-            let mut qk_dims: Vec<usize> = q_ty.dims.iter().copied().collect();
-            qk_dims[ndim - 2] = seq_q;
-            qk_dims[ndim - 1] = seq_k;
-            let qk_ty = ResolvedTensorType::new(q_ty.elem_type, ResolvedTensorDims::new(&qk_dims));
-
-            let qk = modifier.register_new_value(
-                graph,
-                format!("DecompAttn_QK_{:?}", attn_id),
-                qk_ty.clone(),
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![Some(q), Some(k)],
-                    outputs: vec![qk],
-                    name: format!("DecompAttn_QK_{:?}", attn_id),
-                    op: Operator::BatchedGemm(BatchedGemm {
-                        alpha: attn.scale as f64,
-                        beta: 0.0,
-                        trans_a: false,
-                        trans_b: true,
-                    }),
-                    meta: NodeMeta::default(),
-                },
-            );
-
-            // Apply mask
-            let mut qk_masked = qk;
-            let mask = if let Some(mask) = mask {
-                Some(mask)
-            } else if attn.is_causal {
-                let mut data = vec![0.0f64; seq_q * seq_k];
-                for r in 0..seq_q {
-                    for c in 0..seq_k {
-                        if c > r {
-                            data[r * seq_k + c] = f64::NEG_INFINITY;
-                        }
-                    }
-                }
-                let DataType::Float(float_ty) = q_ty.elem_type else {
-                    panic!("Attention requires float type");
-                };
-                let mask_tensor = Tensor::new(
-                    ResolvedTensorDims::new(&[seq_q, seq_k]),
-                    TensorData::Float(float_ty, data),
-                )
-                .unwrap();
-                Some(modifier.register_new_tensor(
-                    graph,
-                    mask_tensor,
-                    format!("DecompAttn_CausalMask_{:?}", attn_id),
-                ))
-            } else {
-                None
-            };
-            if let Some(mask) = mask {
-                let qk_with_mask = modifier.register_new_value(
-                    graph,
-                    format!("DecompAttn_QKMask_{:?}", attn_id),
-                    qk_ty.clone(),
-                );
-                modifier.register_new_node(
-                    graph,
-                    Node {
-                        inputs: vec![Some(qk_masked), Some(mask)],
-                        outputs: vec![qk_with_mask],
-                        name: format!("DecompAttn_QKMask_{:?}", attn_id),
-                        op: Operator::Add,
-                        meta: NodeMeta::default(),
-                    },
-                );
-                qk_masked = qk_with_mask;
-            }
-
-            // Softmax(QK, axis=-1)
-            let qk_softmax = modifier.register_new_value(
-                graph,
-                format!("DecompAttn_Softmax_{:?}", attn_id),
-                qk_ty,
-            );
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![Some(qk_masked)],
-                    outputs: vec![qk_softmax],
-                    name: format!("DecompAttn_Softmax_{:?}", attn_id),
-                    op: Operator::Softmax(Softmax {
-                        axis: TensorIndex::new(-1),
-                    }),
-                    meta: NodeMeta::default(),
-                },
-            );
-
-            // Output = BatchedGemm(Softmax(QK), V)
-            let new_output =
-                modifier.register_new_value(graph, format!("DecompAttn_Out_{:?}", attn_id), out_ty);
-            modifier.register_new_node(
-                graph,
-                Node {
-                    inputs: vec![Some(qk_softmax), Some(v)],
-                    outputs: vec![new_output],
-                    name: format!("DecompAttn_Out_{:?}", attn_id),
-                    op: Operator::BatchedGemm(BatchedGemm {
-                        alpha: 1.0,
-                        beta: 0.0,
-                        trans_a: false,
-                        trans_b: false,
-                    }),
-                    meta: NodeMeta::default(),
-                },
-            );
-
-            modifier.replace_input_value(graph, old_output, new_output);
-        }
-    }
-}
 
 struct ReduceInfo {
     axes: Vec<usize>,

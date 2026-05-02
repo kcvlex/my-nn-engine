@@ -1058,7 +1058,28 @@ impl<'ll> CodeGen<'ll, '_> {
                     let slices = self.collect_slice_info(kernel);
                     translator.build_slice(&ptrs[0], &ptrs[1], &slices, entry)
                 }
-                Operator::Attention(_) => panic!(),
+                Operator::Attention(ref attn) => {
+                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
+                    let mut ptr_idx = 1;
+                    for (i, inp) in kernel.inputs.iter().enumerate() {
+                        if inp.is_some() {
+                            input_ptrs[i] = Some(ptr_idx);
+                            ptr_idx += 1;
+                        }
+                    }
+                    let q = &ptrs[input_ptrs[args::ATTENTION_Q].unwrap()];
+                    let kk = &ptrs[input_ptrs[args::ATTENTION_K].unwrap()];
+                    let vv = &ptrs[input_ptrs[args::ATTENTION_V].unwrap()];
+                    let mask_p = input_ptrs
+                        .get(args::ATTENTION_MASK)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    let active_p = input_ptrs
+                        .get(args::ATTENTION_ACTIVE_SEQ_KV)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    translator.build_attention(&ptrs[0], q, kk, vv, mask_p, active_p, attn, entry)
+                }
                 Operator::BatchedGemm(ref gemm) => {
                     translator.build_batched_gemm(&ptrs[0], &ptrs[1], &ptrs[2], entry, gemm)
                 }
