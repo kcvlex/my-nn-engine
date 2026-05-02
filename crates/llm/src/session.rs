@@ -30,6 +30,12 @@ pub enum LlmError {
     InvalidOutput(&'static str),
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
+    #[error("prompt too long: needs {needed} positions but max_seq_len={max_seq_len} (past_len={past_len})")]
+    PromptTooLong {
+        needed: usize,
+        max_seq_len: usize,
+        past_len: usize,
+    },
 }
 
 impl From<SessionError> for LlmError {
@@ -273,6 +279,20 @@ impl LlmSession {
         }
 
         let prefill_runs = self.prefill.is_some() && self.past_len == 0;
+
+        let needed = if prefill_runs {
+            let prefill_len = self.prefill.as_ref().unwrap().prefill_len;
+            self.past_len + prompt_ids.len().div_ceil(prefill_len) * prefill_len
+        } else {
+            self.past_len + prompt_ids.len()
+        };
+        if self.config.max_seq_len < needed {
+            return Err(LlmError::PromptTooLong {
+                needed,
+                max_seq_len: self.config.max_seq_len,
+                past_len: self.past_len,
+            });
+        }
 
         let last_token = if prefill_runs {
             self.run_prefill(&prompt_ids)?
