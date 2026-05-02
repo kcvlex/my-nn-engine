@@ -41,7 +41,11 @@ fn run(target: Target) {
     assert_eq!(new_ids, EXPECTED_NEW_IDS);
 }
 
-// CPU target is not yet supported for LlmSession (SessionState requires CUDA buffers).
+#[test]
+fn cpu() {
+    run(Target::CPU);
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda() {
