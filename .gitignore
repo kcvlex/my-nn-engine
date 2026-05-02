@@ -8,7 +8,11 @@ Cargo.lock
 *.ll
 *.so
 models/*.onnx
-models/hf/
+models/hf/*
+!models/hf/tiny-llama-random/
+models/hf/tiny-llama-random/.cache/
+models/hf/tiny-llama-random/model.onnx
+models/hf/tiny-llama-random/model.onnx_data
 download
 
 # Python
