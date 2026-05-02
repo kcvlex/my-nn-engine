@@ -42,6 +42,8 @@ impl OnnxInferenceServiceImpl {
             Ok(ProtoModelId::Mnist) => Ok(ModelId::Mnist),
             Ok(ProtoModelId::Resnet) => Ok(ModelId::ResNet),
             Ok(ProtoModelId::Resnet152) => Ok(ModelId::ResNet152),
+            Ok(ProtoModelId::Mobilenetv2) => Ok(ModelId::MobileNetV2),
+            Ok(ProtoModelId::EfficientnetLite4) => Ok(ModelId::EfficientNetLite4),
             Ok(ProtoModelId::Yolo) => Ok(ModelId::Yolo),
             Ok(ProtoModelId::Bert) => Ok(ModelId::Bert),
             Ok(ProtoModelId::Gpt2) => Ok(ModelId::Gpt2),

@@ -8,6 +8,10 @@
             <option :value="ModelId.MNIST">MNIST</option>
             <option :value="ModelId.RESNET">ResNet18</option>
             <option :value="ModelId.RESNET152">ResNet152</option>
+            <option :value="ModelId.MOBILENETV2">MobileNetV2</option>
+            <option :value="ModelId.EFFICIENTNET_LITE4">
+              EfficientNet-Lite4
+            </option>
             <option :value="ModelId.YOLO">YOLO</option>
             <option :value="ModelId.BERT">BERT</option>
             <option :value="ModelId.GPT2">GPT-2</option>
@@ -115,6 +119,18 @@ const IMAGENET_CONFIGS: Partial<Record<ModelId, ImageNetConfig>> = {
     layout: 'nchw',
     normalize: 'imagenet',
     outputIsProbability: false,
+  },
+  [ModelId.MOBILENETV2]: {
+    inputName: 'input',
+    layout: 'nchw',
+    normalize: 'imagenet',
+    outputIsProbability: false,
+  },
+  [ModelId.EFFICIENTNET_LITE4]: {
+    inputName: 'images:0',
+    layout: 'nhwc',
+    normalize: 'pm1',
+    outputIsProbability: true,
   },
 };
 
