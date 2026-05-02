@@ -1,16 +1,36 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
+import { useQuery } from '@tanstack/vue-query';
 import { Backend } from '../gen/onnx_service_pb';
+import { grpcClient } from '../api/grpc_client';
 import { useChatSession } from '../composables/useChatSession';
 
 // CUDA-only: the engine rejects SessionState on CPU, which makes KV-cache
 // reuse impossible. Hide the backend selector so the user can't pick a
 // configuration that's guaranteed to fail.
-const MODEL_DIR = 'tinyllama';
 const BACKEND = Backend.CUDA;
 
+const modelDir = ref<string>('');
+
+const modelsQuery = useQuery({
+  queryKey: ['llm-models'],
+  queryFn: async () => {
+    const resp = await grpcClient.listLlmModels({});
+    return resp.models.map((m) => m.dirName);
+  },
+  staleTime: Infinity,
+});
+
+// Auto-select the first model once the list arrives, if the user hasn't
+// chosen anything yet.
+watch(modelsQuery.data, (list) => {
+  if (!modelDir.value && list && list.length > 0) {
+    modelDir.value = list[0];
+  }
+});
+
 const { status, messages, generating, lastError, send, reset } = useChatSession(
-  MODEL_DIR,
+  modelDir,
   BACKEND,
 );
 
@@ -65,9 +85,30 @@ function onKeydown(event: KeyboardEvent) {
 <template>
   <div class="chat-tab">
     <div class="meta-row">
-      <div class="meta-item">
-        <span class="meta-label">model</span>
-        <span class="meta-value">{{ MODEL_DIR }}</span>
+      <div class="form-group model-select">
+        <label for="chat-model">model</label>
+        <select
+          id="chat-model"
+          v-model="modelDir"
+          :disabled="modelsQuery.isPending.value || generating"
+        >
+          <option v-if="modelsQuery.isPending.value" value="">
+            loading...
+          </option>
+          <option
+            v-else-if="(modelsQuery.data.value?.length ?? 0) === 0"
+            value=""
+          >
+            no models found
+          </option>
+          <option
+            v-for="dir in modelsQuery.data.value ?? []"
+            :key="dir"
+            :value="dir"
+          >
+            {{ dir }}
+          </option>
+        </select>
       </div>
       <div class="meta-item">
         <span class="meta-label">backend</span>
@@ -187,6 +228,15 @@ function onKeydown(event: KeyboardEvent) {
    * so the bottom-aligned row keeps every label at the same y. */
   padding: 9px 0;
   line-height: 1;
+}
+
+.model-select {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.model-select select {
+  min-width: 220px;
 }
 
 .max-tokens {

@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, shallowRef } from 'vue';
+import { computed, onScopeDispose, shallowRef, watch, type Ref } from 'vue';
 import { useMutation } from '@tanstack/vue-query';
 import { grpcClient } from '../api/grpc_client';
 import { humanizeError } from '../utils/error';
@@ -27,18 +27,24 @@ type LifecycleStatus =
  * Manages a single LLM chat session. The session is created lazily on the
  * first send (so the user doesn't pay the compile cost just by opening the
  * tab), then reused for subsequent messages. Calling `reset()` destroys the
- * server-side session and clears history.
+ * server-side session and clears history. Switching `modelDir` auto-resets.
  */
-export function useChatSession(modelDir: string, backend: Backend) {
+export function useChatSession(modelDir: Ref<string>, backend: Backend) {
   const status = shallowRef<LifecycleStatus>({ state: 'idle' });
   const sessionId = shallowRef<string | null>(null);
   const messages = shallowRef<ChatMessage[]>([]);
 
   async function ensureSession(): Promise<string> {
     if (sessionId.value) return sessionId.value;
+    if (!modelDir.value) {
+      throw new Error('no model selected');
+    }
     status.value = { state: 'creating' };
     try {
-      const resp = await grpcClient.createChatSession({ modelDir, backend });
+      const resp = await grpcClient.createChatSession({
+        modelDir: modelDir.value,
+        backend,
+      });
       sessionId.value = resp.sessionId;
       status.value = { state: 'ready', buildMs: resp.buildTimeMs };
       return resp.sessionId;
@@ -99,6 +105,11 @@ export function useChatSession(modelDir: string, backend: Backend) {
       }
     }
   }
+
+  // Switching models invalidates the cached session.
+  watch(modelDir, () => {
+    void reset();
+  });
 
   // Try to clean up the server-side session when the component goes away.
   onScopeDispose(() => {
