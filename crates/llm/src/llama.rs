@@ -2,6 +2,7 @@ use my_nn_engine::graph::ExternalTensorRef;
 use my_nn_engine::graph::Graph;
 use my_nn_engine::graph::ValueId;
 use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
 use my_nn_engine::tensor::types::SIntType;
 
 use crate::builder::Builder;
@@ -10,6 +11,14 @@ use crate::hf_weights::HfWeights;
 use crate::hf_weights::HfWeightsError;
 use crate::hf_weights::WeightRef;
 use crate::session::KVCache;
+use crate::session::KVScale;
+
+#[derive(Debug, Clone, Default)]
+pub struct LlamaOptions {
+    /// If true, KV cache is stored as INT8 with per-token BF16 scale.
+    /// Halves KV cache footprint at small accuracy cost.
+    pub quant_kv_cache: bool,
+}
 
 pub struct LlamaGraph {
     pub graph: Graph,
@@ -100,10 +109,27 @@ struct LayerCtx {
     is_prefill: bool,
     eps: f64,
     activation_ty: DataType,
+    quant_kv_cache: bool,
+    scale_ty: FloatType,
 }
 
 pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize) -> LlamaGraph {
-    build_llama_inner(config, weights, max_seq_len, Mode::Decode)
+    build_llama_inner(
+        config,
+        weights,
+        max_seq_len,
+        Mode::Decode,
+        &LlamaOptions::default(),
+    )
+}
+
+pub fn build_llama_with_options(
+    config: &HfConfig,
+    weights: &LlamaWeights,
+    max_seq_len: usize,
+    options: &LlamaOptions,
+) -> LlamaGraph {
+    build_llama_inner(config, weights, max_seq_len, Mode::Decode, options)
 }
 
 pub fn build_llama_prefill(
@@ -117,6 +143,23 @@ pub fn build_llama_prefill(
         weights,
         max_seq_len,
         Mode::Prefill { len: prefill_len },
+        &LlamaOptions::default(),
+    )
+}
+
+pub fn build_llama_prefill_with_options(
+    config: &HfConfig,
+    weights: &LlamaWeights,
+    max_seq_len: usize,
+    prefill_len: usize,
+    options: &LlamaOptions,
+) -> LlamaGraph {
+    build_llama_inner(
+        config,
+        weights,
+        max_seq_len,
+        Mode::Prefill { len: prefill_len },
+        options,
     )
 }
 
@@ -125,6 +168,7 @@ fn build_llama_inner(
     weights: &LlamaWeights,
     max_seq_len: usize,
     mode: Mode,
+    options: &LlamaOptions,
 ) -> LlamaGraph {
     assert!(max_seq_len <= config.max_position_embeddings);
     assert_eq!(config.hidden_act, "silu");
@@ -197,6 +241,8 @@ fn build_llama_inner(
         is_prefill,
         eps: config.rms_norm_eps,
         activation_ty: DataType::Float(weight_float_ty),
+        quant_kv_cache: options.quant_kv_cache,
+        scale_ty: weight_float_ty,
     };
 
     let mut kv_cache_names = Vec::new();
@@ -319,32 +365,70 @@ fn build_layer(
     // K/V cache (graph inputs; SessionConfig converts to SessionState)
     let k_cache_name = format!("{prefix}.past_key");
     let v_cache_name = format!("{prefix}.past_value");
-    let k_cache = b.input(
-        &k_cache_name,
-        ctx.activation_ty,
-        &[1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim],
-    );
-    let v_cache = b.input(
-        &v_cache_name,
-        ctx.activation_ty,
-        &[1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim],
-    );
+    let cache_dims = [1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim];
+    let cache_dtype = if ctx.quant_kv_cache {
+        DataType::SInt(SIntType::I8)
+    } else {
+        ctx.activation_ty
+    };
+    let k_cache = b.input(&k_cache_name, cache_dtype, &cache_dims);
+    let v_cache = b.input(&v_cache_name, cache_dtype, &cache_dims);
+    let cache_elem_bytes = cache_dtype.bit_width() / 8;
+    let bytes_per_buffer = ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * cache_elem_bytes;
 
-    let elem_bytes = ctx.activation_ty.bit_width() / 8;
+    let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;
+    let (k_updated, v_updated, kv_scales, kv_cache_scale) = if ctx.quant_kv_cache {
+        let scale_dtype = DataType::Float(ctx.scale_ty);
+        let scale_dims = [1, ctx.num_kv_heads, ctx.max_seq_len];
+        let k_scale_name = format!("{prefix}.past_key_scale");
+        let v_scale_name = format!("{prefix}.past_value_scale");
+        let k_scale = b.input(&k_scale_name, scale_dtype, &scale_dims);
+        let v_scale = b.input(&v_scale_name, scale_dtype, &scale_dims);
+        let k_updated = b.quantizing_kv_cache_update(
+            &format!("{prefix}_k_update"),
+            k_cache,
+            k_scale,
+            k,
+            ctx.past_len,
+        );
+        let v_updated = b.quantizing_kv_cache_update(
+            &format!("{prefix}_v_update"),
+            v_cache,
+            v_scale,
+            v,
+            ctx.past_len,
+        );
+        let scale_elem_bytes = scale_dtype.bit_width() / 8;
+        let bytes_per_scale = ctx.num_kv_heads * ctx.max_seq_len * scale_elem_bytes;
+        (
+            k_updated,
+            v_updated,
+            Some((k_scale, v_scale)),
+            Some(KVScale {
+                k_scale_name,
+                v_scale_name,
+                bytes_per_scale,
+            }),
+        )
+    } else {
+        let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
+        let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
+        (k_updated, v_updated, None, None)
+    };
+
     let kv_cache = KVCache {
         k_name: k_cache_name.clone(),
         v_name: v_cache_name.clone(),
-        bytes_per_buffer: ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * elem_bytes,
+        bytes_per_buffer,
+        scale: kv_cache_scale,
     };
 
-    let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;
-    let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
-    let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
-    let attn_out = b.attention(
+    let attn_out = b.attention_quant(
         &format!("{prefix}_attn"),
         q,
         k_updated,
         v_updated,
+        kv_scales,
         None,
         Some(ctx.active_seq_kv),
         ctx.is_prefill,

@@ -255,6 +255,24 @@ impl Builder {
         out
     }
 
+    pub fn quantizing_kv_cache_update(
+        &mut self,
+        name: &str,
+        cache: ValueId,
+        scale: ValueId,
+        new: ValueId,
+        offset: ValueId,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        self.add_node(
+            name,
+            Operator::QuantizingKVCacheUpdate,
+            vec![cache, scale, new, offset],
+            out,
+        );
+        out
+    }
+
     pub fn i64_initializer(&mut self, name: &str, values: Vec<i64>) -> ValueId {
         let len = values.len();
         let t = Tensor::new(
@@ -362,12 +380,37 @@ impl Builder {
         is_causal: bool,
         scale: f32,
     ) -> ValueId {
+        self.attention_quant(name, q, k, v, None, mask, active_seq_kv, is_causal, scale)
+    }
+
+    /// Attention with optional INT8 K/V cache + per-token scale dequant.
+    /// `kv_scales = Some((k_scale, v_scale))` selects the quantized path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attention_quant(
+        &mut self,
+        name: &str,
+        q: ValueId,
+        k: ValueId,
+        v: ValueId,
+        kv_scales: Option<(ValueId, ValueId)>,
+        mask: Option<ValueId>,
+        active_seq_kv: Option<ValueId>,
+        is_causal: bool,
+        scale: f32,
+    ) -> ValueId {
         let out = self.alloc_value(name);
-        let inputs: Vec<Option<ValueId>> = match (mask, active_seq_kv) {
-            (None, None) => vec![Some(q), Some(k), Some(v)],
-            (Some(m), None) => vec![Some(q), Some(k), Some(v), Some(m)],
-            (m, Some(a)) => vec![Some(q), Some(k), Some(v), m, Some(a)],
-        };
+        let mut inputs: Vec<Option<ValueId>> = vec![Some(q), Some(k), Some(v)];
+        // Pad to fixed slot positions: MASK=3, ACTIVE_SEQ_KV=4, K_SCALE=5, V_SCALE=6.
+        if mask.is_some() || active_seq_kv.is_some() || kv_scales.is_some() {
+            inputs.push(mask);
+        }
+        if active_seq_kv.is_some() || kv_scales.is_some() {
+            inputs.push(active_seq_kv);
+        }
+        if let Some((ks, vs)) = kv_scales {
+            inputs.push(Some(ks));
+            inputs.push(Some(vs));
+        }
         self.graph.nodes.alloc(Node::create_node(
             inputs,
             vec![out],

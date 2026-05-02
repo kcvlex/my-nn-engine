@@ -49,6 +49,15 @@ pub struct KVCache {
     pub k_name: String,
     pub v_name: String,
     pub bytes_per_buffer: usize,
+    /// When `Some`, the cache is quantized and these buffers hold per-token scales.
+    pub scale: Option<KVScale>,
+}
+
+#[derive(Debug)]
+pub struct KVScale {
+    pub k_scale_name: String,
+    pub v_scale_name: String,
+    pub bytes_per_scale: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -129,30 +138,7 @@ impl LlmSession {
         let session_config = SessionConfig {
             session_states: kv_cache_names
                 .into_iter()
-                .flat_map(
-                    |KVCache {
-                         k_name,
-                         v_name,
-                         bytes_per_buffer,
-                     }| {
-                        let k_buf = Arc::new(
-                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc K cache"),
-                        );
-                        let v_buf = Arc::new(
-                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc V cache"),
-                        );
-                        [
-                            SessionStateSpec {
-                                name: k_name,
-                                buffer: k_buf,
-                            },
-                            SessionStateSpec {
-                                name: v_name,
-                                buffer: v_buf,
-                            },
-                        ]
-                    },
-                )
+                .flat_map(kv_cache_specs)
                 .collect(),
             ..SessionConfig::default()
         };
@@ -181,43 +167,12 @@ impl LlmSession {
         max_seq_len: usize,
         eos_token_id: u32,
     ) -> Result<Self, LlmError> {
-        let kv_buffers: Vec<(String, String, Arc<DeviceBuffer>, Arc<DeviceBuffer>)> =
-            kv_cache_names
-                .into_iter()
-                .map(
-                    |KVCache {
-                         k_name,
-                         v_name,
-                         bytes_per_buffer,
-                     }| {
-                        let k = Arc::new(
-                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc K"),
-                        );
-                        let v = Arc::new(
-                            DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc V"),
-                        );
-                        (k_name, v_name, k, v)
-                    },
-                )
-                .collect();
+        let shared_specs: Vec<SessionStateSpec> = kv_cache_names
+            .into_iter()
+            .flat_map(kv_cache_specs)
+            .collect();
 
-        let make_specs = || -> Vec<SessionStateSpec> {
-            kv_buffers
-                .iter()
-                .flat_map(|(k_name, v_name, k_buf, v_buf)| {
-                    [
-                        SessionStateSpec {
-                            name: k_name.clone(),
-                            buffer: Arc::clone(k_buf),
-                        },
-                        SessionStateSpec {
-                            name: v_name.clone(),
-                            buffer: Arc::clone(v_buf),
-                        },
-                    ]
-                })
-                .collect()
-        };
+        let make_specs = || shared_specs.clone();
 
         let initializer_buffers = Arc::new(InitializerBuffers::new());
         let decode_session = Session::from_graph(
@@ -412,6 +367,45 @@ impl LlmSession {
         self.past_len += 1;
         Ok(next)
     }
+}
+
+fn kv_cache_specs(kv: KVCache) -> Vec<SessionStateSpec> {
+    let KVCache {
+        k_name,
+        v_name,
+        bytes_per_buffer,
+        scale,
+    } = kv;
+    let k_buf = Arc::new(DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc K cache"));
+    let v_buf = Arc::new(DeviceBuffer::alloc_zeroed(bytes_per_buffer).expect("alloc V cache"));
+    let mut specs = vec![
+        SessionStateSpec {
+            name: k_name,
+            buffer: k_buf,
+        },
+        SessionStateSpec {
+            name: v_name,
+            buffer: v_buf,
+        },
+    ];
+    if let Some(KVScale {
+        k_scale_name,
+        v_scale_name,
+        bytes_per_scale,
+    }) = scale
+    {
+        let k_s = Arc::new(DeviceBuffer::alloc_zeroed(bytes_per_scale).expect("alloc K scale"));
+        let v_s = Arc::new(DeviceBuffer::alloc_zeroed(bytes_per_scale).expect("alloc V scale"));
+        specs.push(SessionStateSpec {
+            name: k_scale_name,
+            buffer: k_s,
+        });
+        specs.push(SessionStateSpec {
+            name: v_scale_name,
+            buffer: v_s,
+        });
+    }
+    specs
 }
 
 fn make_i64(dims: &[usize], values: Vec<i64>) -> Tensor {
