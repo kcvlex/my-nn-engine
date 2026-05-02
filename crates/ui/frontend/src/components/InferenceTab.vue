@@ -30,13 +30,17 @@
         :backend="backend"
       />
 
-      <!-- ResNet: image classification (ResNet18 / ResNet152) -->
-      <ResNet
-        v-else-if="modelId === ModelId.RESNET || modelId === ModelId.RESNET152"
-        ref="resnetRef"
+      <!-- ImageNet classifiers: ResNet18 / ResNet152 / MobileNetV2 / EfficientNet-Lite4 -->
+      <ImageNetClassifier
+        v-else-if="imageNetConfig"
+        ref="imageNetRef"
         :key="modelId"
         :backend="backend"
         :model-id="modelId"
+        :input-name="imageNetConfig.inputName"
+        :layout="imageNetConfig.layout"
+        :normalize="imageNetConfig.normalize"
+        :output-is-probability="imageNetConfig.outputIsProbability"
       />
 
       <!-- YOLO: object detection -->
@@ -81,13 +85,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import MNIST from './MNIST.vue';
-import ResNet from './ResNet.vue';
+import ImageNetClassifier, {
+  type Layout,
+  type Normalization,
+} from './ImageNetClassifier.vue';
 import YOLO from './YOLO.vue';
 import BERT from './BERT.vue';
 import GPT2 from './GPT2.vue';
+
+type ImageNetConfig = {
+  inputName: string;
+  layout: Layout;
+  normalize: Normalization;
+  outputIsProbability: boolean;
+};
+
+const IMAGENET_CONFIGS: Partial<Record<ModelId, ImageNetConfig>> = {
+  [ModelId.RESNET]: {
+    inputName: 'data',
+    layout: 'nchw',
+    normalize: 'imagenet',
+    outputIsProbability: false,
+  },
+  [ModelId.RESNET152]: {
+    inputName: 'data',
+    layout: 'nchw',
+    normalize: 'imagenet',
+    outputIsProbability: false,
+  },
+};
 
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
@@ -98,20 +127,22 @@ const result = ref<{
   output?: string;
 } | null>(null);
 
+const imageNetConfig = computed(() => IMAGENET_CONFIGS[modelId.value]);
+
 const mnistRef = ref<InstanceType<typeof MNIST>>();
-const resnetRef = ref<InstanceType<typeof ResNet>>();
+const imageNetRef = ref<InstanceType<typeof ImageNetClassifier>>();
 const yoloRef = ref<InstanceType<typeof YOLO>>();
 const bertRef = ref<InstanceType<typeof BERT>>();
 const gpt2Ref = ref<InstanceType<typeof GPT2>>();
 
 const handleSubmit = async () => {
+  if (imageNetConfig.value) {
+    await imageNetRef.value?.runInference(backend.value);
+    return;
+  }
   switch (modelId.value) {
     case ModelId.MNIST:
       await mnistRef.value?.runInference(backend.value);
-      return;
-    case ModelId.RESNET:
-    case ModelId.RESNET152:
-      await resnetRef.value?.runInference(backend.value);
       return;
     case ModelId.YOLO:
       await yoloRef.value?.runInference(backend.value);

@@ -13,30 +13,59 @@ import { topK } from '../utils/math';
 import { loadLabels } from '../utils/labels';
 import { serializeOutputs } from '../utils/tensor';
 
+export type Layout = 'nchw' | 'nhwc';
+export type Normalization = 'imagenet' | 'pm1';
+
 const props = defineProps<{
   backend: Backend;
   modelId: ModelId;
+  inputName: string;
+  layout: Layout;
+  normalize: Normalization;
+  // True when the model already outputs softmax probabilities (e.g. EfficientNet-Lite4).
+  outputIsProbability: boolean;
 }>();
 
-// ImageNet normalization constants: per-channel mean/std computed over the ILSVRC2012 training set
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
+const INPUT_SIZE = 224;
 
-// NCHW layout: [1, 3, 224, 224] with ImageNet normalization
+// ImageNet normalization constants: per-channel mean/std computed over the ILSVRC2012 training set
+const IMAGENET_MEAN = [0.485, 0.456, 0.406];
+const IMAGENET_STD = [0.229, 0.224, 0.225];
+
+function normalizeChannel(value: number, channelIdx: number): number {
+  if (props.normalize === 'imagenet') {
+    return (
+      (value / 255.0 - IMAGENET_MEAN[channelIdx]) / IMAGENET_STD[channelIdx]
+    );
+  }
+  // 'pm1': map [0, 255] → [-1, 1]
+  return value / 127.5 - 1.0;
+}
+
 const {
   canvas: processedCanvas,
   processImage: onImageLoaded,
   getTensorData,
-} = useImageCanvas(224, 224, (pixels) => {
-  const r: number[] = [];
-  const g: number[] = [];
-  const b: number[] = [];
-  for (let i = 0; i < pixels.length; i += 4) {
-    r.push((pixels[i] / 255.0 - MEAN[0]) / STD[0]);
-    g.push((pixels[i + 1] / 255.0 - MEAN[1]) / STD[1]);
-    b.push((pixels[i + 2] / 255.0 - MEAN[2]) / STD[2]);
+} = useImageCanvas(INPUT_SIZE, INPUT_SIZE, (pixels) => {
+  if (props.layout === 'nchw') {
+    const r: number[] = [];
+    const g: number[] = [];
+    const b: number[] = [];
+    for (let i = 0; i < pixels.length; i += 4) {
+      r.push(normalizeChannel(pixels[i], 0));
+      g.push(normalizeChannel(pixels[i + 1], 1));
+      b.push(normalizeChannel(pixels[i + 2], 2));
+    }
+    return [...r, ...g, ...b];
   }
-  return [...r, ...g, ...b];
+  // nhwc: interleaved RGB
+  const data: number[] = [];
+  for (let i = 0; i < pixels.length; i += 4) {
+    data.push(normalizeChannel(pixels[i], 0));
+    data.push(normalizeChannel(pixels[i + 1], 1));
+    data.push(normalizeChannel(pixels[i + 2], 2));
+  }
+  return data;
 });
 
 const { loading, result, run } = useInference<
@@ -49,14 +78,19 @@ async function runInference(backend?: Backend) {
   if (getTensorData().length === 0) return;
 
   await run(async (client) => {
+    const dims =
+      props.layout === 'nchw'
+        ? [1n, 3n, BigInt(INPUT_SIZE), BigInt(INPUT_SIZE)]
+        : [1n, BigInt(INPUT_SIZE), BigInt(INPUT_SIZE), 3n];
+
     const [labels, response] = await Promise.all([
       getImageNetLabels(),
       client.runInference({
         modelId: props.modelId,
         inputs: [
           {
-            name: 'data',
-            dims: [1n, 3n, 224n, 224n],
+            name: props.inputName,
+            dims,
             dataType: TensorProto_DataType.FLOAT,
             floatData: getTensorData(),
           },
@@ -66,8 +100,10 @@ async function runInference(backend?: Backend) {
     ]);
 
     const output = response.outputs[0];
-    const logits = output?.floatData ?? output?.doubleData ?? [];
-    const top5 = topK(logits, 5).map(({ id, prob }) => ({
+    const raw = output?.floatData ?? output?.doubleData ?? [];
+    const top5 = topK(raw, 5, {
+      applySoftmax: !props.outputIsProbability,
+    }).map(({ id, prob }) => ({
       label: labels[id] ?? `Class ${id}`,
       probability: prob,
     }));
@@ -93,7 +129,7 @@ defineExpose({ runInference });
 </script>
 
 <template>
-  <div class="resnet">
+  <div class="imagenet-classifier">
     <ImageUpload
       run-label="Classify Image"
       :loading="loading"
@@ -102,11 +138,11 @@ defineExpose({ runInference });
     >
       <template #canvas>
         <div class="image-box">
-          <label>224x224 RGB</label>
+          <label>{{ INPUT_SIZE }}x{{ INPUT_SIZE }} RGB</label>
           <canvas
             ref="processedCanvas"
-            width="224"
-            height="224"
+            :width="INPUT_SIZE"
+            :height="INPUT_SIZE"
             class="processed-canvas"
           ></canvas>
         </div>

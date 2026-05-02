@@ -10,10 +10,12 @@ export function sigmoid(x: number): number {
 }
 
 export function topK(
-  logits: number[],
+  values: number[],
   k: number,
+  opts: { applySoftmax?: boolean } = {},
 ): { id: number; prob: number }[] {
-  const probs = softmax(logits);
+  const applySoftmax = opts.applySoftmax ?? true;
+  const probs = applySoftmax ? softmax(values) : values;
   const indexed = probs.map((p, i) => ({ id: i, prob: p }));
   indexed.sort((a, b) => b.prob - a.prob);
   return indexed.slice(0, k);
