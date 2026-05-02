@@ -308,14 +308,16 @@ defineExpose({ runInference });
 </template>
 
 <style scoped>
+/* Display both Original and the 416x416 letterboxed input at the same
+ * fixed size so the user can compare them side-by-side. */
 :deep(.preview-img) {
-  max-width: 416px;
-  max-height: 416px;
+  width: 320px;
+  height: 320px;
 }
 
 .processed-canvas {
-  width: 224px;
-  height: 224px;
+  width: 320px;
+  height: 320px;
 }
 
 .result-canvas {
