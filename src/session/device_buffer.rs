@@ -1,3 +1,4 @@
+use std::alloc::Layout;
 use std::ffi::c_void;
 
 #[cfg(feature = "cuda")]
@@ -38,9 +39,19 @@ impl std::fmt::Display for CudaError {
 
 impl std::error::Error for CudaError {}
 
+#[derive(Debug, Clone, Copy)]
+enum BufferKind {
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    Cuda,
+    Host,
+}
+
+const HOST_ALIGN: usize = 256;
+
 pub struct DeviceBuffer {
     ptr: *mut c_void,
     size: usize,
+    kind: BufferKind,
 }
 
 unsafe impl Send for DeviceBuffer {}
@@ -62,12 +73,29 @@ impl DeviceBuffer {
             }
             return Err(CudaError(err));
         }
-        Ok(Self { ptr, size })
+        Ok(Self {
+            ptr,
+            size,
+            kind: BufferKind::Cuda,
+        })
     }
 
     #[cfg(not(feature = "cuda"))]
     pub fn alloc_zeroed(_size: usize) -> Result<Self, CudaError> {
         Err(CudaError(-1))
+    }
+
+    pub fn alloc_zeroed_host(size: usize) -> Result<Self, CudaError> {
+        let layout = host_layout(size);
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        if ptr.is_null() {
+            return Err(CudaError(-2));
+        }
+        Ok(Self {
+            ptr: ptr as *mut c_void,
+            size,
+            kind: BufferKind::Host,
+        })
     }
 
     pub fn ptr(&self) -> *mut c_void {
@@ -100,19 +128,35 @@ impl DeviceBuffer {
     }
 }
 
+fn host_layout(size: usize) -> Layout {
+    Layout::from_size_align(size.max(1), HOST_ALIGN).expect("invalid host buffer layout")
+}
+
 impl Drop for DeviceBuffer {
     fn drop(&mut self) {
-        #[cfg(feature = "cuda")]
-        if !self.ptr.is_null() {
-            unsafe {
-                ffi::cudaFree(self.ptr);
+        if self.ptr.is_null() {
+            return;
+        }
+        match self.kind {
+            BufferKind::Cuda => {
+                #[cfg(feature = "cuda")]
+                unsafe {
+                    ffi::cudaFree(self.ptr);
+                }
             }
+            BufferKind::Host => unsafe {
+                std::alloc::dealloc(self.ptr as *mut u8, host_layout(self.size));
+            },
         }
     }
 }
 
 impl std::fmt::Debug for DeviceBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DeviceBuffer(ptr={:p}, size={})", self.ptr, self.size)
+        write!(
+            f,
+            "DeviceBuffer(ptr={:p}, size={}, kind={:?})",
+            self.ptr, self.size, self.kind
+        )
     }
 }
