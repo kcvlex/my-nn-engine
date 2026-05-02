@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Backend, LlmModelId } from '../gen/onnx_service_pb';
+import { Backend } from '../gen/onnx_service_pb';
 import { useChatSession } from '../composables/useChatSession';
 
-// M1: only TinyLlama, only CUDA. The engine rejects SessionState on CPU,
-// which makes KV-cache reuse impossible on CPU; expose CUDA only here so the
-// user can't pick a configuration that's guaranteed to fail.
-const MODEL_ID = LlmModelId.TINY_LLAMA;
+// CUDA-only: the engine rejects SessionState on CPU, which makes KV-cache
+// reuse impossible. Hide the backend selector so the user can't pick a
+// configuration that's guaranteed to fail.
+const MODEL_DIR = 'tinyllama';
 const BACKEND = Backend.CUDA;
 
 const { status, messages, generating, lastError, send, reset } = useChatSession(
-  MODEL_ID,
+  MODEL_DIR,
   BACKEND,
 );
 
@@ -67,7 +67,7 @@ function onKeydown(event: KeyboardEvent) {
     <div class="meta-row">
       <div class="meta-item">
         <span class="meta-label">model</span>
-        <span class="meta-value">tinyllama</span>
+        <span class="meta-value">{{ MODEL_DIR }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">backend</span>

@@ -58,17 +58,27 @@ message GetInitializerResponse {
 
 // ===== Chat (LLM) =====
 
-enum LlmModelId {
-  TINY_LLAMA = 0;
-}
-
 message ChatMessage {
   string role = 1;     // "user" or "assistant"
   string content = 2;
 }
 
+// One discoverable model directory under <models_root>/hf/.
+// The server only reports the directory name; whether the dir actually
+// contains a loadable model is the user's responsibility.
+message LlmModelInfo {
+  string dir_name = 1;
+}
+
+message ListLlmModelsRequest {}
+
+message ListLlmModelsResponse {
+  repeated LlmModelInfo models = 1;
+}
+
 message CreateChatSessionRequest {
-  LlmModelId model_id = 1;
+  // Directory name under <models_root>/hf/. Must not contain '/' or '..'.
+  string model_dir = 1;
   Backend backend = 2;
 }
 
@@ -121,9 +131,14 @@ service OnnxInferenceService {
 
   // ----- LLM chat -----
 
-  // Build the LlmSession for (model, backend) and return a session id used by
-  // subsequent Chat / DestroyChatSession calls. Stateful: the server keeps the
-  // KV cache across turns of the same session.
+  // List directories under <models_root>/hf/ available for chat. Does not
+  // verify whether each directory actually contains a loadable model; that's
+  // checked at CreateChatSession time.
+  rpc ListLlmModels(ListLlmModelsRequest) returns (ListLlmModelsResponse);
+
+  // Build the LlmSession for (model_dir, backend) and return a session id
+  // used by subsequent Chat / DestroyChatSession calls. Stateful: the server
+  // keeps the KV cache across turns of the same session.
   rpc CreateChatSession(CreateChatSessionRequest)
       returns (CreateChatSessionResponse);
 

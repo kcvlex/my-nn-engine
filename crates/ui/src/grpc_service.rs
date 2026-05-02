@@ -9,7 +9,6 @@ use tonic::Response;
 use tonic::Status;
 
 use crate::llm::ChatRegistry;
-use crate::llm::LlmModelId;
 use crate::models::ModelId;
 use crate::models::ModelRegistry;
 
@@ -34,7 +33,9 @@ use onnx_service::GetInitializerRequest;
 use onnx_service::GetInitializerResponse;
 use onnx_service::InferenceRequest;
 use onnx_service::InferenceResponse;
-use onnx_service::LlmModelId as ProtoLlmModelId;
+use onnx_service::ListLlmModelsRequest;
+use onnx_service::ListLlmModelsResponse;
+use onnx_service::LlmModelInfo;
 use onnx_service::ModelId as ProtoModelId;
 use onnx_service::WarmUpRequest;
 use onnx_service::WarmUpResponse;
@@ -49,15 +50,6 @@ impl OnnxInferenceServiceImpl {
         Self {
             registry,
             chat_registry,
-        }
-    }
-
-    fn proto_llm_model_id_to_llm_model_id(proto_id: i32) -> Result<LlmModelId, Status> {
-        match ProtoLlmModelId::try_from(proto_id) {
-            Ok(ProtoLlmModelId::TinyLlama) => Ok(LlmModelId::TinyLlama),
-            Err(_) => Err(Status::invalid_argument(format!(
-                "Invalid LLM model ID: {proto_id}"
-            ))),
         }
     }
 
@@ -213,17 +205,30 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         }))
     }
 
+    async fn list_llm_models(
+        &self,
+        _request: Request<ListLlmModelsRequest>,
+    ) -> Result<Response<ListLlmModelsResponse>, Status> {
+        let models = self
+            .chat_registry
+            .list()
+            .into_iter()
+            .map(|dir_name| LlmModelInfo { dir_name })
+            .collect();
+        Ok(Response::new(ListLlmModelsResponse { models }))
+    }
+
     async fn create_chat_session(
         &self,
         request: Request<CreateChatSessionRequest>,
     ) -> Result<Response<CreateChatSessionResponse>, Status> {
         let req = request.into_inner();
-        let model_id = Self::proto_llm_model_id_to_llm_model_id(req.model_id)?;
         let target = Self::proto_backend_to_target(req.backend)?;
+        let model_dir = req.model_dir;
 
         let chat_registry = Arc::clone(&self.chat_registry);
         let (session_id, build_time) =
-            tokio::task::spawn_blocking(move || chat_registry.create(model_id, target))
+            tokio::task::spawn_blocking(move || chat_registry.create(&model_dir, target))
                 .await
                 .map_err(|e| Status::internal(format!("join: {e}")))?
                 .map_err(|e| Status::internal(format!("{e}")))?;

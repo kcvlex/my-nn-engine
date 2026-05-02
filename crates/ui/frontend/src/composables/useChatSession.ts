@@ -2,7 +2,7 @@ import { computed, onScopeDispose, shallowRef } from 'vue';
 import { useMutation } from '@tanstack/vue-query';
 import { grpcClient } from '../api/grpc_client';
 import { humanizeError } from '../utils/error';
-import { Backend, LlmModelId } from '../gen/onnx_service_pb';
+import { Backend } from '../gen/onnx_service_pb';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -29,7 +29,7 @@ type LifecycleStatus =
  * tab), then reused for subsequent messages. Calling `reset()` destroys the
  * server-side session and clears history.
  */
-export function useChatSession(modelId: LlmModelId, backend: Backend) {
+export function useChatSession(modelDir: string, backend: Backend) {
   const status = shallowRef<LifecycleStatus>({ state: 'idle' });
   const sessionId = shallowRef<string | null>(null);
   const messages = shallowRef<ChatMessage[]>([]);
@@ -38,7 +38,7 @@ export function useChatSession(modelId: LlmModelId, backend: Backend) {
     if (sessionId.value) return sessionId.value;
     status.value = { state: 'creating' };
     try {
-      const resp = await grpcClient.createChatSession({ modelId, backend });
+      const resp = await grpcClient.createChatSession({ modelDir, backend });
       sessionId.value = resp.sessionId;
       status.value = { state: 'ready', buildMs: resp.buildTimeMs };
       return resp.sessionId;

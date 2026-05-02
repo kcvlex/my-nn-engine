@@ -26,30 +26,23 @@ const MAX_SEQ_LEN: usize = 1024;
 const PREFILL_LEN: usize = 16;
 const DEFAULT_MAX_TOKENS: u32 = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LlmModelId {
-    TinyLlama,
-}
-
-impl LlmModelId {
-    pub fn dir_name(&self) -> &'static str {
-        match self {
-            LlmModelId::TinyLlama => "tinyllama",
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            LlmModelId::TinyLlama => "TinyLlama",
-        }
-    }
-}
+/// Llama-2-Chat style template, used as a fallback when the model's
+/// `tokenizer_config.json` doesn't ship a `chat_template` field. Works for
+/// most Llama-family chat fine-tunes; if your model uses a different format
+/// you'll need to override this per directory.
+const LLAMA2_CHAT_TEMPLATE: &str = "{% for message in messages %}\n\
+{% if message['role'] == 'user' %}\
+{{ bos_token + '[INST] ' + message['content'] + ' [/INST]' }}\n\
+{% elif message['role'] == 'assistant' %}\
+{{ ' ' + message['content'] + ' ' + eos_token }}\n\
+{% endif %}\n\
+{% endfor %}";
 
 pub type SessionId = String;
 
 pub struct ChatSession {
     #[allow(dead_code)] // exposed for future eviction / introspection
-    pub model_id: LlmModelId,
+    pub model_dir: String,
     #[allow(dead_code)]
     pub target: Target,
     llm: LlmSession,
@@ -80,7 +73,7 @@ impl ChatSession {
 
 pub struct ChatRegistry {
     sessions: Mutex<HashMap<SessionId, ChatSession>>,
-    models_dir: PathBuf,
+    models_root: PathBuf,
 }
 
 #[derive(Debug)]
@@ -88,6 +81,7 @@ pub enum ChatError {
     Llm(LlmError),
     Template(ChatTemplateError),
     UnknownSession,
+    InvalidModelDir(String),
     LoadConfig(String),
     LoadTokenizer(String),
 }
@@ -98,6 +92,7 @@ impl std::fmt::Display for ChatError {
             ChatError::Llm(e) => write!(f, "{e}"),
             ChatError::Template(e) => write!(f, "chat template: {e}"),
             ChatError::UnknownSession => write!(f, "unknown chat session"),
+            ChatError::InvalidModelDir(s) => write!(f, "invalid model_dir: {s}"),
             ChatError::LoadConfig(s) => write!(f, "config load failed: {s}"),
             ChatError::LoadTokenizer(s) => write!(f, "tokenizer load failed: {s}"),
         }
@@ -106,9 +101,9 @@ impl std::fmt::Display for ChatError {
 
 #[derive(Debug, Deserialize)]
 struct TokenizerConfig {
-    chat_template: String,
-    eos_token: TokenSpec,
-    bos_token: TokenSpec,
+    chat_template: Option<String>,
+    eos_token: Option<TokenSpec>,
+    bos_token: Option<TokenSpec>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,70 +129,122 @@ pub struct ChatTurnResult {
     pub eos_emitted: bool,
 }
 
+/// Returns true if `name` is a safe single-segment directory name (no `/`, no
+/// `..`, no leading dot, non-empty).
+fn validate_model_dir(name: &str) -> Result<(), ChatError> {
+    if name.is_empty() {
+        return Err(ChatError::InvalidModelDir("empty".into()));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(ChatError::InvalidModelDir("contains path separator".into()));
+    }
+    if name == "." || name == ".." || name.starts_with("..") {
+        return Err(ChatError::InvalidModelDir("traversal".into()));
+    }
+    Ok(())
+}
+
+/// Whether to compile a separate prefill graph alongside the decode graph.
+/// We default to no-prefill (the Llama2 example's path); models small enough
+/// that the extra graph is cheap can opt in via this allowlist.
+fn dir_uses_prefill(dir_name: &str) -> bool {
+    matches!(dir_name, "tinyllama" | "tiny-llama-random")
+}
+
 impl ChatRegistry {
-    pub fn new(models_dir: impl AsRef<Path>) -> Self {
+    pub fn new(models_root: impl AsRef<Path>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            models_dir: models_dir.as_ref().to_path_buf(),
+            models_root: models_root.as_ref().to_path_buf(),
         }
+    }
+
+    /// List immediate subdirectories under `<models_root>/hf/`. Does not
+    /// validate that any given directory actually contains a loadable model.
+    pub fn list(&self) -> Vec<String> {
+        let dir = self.models_root.join("hf");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_type()
+                    .map(|t| t.is_dir() || t.is_symlink())
+                    .unwrap_or(false)
+            })
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| !name.starts_with('.'))
+            .collect();
+        out.sort();
+        out
     }
 
     pub fn create(
         &self,
-        model_id: LlmModelId,
+        model_dir: &str,
         target: Target,
     ) -> Result<(SessionId, Duration), ChatError> {
+        validate_model_dir(model_dir)?;
         let started = Instant::now();
-        let model_dir = self.models_dir.join("hf").join(model_id.dir_name());
+        let path = self.models_root.join("hf").join(model_dir);
 
         log::info!(
             "Loading {} from {} for chat session",
-            model_id.display_name(),
-            model_dir.display()
+            model_dir,
+            path.display()
         );
 
-        let config = HfConfig::from_path(model_dir.join("config.json"))
-            .map_err(|e| ChatError::LoadConfig(format!("{e}")))?;
-        let hf = HfWeights::from_dir(&model_dir)
+        let config = HfConfig::from_path(path.join("config.json"))
+            .map_err(|e| ChatError::LoadConfig(format!("config.json: {e}")))?;
+        let hf = HfWeights::from_dir(&path)
             .map_err(|e| ChatError::LoadConfig(format!("hf weights: {e}")))?;
         let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers)
             .map_err(|e| ChatError::LoadConfig(format!("llama weights: {e}")))?;
 
-        let tok_cfg_str = std::fs::read_to_string(model_dir.join("tokenizer_config.json"))
-            .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json: {e}")))?;
-        let tok_cfg: TokenizerConfig = serde_json::from_str(&tok_cfg_str)
-            .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json parse: {e}")))?;
+        let (chat_template, eos_token_str, bos_token_str) = load_chat_meta(&path, &config)?;
 
         let r = build_llama(&config, &weights, MAX_SEQ_LEN);
-        let p = build_llama_prefill(&config, &weights, MAX_SEQ_LEN, PREFILL_LEN);
 
         let opts = Options::builder().target(target).build();
-        let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
+        let tokenizer = Tokenizer::from_file(path.join("tokenizer.json"))
             .map_err(|e| ChatError::LoadTokenizer(format!("{e}")))?;
         let tokenizer_for_decode = tokenizer.clone();
 
-        let llm = LlmSession::for_llama_with_prefill(
-            r.graph,
-            p.graph,
-            r.kv_cache_names,
-            PREFILL_LEN,
-            tokenizer,
-            &opts,
-            MAX_SEQ_LEN,
-            config.eos_token_id,
-        )
+        let llm = if dir_uses_prefill(model_dir) {
+            let p = build_llama_prefill(&config, &weights, MAX_SEQ_LEN, PREFILL_LEN);
+            LlmSession::for_llama_with_prefill(
+                r.graph,
+                p.graph,
+                r.kv_cache_names,
+                PREFILL_LEN,
+                tokenizer,
+                &opts,
+                MAX_SEQ_LEN,
+                config.eos_token_id,
+            )
+        } else {
+            LlmSession::for_llama(
+                r.graph,
+                r.kv_cache_names,
+                tokenizer,
+                &opts,
+                MAX_SEQ_LEN,
+                config.eos_token_id,
+            )
+        }
         .map_err(ChatError::Llm)?;
 
         let session_id = Uuid::new_v4().to_string();
         let session = ChatSession {
-            model_id,
+            model_dir: model_dir.to_string(),
             target,
             llm,
             tokenizer: tokenizer_for_decode,
             history: Vec::new(),
-            chat_template: tok_cfg.chat_template,
-            eos_token_str: tok_cfg.eos_token.as_str().to_string(),
-            bos_token_str: tok_cfg.bos_token.as_str().to_string(),
+            chat_template,
+            eos_token_str,
+            bos_token_str,
             eos_token_id: config.eos_token_id,
             last_used: Instant::now(),
             last_turn_eos_emitted: true,
@@ -206,7 +253,7 @@ impl ChatRegistry {
             .lock()
             .unwrap()
             .insert(session_id.clone(), session);
-        log::info!("Created chat session {session_id}");
+        log::info!("Created chat session {session_id} ({model_dir})");
         Ok((session_id, started.elapsed()))
     }
 
@@ -302,6 +349,37 @@ impl ChatRegistry {
     }
 }
 
+/// Resolve the chat template, EOS token string, and BOS token string for a
+/// model directory. Falls back to the Llama-2 chat template / "</s>" / "<s>"
+/// when `tokenizer_config.json` is absent or doesn't carry the field.
+fn load_chat_meta(path: &Path, _config: &HfConfig) -> Result<(String, String, String), ChatError> {
+    let cfg_path = path.join("tokenizer_config.json");
+    let parsed: Option<TokenizerConfig> = if cfg_path.exists() {
+        let s = std::fs::read_to_string(&cfg_path)
+            .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json: {e}")))?;
+        Some(
+            serde_json::from_str(&s)
+                .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json parse: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    let chat_template = parsed
+        .as_ref()
+        .and_then(|c| c.chat_template.clone())
+        .unwrap_or_else(|| LLAMA2_CHAT_TEMPLATE.to_string());
+    let eos_token_str = parsed
+        .as_ref()
+        .and_then(|c| c.eos_token.as_ref().map(|t| t.as_str().to_string()))
+        .unwrap_or_else(|| "</s>".to_string());
+    let bos_token_str = parsed
+        .as_ref()
+        .and_then(|c| c.bos_token.as_ref().map(|t| t.as_str().to_string()))
+        .unwrap_or_else(|| "<s>".to_string());
+    Ok((chat_template, eos_token_str, bos_token_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,9 +416,18 @@ mod tests {
     }
 
     #[test]
-    fn llm_model_id_helpers() {
-        assert_eq!(LlmModelId::TinyLlama.dir_name(), "tinyllama");
-        assert_eq!(LlmModelId::TinyLlama.display_name(), "TinyLlama");
+    fn validate_model_dir_accepts_simple_name() {
+        assert!(validate_model_dir("tinyllama").is_ok());
+        assert!(validate_model_dir("llama2-7b-sft").is_ok());
+    }
+
+    #[test]
+    fn validate_model_dir_rejects_traversal_and_separators() {
+        assert!(validate_model_dir("").is_err());
+        assert!(validate_model_dir("..").is_err());
+        assert!(validate_model_dir("../escape").is_err());
+        assert!(validate_model_dir("a/b").is_err());
+        assert!(validate_model_dir("a\\b").is_err());
     }
 
     #[test]
@@ -350,6 +437,9 @@ mod tests {
 
         let e = ChatError::LoadConfig("missing config.json".to_string());
         assert_eq!(e.to_string(), "config load failed: missing config.json");
+
+        let e = ChatError::InvalidModelDir("traversal".to_string());
+        assert_eq!(e.to_string(), "invalid model_dir: traversal");
     }
 
     /// KV-cache reuse correctness invariant: rendering the conversation
@@ -373,11 +463,35 @@ mod tests {
             with_new_rendered.starts_with(&prev),
             "template not append-only:\n--- prev ---\n{prev}\n--- with_new ---\n{with_new_rendered}"
         );
-        // The suffix should contain the new user message.
         let suffix = &with_new_rendered[prev.len()..];
         assert!(
             suffix.contains("How are you?"),
             "suffix missing new user content: {suffix:?}"
+        );
+    }
+
+    #[test]
+    fn template_prefix_invariant_holds_for_llama2_fallback() {
+        let history = vec![
+            ChatMessage::user("Hello"),
+            ChatMessage::assistant("Hi there!"),
+        ];
+        let mut with_new = history.clone();
+        with_new.push(ChatMessage::user("How are you?"));
+
+        let prev =
+            apply_chat_template(LLAMA2_CHAT_TEMPLATE, &history, "</s>", "<s>", false).unwrap();
+        let with_new_rendered =
+            apply_chat_template(LLAMA2_CHAT_TEMPLATE, &with_new, "</s>", "<s>", true).unwrap();
+
+        assert!(
+            with_new_rendered.starts_with(&prev),
+            "llama2 template not append-only:\n--- prev ---\n{prev}\n--- with_new ---\n{with_new_rendered}"
+        );
+        let suffix = &with_new_rendered[prev.len()..];
+        assert!(
+            suffix.contains("How are you?"),
+            "llama2 suffix missing new user content: {suffix:?}"
         );
     }
 
