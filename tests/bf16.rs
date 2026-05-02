@@ -1,5 +1,3 @@
-#![cfg(feature = "cuda")]
-
 mod common;
 
 use std::collections::HashMap;
@@ -48,8 +46,7 @@ fn extract_bf16(t: &Tensor) -> Vec<f32> {
     data.iter().map(|&x| x as f32).collect()
 }
 
-#[test]
-fn bf16_sigmoid_smoke() -> TestResult {
+fn run_bf16_sigmoid(target: Target) -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let dims = &[4usize];
 
@@ -87,7 +84,7 @@ fn bf16_sigmoid_smoke() -> TestResult {
     ));
     graph.outputs.push(node);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
 
     let x_vals = [-2.0f32, -0.5, 0.5, 2.0];
@@ -112,8 +109,7 @@ fn bf16_sigmoid_smoke() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn bf16_rms_norm_smoke() -> TestResult {
+fn run_bf16_rms_norm(target: Target) -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let dim_size = 8usize;
     let dims = &[1usize, dim_size];
@@ -165,7 +161,7 @@ fn bf16_rms_norm_smoke() -> TestResult {
     ));
     graph.outputs.push(node);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
 
     let x_vals: Vec<f32> = vec![1.0, 2.0, -1.5, 0.5, 0.0, 3.0, -2.0, 1.0];
@@ -187,8 +183,8 @@ fn bf16_rms_norm_smoke() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn bf16_matmul_smoke() -> TestResult {
+#[cfg(feature = "cuda")]
+fn run_bf16_matmul(target: Target) -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let a_dims = &[1usize, 4];
     let b_dims = &[4usize, 4];
@@ -234,7 +230,7 @@ fn bf16_matmul_smoke() -> TestResult {
     ));
     graph.outputs.push(node);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
 
     let a_vals = [1.0f32, 0.5, -1.0, 2.0];
@@ -257,8 +253,7 @@ fn bf16_matmul_smoke() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn bf16_add_smoke() -> TestResult {
+fn run_bf16_add(target: Target) -> TestResult {
     let bf16_ty: DataType = FloatType::BF16.into();
     let dims = &[4usize];
 
@@ -306,7 +301,7 @@ fn bf16_add_smoke() -> TestResult {
     ));
     graph.outputs.push(node);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let mut session = Session::from_graph(graph, &opts, &SessionConfig::default())?;
 
     let a_vals = [1.0f32, 2.0, 3.0, 4.0];
@@ -329,4 +324,43 @@ fn bf16_add_smoke() -> TestResult {
         assert!((g - e).abs() < 1e-2, "bf16 add[{i}]: got {g}, expected {e}");
     }
     Ok(())
+}
+
+#[test]
+fn bf16_sigmoid_cpu() -> TestResult {
+    run_bf16_sigmoid(Target::CPU)
+}
+
+#[test]
+fn bf16_rms_norm_cpu() -> TestResult {
+    run_bf16_rms_norm(Target::CPU)
+}
+
+#[test]
+fn bf16_add_cpu() -> TestResult {
+    run_bf16_add(Target::CPU)
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn bf16_sigmoid_cuda() -> TestResult {
+    run_bf16_sigmoid(Target::CUDA)
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn bf16_rms_norm_cuda() -> TestResult {
+    run_bf16_rms_norm(Target::CUDA)
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn bf16_matmul_cuda() -> TestResult {
+    run_bf16_matmul(Target::CUDA)
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn bf16_add_cuda() -> TestResult {
+    run_bf16_add(Target::CUDA)
 }

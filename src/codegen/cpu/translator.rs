@@ -110,11 +110,16 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_load(&self, ptr: &TensorPtr<'ctx>) -> Result<BasicValueEnum<'ctx>, BuilderError> {
         let gep = self.build_gep(ptr)?;
-        self.builder.build_load(
+        let raw = self.builder.build_load(
             ptr.ty.elem_type.llvm_type(self.context),
             gep,
             format!("load.{}", ptr.name).as_str(),
-        )
+        )?;
+        if matches!(ptr.ty.elem_type, DataType::Float(FloatType::BF16)) {
+            Ok(self.bf16_bits_to_f32(raw.into_int_value())?.into())
+        } else {
+            Ok(raw)
+        }
     }
 
     fn build_store<V: BasicValue<'ctx>>(
@@ -123,7 +128,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         val: V,
     ) -> Result<(), BuilderError> {
         let gep = self.build_gep(ptr)?;
-        self.builder.build_store(gep, val).map(|_| ())
+        if matches!(ptr.ty.elem_type, DataType::Float(FloatType::BF16)) {
+            let bits = self.f32_to_bf16_bits(val.as_basic_value_enum().into_float_value())?;
+            self.builder.build_store(gep, bits).map(|_| ())
+        } else {
+            self.builder.build_store(gep, val).map(|_| ())
+        }
     }
 
     fn build_raw_load<T: BasicType<'ctx> + Copy>(
@@ -145,6 +155,52 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     ) -> Result<(), BuilderError> {
         let gep = unsafe { self.builder.build_in_bounds_gep(ty, ptr, &[offset], "gep") }?;
         self.builder.build_store(gep, val).map(|_| ())
+    }
+
+    // bf16 bit pattern (i16) -> f32 value via shift-and-bitcast.
+    fn bf16_bits_to_f32(&self, bits: IntValue<'ctx>) -> Result<FloatValue<'ctx>, BuilderError> {
+        let i32_ty = self.context.i32_type();
+        let zext = self.builder.build_int_z_extend(bits, i32_ty, "bf16.zext")?;
+        let shifted =
+            self.builder
+                .build_left_shift(zext, i32_ty.const_int(16, false), "bf16.shl")?;
+        let bc = self
+            .builder
+            .build_bit_cast(shifted, self.context.f32_type(), "bf16.f32")?;
+        Ok(bc.into_float_value())
+    }
+
+    // f32 value -> bf16 bit pattern (i16) with round-to-nearest-even.
+    fn f32_to_bf16_bits(&self, v: FloatValue<'ctx>) -> Result<IntValue<'ctx>, BuilderError> {
+        let i32_ty = self.context.i32_type();
+        let i16_ty = self.context.i16_type();
+        let bits = self
+            .builder
+            .build_bit_cast(v, i32_ty, "bf16.bits")?
+            .into_int_value();
+        // RNE: bias = 0x7FFF + ((bits >> 16) & 1)
+        let lsb = self.builder.build_right_shift(
+            bits,
+            i32_ty.const_int(16, false),
+            false,
+            "bf16.lsb.shr",
+        )?;
+        let lsb = self
+            .builder
+            .build_and(lsb, i32_ty.const_int(1, false), "bf16.lsb")?;
+        let bias = self
+            .builder
+            .build_int_add(lsb, i32_ty.const_int(0x7FFF, false), "bf16.bias")?;
+        let rounded = self.builder.build_int_add(bits, bias, "bf16.rounded")?;
+        let high = self.builder.build_right_shift(
+            rounded,
+            i32_ty.const_int(16, false),
+            false,
+            "bf16.high",
+        )?;
+        Ok(self
+            .builder
+            .build_int_truncate(high, i16_ty, "bf16.trunc")?)
     }
 
     fn build_tail_call(
@@ -833,7 +889,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let v = match ft {
                     FloatType::F32 => f32::NEG_INFINITY as f64,
                     FloatType::F64 => f64::NEG_INFINITY,
-                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
+                    FloatType::BF16 => f32::NEG_INFINITY as f64,
                 };
                 ft.llvm_type(self.context)
                     .const_float(v)
@@ -1613,7 +1669,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .const_float(match fp_ty {
                     FloatType::F32 => f32::NEG_INFINITY as f64,
                     FloatType::F64 => f64::NEG_INFINITY,
-                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
+                    FloatType::BF16 => f32::NEG_INFINITY as f64,
                 })
                 .as_basic_value_enum(),
         };
@@ -1897,7 +1953,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             PoolMode::Max => match fp_ty {
                 FloatType::F32 => f32::NEG_INFINITY as f64,
                 FloatType::F64 => f64::NEG_INFINITY,
-                FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
+                FloatType::BF16 => f32::NEG_INFINITY as f64,
             },
         };
 
@@ -2455,9 +2511,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 let ty = elem_ty.float_type().unwrap();
                 let fmax = self.intrinsics.fmax.get(ty);
                 let id_v = match ty {
-                    FloatType::F32 => f32::MIN as f64,
+                    FloatType::F32 | FloatType::BF16 => f32::MIN as f64,
                     FloatType::F64 => f64::MIN,
-                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 };
                 let ty = ty.llvm_type(self.context);
                 let id_v = ty.const_float(id_v);
@@ -3749,9 +3804,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             }
             ScalarData::Float(ty, v) => {
                 let ty = match ty {
-                    FloatType::F32 => self.context.f32_type(),
+                    FloatType::F32 | FloatType::BF16 => self.context.f32_type(),
                     FloatType::F64 => self.context.f64_type(),
-                    FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
                 };
                 ty.const_float(*v).into()
             }
@@ -4105,9 +4159,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             _ => unimplemented!(),
         };
         let fmax_id = match val_ty {
-            FloatType::F32 => f32::MIN as f64,
+            FloatType::F32 | FloatType::BF16 => f32::MIN as f64,
             FloatType::F64 => f64::MIN,
-            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         };
 
         let outer_bound = {
@@ -5291,7 +5344,6 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             acc
         };
 
-        let elem_type = dst.ty.elem_type.llvm_type(self.context);
         let src_offset = self
             .builder
             .build_int_add(src.offset, offset, "src.offset")?;
@@ -5300,7 +5352,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let dst_offset = self
             .builder
             .build_int_add(dst.offset, ind_val, "dst.offset")?;
-        self.build_raw_store(elem_type, dst.ptr, dst_offset, src_val)?;
+        let dst = dst.clone().set_offset(dst_offset);
+        self.build_store(&dst, src_val)?;
 
         self.finalize_counted_loop(
             ind,

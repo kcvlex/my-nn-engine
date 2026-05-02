@@ -20,9 +20,8 @@ pub struct FloatIntrinsics<'ll> {
 impl<'ctx> FloatIntrinsics<'ctx> {
     pub fn get(&self, ty: FloatType) -> FunctionValue<'ctx> {
         match ty {
-            FloatType::F32 => self.f_f32,
+            FloatType::F32 | FloatType::BF16 => self.f_f32,
             FloatType::F64 => self.f_f64,
-            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 }
@@ -173,21 +172,25 @@ impl UIntType {
 }
 
 impl FloatType {
+    // Returns the COMPUTE type used for arithmetic. BF16 is substituted with f32; all
+    // bf16 math happens in f32 and is rounded back to bf16 only at memory store time.
     pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::FloatType<'ctx> {
         match self {
-            FloatType::F32 => ctx.f32_type(),
+            FloatType::F32 | FloatType::BF16 => ctx.f32_type(),
             FloatType::F64 => ctx.f64_type(),
-            FloatType::BF16 => unimplemented!("BF16 not supported on CPU backend"),
         }
     }
 }
 
 impl DataType {
+    // Returns the STORAGE type used for memory layout (alloca, GEP stride, load/store
+    // size). BF16 storage is i16; conversion to/from f32 happens in build_load/store.
     pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> BasicTypeEnum<'ctx> {
         match self {
             DataType::Bool => ctx.i8_type().as_basic_type_enum(),
             DataType::SInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
             DataType::UInt(t) => t.llvm_type(ctx).as_basic_type_enum(),
+            DataType::Float(FloatType::BF16) => ctx.i16_type().as_basic_type_enum(),
             DataType::Float(t) => t.llvm_type(ctx).as_basic_type_enum(),
         }
     }
