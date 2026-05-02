@@ -3,6 +3,7 @@ pub mod chat_template;
 pub mod hf_config;
 pub mod hf_weights;
 pub mod llama;
+pub mod quantize;
 pub mod session;
 
 pub use chat_template::apply_chat_template;
