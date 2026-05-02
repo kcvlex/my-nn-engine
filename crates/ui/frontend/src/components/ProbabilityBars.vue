@@ -20,13 +20,8 @@ withDefaults(
       :class="{ highlight: item.highlight }"
     >
       <span
-        class="prob-label"
-        :style="{
-          width: labelWidth,
-          overflow: truncateLabel ? 'hidden' : undefined,
-          textOverflow: truncateLabel ? 'ellipsis' : undefined,
-          whiteSpace: truncateLabel ? 'nowrap' : undefined,
-        }"
+        :class="['prob-label', { truncate: truncateLabel }]"
+        :style="{ width: labelWidth }"
         >{{ item.label }}</span
       >
       <div class="prob-bar-bg">

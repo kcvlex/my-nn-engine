@@ -396,6 +396,12 @@ summary:hover {
   color: inherit;
 }
 
+.prob-label.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .prob-bar-bg {
   flex: 1;
   height: 12px;
