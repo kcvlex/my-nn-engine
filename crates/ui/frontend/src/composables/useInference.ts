@@ -32,10 +32,9 @@ export function useInference<T extends BaseInferenceResult>() {
     return (mutation.data.value as T | undefined) ?? null;
   });
 
-  function run(fn: (client: GrpcClient) => Promise<T>): Promise<void> {
-    return new Promise((resolve) => {
-      mutation.mutate(fn, { onSettled: () => resolve() });
-    });
+  async function run(fn: (client: GrpcClient) => Promise<T>): Promise<void> {
+    // Errors are surfaced through `result`, so swallow the rejection here.
+    await mutation.mutateAsync(fn).catch(() => {});
   }
 
   return { loading, result, run };
