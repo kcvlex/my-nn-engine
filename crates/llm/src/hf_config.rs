@@ -19,12 +19,17 @@ pub struct HfConfig {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
+    #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
     pub rms_norm_eps: f64,
     pub hidden_act: String,
     pub tie_word_embeddings: bool,
     pub bos_token_id: u32,
     pub eos_token_id: u32,
+}
+
+fn default_rope_theta() -> f32 {
+    10000.0
 }
 
 impl HfConfig {

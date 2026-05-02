@@ -42,6 +42,32 @@ fn bf16_bits_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
+fn f16_bits_to_f32(bits: u16) -> f32 {
+    let sign = ((bits as u32) >> 15) & 0x1;
+    let exp = ((bits as u32) >> 10) & 0x1F;
+    let mantissa = (bits as u32) & 0x3FF;
+    let f32_bits: u32 = if exp == 0 {
+        if mantissa == 0 {
+            sign << 31
+        } else {
+            let mut e: u32 = 1;
+            let mut m = mantissa;
+            while m & 0x400 == 0 {
+                m <<= 1;
+                e += 1;
+            }
+            let m = m & 0x3FF;
+            (sign << 31) | ((127 - 15 + 1 - e) << 23) | (m << 13)
+        }
+    } else if exp == 0x1F {
+        (sign << 31) | (0xFF << 23) | (mantissa << 13)
+    } else {
+        let new_exp = exp + (127 - 15);
+        (sign << 31) | (new_exp << 23) | (mantissa << 13)
+    };
+    f32::from_bits(f32_bits)
+}
+
 fn f32_to_bf16_bits_rne(x: f32) -> u16 {
     if x.is_nan() {
         return 0x7FC0;
@@ -82,6 +108,10 @@ fn read_as_f32(view: &TensorView<'_>) -> Result<Vec<f32>, QuantizeError> {
         Dtype::BF16 => bytes
             .chunks_exact(2)
             .map(|c| bf16_bits_to_f32(u16::from_le_bytes(c.try_into().unwrap())))
+            .collect(),
+        Dtype::F16 => bytes
+            .chunks_exact(2)
+            .map(|c| f16_bits_to_f32(u16::from_le_bytes(c.try_into().unwrap())))
             .collect(),
         d => return Err(QuantizeError::UnsupportedDtype(d)),
     };
@@ -135,12 +165,24 @@ fn quantize_per_channel(
     ))
 }
 
-fn copy_view(view: &TensorView<'_>) -> OwnedTensor {
-    OwnedTensor {
+fn copy_view(view: &TensorView<'_>) -> Result<OwnedTensor, QuantizeError> {
+    if view.dtype() == Dtype::F16 {
+        let f32_data = read_as_f32(view)?;
+        let bf16_bytes: Vec<u8> = f32_data
+            .iter()
+            .flat_map(|&f| f32_to_bf16_bits_rne(f).to_le_bytes())
+            .collect();
+        return Ok(OwnedTensor {
+            dtype: Dtype::BF16,
+            shape: view.shape().to_vec(),
+            data: bf16_bytes,
+        });
+    }
+    Ok(OwnedTensor {
         dtype: view.dtype(),
         shape: view.shape().to_vec(),
         data: view.data().to_vec(),
-    }
+    })
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -193,7 +235,7 @@ fn quantize_safetensors_int8_files(
                 output.push((format!("{name}.scale"), scale));
                 stats.quantized += 1;
             } else {
-                output.push((name.clone(), copy_view(&view)));
+                output.push((name.clone(), copy_view(&view)?));
                 stats.passthrough += 1;
             }
         }
