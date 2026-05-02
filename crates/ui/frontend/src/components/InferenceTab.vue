@@ -5,8 +5,8 @@
         <div class="form-group">
           <label for="model-id">Model</label>
           <select id="model-id" v-model.number="modelId">
-            <option v-for="id in MODEL_ORDER" :key="id" :value="id">
-              {{ MODELS[id].label }}
+            <option v-for="[id, entry] in MODELS" :key="id" :value="id">
+              {{ entry.label }}
             </option>
           </select>
         </div>
@@ -96,52 +96,54 @@ const imageNetEntry = (modelId: ModelId, label: string): ModelEntry => ({
   props: (backend) => ({ backend, modelId, ...IMAGENET_CONFIGS[modelId]! }),
 });
 
-const MODELS: Record<ModelId, ModelEntry> = {
-  [ModelId.MNIST]: {
-    label: 'MNIST',
-    component: defineAsyncComponent(() => import('./MNIST.vue')),
-    props: (backend) => ({ backend }),
-  },
-  [ModelId.RESNET]: imageNetEntry(ModelId.RESNET, 'ResNet18'),
-  [ModelId.RESNET152]: imageNetEntry(ModelId.RESNET152, 'ResNet152'),
-  [ModelId.MOBILENETV2]: imageNetEntry(ModelId.MOBILENETV2, 'MobileNetV2'),
-  [ModelId.EFFICIENTNET_LITE4]: imageNetEntry(
+// A Map (not a Record) so insertion order is the dropdown display order;
+// Record keys with integer-like values get sorted numerically by JS.
+const MODELS = new Map<ModelId, ModelEntry>([
+  [
+    ModelId.MNIST,
+    {
+      label: 'MNIST',
+      component: defineAsyncComponent(() => import('./MNIST.vue')),
+      props: (backend) => ({ backend }),
+    },
+  ],
+  [ModelId.RESNET, imageNetEntry(ModelId.RESNET, 'ResNet18')],
+  [ModelId.RESNET152, imageNetEntry(ModelId.RESNET152, 'ResNet152')],
+  [ModelId.MOBILENETV2, imageNetEntry(ModelId.MOBILENETV2, 'MobileNetV2')],
+  [
     ModelId.EFFICIENTNET_LITE4,
-    'EfficientNet-Lite4',
-  ),
-  [ModelId.YOLO]: {
-    label: 'YOLO',
-    component: defineAsyncComponent(() => import('./YOLO.vue')),
-    props: (backend) => ({ backend }),
-  },
-  [ModelId.BERT]: {
-    label: 'BERT',
-    component: defineAsyncComponent(() => import('./BERT.vue')),
-    props: (backend) => ({ backend }),
-  },
-  [ModelId.GPT2]: {
-    label: 'GPT-2',
-    component: defineAsyncComponent(() => import('./GPT2.vue')),
-    props: (backend) => ({ backend }),
-  },
-};
-
-// Display order for the dropdown (Record key order is numeric, not what we want).
-const MODEL_ORDER: ModelId[] = [
-  ModelId.MNIST,
-  ModelId.RESNET,
-  ModelId.RESNET152,
-  ModelId.MOBILENETV2,
-  ModelId.EFFICIENTNET_LITE4,
-  ModelId.YOLO,
-  ModelId.BERT,
-  ModelId.GPT2,
-];
+    imageNetEntry(ModelId.EFFICIENTNET_LITE4, 'EfficientNet-Lite4'),
+  ],
+  [
+    ModelId.YOLO,
+    {
+      label: 'YOLO',
+      component: defineAsyncComponent(() => import('./YOLO.vue')),
+      props: (backend) => ({ backend }),
+    },
+  ],
+  [
+    ModelId.BERT,
+    {
+      label: 'BERT',
+      component: defineAsyncComponent(() => import('./BERT.vue')),
+      props: (backend) => ({ backend }),
+    },
+  ],
+  [
+    ModelId.GPT2,
+    {
+      label: 'GPT-2',
+      component: defineAsyncComponent(() => import('./GPT2.vue')),
+      props: (backend) => ({ backend }),
+    },
+  ],
+]);
 
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
 
-const activeEntry = computed(() => MODELS[modelId.value]);
+const activeEntry = computed(() => MODELS.get(modelId.value)!);
 
 // Pre-build the session whenever (modelId, backend) changes. The server caches
 // per (model, target), so the query is `staleTime: Infinity`. Vue Query
