@@ -43,6 +43,5 @@ withDefaults(
 <style scoped>
 .prob-label {
   text-align: right;
-  color: #333;
 }
 </style>

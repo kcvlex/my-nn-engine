@@ -295,18 +295,24 @@ defineExpose({ runInference });
 
 <style scoped>
 .answer {
-  margin: 12px 0;
+  margin: 14px 0 10px;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border-left: 2px solid var(--accent);
 }
 
 .answer-label {
-  font-weight: 600;
-  color: #333;
-  margin-right: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-right: 10px;
 }
 
 .answer-text {
-  font-size: 1.3rem;
-  font-weight: 700;
-  color: #333;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--accent);
 }
 </style>

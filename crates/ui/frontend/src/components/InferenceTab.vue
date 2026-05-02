@@ -70,21 +70,6 @@
 
       <template v-else />
     </form>
-
-    <div v-if="result" :class="['result', result.type]">
-      <template v-if="result.type === 'success'">
-        <h3>Inference Complete</h3>
-        <p><strong>Time:</strong> {{ result.inferenceTime?.toFixed(2) }} ms</p>
-        <details>
-          <summary>Output Tensor</summary>
-          <pre class="output-json">{{ result.output }}</pre>
-        </details>
-      </template>
-      <template v-else>
-        <h3>Error</h3>
-        <p>{{ result.message }}</p>
-      </template>
-    </div>
   </div>
 </template>
 
@@ -136,12 +121,6 @@ const IMAGENET_CONFIGS: Partial<Record<ModelId, ImageNetConfig>> = {
 
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
-const result = ref<{
-  type: 'success' | 'error';
-  message?: string;
-  inferenceTime?: number;
-  output?: string;
-} | null>(null);
 
 const imageNetConfig = computed(() => IMAGENET_CONFIGS[modelId.value]);
 
@@ -175,59 +154,32 @@ const handleSubmit = async () => {
 
 <style scoped>
 .tab-content {
-  padding: 30px;
+  padding: 24px 28px 28px;
 }
 
 .form {
-  max-width: 800px;
+  max-width: 880px;
 }
 
 .form-row {
   display: flex;
-  gap: 20px;
+  gap: 18px;
+  border-bottom: 1px dashed var(--border-strong);
+  padding-bottom: 18px;
+  margin-bottom: 22px;
 }
 
 .form-row .form-group {
   flex: 1;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-textarea {
-  font-family: 'Courier New', monospace;
-}
-
-button {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 12px 30px;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s;
-}
-
-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  margin-bottom: 0;
 }
 
 h3 {
-  margin-bottom: 10px;
-}
-
-.output-json {
-  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
 }
 </style>

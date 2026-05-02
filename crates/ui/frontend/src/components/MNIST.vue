@@ -147,8 +147,18 @@ defineExpose({ runInference });
 }
 
 .digit {
-  font-size: 3rem;
+  font-size: 2.6rem;
   font-weight: 700;
-  color: #333;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.digit::before {
+  content: 'argmax = ';
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--fg-dim);
+  margin-right: 6px;
+  letter-spacing: 0.06em;
 }
 </style>

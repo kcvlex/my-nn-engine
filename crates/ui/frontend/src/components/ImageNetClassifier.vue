@@ -190,8 +190,17 @@ defineExpose({ runInference });
 }
 
 .top-label {
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   font-weight: 700;
-  color: #333;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+
+.top-label::before {
+  content: 'top1 ▸ ';
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
 }
 </style>

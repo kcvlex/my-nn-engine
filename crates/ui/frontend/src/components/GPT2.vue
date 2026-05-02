@@ -192,60 +192,60 @@ input[type='number'] {
 }
 
 .generation-output {
-  margin-top: 20px;
+  margin-top: 22px;
 }
 
 .generated-text {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 20px;
-  border-radius: 6px;
-  font-family: 'Courier New', monospace;
-  font-size: 1rem;
-  line-height: 1.6;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 16px 18px;
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--accent-dim);
+  font-size: 13px;
+  line-height: 1.65;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
 
 .prompt-echo {
-  color: #888;
+  color: var(--fg-dim);
 }
 
 .completion {
-  color: #4ec9b0;
+  color: var(--accent);
 }
 
 .cursor {
-  animation: blink 1s step-end infinite;
-  color: #fff;
+  animation: blink 1.05s steps(2, end) infinite;
+  color: var(--accent);
 }
 
 @keyframes blink {
-  50% {
+  to {
     opacity: 0;
   }
 }
 
 .timing {
-  margin-top: 12px;
-  color: #333;
-  font-size: 0.9rem;
+  margin-top: 14px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .error-msg {
   margin-top: 12px;
-  color: #c00;
-  background: #fee;
-  padding: 10px;
-  border-radius: 6px;
-  border-left: 4px solid #f44;
+  color: var(--danger);
+  background: var(--bg-input);
+  padding: 10px 12px;
+  border-left: 2px solid var(--danger);
 }
 
 .token-list {
   list-style: none;
   padding: 0;
-  margin: 0;
-  font-size: 0.85rem;
+  margin: 6px 0 0;
+  font-size: 11px;
 }
 
 .token-list li {
@@ -253,40 +253,37 @@ input[type='number'] {
   align-items: baseline;
   gap: 8px;
   padding: 4px 0;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border);
 }
 
 .step {
-  color: #999;
-  width: 30px;
+  color: var(--fg-faint);
+  width: 32px;
   flex-shrink: 0;
 }
 
 .chosen-token {
-  font-weight: 700;
-  color: #333;
-  font-family: 'Courier New', monospace;
-  min-width: 80px;
+  font-weight: 500;
+  color: var(--accent);
+  min-width: 88px;
 }
 
 .top-predictions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .pred {
-  background: #f0f0f0;
+  background: var(--bg-input);
   padding: 2px 6px;
-  border-radius: 3px;
-  font-family: 'Courier New', monospace;
-  color: #666;
-  font-size: 0.8rem;
+  color: var(--fg-dim);
+  font-size: 10px;
+  border: 1px solid var(--border);
 }
 
 .pred.best {
-  background: #e0f0e0;
-  color: #060;
-  font-weight: 600;
+  border-color: var(--accent-dim);
+  color: var(--accent);
 }
 </style>

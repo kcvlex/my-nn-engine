@@ -1,12 +1,16 @@
 <template>
   <div class="app">
-    <div class="container">
-      <header>
-        <h1>My ONNX</h1>
-        <p class="subtitle">Run inference on pre-loaded ONNX models via gRPC</p>
+    <div class="frame">
+      <header class="app-header">
+        <div class="brand">
+          <span class="prompt">$</span>
+          <h1>my-nn-engine</h1>
+        </div>
       </header>
 
-      <InferenceTab />
+      <main class="container">
+        <InferenceTab />
+      </main>
     </div>
   </div>
 </template>
@@ -17,31 +21,57 @@ import InferenceTab from './components/InferenceTab.vue';
 
 <style scoped>
 .app {
-  max-width: 1200px;
-  margin: 0 auto;
+  min-height: 100vh;
+  padding: 28px 24px;
+  display: flex;
+  justify-content: center;
 }
 
-.container {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
+.frame {
+  width: 100%;
+  max-width: 1100px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
 }
 
-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 30px;
-  text-align: center;
+.app-header {
+  border-bottom: 1px solid var(--border-strong);
+  padding: 16px 24px;
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.prompt {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 18px;
 }
 
 h1 {
-  font-size: 2.5rem;
-  margin-bottom: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg);
 }
 
-.subtitle {
-  opacity: 0.9;
-  font-size: 1.1rem;
+.container {
+  background: var(--bg-raised);
+}
+
+@media (max-width: 600px) {
+  .app {
+    padding: 16px 12px;
+  }
+  .app-header {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }
 </style>

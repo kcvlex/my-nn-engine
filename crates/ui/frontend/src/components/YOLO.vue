@@ -320,36 +320,38 @@ defineExpose({ runInference });
 
 .result-canvas {
   max-width: 100%;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
   margin: 10px 0;
 }
 
 .detection-list {
   list-style: none;
   padding: 0;
-  margin: 10px 0;
+  margin: 12px 0 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .detection-list li {
-  background: #fff;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--accent-dim);
   padding: 4px 10px;
-  font-size: 0.85rem;
+  font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 .det-label {
-  font-weight: 600;
-  color: #333;
+  font-weight: 500;
+  color: var(--fg);
   margin-right: 6px;
+  text-transform: lowercase;
 }
 
 .det-score {
-  color: #666;
-  font-family: 'Courier New', monospace;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 </style>
