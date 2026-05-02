@@ -3,6 +3,7 @@ pub mod canonicalization;
 pub mod const_folding;
 pub mod conv_activation_fusion;
 pub mod conv_bn_fusion;
+pub mod dequant_gemm_fusion;
 pub mod fast_gelu_fusion;
 pub mod gemm_add_fusion;
 pub mod gemm_transpose_fusion;
@@ -20,6 +21,7 @@ use crate::transform::optimize::canonicalization::MatMul2BatchedGemm;
 use crate::transform::optimize::const_folding::ConstantFolding;
 use crate::transform::optimize::conv_activation_fusion::ConvActivationFusion;
 use crate::transform::optimize::conv_bn_fusion::ConvBNFusion;
+use crate::transform::optimize::dequant_gemm_fusion::DequantGemmFusion;
 use crate::transform::optimize::fast_gelu_fusion::FastGeLUFusion;
 use crate::transform::optimize::gemm_add_fusion::GemmAddFusion;
 use crate::transform::optimize::gemm_transpose_fusion::GemmTransposeFusion;
@@ -55,6 +57,7 @@ pub fn create_optimize_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp>
     pass_manager.add_pass(Box::new(IdentityElimination::default()));
     pass_manager.add_pass(Box::new(GemmTransposeFusion::default()));
     pass_manager.add_pass(Box::new(GemmAddFusion::default()));
+    pass_manager.add_pass(Box::new(DequantGemmFusion::default()));
     pass_manager.add_pass(Box::new(ConstantFolding {
         check_strides: true,
     }));

@@ -226,6 +226,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Concat(c) => vec![attr_int("axis", c.axis.raw() as i64)],
 
         Operator::DequantizeLinear(d) => vec![attr_int("axis", d.axis.raw() as i64)],
+        Operator::DequantMatMul(d) => vec![attr_int("axis", d.axis.raw() as i64)],
 
         Operator::Constant(c) => vec![attr_tensor("value", tensor_to_proto(&c.value))],
 

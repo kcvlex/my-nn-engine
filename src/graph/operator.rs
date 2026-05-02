@@ -55,6 +55,7 @@ pub enum Operator {
     Conv(Conv),
     Cos,
     DequantizeLinear(DequantizeLinear),
+    DequantMatMul(DequantMatMul),
     Div,
     Equal,
     Expand,
@@ -188,6 +189,12 @@ pub struct Concat {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DequantizeLinear {
+    pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DequantMatMul {
+    /// Per-channel scale axis on the quantized weight (typically 0).
     pub axis: TensorIndex,
 }
 
@@ -817,6 +824,7 @@ impl Operator {
             Operator::Conv(_) => "Conv",
             Operator::Cos => "Cos",
             Operator::DequantizeLinear(_) => "DequantizeLinear",
+            Operator::DequantMatMul(_) => "DequantMatMul",
             Operator::Div => "Div",
             Operator::Equal => "Equal",
             Operator::Expand => "Expand",
@@ -923,6 +931,7 @@ impl Operator {
             Operator::ConstantOfShape(_) |
             Operator::Conv(_) |
             Operator::DequantizeLinear(_) |
+            Operator::DequantMatMul(_) |
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
@@ -1042,6 +1051,10 @@ pub mod args {
 
     pub const DEQUANTIZE_X: usize = 0;
     pub const DEQUANTIZE_SCALE: usize = 1;
+
+    pub const DEQUANT_MATMUL_LHS: usize = 0;
+    pub const DEQUANT_MATMUL_RHS: usize = 1;
+    pub const DEQUANT_MATMUL_SCALE: usize = 2;
 
     pub const KVCACHE_UPDATE_CACHE: usize = 0;
     pub const KVCACHE_UPDATE_NEW: usize = 1;

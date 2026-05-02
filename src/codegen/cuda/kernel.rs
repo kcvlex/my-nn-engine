@@ -19,6 +19,7 @@ pub enum CUDAKernel {
     AttentionDecodeKernel(AttentionDecodeKernel),
     ConcatKernel(ConcatKernel),
     DequantizeLinearKernel(DequantizeLinearKernel),
+    DequantMatMulKernel(DequantMatMulKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -272,6 +273,7 @@ impl LaunchKernel {
             CUDAKernel::AttentionDecodeKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
             CUDAKernel::DequantizeLinearKernel(d) => d,
+            CUDAKernel::DequantMatMulKernel(d) => d,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1280,6 +1282,39 @@ impl DequantizeLinearKernel {
             self.axis_dim.to_string(),
             self.inner_size.to_string(),
             self.total.to_string(),
+        ];
+        (id, args)
+    }
+}
+
+pub struct DequantMatMulKernel {
+    pub act_ty: DataType,
+    pub out_ty: DataType,
+    pub block_size: usize,
+    pub m: usize,
+    pub n: usize,
+    pub k: usize,
+
+    pub out: Expr,
+    pub act: Expr,
+    pub wq: Expr,
+    pub scale: Expr,
+}
+
+impl DequantMatMulKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "dequant_matmul<{}, {}, {}>",
+            self.act_ty, self.out_ty, self.block_size
+        );
+        let args = vec![
+            cast!(self.out_ty, self.out),
+            cast!(self.act_ty, self.act),
+            format!("(const signed char *)({})", self.wq),
+            cast!(self.out_ty, self.scale),
+            self.m.to_string(),
+            self.n.to_string(),
+            self.k.to_string(),
         ];
         (id, args)
     }

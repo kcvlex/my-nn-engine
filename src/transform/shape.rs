@@ -265,6 +265,29 @@ pub fn infer_node_output(
             );
             res.push(ResolvedTensorType::new(scale.elem_type, x.dims.clone()));
         }
+        Operator::DequantMatMul(DequantMatMul { axis }) => {
+            let lhs = &inputs[args::DEQUANT_MATMUL_LHS];
+            let rhs = &inputs[args::DEQUANT_MATMUL_RHS];
+            let scale = &inputs[args::DEQUANT_MATMUL_SCALE];
+            assert!(2 <= lhs.dims.ndim());
+            assert_eq!(rhs.dims.ndim(), 2, "weight must be 2D");
+            assert_eq!(scale.dims.ndim(), 1, "scale must be 1D (per-channel)");
+            let axis_idx = axis.index(rhs.dims.ndim());
+            assert_eq!(
+                scale.dims[0], rhs.dims[axis_idx],
+                "scale length must equal weight.dims[axis]"
+            );
+            // weight is [N, K] (axis=0 → N is per-channel), output is [..., M, N]
+            let n = rhs.dims[axis_idx];
+            let k = rhs.dims[1 - axis_idx];
+            assert_eq!(lhs.dims[lhs.dims.ndim() - 1], k, "matmul K dim mismatch");
+            let mut out_dims: Vec<usize> = lhs.dims.iter().copied().collect();
+            *out_dims.last_mut().unwrap() = n;
+            res.push(ResolvedTensorType::new(
+                scale.elem_type,
+                ResolvedTensorDims::new(&out_dims),
+            ));
+        }
         Operator::Transpose(ref t) => {
             let data = &inputs[args::TRANSPOSE_DATA];
             let ty = transpose(data, t, mode)?;

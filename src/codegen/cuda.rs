@@ -1269,6 +1269,56 @@ impl<'sched> HostCodeGenerator<'sched> {
                     )));
                 }
 
+                Operator::DequantMatMul(DequantMatMul { axis }) => {
+                    self.includes.insert(Include::Local("dequant_matmul.cuh"));
+                    let lhs_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap())?
+                        .clone();
+                    let rhs_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap())?
+                        .clone();
+                    let scale_ty = self
+                        .get_resolved_tensor_type(
+                            kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap(),
+                        )?
+                        .clone();
+                    let axis_idx = axis.index(rhs_ty.dims.ndim());
+                    assert_eq!(axis_idx, 0, "DequantMatMul kernel assumes axis=0");
+                    let n = rhs_ty.dims[0];
+                    let k = rhs_ty.dims[1];
+                    let m = lhs_ty.dims.size() / k;
+                    let block_size = DEFAULT_BLOCK_SIZE;
+                    let cuda_kernel =
+                        kernel::CUDAKernel::DequantMatMulKernel(kernel::DequantMatMulKernel {
+                            act_ty: lhs_ty.elem_type,
+                            out_ty: scale_ty.elem_type,
+                            block_size,
+                            m,
+                            n,
+                            k,
+                            out: self.device_identifier(kernel.outputs[0])?,
+                            act: self.device_identifier(
+                                kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap(),
+                            )?,
+                            wq: self.device_identifier(
+                                kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap(),
+                            )?,
+                            scale: self.device_identifier(
+                                kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap(),
+                            )?,
+                        });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: Expr::Identifier(format!("dim3({}, {}, 1)", n, m)),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::DequantizeLinear(DequantizeLinear { axis }) => {
                     self.includes.insert(Include::Local("dequantize.cuh"));
                     let x_ty = self

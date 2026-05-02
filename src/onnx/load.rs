@@ -734,6 +734,17 @@ impl DequantizeLinear {
     }
 }
 
+impl DequantMatMul {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|a| a.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(0));
+        Ok(DequantMatMul { axis })
+    }
+}
+
 impl Constant {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let value = attributes.required("value")?.tensor()?;
@@ -1176,6 +1187,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "DequantizeLinear" => Ok(Operator::DequantizeLinear(DequantizeLinear::load(
             attributes,
         )?)),
+        "DequantMatMul" => Ok(Operator::DequantMatMul(DequantMatMul::load(attributes)?)),
         "Div" => Ok(Operator::Div),
         "Equal" => Ok(Operator::Equal),
         "Expand" => Ok(Operator::Expand),
