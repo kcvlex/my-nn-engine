@@ -1,4 +1,5 @@
-import { shallowRef } from 'vue';
+import { computed } from 'vue';
+import { useMutation } from '@tanstack/vue-query';
 import { grpcClient } from '../api/grpc_client';
 import type { Client } from '@connectrpc/connect';
 import type { OnnxInferenceService } from '../gen/onnx_service_pb';
@@ -13,22 +14,28 @@ export type BaseInferenceResult = {
 };
 
 export function useInference<T extends BaseInferenceResult>() {
-  const loading = shallowRef(false);
-  const result = shallowRef<T | null>(null);
+  const mutation = useMutation({
+    mutationFn: (fn: (client: GrpcClient) => Promise<T>) => fn(grpcClient),
+  });
 
-  async function run(fn: (client: GrpcClient) => Promise<T>): Promise<void> {
-    loading.value = true;
-    result.value = null;
-    try {
-      result.value = await fn(grpcClient);
-    } catch (e) {
-      result.value = {
+  const loading = computed(() => mutation.isPending.value);
+
+  const result = computed<T | null>(() => {
+    if (mutation.isPending.value) return null;
+    if (mutation.error.value) {
+      const err = mutation.error.value;
+      return {
         type: 'error',
-        message: e instanceof Error ? e.message : 'Unknown error',
-      } satisfies BaseInferenceResult;
-    } finally {
-      loading.value = false;
+        message: err instanceof Error ? err.message : String(err),
+      } as T;
     }
+    return (mutation.data.value as T | undefined) ?? null;
+  });
+
+  function run(fn: (client: GrpcClient) => Promise<T>): Promise<void> {
+    return new Promise((resolve) => {
+      mutation.mutate(fn, { onSettled: () => resolve() });
+    });
   }
 
   return { loading, result, run };
