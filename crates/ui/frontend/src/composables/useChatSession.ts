@@ -4,9 +4,9 @@ import { grpcClient } from '../api/grpc_client';
 import { humanizeError } from '../utils/error';
 import { Backend, LlmModelId } from '../gen/onnx_service_pb';
 
-export type ChatRole = 'user' | 'assistant';
+type ChatRole = 'user' | 'assistant';
 
-export type ChatMessage = {
+type ChatMessage = {
   role: ChatRole;
   content: string;
   /** Server-reported tokens generated for assistant turns. */
