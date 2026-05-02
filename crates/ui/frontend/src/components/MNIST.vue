@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import {
   useInference,
   type BaseInferenceResult,
@@ -77,6 +78,12 @@ async function runInference(backend?: Backend) {
   });
 }
 
+const topProbability = computed(() => {
+  const r = result.value;
+  if (r?.type !== 'success' || r.prediction == null) return 0;
+  return r.probabilities?.[r.prediction] ?? 0;
+});
+
 defineExpose({ runInference });
 </script>
 
@@ -110,13 +117,7 @@ defineExpose({ runInference });
     >
       <div class="prediction">
         <span class="digit">{{ result?.prediction }}</span>
-        <span class="confidence"
-          >{{
-            ((result?.probabilities?.[result?.prediction!] ?? 0) * 100).toFixed(
-              1,
-            )
-          }}%</span
-        >
+        <span class="confidence">{{ (topProbability * 100).toFixed(1) }}%</span>
       </div>
 
       <ProbabilityBars
