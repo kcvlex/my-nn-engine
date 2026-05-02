@@ -30,17 +30,25 @@ const { loading, result, run } = useInference<
   }
 >();
 
-// WordPiece tokenizer
-let vocab: Map<string, number> | null = null;
+// WordPiece tokenizer. The vocab is loaded once and shared across all calls,
+// memoized as a Promise so concurrent loadVocab() invocations don't race.
+type Vocab = Map<string, number>;
+let vocabPromise: Promise<Vocab> | null = null;
 
-async function loadVocab(): Promise<void> {
-  if (vocab) return;
-  const resp = await fetch('/bert-vocab.txt');
-  const text = await resp.text();
-  vocab = new Map();
-  text.split('\n').forEach((t, i) => {
-    if (t.length > 0) vocab!.set(t, i);
-  });
+function getVocab(): Promise<Vocab> {
+  vocabPromise ??= (async () => {
+    const resp = await fetch('/bert-vocab.txt');
+    if (!resp.ok) {
+      throw new Error(`Failed to load /bert-vocab.txt: HTTP ${resp.status}`);
+    }
+    const text = await resp.text();
+    const map: Vocab = new Map();
+    text.split('\n').forEach((t, i) => {
+      if (t.length > 0) map.set(t, i);
+    });
+    return map;
+  })();
+  return vocabPromise;
 }
 
 function basicTokenize(text: string): string[] {
@@ -83,8 +91,7 @@ function isWhitespace(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
 }
 
-function wordpieceTokenize(token: string): string[] {
-  if (!vocab) return [token];
+function wordpieceTokenize(token: string, vocab: Vocab): string[] {
   const subTokens: string[] = [];
   let start = 0;
   while (start < token.length) {
@@ -109,32 +116,31 @@ function wordpieceTokenize(token: string): string[] {
   return subTokens;
 }
 
-function tokenize(text: string): string[] {
-  const basicTokens = basicTokenize(text);
+function tokenize(text: string, vocab: Vocab): string[] {
   const wpTokens: string[] = [];
-  for (const token of basicTokens) {
-    wpTokens.push(...wordpieceTokenize(token));
+  for (const token of basicTokenize(text)) {
+    wpTokens.push(...wordpieceTokenize(token, vocab));
   }
   return wpTokens;
 }
 
-function tokensToIds(tokens: string[]): number[] {
-  if (!vocab) return [];
-  return tokens.map((t) => vocab!.get(t) ?? vocab!.get('[UNK]')!);
+function tokensToIds(tokens: string[], vocab: Vocab): number[] {
+  const unk = vocab.get('[UNK]')!;
+  return tokens.map((t) => vocab.get(t) ?? unk);
 }
 
 async function runInference(backend?: Backend) {
   if (!context.value.trim() || !question.value.trim()) return;
 
   await run(async (client) => {
-    await loadVocab();
+    const vocab = await getVocab();
 
     // Tokenize question and context
-    let qTokens = tokenize(question.value);
+    let qTokens = tokenize(question.value, vocab);
     if (qTokens.length > MAX_QUERY_LENGTH) {
       qTokens = qTokens.slice(0, MAX_QUERY_LENGTH);
     }
-    const cTokens = tokenize(context.value);
+    const cTokens = tokenize(context.value, vocab);
 
     // Build input: [CLS] question [SEP] context [SEP]
     const tokens = ['[CLS]', ...qTokens, '[SEP]', ...cTokens, '[SEP]'];
@@ -149,7 +155,7 @@ async function runInference(backend?: Backend) {
     const inputMask = new Array(MAX_SEQ_LENGTH).fill(0);
     const segmentIds = new Array(MAX_SEQ_LENGTH).fill(0);
 
-    const ids = tokensToIds(paddedTokens);
+    const ids = tokensToIds(paddedTokens, vocab);
     for (let i = 0; i < seqLen; i++) {
       inputIds[i] = ids[i];
       inputMask[i] = 1;
