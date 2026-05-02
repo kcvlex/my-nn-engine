@@ -58,11 +58,6 @@ message GetInitializerResponse {
 
 // ===== Chat (LLM) =====
 
-message ChatMessage {
-  string role = 1;     // "user" or "assistant"
-  string content = 2;
-}
-
 // One discoverable model directory under <models_root>/hf/.
 // The server only reports the directory name; whether the dir actually
 // contains a loadable model is the user's responsibility.
