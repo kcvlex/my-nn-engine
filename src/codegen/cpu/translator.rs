@@ -281,6 +281,36 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(after)
     }
 
+    fn load_tensor_f32(
+        &self,
+        storage_ty: BasicTypeEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+        is_bf16: bool,
+        name: &str,
+    ) -> Result<FloatValue<'ctx>, BuilderError> {
+        let raw = self.builder.build_load(storage_ty, ptr, name)?;
+        if is_bf16 {
+            self.bf16_bits_to_f32(raw.into_int_value())
+        } else {
+            Ok(raw.into_float_value())
+        }
+    }
+
+    fn store_tensor_f32(
+        &self,
+        ptr: PointerValue<'ctx>,
+        val: FloatValue<'ctx>,
+        is_bf16: bool,
+    ) -> Result<(), BuilderError> {
+        if is_bf16 {
+            let bits = self.f32_to_bf16_bits(val)?;
+            self.builder.build_store(ptr, bits)?;
+        } else {
+            self.builder.build_store(ptr, val)?;
+        }
+        Ok(())
+    }
+
     // Returns ptr = workspace.ptr + workspace.offset + offset_elems (in f32 elements).
     fn workspace_offset(
         &self,
@@ -3623,6 +3653,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             panic!("Attention requires float input");
         };
         let llvm_float = float_ty.llvm_type(self.context);
+        let storage_ty = q.ty.elem_type.llvm_type(self.context);
+        let is_bf16 = matches!(float_ty, FloatType::BF16);
         let i64_ty = self.context.i64_type();
 
         let qk_dims = ResolvedTensorDims::new(&[b_dim, hq, seq_q, seq_k]);
@@ -3727,7 +3759,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let q_total = self.builder.build_int_add(q.offset, q_local, "q.total")?;
         let q_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, q.ptr, &[q_total], "q.row")?
+                .build_in_bounds_gep(storage_ty, q.ptr, &[q_total], "q.row")?
         };
 
         // GQA mapping: bh_kv = b * Hkv + h_q * Hkv / Hq.
@@ -3761,7 +3793,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(k.offset, k_base_off, "k.total")?;
         let k_head_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, k.ptr, &[k_total], "k.head")?
+                .build_in_bounds_gep(storage_ty, k.ptr, &[k_total], "k.head")?
         };
 
         let v_base_off = self.builder.build_int_mul(
@@ -3774,7 +3806,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(v.offset, v_base_off, "v.total")?;
         let v_head_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, v.ptr, &[v_total], "v.head")?
+                .build_in_bounds_gep(storage_ty, v.ptr, &[v_total], "v.head")?
         };
 
         let mask_bh_sq_off = if let (Some(mptr), Some(mty)) = (mask, mask_bc.as_ref()) {
@@ -3829,7 +3861,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(out.offset, out_local, "out.total")?;
         let out_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, out.ptr, &[out_total], "out.row")?
+                .build_in_bounds_gep(storage_ty, out.ptr, &[out_total], "out.row")?
         };
 
         // [B]: init o[d] = 0. m and s are init via PHI at k_loop_header below.
@@ -3913,14 +3945,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .build_int_mul(k_idx, i64_ty.const_int(k_stride_sk, false), "k.row.off")?;
         let k_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, k_head_ptr, &[k_row_off], "k.row.gep")?
+                .build_in_bounds_gep(storage_ty, k_head_ptr, &[k_row_off], "k.row.gep")?
         };
         let v_row_off =
             self.builder
                 .build_int_mul(k_idx, i64_ty.const_int(v_stride_sk, false), "v.row.off")?;
         let v_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(llvm_float, v_head_ptr, &[v_row_off], "v.row.gep")?
+                .build_in_bounds_gep(storage_ty, v_head_ptr, &[v_row_off], "v.row.gep")?
         };
 
         // [E]: qk = scale * <Q[b,h,sq,:], K[b,h,k,:]>. D is unrolled.
@@ -3929,7 +3961,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let d_const = i64_ty.const_int(d as u64, false);
             let q_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    llvm_float,
+                    storage_ty,
                     q_row_ptr,
                     &[d_const],
                     &format!("q.d{}.gep", d),
@@ -3937,20 +3969,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             };
             let k_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    llvm_float,
+                    storage_ty,
                     k_row_ptr,
                     &[d_const],
                     &format!("k.d{}.gep", d),
                 )?
             };
-            let q_v = self
-                .builder
-                .build_load(llvm_float, q_d_ptr, &format!("q.d{}", d))?
-                .into_float_value();
-            let k_v = self
-                .builder
-                .build_load(llvm_float, k_d_ptr, &format!("k.d{}", d))?
-                .into_float_value();
+            let q_v = self.load_tensor_f32(storage_ty, q_d_ptr, is_bf16, &format!("q.d{}", d))?;
+            let k_v = self.load_tensor_f32(storage_ty, k_d_ptr, is_bf16, &format!("k.d{}", d))?;
             let prod = self
                 .builder
                 .build_float_mul(q_v, k_v, &format!("dot.prod{}", d))?;
@@ -4028,16 +4054,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let d_const = i64_ty.const_int(d as u64, false);
             let v_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    llvm_float,
+                    storage_ty,
                     v_row_ptr,
                     &[d_const],
                     &format!("v.d{}.gep", d),
                 )?
             };
-            let v_d_val = self
-                .builder
-                .build_load(llvm_float, v_d_ptr, &format!("v.d{}", d))?
-                .into_float_value();
+            let v_d_val =
+                self.load_tensor_f32(storage_ty, v_d_ptr, is_bf16, &format!("v.d{}", d))?;
             let o_d_val = self
                 .builder
                 .build_load(llvm_float, o_d_ptrs[d], &format!("o.d{}.load", d))?
@@ -4086,13 +4110,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .build_float_div(o_d_val, s_final, &format!("o.norm.d{}", d))?;
             let out_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    llvm_float,
+                    storage_ty,
                     out_row_ptr,
                     &[d_const],
                     &format!("out.d{}.gep", d),
                 )?
             };
-            self.builder.build_store(out_d_ptr, normalized)?;
+            self.store_tensor_f32(out_d_ptr, normalized, is_bf16)?;
         }
 
         self.builder.build_unconditional_branch(outer_latch)?;

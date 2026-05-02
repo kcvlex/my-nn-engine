@@ -245,13 +245,15 @@ impl KernelsBuilder {
                                         crate::tensor::types::FloatType::BF16,
                                     )
                                 ) {
-                                    let m = a_ty.dims[0];
-                                    let k = a_ty.dims[1];
                                     let b_ty = graph
                                         .get_resolved_tensor_type(n.inputs[args::GEMM_B].unwrap())
                                         .unwrap();
-                                    let n_dim = b_ty.dims[1];
-                                    Some((args::GEMM_WORKSPACE, m * k + k * n_dim + m * n_dim))
+                                    let out_ty =
+                                        graph.get_resolved_tensor_type(n.outputs[0]).unwrap();
+                                    Some((
+                                        args::GEMM_WORKSPACE,
+                                        a_ty.dims.size() + b_ty.dims.size() + out_ty.dims.size(),
+                                    ))
                                 } else {
                                     None
                                 }
