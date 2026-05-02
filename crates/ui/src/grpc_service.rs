@@ -8,6 +8,8 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
+use crate::llm::ChatRegistry;
+use crate::llm::LlmModelId;
 use crate::models::ModelId;
 use crate::models::ModelRegistry;
 
@@ -22,21 +24,41 @@ pub mod onnx {
 
 use onnx_service::onnx_inference_service_server::OnnxInferenceService;
 use onnx_service::Backend as ProtoBackend;
+use onnx_service::ChatRequest;
+use onnx_service::ChatResponse;
+use onnx_service::CreateChatSessionRequest;
+use onnx_service::CreateChatSessionResponse;
+use onnx_service::DestroyChatSessionRequest;
+use onnx_service::DestroyChatSessionResponse;
 use onnx_service::GetInitializerRequest;
 use onnx_service::GetInitializerResponse;
 use onnx_service::InferenceRequest;
 use onnx_service::InferenceResponse;
+use onnx_service::LlmModelId as ProtoLlmModelId;
 use onnx_service::ModelId as ProtoModelId;
 use onnx_service::WarmUpRequest;
 use onnx_service::WarmUpResponse;
 
 pub struct OnnxInferenceServiceImpl {
     registry: Arc<RwLock<ModelRegistry>>,
+    chat_registry: Arc<ChatRegistry>,
 }
 
 impl OnnxInferenceServiceImpl {
-    pub fn new(registry: Arc<RwLock<ModelRegistry>>) -> Self {
-        Self { registry }
+    pub fn new(registry: Arc<RwLock<ModelRegistry>>, chat_registry: Arc<ChatRegistry>) -> Self {
+        Self {
+            registry,
+            chat_registry,
+        }
+    }
+
+    fn proto_llm_model_id_to_llm_model_id(proto_id: i32) -> Result<LlmModelId, Status> {
+        match ProtoLlmModelId::try_from(proto_id) {
+            Ok(ProtoLlmModelId::TinyLlama) => Ok(LlmModelId::TinyLlama),
+            Err(_) => Err(Status::invalid_argument(format!(
+                "Invalid LLM model ID: {proto_id}"
+            ))),
+        }
     }
 
     fn proto_model_id_to_model_id(proto_id: i32) -> Result<ModelId, Status> {
@@ -189,5 +211,54 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         Ok(Response::new(GetInitializerResponse {
             tensor: Some(tensor),
         }))
+    }
+
+    async fn create_chat_session(
+        &self,
+        request: Request<CreateChatSessionRequest>,
+    ) -> Result<Response<CreateChatSessionResponse>, Status> {
+        let req = request.into_inner();
+        let model_id = Self::proto_llm_model_id_to_llm_model_id(req.model_id)?;
+        let target = Self::proto_backend_to_target(req.backend)?;
+
+        let chat_registry = Arc::clone(&self.chat_registry);
+        let (session_id, build_time) =
+            tokio::task::spawn_blocking(move || chat_registry.create(model_id, target))
+                .await
+                .map_err(|e| Status::internal(format!("join: {e}")))?
+                .map_err(|e| Status::internal(format!("{e}")))?;
+
+        Ok(Response::new(CreateChatSessionResponse {
+            session_id,
+            build_time_ms: build_time.as_secs_f64() * 1000.0,
+        }))
+    }
+
+    async fn chat(&self, request: Request<ChatRequest>) -> Result<Response<ChatResponse>, Status> {
+        let req = request.into_inner();
+
+        let chat_registry = Arc::clone(&self.chat_registry);
+        let result = tokio::task::spawn_blocking(move || {
+            chat_registry.chat(&req.session_id, req.user_message, req.max_tokens)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("join: {e}")))?
+        .map_err(|e| Status::internal(format!("{e}")))?;
+
+        Ok(Response::new(ChatResponse {
+            assistant_message: result.assistant_message,
+            tokens_generated: result.tokens_generated,
+            generation_time_ms: result.generation_time.as_secs_f64() * 1000.0,
+            eos_emitted: result.eos_emitted,
+        }))
+    }
+
+    async fn destroy_chat_session(
+        &self,
+        request: Request<DestroyChatSessionRequest>,
+    ) -> Result<Response<DestroyChatSessionResponse>, Status> {
+        let req = request.into_inner();
+        self.chat_registry.destroy(&req.session_id);
+        Ok(Response::new(DestroyChatSessionResponse {}))
     }
 }

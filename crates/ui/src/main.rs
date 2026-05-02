@@ -1,4 +1,5 @@
 mod grpc_service;
+mod llm;
 mod models;
 
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::sync::Arc;
 
 use grpc_service::onnx_service::onnx_inference_service_server::OnnxInferenceServiceServer;
 use grpc_service::OnnxInferenceServiceImpl;
+use llm::ChatRegistry;
 use models::ModelRegistry;
 use tokio::sync::RwLock;
 use tonic::transport::Server;
@@ -18,19 +20,20 @@ use tower_http::cors::CorsLayer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let models_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/validated");
+    let workspace_models_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models");
+    let models_dir = workspace_models_root.join("validated");
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "50051".to_string())
         .parse()
         .expect("PORT must be a valid u16");
 
-    log::info!("Models directory: {}", models_dir.display());
+    log::info!("Validated models directory: {}", models_dir.display());
+    log::info!("LLM models root: {}", workspace_models_root.display());
     log::info!("Starting gRPC server on port {}", port);
 
-    let registry = ModelRegistry::new(&models_dir);
-
-    let registry = Arc::new(RwLock::new(registry));
-    let service = OnnxInferenceServiceImpl::new(registry);
+    let model_registry = Arc::new(RwLock::new(ModelRegistry::new(&models_dir)));
+    let chat_registry = Arc::new(ChatRegistry::new(&workspace_models_root));
+    let service = OnnxInferenceServiceImpl::new(model_registry, chat_registry);
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::any())

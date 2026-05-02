@@ -56,6 +56,46 @@ message GetInitializerResponse {
   onnx.TensorProto tensor = 1;
 }
 
+// ===== Chat (LLM) =====
+
+enum LlmModelId {
+  TINY_LLAMA = 0;
+}
+
+message ChatMessage {
+  string role = 1;     // "user" or "assistant"
+  string content = 2;
+}
+
+message CreateChatSessionRequest {
+  LlmModelId model_id = 1;
+  Backend backend = 2;
+}
+
+message CreateChatSessionResponse {
+  string session_id = 1;
+  double build_time_ms = 2;
+}
+
+message ChatRequest {
+  string session_id = 1;
+  string user_message = 2;
+  uint32 max_tokens = 3;  // 0 → use server default
+}
+
+message ChatResponse {
+  string assistant_message = 1;
+  uint32 tokens_generated = 2;
+  double generation_time_ms = 3;
+  bool eos_emitted = 4;   // false if generation stopped at max_tokens
+}
+
+message DestroyChatSessionRequest {
+  string session_id = 1;
+}
+
+message DestroyChatSessionResponse {}
+
 // Pre-build (compile + cache) a session so subsequent inference calls do not
 // pay the kernel-compilation cost on the first request.
 message WarmUpRequest {
@@ -78,4 +118,19 @@ service OnnxInferenceService {
 
   // Compile and cache a session without running inference.
   rpc WarmUp(WarmUpRequest) returns (WarmUpResponse);
+
+  // ----- LLM chat -----
+
+  // Build the LlmSession for (model, backend) and return a session id used by
+  // subsequent Chat / DestroyChatSession calls. Stateful: the server keeps the
+  // KV cache across turns of the same session.
+  rpc CreateChatSession(CreateChatSessionRequest)
+      returns (CreateChatSessionResponse);
+
+  // Send one user message to a chat session and receive the model's reply.
+  rpc Chat(ChatRequest) returns (ChatResponse);
+
+  // Free server-side state associated with a chat session.
+  rpc DestroyChatSession(DestroyChatSessionRequest)
+      returns (DestroyChatSessionResponse);
 }
