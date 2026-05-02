@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
 use my_nn_engine_llm::LlamaWeights;
@@ -16,7 +17,21 @@ fn main() {
     let safetensors_arg = std::env::args().nth(1);
     let hf = match safetensors_arg.as_deref() {
         Some(name) => HfWeights::from_safetensors(model_dir.join(name)).unwrap(),
-        None => HfWeights::from_dir(&model_dir).unwrap(),
+        None => {
+            let int8_path = model_dir.join("model.int8.safetensors");
+            if !int8_path.exists() {
+                println!("quantizing to INT8 (one-time, ~30s)...");
+                let t0 = std::time::Instant::now();
+                let stats = quantize_safetensors_int8_dir(&model_dir, &int8_path).unwrap();
+                println!(
+                    "  quantized {} tensors, passed through {} ({:.2?})",
+                    stats.quantized,
+                    stats.passthrough,
+                    t0.elapsed()
+                );
+            }
+            HfWeights::from_safetensors(&int8_path).unwrap()
+        }
     };
     println!("loaded {} tensors", hf.names().count());
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
