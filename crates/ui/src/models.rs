@@ -8,11 +8,23 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
+use my_nn_engine::session::SessionError;
 use my_nn_engine::tensor::types::DataType;
 use my_nn_engine::tensor::types::FloatType;
 use my_nn_engine::tensor::types::ResolvedTensorDims;
 use my_nn_engine::tensor::types::ResolvedTensorType;
 use my_nn_engine::tensor::types::SIntType;
+
+fn format_session_error(model_name: &str, e: SessionError) -> String {
+    match e {
+        SessionError::OtherError(msg) => format!("{model_name}: {msg}"),
+        SessionError::ModelLoadError(err) => {
+            format!("{model_name}: model load failed: {err:?}")
+        }
+        SessionError::TypeError(err) => format!("{model_name}: type error: {err:?}"),
+        SessionError::CodeGenError(err) => format!("{model_name}: codegen failed: {err:?}"),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelId {
@@ -142,7 +154,7 @@ impl ModelRegistry {
             &options,
             &SessionConfig::default(),
         )
-        .map_err(|e| format!("Failed to load {}: {:?}", model_id.display_name(), e))?;
+        .map_err(|e| format_session_error(model_id.display_name(), e))?;
 
         self.models
             .insert((model_id, target), Arc::new(Mutex::new(session)));

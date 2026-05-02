@@ -46,6 +46,7 @@ import { computed, defineAsyncComponent, ref, type Component } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { grpcClient } from '../api/grpc_client';
+import { humanizeError } from '../utils/error';
 import { type Layout, type Normalization } from './ImageNetClassifier.vue';
 
 type ImageNetConfig = {
@@ -159,10 +160,9 @@ const warmupQuery = useQuery({
 const warmup = computed(() => {
   if (warmupQuery.isPending.value) return { state: 'compiling' as const };
   if (warmupQuery.error.value) {
-    const err = warmupQuery.error.value;
     return {
       state: 'error' as const,
-      message: err instanceof Error ? err.message : String(err),
+      message: humanizeError(warmupQuery.error.value),
     };
   }
   if (warmupQuery.data.value) {

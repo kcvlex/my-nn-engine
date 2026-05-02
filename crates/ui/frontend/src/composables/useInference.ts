@@ -1,6 +1,7 @@
 import { computed } from 'vue';
 import { useMutation } from '@tanstack/vue-query';
 import { grpcClient } from '../api/grpc_client';
+import { humanizeError } from '../utils/error';
 import type { Client } from '@connectrpc/connect';
 import type { OnnxInferenceService } from '../gen/onnx_service_pb';
 
@@ -23,10 +24,9 @@ export function useInference<T extends BaseInferenceResult>() {
   const result = computed<T | null>(() => {
     if (mutation.isPending.value) return null;
     if (mutation.error.value) {
-      const err = mutation.error.value;
       return {
         type: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: humanizeError(mutation.error.value),
       } as T;
     }
     return (mutation.data.value as T | undefined) ?? null;
