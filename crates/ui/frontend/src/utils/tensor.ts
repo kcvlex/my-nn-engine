@@ -13,13 +13,15 @@ export function serializeOutputs(
         ? {
             floatDataLength: t.floatData.length,
             doubleDataLength: t.doubleData.length,
+            int32DataLength: t.int32Data.length,
+            int64DataLength: t.int64Data.length,
           }
         : {
             floatData: t.floatData,
             doubleData: t.doubleData,
             int32Data: t.int32Data,
+            int64Data: t.int64Data.map(Number),
           }),
-      int64Data: t.int64Data.map(Number),
     })),
     null,
     2,
