@@ -79,7 +79,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);
-  background: var(--bg-elevated);
+  background-color: var(--bg-elevated);
 }
 
 select {
