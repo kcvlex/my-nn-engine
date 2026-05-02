@@ -32,22 +32,15 @@ const { loading, result, run } = useInference<
 
 // WordPiece tokenizer
 let vocab: Map<string, number> | null = null;
-let inverseVocab: string[] | null = null;
 
 async function loadVocab(): Promise<void> {
   if (vocab) return;
   const resp = await fetch('/bert-vocab.txt');
   const text = await resp.text();
-  const tokens = text.split('\n');
   vocab = new Map();
-  inverseVocab = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t.length > 0) {
-      vocab.set(t, i);
-      inverseVocab[i] = t;
-    }
-  }
+  text.split('\n').forEach((t, i) => {
+    if (t.length > 0) vocab!.set(t, i);
+  });
 }
 
 function basicTokenize(text: string): string[] {
