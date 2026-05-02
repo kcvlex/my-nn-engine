@@ -82,13 +82,12 @@ function onImageLoaded(img: HTMLImageElement) {
 }
 
 function decodeDetections(
-  outputs: { floatData: number[]; doubleData: number[] }[],
+  outputs: readonly { floatData: readonly number[] }[],
 ): Detection[] {
   const boxes: Detection[] = [];
 
   for (let scaleIdx = 0; scaleIdx < 3; scaleIdx++) {
-    const output = outputs[scaleIdx];
-    const data = Array.from(output.floatData);
+    const data = outputs[scaleIdx].floatData;
     const stride = STRIDES[scaleIdx];
     const gridSize = INPUT_SIZE / stride;
     const anchors = ANCHORS[scaleIdx];
@@ -235,12 +234,7 @@ async function runInference(backend?: Backend) {
       }),
     ]);
 
-    const outputs = response.outputs.map((t) => ({
-      floatData: Array.from(t.floatData),
-      doubleData: Array.from(t.doubleData),
-    }));
-
-    const detections = decodeDetections(outputs);
+    const detections = decodeDetections(response.outputs);
     for (const det of detections) {
       det.label = labels[det.classId] ?? `Class ${det.classId}`;
     }
