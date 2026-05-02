@@ -34,10 +34,7 @@ fn ty_f32(dims: &[usize]) -> ResolvedTensorType {
 }
 
 fn ty_i64(dims: &[usize]) -> ResolvedTensorType {
-    ResolvedTensorType::new(
-        DataType::SInt(SIntType::I64),
-        ResolvedTensorDims::new(dims),
-    )
+    ResolvedTensorType::new(DataType::SInt(SIntType::I64), ResolvedTensorDims::new(dims))
 }
 
 impl ModelId {
@@ -110,9 +107,24 @@ impl ModelRegistry {
     }
 
     /// Build and cache a session for `(model_id, target)` if not already cached.
+    /// Evicts the same model on the opposite backend (if any) so we don't keep
+    /// two copies of the same weights resident across CPU and CUDA.
     pub fn warm_up(&mut self, model_id: ModelId, target: Target) -> Result<(), String> {
         if self.is_loaded(model_id, target) {
             return Ok(());
+        }
+
+        let other = match target {
+            Target::CPU => Target::CUDA,
+            Target::CUDA => Target::CPU,
+        };
+        if self.models.remove(&(model_id, other)).is_some() {
+            log::info!(
+                "Evicting {} on {:?} to free memory before loading on {:?}",
+                model_id.display_name(),
+                other,
+                target,
+            );
         }
 
         let model_path = self.models_dir.join(model_id.model_path());
