@@ -12,10 +12,14 @@ pub enum QuantizeError {
     Io(#[from] std::io::Error),
     #[error("safetensors: {0}")]
     SafeTensors(#[from] safetensors::SafeTensorError),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("unsupported source dtype: {0:?}")]
     UnsupportedDtype(Dtype),
     #[error("expected >=2D weight, got shape {0:?}")]
     BadShape(Vec<usize>),
+    #[error("malformed safetensors.index.json")]
+    MalformedIndex,
 }
 
 const QUANT_PATTERNS: &[&str] = &[
@@ -149,23 +153,51 @@ pub fn quantize_safetensors_int8(
     src: impl AsRef<Path>,
     dst: impl AsRef<Path>,
 ) -> Result<QuantizeStats, QuantizeError> {
-    let bytes = std::fs::read(src.as_ref())?;
-    let st = SafeTensors::deserialize(&bytes)?;
+    quantize_safetensors_int8_files(&[src.as_ref().to_path_buf()], dst)
+}
 
+pub fn quantize_safetensors_int8_dir(
+    src_dir: impl AsRef<Path>,
+    dst: impl AsRef<Path>,
+) -> Result<QuantizeStats, QuantizeError> {
+    let dir = src_dir.as_ref();
+    let index = dir.join("model.safetensors.index.json");
+    let files: Vec<std::path::PathBuf> = if index.exists() {
+        let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index)?)?;
+        let map = json
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .ok_or(QuantizeError::MalformedIndex)?;
+        let shards: std::collections::BTreeSet<&str> =
+            map.values().filter_map(|v| v.as_str()).collect();
+        shards.into_iter().map(|s| dir.join(s)).collect()
+    } else {
+        vec![dir.join("model.safetensors")]
+    };
+    quantize_safetensors_int8_files(&files, dst)
+}
+
+fn quantize_safetensors_int8_files(
+    src_files: &[std::path::PathBuf],
+    dst: impl AsRef<Path>,
+) -> Result<QuantizeStats, QuantizeError> {
     let mut output: Vec<(String, OwnedTensor)> = Vec::new();
     let mut stats = QuantizeStats::default();
-    for (name, view) in st.tensors() {
-        if should_quantize(&name) {
-            let (q, scale) = quantize_per_channel(&view)?;
-            output.push((name.clone(), q));
-            output.push((format!("{name}.scale"), scale));
-            stats.quantized += 1;
-        } else {
-            output.push((name.clone(), copy_view(&view)));
-            stats.passthrough += 1;
+    for src in src_files {
+        let bytes = std::fs::read(src)?;
+        let st = SafeTensors::deserialize(&bytes)?;
+        for (name, view) in st.tensors() {
+            if should_quantize(&name) {
+                let (q, scale) = quantize_per_channel(&view)?;
+                output.push((name.clone(), q));
+                output.push((format!("{name}.scale"), scale));
+                stats.quantized += 1;
+            } else {
+                output.push((name.clone(), copy_view(&view)));
+                stats.passthrough += 1;
+            }
         }
     }
-
     safetensors::serialize_to_file(output, None, dst.as_ref())?;
     Ok(stats)
 }
