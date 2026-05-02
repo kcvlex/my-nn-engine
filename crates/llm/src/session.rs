@@ -67,6 +67,16 @@ pub struct LlmConfig {
     pub session_states: Vec<SessionStateSpec>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GenerateOptions {
+    pub max_new_tokens: usize,
+    /// Stop generation when any of these strings appears in the decoded output.
+    /// On hit, trailing tokens are popped until the decoded text no longer
+    /// contains any stop string, and `past_len` is rewound to match (so the
+    /// stop-triggering tokens don't leak into subsequent `generate*` calls).
+    pub stop_strings: Vec<String>,
+}
+
 /// Per-step input convention. Selected by which constructor is used.
 enum DecodeKind {
     /// `[input_ids: i64[1], past_len: i64[]]` — used by simple test fixtures.
@@ -222,6 +232,20 @@ impl LlmSession {
         prompt: &str,
         max_new_tokens: usize,
     ) -> Result<Vec<u32>, LlmError> {
+        self.generate_ids_with(
+            prompt,
+            &GenerateOptions {
+                max_new_tokens,
+                ..GenerateOptions::default()
+            },
+        )
+    }
+
+    pub fn generate_ids_with(
+        &mut self,
+        prompt: &str,
+        opts: &GenerateOptions,
+    ) -> Result<Vec<u32>, LlmError> {
         let encoded = self
             .tokenizer
             .encode(prompt, false)
@@ -249,34 +273,62 @@ impl LlmSession {
             });
         }
 
-        let last_token = if prefill_runs {
-            self.run_prefill(&prompt_ids)?
-        } else {
-            for &tok in &prompt_ids[..prompt_ids.len() - 1] {
-                self.decode_step(tok)?;
-            }
-            let last_prompt = *prompt_ids.last().unwrap();
-            self.decode_step(last_prompt)?
-        };
-        new_ids.push(last_token);
-        if last_token == self.config.eos_token_id {
-            return Ok(new_ids);
-        }
-
-        let mut last_token = last_token;
-        for _ in 1..max_new_tokens {
+        for i in 0..opts.max_new_tokens {
             if self.config.max_seq_len < self.past_len + 1 {
                 break;
             }
-            let next = self.decode_step(last_token)?;
-            new_ids.push(next);
-            last_token = next;
-            if next == self.config.eos_token_id {
+
+            let token = if i == 0 {
+                if prefill_runs {
+                    self.run_prefill(&prompt_ids)?
+                } else {
+                    prompt_ids
+                        .iter()
+                        .map(|&tok| self.decode_step(tok))
+                        .last()
+                        .transpose()?
+                        .unwrap()
+                }
+            } else {
+                self.decode_step(*new_ids.last().unwrap())?
+            };
+            new_ids.push(token);
+            if token == self.config.eos_token_id || self.hit_stop(&new_ids, opts)? {
+                self.truncate_at_stop(&mut new_ids, opts)?;
                 break;
             }
         }
-
         Ok(new_ids)
+    }
+
+    fn hit_stop(&self, new_ids: &[u32], opts: &GenerateOptions) -> Result<bool, LlmError> {
+        if opts.stop_strings.is_empty() {
+            return Ok(false);
+        }
+        let text = self
+            .tokenizer
+            .decode(new_ids, false)
+            .map_err(|e| LlmError::Tokenizer(format!("{:?}", e)))?;
+        Ok(opts.stop_strings.iter().any(|s| text.contains(s.as_str())))
+    }
+
+    /// Pop the most recently generated tokens until the decoded text no longer
+    /// contains any stop string, rewinding `past_len` accordingly so the KV
+    /// cache state matches the truncated output. EOS-only stops are no-ops
+    /// (no stop string to match).
+    fn truncate_at_stop(
+        &mut self,
+        new_ids: &mut Vec<u32>,
+        opts: &GenerateOptions,
+    ) -> Result<(), LlmError> {
+        if opts.stop_strings.is_empty() {
+            return Ok(());
+        }
+        while !new_ids.is_empty() && self.hit_stop(new_ids, opts)? {
+            new_ids.pop();
+            self.past_len = self.past_len.saturating_sub(1);
+        }
+        Ok(())
     }
 
     fn run_prefill_rec(&mut self, prompt_ids: &[u32]) -> Result<Vec<f64>, LlmError> {
@@ -334,7 +386,21 @@ impl LlmSession {
     }
 
     pub fn generate(&mut self, prompt: &str, max_new_tokens: usize) -> Result<String, LlmError> {
-        let new_ids = self.generate_ids(prompt, max_new_tokens)?;
+        self.generate_with(
+            prompt,
+            &GenerateOptions {
+                max_new_tokens,
+                ..GenerateOptions::default()
+            },
+        )
+    }
+
+    pub fn generate_with(
+        &mut self,
+        prompt: &str,
+        opts: &GenerateOptions,
+    ) -> Result<String, LlmError> {
+        let new_ids = self.generate_ids_with(prompt, opts)?;
         self.tokenizer
             .decode(&new_ids, false)
             .map_err(|e| LlmError::Tokenizer(format!("{:?}", e)))

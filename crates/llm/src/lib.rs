@@ -16,6 +16,7 @@ pub use llama::build_llama_with_options;
 pub use llama::LlamaGraph;
 pub use llama::LlamaOptions;
 pub use llama::LlamaWeights;
+pub use session::GenerateOptions;
 pub use session::LlmConfig;
 pub use session::LlmError;
 pub use session::LlmSession;

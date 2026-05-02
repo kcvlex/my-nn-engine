@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
+use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::LlmConfig;
 use my_nn_engine_llm::LlmSession;
 
@@ -56,4 +57,31 @@ fn empty_prompt_returns_no_tokens() {
     let mut llm = make_session();
     let new_ids = llm.generate_ids("", 5).unwrap();
     assert!(new_ids.is_empty());
+}
+
+#[test]
+fn generate_with_stop_string_truncates_text() {
+    // Without stop: "c d e <unk> a"
+    let mut llm = make_session();
+    let opts = GenerateOptions {
+        max_new_tokens: 5,
+        stop_strings: vec!["<unk>".to_string()],
+    };
+    let text = llm.generate_with("a b c", &opts).unwrap();
+    assert_eq!(text, "c d e");
+    assert!(!text.contains("<unk>"));
+}
+
+#[test]
+fn past_len_rewinds_after_stop() {
+    let mut llm = make_session();
+    let opts = GenerateOptions {
+        max_new_tokens: 5,
+        stop_strings: vec!["<unk>".to_string()],
+    };
+    let new_ids = llm.generate_ids_with("a b c", &opts).unwrap();
+    // 2 prompt tokens (mock prefill) consumes the first 2 decode_step calls,
+    // and the surviving generated tokens contribute the rest. With stop hit
+    // and rewound past_len, past_len == prompt_steps + new_ids.len().
+    assert_eq!(llm.past_len(), 2 + new_ids.len());
 }
