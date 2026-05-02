@@ -56,6 +56,18 @@ message GetInitializerResponse {
   onnx.TensorProto tensor = 1;
 }
 
+// Pre-build (compile + cache) a session so subsequent inference calls do not
+// pay the kernel-compilation cost on the first request.
+message WarmUpRequest {
+  ModelId model_id = 1;
+  Backend backend = 2;
+}
+
+message WarmUpResponse {
+  // Wall time spent building the session (0 if already cached).
+  double build_time_ms = 1;
+}
+
 // ONNX Model Inference Service
 service OnnxInferenceService {
   // Run inference on a pre-defined model
@@ -63,4 +75,7 @@ service OnnxInferenceService {
 
   // Fetch a named initializer (weight tensor) from a model
   rpc GetInitializer(GetInitializerRequest) returns (GetInitializerResponse);
+
+  // Compile and cache a session without running inference.
+  rpc WarmUp(WarmUpRequest) returns (WarmUpResponse);
 }

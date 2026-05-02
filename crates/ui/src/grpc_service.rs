@@ -27,6 +27,8 @@ use onnx_service::GetInitializerResponse;
 use onnx_service::InferenceRequest;
 use onnx_service::InferenceResponse;
 use onnx_service::ModelId as ProtoModelId;
+use onnx_service::WarmUpRequest;
+use onnx_service::WarmUpResponse;
 
 pub struct OnnxInferenceServiceImpl {
     registry: Arc<RwLock<ModelRegistry>>,
@@ -91,7 +93,7 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         // Get or load the model from registry
         let mut registry = self.registry.write().await;
         let session = registry
-            .get_or_load(model_id, target, &input_tensors)
+            .get_or_load(model_id, target)
             .map_err(|e| Status::internal(e))?;
 
         // Run inference
@@ -117,6 +119,29 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
             outputs: output_protos,
             inference_time_ms,
         }))
+    }
+
+    async fn warm_up(
+        &self,
+        request: Request<WarmUpRequest>,
+    ) -> Result<Response<WarmUpResponse>, Status> {
+        let req = request.into_inner();
+        let model_id = Self::proto_model_id_to_model_id(req.model_id)?;
+        let target = Self::proto_backend_to_target(req.backend)?;
+
+        let mut registry = self.registry.write().await;
+        let already_loaded = registry.is_loaded(model_id, target);
+        let start = std::time::Instant::now();
+        registry
+            .warm_up(model_id, target)
+            .map_err(|e| Status::internal(e))?;
+        let build_time_ms = if already_loaded {
+            0.0
+        } else {
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+
+        Ok(Response::new(WarmUpResponse { build_time_ms }))
     }
 
     async fn get_initializer(

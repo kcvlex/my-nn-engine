@@ -27,6 +27,17 @@
         </div>
       </div>
 
+      <div :class="['session-status', warmup.state]">
+        <span class="status-dot"></span>
+        <span class="status-text">{{ warmupStatusText }}</span>
+        <span
+          v-if="warmup.state === 'ready' && warmup.buildMs > 0"
+          class="status-meta"
+        >
+          // built in {{ warmup.buildMs.toFixed(0) }} ms
+        </span>
+      </div>
+
       <!-- MNIST: image upload input -->
       <MNIST
         v-if="modelId === ModelId.MNIST"
@@ -74,8 +85,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
+import { grpcClient } from '../api/grpc_client';
 import MNIST from './MNIST.vue';
 import ImageNetClassifier, {
   type Layout,
@@ -84,6 +96,12 @@ import ImageNetClassifier, {
 import YOLO from './YOLO.vue';
 import BERT from './BERT.vue';
 import GPT2 from './GPT2.vue';
+
+type WarmupState =
+  | { state: 'idle' }
+  | { state: 'compiling' }
+  | { state: 'ready'; buildMs: number }
+  | { state: 'error'; message: string };
 
 type ImageNetConfig = {
   inputName: string;
@@ -123,6 +141,42 @@ const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
 
 const imageNetConfig = computed(() => IMAGENET_CONFIGS[modelId.value]);
+
+const warmup = ref<WarmupState>({ state: 'idle' });
+let warmupSeq = 0;
+
+const warmupStatusText = computed(() => {
+  switch (warmup.value.state) {
+    case 'idle':
+      return 'idle';
+    case 'compiling':
+      return 'compiling kernels...';
+    case 'ready':
+      return 'session ready';
+    case 'error':
+      return `error: ${warmup.value.message}`;
+  }
+});
+
+watch(
+  [modelId, backend],
+  async ([m, b]) => {
+    const ticket = ++warmupSeq;
+    warmup.value = { state: 'compiling' };
+    try {
+      const resp = await grpcClient.warmUp({ modelId: m, backend: b });
+      if (ticket !== warmupSeq) return;
+      warmup.value = { state: 'ready', buildMs: resp.buildTimeMs };
+    } catch (e) {
+      if (ticket !== warmupSeq) return;
+      warmup.value = {
+        state: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      };
+    }
+  },
+  { immediate: true },
+);
 
 const mnistRef = ref<InstanceType<typeof MNIST>>();
 const imageNetRef = ref<InstanceType<typeof ImageNetClassifier>>();
@@ -181,5 +235,74 @@ h3 {
   text-transform: uppercase;
   color: var(--fg-dim);
   margin-bottom: 8px;
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  margin: -10px 0 22px;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--fg-faint);
+  color: var(--fg-dim);
+}
+
+.session-status .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+.session-status.compiling {
+  border-left-color: var(--warn);
+  color: var(--warn);
+}
+
+.session-status.compiling .status-dot {
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.session-status.ready {
+  border-left-color: var(--accent-dim);
+  color: var(--fg-mid);
+}
+
+.session-status.ready .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.session-status.error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+.session-status.error .status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+
+.status-meta {
+  margin-left: auto;
+  color: var(--fg-faint);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 </style>
