@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use log::info;
+use my_nn_engine::graph::Graph;
 use my_nn_engine::onnx::load::ModelLoadError;
-use my_nn_engine::onnx::model::Graph;
 use my_nn_engine::options::Options;
 use my_nn_engine::session::DeviceBuffer;
 use my_nn_engine::session::InitializerBuffers;

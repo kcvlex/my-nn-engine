@@ -3,14 +3,14 @@ use std::io::Result;
 
 use itertools::Itertools;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::NodeMeta;
-use crate::onnx::model::ValueId;
-use crate::onnx::model::ValueInfo;
-use crate::onnx::operator::*;
-use crate::onnx::utils::simple_topological_order;
+use crate::graph::operator::*;
+use crate::graph::utils::simple_topological_order;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::NodeMeta;
+use crate::graph::ValueId;
+use crate::graph::ValueInfo;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;

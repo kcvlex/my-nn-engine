@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use my_nn_engine::graph::ValueId;
 use my_nn_engine::onnx::load::LoadProto;
-use my_nn_engine::onnx::model::ValueId;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
@@ -26,12 +26,12 @@ fn load_pb(path: PathBuf) -> Option<Tensor> {
     Tensor::load_from_path(path).ok()
 }
 
-fn run_builder(graph: my_nn_engine::onnx::model::Graph, inputs: &[Tensor]) -> Tensor {
+fn run_builder(graph: my_nn_engine::graph::Graph, inputs: &[Tensor]) -> Tensor {
     run_builder_with_target(graph, inputs, Target::CPU)
 }
 
 fn run_builder_with_target(
-    graph: my_nn_engine::onnx::model::Graph,
+    graph: my_nn_engine::graph::Graph,
     inputs: &[Tensor],
     target: Target,
 ) -> Tensor {

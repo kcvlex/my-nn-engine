@@ -17,8 +17,8 @@ pub use optimize::create_optimize_passes;
 pub use rewrite::create_rewrite_passes;
 pub use shape::create_infer_passes;
 
-use crate::onnx::model::Graph;
-use crate::onnx::operator::Operator;
+use crate::graph::operator::Operator;
+use crate::graph::Graph;
 use crate::options::*;
 use crate::session::SessionConfig;
 
@@ -84,7 +84,7 @@ pub fn transform_graph(graph: &mut Graph, options: &Options, config: &SessionCon
             .iter()
             .any(|(_, node)| matches!(node.op, Operator::Conv(_)));
         let all_inputs_4d = graph.inputs.iter().all(|&id| {
-            let crate::onnx::operator::Operator::Input(value_id) = graph.nodes[id].op else {
+            let crate::graph::operator::Operator::Input(value_id) = graph.nodes[id].op else {
                 return false;
             };
             graph

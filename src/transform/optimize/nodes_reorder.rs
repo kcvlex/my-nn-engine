@@ -1,9 +1,9 @@
 use itertools::Itertools;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::operator::*;
-use crate::onnx::utils::simple_topological_order;
+use crate::graph::operator::*;
+use crate::graph::utils::simple_topological_order;
+use crate::graph::Graph;
+use crate::graph::Node;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 

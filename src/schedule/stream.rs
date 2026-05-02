@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::Operator;
-use crate::onnx::operator::TransferKind;
+use crate::graph::operator::Operator;
+use crate::graph::operator::TransferKind;
+use crate::graph::ValueId;
 use crate::schedule::*;
 
 pub struct StreamAllocResult(pub HashMap<KernelId, KernelStreamAssignment>);

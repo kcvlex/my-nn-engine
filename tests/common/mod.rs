@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
+use my_nn_engine::graph::Graph;
+use my_nn_engine::graph::Node;
+use my_nn_engine::graph::NodeId;
+use my_nn_engine::graph::ValueId;
+use my_nn_engine::graph::ValueInfo;
 use my_nn_engine::onnx::load::*;
-use my_nn_engine::onnx::model::Graph;
-use my_nn_engine::onnx::model::Node;
-use my_nn_engine::onnx::model::NodeId;
-use my_nn_engine::onnx::model::ValueId;
-use my_nn_engine::onnx::model::ValueInfo;
 use my_nn_engine::options::*;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;

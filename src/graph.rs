@@ -1,3 +1,6 @@
+pub mod operator;
+pub mod utils;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ops::Index;
@@ -11,9 +14,8 @@ use id_arena::Arena;
 use id_arena::Id;
 use itertools::zip_eq;
 
-use crate::onnx::load::ModelLoadError;
-use crate::onnx::operator::Operator;
-use crate::onnx::operator::OperatorType;
+use crate::graph::operator::Operator;
+use crate::graph::operator::OperatorType;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::Dimension;
@@ -25,22 +27,10 @@ use crate::tensor::types::TypeError;
 use crate::tensor::types::UnresolvedTensorType;
 use crate::tensor::Tensor;
 
-#[derive(Debug, Clone)]
-pub struct OpsetImport {
-    pub domain: String,
-    pub version: i64,
-}
-
 #[derive(Debug)]
-pub struct Model {
-    pub ir_version: i64,
-    pub opset_import: Vec<OpsetImport>,
-    pub producer_name: String,
-    pub producer_version: String,
-    pub domain: String,
-    pub model_version: i64,
-    pub doc_string: String,
-    pub graph: Graph,
+pub enum GraphError {
+    FileRead(std::io::Error),
+    Unexpected(String),
 }
 
 #[derive(Debug)]
@@ -267,7 +257,7 @@ impl Graph {
         &self,
         value_id: ValueId,
         f: impl FnOnce(DataType, &[u8]) -> R,
-    ) -> Option<Result<R, ModelLoadError>> {
+    ) -> Option<Result<R, GraphError>> {
         let r = self.external_refs.get(&value_id)?;
         let mmap = match self.mmap_for(&r.path) {
             Ok(m) => m,
@@ -281,19 +271,19 @@ impl Graph {
         Some(Ok(f(r.elem_type, &mmap[start..end])))
     }
 
-    fn mmap_for(&self, path: &Path) -> Result<Arc<memmap2::Mmap>, ModelLoadError> {
+    fn mmap_for(&self, path: &Path) -> Result<Arc<memmap2::Mmap>, GraphError> {
         let mut cache = self.mmap_cache.lock().unwrap();
         if let Some(m) = cache.get(path) {
             return Ok(Arc::clone(m));
         }
-        let file = std::fs::File::open(path).map_err(ModelLoadError::FileRead)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(ModelLoadError::FileRead)?;
+        let file = std::fs::File::open(path).map_err(GraphError::FileRead)?;
+        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(GraphError::FileRead)?;
         let arc = Arc::new(mmap);
         cache.insert(path.to_path_buf(), Arc::clone(&arc));
         Ok(arc)
     }
 
-    fn load_external(&self, r: &ExternalTensorRef) -> Result<Tensor, ModelLoadError> {
+    fn load_external(&self, r: &ExternalTensorRef) -> Result<Tensor, GraphError> {
         let mmap = self.mmap_for(&r.path)?;
         let start = r.offset as usize;
         let end = r
@@ -301,9 +291,8 @@ impl Graph {
             .map(|len| start + len as usize)
             .unwrap_or(mmap.len());
         let data = TensorData::from_bytes(r.elem_type, &mmap[start..end]);
-        Tensor::new(r.dims.clone(), data).map_err(|e| {
-            ModelLoadError::Unexpected(format!("external data shape mismatch: {:?}", e))
-        })
+        Tensor::new(r.dims.clone(), data)
+            .map_err(|e| GraphError::Unexpected(format!("external data shape mismatch: {:?}", e)))
     }
 
     pub fn set_initializer(&mut self, value_id: ValueId, tensor: Tensor) {

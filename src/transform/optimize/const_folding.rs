@@ -2,11 +2,11 @@ use itertools::izip;
 use itertools::Itertools;
 use num::Zero;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::NodeId;
-use crate::onnx::operator::args;
-use crate::onnx::operator::*;
-use crate::onnx::utils::simple_topological_order;
+use crate::graph::operator::args;
+use crate::graph::operator::*;
+use crate::graph::utils::simple_topological_order;
+use crate::graph::Graph;
+use crate::graph::NodeId;
 use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::broadcast_shape;

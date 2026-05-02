@@ -7,7 +7,7 @@ use itertools::zip_eq;
 use smallvec::smallvec;
 use smallvec::SmallVec;
 
-use crate::onnx::operator::Slice;
+use crate::graph::operator::Slice;
 use crate::tensor::Tensor;
 use crate::tensor::TensorData;
 

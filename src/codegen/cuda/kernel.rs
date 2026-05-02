@@ -6,9 +6,9 @@ use itertools::izip;
 use itertools::Itertools;
 
 use crate::codegen::cuda::*;
-use crate::onnx::operator;
-use crate::onnx::operator::args;
-use crate::onnx::operator::ReinterpretType;
+use crate::graph::operator;
+use crate::graph::operator::args;
+use crate::graph::operator::ReinterpretType;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;

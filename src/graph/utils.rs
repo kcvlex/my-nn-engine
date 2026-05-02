@@ -5,12 +5,12 @@ use indexmap::IndexMap;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::Nodes;
-use crate::onnx::model::ValueId;
-use crate::onnx::model::ValueInfo;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::NodeId;
+use crate::graph::Nodes;
+use crate::graph::ValueId;
+use crate::graph::ValueInfo;
 
 pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     fn dfs(
@@ -590,7 +590,7 @@ mod test {
 
     use super::*;
     use crate::onnx::load::*;
-    use crate::onnx::model::Model;
+    use crate::onnx::Model;
 
     fn compare_models<P0: AsRef<Path>, P1: AsRef<Path>>(
         p0: P0,
@@ -650,8 +650,8 @@ mod test {
         assert!(err.is_err());
     }
 
-    use crate::onnx::model::Node;
-    use crate::onnx::model::ValueInfo;
+    use crate::graph::Node;
+    use crate::graph::ValueInfo;
     use crate::tensor::types::FloatType;
     use crate::tensor::types::ResolvedTensorDims;
     use crate::tensor::types::ResolvedTensorType;

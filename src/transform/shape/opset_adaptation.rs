@@ -1,13 +1,13 @@
 use itertools::Itertools;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::args;
-use crate::onnx::operator::Constant;
-use crate::onnx::operator::Operator;
-use crate::onnx::operator::Squeeze;
-use crate::onnx::operator::TensorIndex;
-use crate::onnx::operator::Unsqueeze;
+use crate::graph::operator::args;
+use crate::graph::operator::Constant;
+use crate::graph::operator::Operator;
+use crate::graph::operator::Squeeze;
+use crate::graph::operator::TensorIndex;
+use crate::graph::operator::Unsqueeze;
+use crate::graph::Graph;
+use crate::graph::ValueId;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::SIntType;
 use crate::tensor::Tensor;
@@ -60,7 +60,7 @@ fn lookup_constant_tensor(graph: &Graph, value_id: ValueId) -> Option<Tensor> {
 
 fn extract_axes(
     graph: &Graph,
-    node_id: crate::onnx::model::NodeId,
+    node_id: crate::graph::NodeId,
     arg: usize,
 ) -> Option<Vec<TensorIndex>> {
     let value_id = *graph.nodes[node_id].inputs.get(arg)?.as_ref()?;
@@ -75,7 +75,7 @@ fn extract_axes(
 
 fn bake_unsqueeze_axes<T: GraphOp>(
     graph: &mut Graph,
-    node_id: crate::onnx::model::NodeId,
+    node_id: crate::graph::NodeId,
     modifier: &mut T,
 ) {
     let Some(axes) = extract_axes(graph, node_id, args::UNSQUEEZE_AXES) else {
@@ -91,7 +91,7 @@ fn bake_unsqueeze_axes<T: GraphOp>(
 
 fn bake_squeeze_axes<T: GraphOp>(
     graph: &mut Graph,
-    node_id: crate::onnx::model::NodeId,
+    node_id: crate::graph::NodeId,
     modifier: &mut T,
 ) {
     let Some(axes) = extract_axes(graph, node_id, args::SQUEEZE_AXES) else {
@@ -107,7 +107,7 @@ fn bake_squeeze_axes<T: GraphOp>(
 
 fn bake_reduce_axes<T: GraphOp>(
     graph: &mut Graph,
-    node_id: crate::onnx::model::NodeId,
+    node_id: crate::graph::NodeId,
     modifier: &mut T,
 ) {
     let Some(axes) = extract_axes(graph, node_id, args::REDUCE_AXES) else {

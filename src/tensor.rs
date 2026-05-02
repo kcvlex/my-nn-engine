@@ -13,7 +13,7 @@ use types::SIntType;
 use types::TypeError;
 use types::UIntType;
 
-use crate::onnx::operator::TensorIndex;
+use crate::graph::operator::TensorIndex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tensor {

@@ -17,10 +17,10 @@ use log::info;
 use tempfile::TempDir;
 
 use crate::codegen::CodeGenError;
+use crate::graph::Graph;
+use crate::graph::ValueId;
 use crate::onnx::load::*;
-use crate::onnx::model::Graph;
-use crate::onnx::model::Model;
-use crate::onnx::model::ValueId;
+use crate::onnx::Model;
 use crate::options::*;
 use crate::schedule::create_schedule_passes;
 use crate::schedule::Schedule;

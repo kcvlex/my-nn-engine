@@ -30,9 +30,9 @@ use crate::codegen::cuda::kernel::SplitBuilder;
 use crate::codegen::cuda::kernel::TypeSymbol;
 use crate::codegen::cuda::kernel::WhereBuilder;
 use crate::codegen::cuda::runtime_api::*;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator;
-use crate::onnx::operator::*;
+use crate::graph::operator;
+use crate::graph::operator::*;
+use crate::graph::ValueId;
 use crate::options::Options;
 use crate::schedule::stream::EventId;
 use crate::schedule::stream::KernelStreamAssignment;
@@ -2029,7 +2029,7 @@ mod test {
 
     use super::*;
     use crate::onnx::load::*;
-    use crate::onnx::model::Model;
+    use crate::onnx::Model;
     use crate::options::*;
     use crate::schedule::Schedule;
 

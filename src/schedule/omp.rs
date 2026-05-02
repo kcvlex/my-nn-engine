@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::onnx::operator::Operator;
+use crate::graph::operator::Operator;
 use crate::schedule::*;
 
 pub struct OmpResult(pub HashSet<KernelId>);

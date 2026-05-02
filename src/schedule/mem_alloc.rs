@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use indexmap::IndexSet;
 
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::args;
-use crate::onnx::operator::Operator;
+use crate::graph::operator::args;
+use crate::graph::operator::Operator;
+use crate::graph::ValueId;
 use crate::schedule::*;
 
 pub struct MemAllocResult(pub HashMap<KernelId, Vec<AllocateInfo>>);
@@ -425,7 +425,7 @@ mod test {
 
     use super::*;
     use crate::onnx::load::*;
-    use crate::onnx::model::Model;
+    use crate::onnx::Model;
     use crate::options::Target;
     use crate::transform::lower::strides;
     use crate::transform::modify::SimpleGraphOp;

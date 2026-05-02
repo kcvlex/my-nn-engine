@@ -4,11 +4,11 @@ mod common;
 
 use std::collections::HashMap;
 
-use my_nn_engine::onnx::model::Graph;
-use my_nn_engine::onnx::model::Node;
-use my_nn_engine::onnx::model::ValueId;
-use my_nn_engine::onnx::model::ValueInfo;
-use my_nn_engine::onnx::operator::*;
+use my_nn_engine::graph::operator::*;
+use my_nn_engine::graph::Graph;
+use my_nn_engine::graph::Node;
+use my_nn_engine::graph::ValueId;
+use my_nn_engine::graph::ValueInfo;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;

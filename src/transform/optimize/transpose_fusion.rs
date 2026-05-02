@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::NodeId;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::NodeId;
 use crate::transform::modify::GraphOp;
 use crate::transform::utils::TransposeGenerator;
 use crate::transform::Pass;

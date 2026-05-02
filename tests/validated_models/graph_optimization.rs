@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
+use my_nn_engine::graph::operator::Layout;
+use my_nn_engine::graph::operator::Operator;
 use my_nn_engine::onnx::load::LoadProto;
-use my_nn_engine::onnx::model::Model;
-use my_nn_engine::onnx::operator::Layout;
-use my_nn_engine::onnx::operator::Operator;
+use my_nn_engine::onnx::Model;
 use my_nn_engine::options::*;
 use my_nn_engine::session::SessionConfig;
 use my_nn_engine::tensor::Tensor;

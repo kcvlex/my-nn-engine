@@ -1,8 +1,8 @@
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::ValueId;
 use crate::tensor::data::ScalarData;
 use crate::transform::modify::GraphOp;
 use crate::transform::pattern::extract_other_binary_input;

@@ -3,13 +3,13 @@ use std::collections::VecDeque;
 
 use itertools::zip_eq;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::NodeMeta;
-use crate::onnx::model::UnifyMode;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::NodeMeta;
+use crate::graph::UnifyMode;
+use crate::graph::ValueId;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;

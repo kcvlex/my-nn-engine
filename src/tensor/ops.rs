@@ -5,7 +5,7 @@ use ndarray::Axis;
 use ndarray::IxDyn;
 use ndarray::Slice;
 
-use crate::onnx::operator::TensorIndex;
+use crate::graph::operator::TensorIndex;
 
 pub struct RawTensor<'a, T> {
     pub data: Vec<T>,

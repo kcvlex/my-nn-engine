@@ -1,8 +1,8 @@
 use itertools::Itertools;
 
-use crate::onnx::model::Graph;
-use crate::onnx::operator::args;
-use crate::onnx::operator::Operator;
+use crate::graph::operator::args;
+use crate::graph::operator::Operator;
+use crate::graph::Graph;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::GraphOp;

@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use itertools::zip_eq;
 
-use crate::onnx::model::*;
-use crate::onnx::operator::args;
-use crate::onnx::operator::Layout;
-use crate::onnx::operator::Operator;
-use crate::onnx::utils;
+use crate::graph::operator::args;
+use crate::graph::operator::Layout;
+use crate::graph::operator::Operator;
+use crate::graph::utils;
+use crate::graph::*;
 use crate::schedule::*;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;

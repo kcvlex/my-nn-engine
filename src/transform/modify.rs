@@ -4,12 +4,12 @@ use std::collections::HashSet;
 
 use indexmap::IndexSet;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::ValueId;
-use crate::onnx::model::ValueInfo;
-use crate::onnx::operator::Operator;
+use crate::graph::operator::Operator;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::ValueId;
+use crate::graph::ValueInfo;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::TensorType;
 use crate::tensor::Tensor;

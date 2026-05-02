@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::NodeMeta;
-use crate::onnx::operator::*;
-use crate::onnx::utils::simple_topological_order;
+use crate::graph::operator::*;
+use crate::graph::utils::simple_topological_order;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::NodeMeta;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::TensorType;
 use crate::transform::modify::GraphOp;

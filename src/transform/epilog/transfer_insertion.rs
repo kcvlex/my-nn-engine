@@ -1,7 +1,7 @@
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeMeta;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeMeta;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 use crate::transform::modify::GraphOp;

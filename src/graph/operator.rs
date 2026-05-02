@@ -3,9 +3,9 @@ use std::ops::Index;
 use itertools::izip;
 use itertools::zip_eq;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::ValueId;
+use crate::graph::Graph;
+use crate::graph::NodeId;
+use crate::graph::ValueId;
 use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;

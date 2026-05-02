@@ -1,4 +1,5 @@
 pub mod codegen;
+pub mod graph;
 pub mod onnx;
 pub mod options;
 pub mod schedule;

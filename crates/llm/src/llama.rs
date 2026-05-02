@@ -1,6 +1,6 @@
-use my_nn_engine::onnx::model::ExternalTensorRef;
-use my_nn_engine::onnx::model::Graph;
-use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::graph::ExternalTensorRef;
+use my_nn_engine::graph::Graph;
+use my_nn_engine::graph::ValueId;
 use my_nn_engine::tensor::types::DataType;
 use my_nn_engine::tensor::types::SIntType;
 

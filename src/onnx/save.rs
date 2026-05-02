@@ -2,6 +2,9 @@ use std::path::Path;
 
 use prost::Message;
 
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::ValueId;
 use crate::onnx::load::attribute_proto;
 use crate::onnx::load::tensor_proto;
 use crate::onnx::load::tensor_shape_proto;
@@ -16,11 +19,8 @@ use crate::onnx::load::TensorProto;
 use crate::onnx::load::TensorShapeProto;
 use crate::onnx::load::TypeProto;
 use crate::onnx::load::ValueInfoProto;
-use crate::onnx::model::Graph;
-use crate::onnx::model::Model;
-use crate::onnx::model::OpsetImport;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::*;
+use crate::onnx::Model;
+use crate::onnx::OpsetImport;
 use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::Dimension;
@@ -644,7 +644,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::onnx::load::LoadProto;
-    use crate::onnx::model::Model;
+    use crate::onnx::Model;
 
     #[test]
     fn test_save_roundtrip_mnist12() {

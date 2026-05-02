@@ -1,5 +1,5 @@
-use crate::onnx::model::Graph;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
 use crate::transform::modify::GraphOp;
 use crate::transform::Pass;
 

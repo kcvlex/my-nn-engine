@@ -1,11 +1,11 @@
 use inkwell::values::*;
 use smallvec::SmallVec;
 
-use crate::onnx::operator::BatchNormalization;
-use crate::onnx::operator::Clip;
-use crate::onnx::operator::GeLU;
-use crate::onnx::operator::LeakyReLU;
-use crate::onnx::operator::Swish;
+use crate::graph::operator::BatchNormalization;
+use crate::graph::operator::Clip;
+use crate::graph::operator::GeLU;
+use crate::graph::operator::LeakyReLU;
+use crate::graph::operator::Swish;
 use crate::schedule::ElementwiseOpArg;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;

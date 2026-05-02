@@ -29,12 +29,12 @@ use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::codegen::cpu::translator::*;
 use crate::codegen::*;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::args;
-use crate::onnx::operator::Contiguous;
-use crate::onnx::operator::Layout;
-use crate::onnx::operator::Operator;
-use crate::onnx::operator::Slice;
+use crate::graph::operator::args;
+use crate::graph::operator::Contiguous;
+use crate::graph::operator::Layout;
+use crate::graph::operator::Operator;
+use crate::graph::operator::Slice;
+use crate::graph::ValueId;
 use crate::options::Options;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
@@ -678,7 +678,7 @@ impl<'ll> CodeGen<'ll, '_> {
     }
 
     fn collect_slice_info(&self, kernel: &Kernel) -> Vec<Slice> {
-        use crate::onnx::operator::TensorIndex;
+        use crate::graph::operator::TensorIndex;
         let graph = self.gen_ctx.schedule.graph();
         let data_id = kernel.inputs[args::SLICE_DATA].unwrap();
         let dims = graph

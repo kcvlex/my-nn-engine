@@ -1,9 +1,9 @@
 use itertools::zip_eq;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::UnifyMode;
-use crate::onnx::model::ValueId;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::UnifyMode;
+use crate::graph::ValueId;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::TypeError;
@@ -96,7 +96,7 @@ mod test {
     use std::path::PathBuf;
 
     use crate::onnx::load::*;
-    use crate::onnx::model::*;
+    use crate::onnx::Model;
     use crate::options::Options;
     use crate::tensor::types::FloatType;
     use crate::tensor::types::ResolvedTensorDims;

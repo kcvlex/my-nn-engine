@@ -1,7 +1,7 @@
 use itertools::izip;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::UnifyMode;
+use crate::graph::Graph;
+use crate::graph::UnifyMode;
 use crate::tensor::types::TypeError;
 use crate::transform::optimize::const_folding::fold_constant;
 use crate::transform::optimize::const_folding::prop_constant;

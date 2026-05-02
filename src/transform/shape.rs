@@ -7,10 +7,10 @@ use itertools::izip;
 use itertools::Itertools;
 use num::Zero;
 
-use crate::onnx::model::Graph;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::UnifyMode;
-use crate::onnx::operator::*;
+use crate::graph::operator::*;
+use crate::graph::Graph;
+use crate::graph::NodeId;
+use crate::graph::UnifyMode;
 use crate::options::Options;
 use crate::tensor::data::ScalarData;
 use crate::tensor::data::TensorData;

@@ -1,7 +1,7 @@
-use crate::onnx::model::Graph;
-use crate::onnx::model::Node;
-use crate::onnx::model::NodeId;
-use crate::onnx::model::ValueId;
+use crate::graph::Graph;
+use crate::graph::Node;
+use crate::graph::NodeId;
+use crate::graph::ValueId;
 use crate::transform::modify::GraphOp;
 
 pub struct PatternMatcher<'a, T: GraphOp> {
