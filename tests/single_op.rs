@@ -904,10 +904,9 @@ fn attention_causal_large() -> TestResult {
     )
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn attention_decode() -> TestResult {
-    with_cuda_session_and_tensors("attention_decode", (3, 1), |session, (inputs, expected)| {
+    with_all_sessions_and_tensors("attention_decode", (3, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;
         assert_eq_epsilon!(outputs[0], expected[0], 1e-4);
         Ok(())
@@ -923,10 +922,9 @@ fn kv_cache_update() -> TestResult {
     })
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn attention_decode_gqa() -> TestResult {
-    with_cuda_session_and_tensors(
+    with_all_sessions_and_tensors(
         "attention_decode_gqa",
         (3, 1),
         |session, (inputs, expected)| {
@@ -937,10 +935,9 @@ fn attention_decode_gqa() -> TestResult {
     )
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn attention_decode_runtime_kv() -> TestResult {
-    with_cuda_session_and_tensors(
+    with_all_sessions_and_tensors(
         "attention_decode_runtime_kv",
         (4, 1),
         |session, (inputs, expected)| {

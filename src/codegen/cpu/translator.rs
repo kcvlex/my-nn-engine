@@ -3535,9 +3535,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let d_dim = q.ty.dims[3];
         let hkv = k.ty.dims[1];
         let seq_k = k.ty.dims[2];
-        assert_eq!(
-            hq, hkv,
-            "GQA (Q heads != K/V heads) not yet supported on CPU Attention"
+        assert!(
+            hq % hkv == 0,
+            "Q head count ({}) must be a multiple of KV head count ({})",
+            hq,
+            hkv,
         );
         let DataType::Float(float_ty) = q.ty.elem_type else {
             panic!("Attention requires float input");
@@ -3650,8 +3652,29 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .build_in_bounds_gep(llvm_float, q.ptr, &[q_total], "q.row")?
         };
 
+        // GQA mapping: bh_kv = b * Hkv + h_q * Hkv / Hq.
+        let bh_kv_idx = if hq == hkv {
+            bh_idx
+        } else {
+            let bq_factor = (hq / hkv) as u64;
+            let kv_b =
+                self.builder
+                    .build_int_unsigned_div(b_idx, i64_ty.const_int(1, false), "kv.b")?;
+            let kv_h = self.builder.build_int_unsigned_div(
+                h_idx,
+                i64_ty.const_int(bq_factor, false),
+                "kv.h",
+            )?;
+            let scaled = self.builder.build_int_mul(
+                kv_b,
+                i64_ty.const_int(hkv as u64, false),
+                "kv.b.scaled",
+            )?;
+            self.builder.build_int_add(scaled, kv_h, "kv.bh")?
+        };
+
         let k_base_off = self.builder.build_int_mul(
-            bh_idx,
+            bh_kv_idx,
             i64_ty.const_int(k_stride_bh, false),
             "k.base.bh",
         )?;
@@ -3664,7 +3687,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         };
 
         let v_base_off = self.builder.build_int_mul(
-            bh_idx,
+            bh_kv_idx,
             i64_ty.const_int(v_stride_bh, false),
             "v.base.bh",
         )?;
