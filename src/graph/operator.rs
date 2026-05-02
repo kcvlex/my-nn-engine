@@ -1023,6 +1023,8 @@ pub mod args {
     pub const ATTENTION_V: usize = 2;
     pub const ATTENTION_MASK: usize = 3;
     pub const ATTENTION_ACTIVE_SEQ_KV: usize = 4;
+    pub const ATTENTION_K_SCALE: usize = 5;
+    pub const ATTENTION_V_SCALE: usize = 6;
 
     pub const EQUAL_A: usize = 0;
     pub const EQUAL_B: usize = 1;

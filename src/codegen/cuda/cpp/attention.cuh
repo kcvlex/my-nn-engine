@@ -3,15 +3,21 @@
 
 #include <cuda.h>
 #include <cooperative_groups.h>
+#include <type_traits>
 
 namespace cg = cooperative_groups;
 
-template <typename T, int Br, int Bc, int THREADS_PER_ROW, int HEAD_DIM>
+// Tiled flash-attention. When `TKV == T` the K/V cache is in the same dtype as Q
+// and scale pointers are unused. When `TKV == signed char` the cache is INT8 and
+// `k_scale` / `v_scale` provide one BF16 scale per (kv_head, token).
+template <typename T, typename TKV, int Br, int Bc, int THREADS_PER_ROW, int HEAD_DIM>
 __global__ void attention(
     T *out,
     T *Q,
-    T *K,
-    T *V,
+    TKV *K,
+    TKV *V,
+    T *k_scale,
+    T *v_scale,
     float scale,
     bool is_causal,
     T *mask,
@@ -24,10 +30,13 @@ __global__ void attention(
     int num_q_heads,
     int num_kv_heads
 ) {
+    constexpr bool QUANT = !std::is_same<T, TKV>::value;
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
     __shared__ T s_Q[Br][HEAD_DIM + 1];
-    __shared__ T s_K[Bc][HEAD_DIM + 1];
-    __shared__ T s_V[Bc][HEAD_DIM + 1];
+    __shared__ TKV s_K[Bc][HEAD_DIM + 1];
+    __shared__ TKV s_V[Bc][HEAD_DIM + 1];
+    __shared__ float s_K_scale[QUANT ? Bc : 1];
+    __shared__ float s_V_scale[QUANT ? Bc : 1];
 
     static_assert(THREADS_PER_ROW <= 32);
     static_assert((THREADS_PER_ROW & (THREADS_PER_ROW - 1)) == 0, "THREADS_PER_ROW must be a power of 2");
@@ -41,6 +50,10 @@ __global__ void attention(
 
     K += kv_bh * kv_cache_stride * HEAD_DIM;
     V += kv_bh * kv_cache_stride * HEAD_DIM;
+    if constexpr (QUANT) {
+        k_scale += kv_bh * kv_cache_stride;
+        v_scale += kv_bh * kv_cache_stride;
+    }
     out += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
@@ -69,6 +82,12 @@ __global__ void attention(
             s_K[kv_row][kv_col] = K[i * Bc * HEAD_DIM + j];
             s_V[kv_row][kv_col] = V[i * Bc * HEAD_DIM + j];
         }
+        if constexpr (QUANT) {
+            for (int j = threadIdx.x; j < num_kv_row; j += blockDim.x) {
+                s_K_scale[j] = (float)k_scale[i * Bc + j];
+                s_V_scale[j] = (float)v_scale[i * Bc + j];
+            }
+        }
         cg::sync(cta);
 
         float P[Bc];
@@ -77,6 +96,9 @@ __global__ void attention(
             float sum = 0.0f;
             for (int k = tile.thread_rank(); k < HEAD_DIM; k += THREADS_PER_ROW) {
                 sum += (float)s_Q[local_row][k] * (float)s_K[j][k];
+            }
+            if constexpr (QUANT) {
+                sum *= s_K_scale[j];
             }
             int g_row = blockIdx.x * Br + local_row;
             int g_col = i * Bc + j;
@@ -111,8 +133,12 @@ __global__ void attention(
             block_O[j] *= coeff;
         }
         for (int j = 0; j < num_kv_row; j++) {
+            float pj = P[j];
+            if constexpr (QUANT) {
+                pj *= s_V_scale[j];
+            }
             for (int k = 0, idx = tile.thread_rank(); idx < HEAD_DIM; k++, idx += THREADS_PER_ROW) {
-                block_O[k] += P[j] * (float)s_V[j][idx];
+                block_O[k] += pj * (float)s_V[j][idx];
             }
         }
         cg::sync(cta);
@@ -130,18 +156,21 @@ __global__ void attention(
     }
 }
 
-template <typename T, int HEAD_DIM, int BLOCK_SIZE>
+template <typename T, typename TKV, int HEAD_DIM, int BLOCK_SIZE>
 __global__ void attention_decode(
     T *out,
     T *Q,
-    T *K,
-    T *V,
+    TKV *K,
+    TKV *V,
+    T *k_scale,
+    T *v_scale,
     float scale,
     int cache_seq_len,
     int active_seq_kv,
     int num_q_heads,
     int num_kv_heads
 ) {
+    constexpr bool QUANT = !std::is_same<T, TKV>::value;
     __shared__ T s_Q[HEAD_DIM];
     __shared__ float s_O[HEAD_DIM];
     __shared__ float dot_buf[BLOCK_SIZE];
@@ -155,6 +184,10 @@ __global__ void attention_decode(
     Q += blockIdx.x * HEAD_DIM;
     K += kv_bh * cache_seq_len * HEAD_DIM;
     V += kv_bh * cache_seq_len * HEAD_DIM;
+    if constexpr (QUANT) {
+        k_scale += kv_bh * cache_seq_len;
+        v_scale += kv_bh * cache_seq_len;
+    }
 
     cg::thread_block cta = cg::this_thread_block();
     cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);
@@ -172,6 +205,9 @@ __global__ void attention_decode(
         float dot = 0.0f;
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
             dot += (float)s_Q[i] * (float)K[row_K * HEAD_DIM + i];
+        }
+        if constexpr (QUANT) {
+            dot *= (float)k_scale[row_K];
         }
 
         for (int s = tile.size() / 2; 0 < s; s /= 2) {
@@ -191,6 +227,9 @@ __global__ void attention_decode(
         float score = expf(dot_buf[0] - row_max);
         float coeff = expf(old_max - row_max);
         row_sum = row_sum * coeff + score;
+        if constexpr (QUANT) {
+            score *= (float)v_scale[row_K];
+        }
 
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
             s_O[i] *= coeff;

@@ -59,24 +59,55 @@ pub struct AttentionKernel {
     pub num_q_heads: usize,
     pub num_kv_heads: usize,
 
+    /// When `Some`, K/V are stored as INT8 with per-(head, token) scale of dtype
+    /// `data_ty`, and the `attention_int8` kernel is emitted instead.
+    pub kv_quant: Option<KvQuantArgs>,
+
     pub attn: Attention,
+}
+
+#[derive(Clone)]
+pub struct KvQuantArgs {
+    pub k_scale: Expr,
+    pub v_scale: Expr,
 }
 
 impl AttentionKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
-        let id = format!(
-            "attention<{}, {}, {}, {}, {}>",
-            self.data_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
-        );
         let mask = match &self.mask {
             Some(mask) => mask.to_owned(),
             None => "nullptr".to_literal(),
         };
+        let kv_ty = if self.kv_quant.is_some() {
+            "signed char".to_string()
+        } else {
+            self.data_ty.to_string()
+        };
+        let (k_scale, v_scale) = match &self.kv_quant {
+            Some(q) => (
+                cast!(self.data_ty, q.k_scale),
+                cast!(self.data_ty, q.v_scale),
+            ),
+            None => ("nullptr".to_string(), "nullptr".to_string()),
+        };
+        let kv_cast = |e: &Expr| {
+            if self.kv_quant.is_some() {
+                format!("(signed char *)({})", e)
+            } else {
+                cast!(self.data_ty, e)
+            }
+        };
+        let id = format!(
+            "attention<{}, {}, {}, {}, {}, {}>",
+            self.data_ty, kv_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
+        );
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
-            cast!(self.data_ty, self.k),
-            cast!(self.data_ty, self.v),
+            kv_cast(&self.k),
+            kv_cast(&self.v),
+            k_scale,
+            v_scale,
             self.attn.scale.to_string(),
             if self.attn.is_causal { "1" } else { "0" }.to_string(),
             cast!(self.data_ty, mask),
@@ -107,20 +138,42 @@ pub struct AttentionDecodeKernel {
     pub num_q_heads: usize,
     pub num_kv_heads: usize,
 
+    pub kv_quant: Option<KvQuantArgs>,
     pub attn: Attention,
 }
 
 impl AttentionDecodeKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
+        let kv_ty = if self.kv_quant.is_some() {
+            "signed char".to_string()
+        } else {
+            self.data_ty.to_string()
+        };
+        let (k_scale, v_scale) = match &self.kv_quant {
+            Some(q) => (
+                cast!(self.data_ty, q.k_scale),
+                cast!(self.data_ty, q.v_scale),
+            ),
+            None => ("nullptr".to_string(), "nullptr".to_string()),
+        };
+        let kv_cast = |e: &Expr| {
+            if self.kv_quant.is_some() {
+                format!("(signed char *)({})", e)
+            } else {
+                cast!(self.data_ty, e)
+            }
+        };
         let id = format!(
-            "attention_decode<{}, {}, {}>",
-            self.data_ty, self.head_dim, self.block_size,
+            "attention_decode<{}, {}, {}, {}>",
+            self.data_ty, kv_ty, self.head_dim, self.block_size,
         );
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
-            cast!(self.data_ty, self.k),
-            cast!(self.data_ty, self.v),
+            kv_cast(&self.k),
+            kv_cast(&self.v),
+            k_scale,
+            v_scale,
             self.attn.scale.to_string(),
             self.cache_seq_len.to_string(),
             self.active_seq_kv.to_string(),

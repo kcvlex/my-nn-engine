@@ -983,6 +983,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let q = kernel.inputs[args::ATTENTION_Q].unwrap();
                     let k = kernel.inputs[args::ATTENTION_K].unwrap();
                     let v = kernel.inputs[args::ATTENTION_V].unwrap();
+                    let k_scale_id = kernel.inputs.get(args::ATTENTION_K_SCALE).and_then(|x| *x);
+                    let v_scale_id = kernel.inputs.get(args::ATTENTION_V_SCALE).and_then(|x| *x);
+                    let kv_quant = match (k_scale_id, v_scale_id) {
+                        (Some(ks), Some(vs)) => Some(kernel::KvQuantArgs {
+                            k_scale: self.device_identifier(ks)?,
+                            v_scale: self.device_identifier(vs)?,
+                        }),
+                        (None, None) => None,
+                        _ => panic!("Attention: K and V scale must be both present or both absent"),
+                    };
 
                     let q_ty = self.get_resolved_tensor_type(q)?;
                     let k_ty = self.get_resolved_tensor_type(k)?;
@@ -1044,6 +1054,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 active_seq_kv: active_seq_kv_expr,
                                 num_q_heads,
                                 num_kv_heads,
+                                kv_quant: kv_quant.clone(),
                                 attn: *attn,
                             },
                         );
@@ -1140,6 +1151,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             num_q_heads,
                             num_kv_heads,
                             out: self.device_identifier(kernel.outputs[0])?,
+                            kv_quant,
                             attn: *attn,
                         });
 
