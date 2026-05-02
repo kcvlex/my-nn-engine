@@ -175,7 +175,8 @@ const warmup = computed(() => {
 });
 
 const warmupStatusText = computed(() => {
-  switch (warmup.value.state) {
+  const w = warmup.value;
+  switch (w.state) {
     case 'idle':
       return 'idle';
     case 'compiling':
@@ -183,7 +184,11 @@ const warmupStatusText = computed(() => {
     case 'ready':
       return 'session ready';
     case 'error':
-      return `error: ${warmup.value.message}`;
+      return `error: ${w.message}`;
+    default: {
+      const _exhaustive: never = w;
+      return _exhaustive;
+    }
   }
 });
 
