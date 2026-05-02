@@ -1,15 +1,15 @@
 [package]
-name = "my-onnx-llm"
+name = "my-nn-engine-llm"
 version = "0.1.0"
 edition = "2021"
 
 [features]
 default = ["cuda"]
-cuda = ["my-onnx/cuda"]
-local = ["my-onnx/local"]
+cuda = ["my-nn-engine/cuda"]
+local = ["my-nn-engine/local"]
 
 [dependencies]
-my-onnx = { path = "../..", default-features = false }
+my-nn-engine = { path = "../..", default-features = false }
 log = "0.4.29"
 thiserror = "2"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }

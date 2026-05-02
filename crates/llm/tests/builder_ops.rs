@@ -1,18 +1,18 @@
 use std::path::PathBuf;
 
-use my_onnx::onnx::load::LoadProto;
-use my_onnx::onnx::model::ValueId;
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::tensor::data::CompPolicy;
-use my_onnx::tensor::data::TensorData;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
-use my_onnx::tensor::types::SIntType;
-use my_onnx::tensor::Tensor;
-use my_onnx_llm::builder::Builder;
+use my_nn_engine::onnx::load::LoadProto;
+use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::tensor::data::CompPolicy;
+use my_nn_engine::tensor::data::TensorData;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::SIntType;
+use my_nn_engine::tensor::Tensor;
+use my_nn_engine_llm::builder::Builder;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -26,12 +26,12 @@ fn load_pb(path: PathBuf) -> Option<Tensor> {
     Tensor::load_from_path(path).ok()
 }
 
-fn run_builder(graph: my_onnx::onnx::model::Graph, inputs: &[Tensor]) -> Tensor {
+fn run_builder(graph: my_nn_engine::onnx::model::Graph, inputs: &[Tensor]) -> Tensor {
     run_builder_with_target(graph, inputs, Target::CPU)
 }
 
 fn run_builder_with_target(
-    graph: my_onnx::onnx::model::Graph,
+    graph: my_nn_engine::onnx::model::Graph,
     inputs: &[Tensor],
     target: Target,
 ) -> Tensor {

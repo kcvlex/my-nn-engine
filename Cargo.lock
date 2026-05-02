@@ -1450,7 +1450,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
-name = "my-onnx"
+name = "my-nn-engine"
 version = "0.1.0"
 dependencies = [
  "bitvec",
@@ -1484,7 +1484,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "my-onnx-llm"
+name = "my-nn-engine-llm"
 version = "0.1.0"
 dependencies = [
  "itertools 0.14.0",
@@ -1492,7 +1492,7 @@ dependencies = [
  "log",
  "memmap2",
  "minijinja",
- "my-onnx",
+ "my-nn-engine",
  "safetensors",
  "serde",
  "serde_json",
@@ -1501,22 +1501,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "my-onnx-test-tools"
+name = "my-nn-engine-test-tools"
 version = "0.1.0"
 dependencies = [
  "clap",
- "my-onnx",
+ "my-nn-engine",
  "tempfile",
 ]
 
 [[package]]
-name = "my-onnx-ui"
+name = "my-nn-engine-ui"
 version = "0.1.0"
 dependencies = [
  "env_logger",
  "http",
  "log",
- "my-onnx",
+ "my-nn-engine",
  "prost",
  "tempfile",
  "tokio",

@@ -1,5 +1,5 @@
-use my_onnx::options::Target;
-use my_onnx::session::SessionError;
+use my_nn_engine::options::Target;
+use my_nn_engine::session::SessionError;
 
 use super::common::run_validated_model;
 

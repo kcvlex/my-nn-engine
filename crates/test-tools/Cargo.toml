@@ -1,13 +1,13 @@
 [package]
-name = "my-onnx-test-tools"
+name = "my-nn-engine-test-tools"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "my-onnx-test-tools"
+name = "my-nn-engine-test-tools"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-my-onnx = { path = "../.." }
+my-nn-engine = { path = "../.." }
 tempfile = "3"

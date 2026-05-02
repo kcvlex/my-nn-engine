@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use my_onnx::onnx::model::ExternalTensorRef;
-use my_onnx::tensor::types::DataType;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
+use my_nn_engine::onnx::model::ExternalTensorRef;
+use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
 use safetensors::Dtype;
 use safetensors::SafeTensors;
 

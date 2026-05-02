@@ -1,4 +1,4 @@
-# my-onnx-test-tools — Agent Guide
+# my-nn-engine-test-tools — Agent Guide
 
 This tool identifies which ONNX node first produces incorrect output by binary-searching over the model's node list. It extracts subgraphs inside a Podman container (with onnxruntime as reference), then runs the test command on the host.
 
@@ -9,11 +9,11 @@ This tool identifies which ONNX node first produces incorrect output by binary-s
 
 ## Build
 
-Run both from the **project root** (`/home/kcvlex/my-onnx`):
+Run both from the **project root** (`/home/kcvlex/my-nn-engine`):
 
 ```bash
-cargo build -p my-onnx-test-tools --release
-cargo build -p my-onnx-test-tools --example test_extracted --release
+cargo build -p my-nn-engine-test-tools --release
+cargo build -p my-nn-engine-test-tools --example test_extracted --release
 ```
 
 ## Binary Search Usage
@@ -23,9 +23,9 @@ cargo build -p my-onnx-test-tools --example test_extracted --release
 **All commands must be run from the project root directory.**
 
 ```bash
-cd /home/kcvlex/my-onnx
+cd /home/kcvlex/my-nn-engine
 
-TARGET=CUDA EPSILON=0.01 ./target/release/my-onnx-test-tools \
+TARGET=CUDA EPSILON=0.01 ./target/release/my-nn-engine-test-tools \
   --mode binary-search \
   --model-path models/validated/GPT2/model.onnx \
   --input-paths models/validated/GPT2/test_data_set_0/input_0.pb \
@@ -88,8 +88,8 @@ To test a specific node index without running the full binary search, call the c
 # output-dir MUST be relative to project root (inside mounted volume)
 podman run --rm --userns=keep-id \
   --entrypoint python \
-  -v /home/kcvlex/my-onnx:/workspace -w /workspace \
-  my-onnx-test-tools /usr/local/bin/binary_search.py \
+  -v /home/kcvlex/my-nn-engine:/workspace -w /workspace \
+  my-nn-engine-test-tools /usr/local/bin/binary_search.py \
   extract-node \
   --model models/validated/GPT2/model.onnx \
   --inputs models/validated/GPT2/test_data_set_0/input_0.pb \
@@ -100,9 +100,9 @@ podman run --rm --userns=keep-id \
 Then test on host:
 
 ```bash
-EXTRACTED_MODEL_DIR=/home/kcvlex/my-onnx/tmp/gpt2_debug/node_1894 \
+EXTRACTED_MODEL_DIR=/home/kcvlex/my-nn-engine/tmp/gpt2_debug/node_1894 \
   TARGET=CUDA EPSILON=0.01 \
-  /home/kcvlex/my-onnx/target/release/examples/test_extracted
+  /home/kcvlex/my-nn-engine/target/release/examples/test_extracted
 ```
 
 ## Extraction Mode (by output node name)
@@ -110,7 +110,7 @@ EXTRACTED_MODEL_DIR=/home/kcvlex/my-onnx/tmp/gpt2_debug/node_1894 \
 Extract a subgraph up to a named output node:
 
 ```bash
-./target/release/my-onnx-test-tools \
+./target/release/my-nn-engine-test-tools \
   --mode extract \
   --model-path models/validated/GPT2/model.onnx \
   --input-paths models/validated/GPT2/test_data_set_0/input_0.pb \
@@ -121,5 +121,5 @@ Extract a subgraph up to a named output node:
 ## Architecture
 
 - **Container** (Podman): Runs Python with onnx/onnxruntime. Handles model extraction (`onnx.utils.extract_model`) and reference inference. Mounted volume: project root -> `/workspace`.
-- **Host**: Runs the test command binary (e.g. `test_extracted`), which loads the extracted model with my-onnx's `Session` and compares outputs.
+- **Host**: Runs the test command binary (e.g. `test_extracted`), which loads the extracted model with my-nn-engine's `Session` and compares outputs.
 - The binary search tool orchestrates both: it calls the container for extraction, then the host binary for testing.

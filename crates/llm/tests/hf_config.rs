@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use my_onnx_llm::HfConfig;
+use my_nn_engine_llm::HfConfig;
 
 #[test]
 fn parse_tinyllama_config() {

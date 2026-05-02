@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use my_onnx::options::Target as MyOnnxTarget;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::options::Target as MyOnnxTarget;
+use my_nn_engine::tensor::Tensor;
 use prost::Message;
 use tokio::sync::RwLock;
 use tonic::Request;

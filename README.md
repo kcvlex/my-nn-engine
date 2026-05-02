@@ -1,4 +1,4 @@
-# my-onnx
+# my-nn-engine
 
 ONNX model compiler with CPU and CUDA backends.
 

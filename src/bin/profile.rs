@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use my_onnx::onnx::load::LoadProto;
-use my_onnx::options::*;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::onnx::load::LoadProto;
+use my_nn_engine::options::*;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::tensor::Tensor;
 
 fn cuda_profiler_start() {
     unsafe {

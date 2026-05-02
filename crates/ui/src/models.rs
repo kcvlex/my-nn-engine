@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::tensor::Tensor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelId {

@@ -1,5 +1,5 @@
 {
-  "name": "my-onnx-ui-frontend",
+  "name": "my-nn-engine-ui-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx_llm::build_llama;
-use my_onnx_llm::llama::build_llama_prefill;
-use my_onnx_llm::HfConfig;
-use my_onnx_llm::HfWeights;
-use my_onnx_llm::LlamaWeights;
-use my_onnx_llm::LlmSession;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::llama::build_llama_prefill;
+use my_nn_engine_llm::HfConfig;
+use my_nn_engine_llm::HfWeights;
+use my_nn_engine_llm::LlamaWeights;
+use my_nn_engine_llm::LlmSession;
 use tokenizers::Tokenizer;
 
 fn main() {

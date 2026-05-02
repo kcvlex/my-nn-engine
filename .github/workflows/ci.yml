@@ -57,7 +57,7 @@ jobs:
           models: mnist-12
 
       - name: Run tests
-        run: cargo test -p my-onnx-ui --no-default-features --verbose
+        run: cargo test -p my-nn-engine-ui --no-default-features --verbose
 
   llm-test:
     name: LLM Crate Tests
@@ -72,14 +72,14 @@ jobs:
           models: ""
 
       - name: Run tests
-        run: cargo test -p my-onnx-llm --no-default-features --verbose
+        run: cargo test -p my-nn-engine-llm --no-default-features --verbose
 
   frontend-lint:
     name: Frontend Lint & Format
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: crates/my-onnx-ui/frontend
+        working-directory: crates/ui/frontend
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -96,7 +96,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: crates/my-onnx-ui/frontend/pnpm-lock.yaml
+          cache-dependency-path: crates/ui/frontend/pnpm-lock.yaml
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: crates/my-onnx-ui/frontend
+        working-directory: crates/ui/frontend
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -135,7 +135,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: crates/my-onnx-ui/frontend/pnpm-lock.yaml
+          cache-dependency-path: crates/ui/frontend/pnpm-lock.yaml
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

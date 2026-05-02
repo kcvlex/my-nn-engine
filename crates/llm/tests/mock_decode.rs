@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx_llm::LlmConfig;
-use my_onnx_llm::LlmSession;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine_llm::LlmConfig;
+use my_nn_engine_llm::LlmSession;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_decode")

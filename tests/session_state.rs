@@ -5,19 +5,19 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx::session::DeviceBuffer;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::session::SessionError;
-use my_onnx::session::SessionStateSpec;
-use my_onnx::tensor::data::CompPolicy;
-use my_onnx::tensor::data::TensorData;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
-use my_onnx::tensor::types::SIntType;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine::session::DeviceBuffer;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::session::SessionError;
+use my_nn_engine::session::SessionStateSpec;
+use my_nn_engine::tensor::data::CompPolicy;
+use my_nn_engine::tensor::data::TensorData;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::SIntType;
+use my_nn_engine::tensor::Tensor;
 
 type TestResult = Result<(), SessionError>;
 

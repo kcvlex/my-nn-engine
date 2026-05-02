@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use my_onnx::onnx::load::LoadProto;
-use my_onnx::onnx::model::Model;
-use my_onnx::onnx::operator::Layout;
-use my_onnx::onnx::operator::Operator;
-use my_onnx::options::*;
-use my_onnx::session::SessionConfig;
-use my_onnx::tensor::Tensor;
-use my_onnx::transform::transform_graph;
+use my_nn_engine::onnx::load::LoadProto;
+use my_nn_engine::onnx::model::Model;
+use my_nn_engine::onnx::operator::Layout;
+use my_nn_engine::onnx::operator::Operator;
+use my_nn_engine::options::*;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::tensor::Tensor;
+use my_nn_engine::transform::transform_graph;
 
 fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> Model {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

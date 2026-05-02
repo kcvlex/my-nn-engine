@@ -5,7 +5,7 @@ use std::process::Stdio;
 
 use clap::Parser;
 
-const IMAGE_NAME: &str = "my-onnx-test-tools";
+const IMAGE_NAME: &str = "my-nn-engine-test-tools";
 
 #[derive(Parser)]
 struct Args {
@@ -61,7 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let project_root = get_project_root()?;
-    let dockerfile_dir = project_root.join("crates").join("my-onnx-test-tools");
+    let dockerfile_dir = project_root.join("crates").join("my-nn-engine-test-tools");
 
     if !image_exists()? {
         build_image(&dockerfile_dir)?;

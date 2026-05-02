@@ -1,5 +1,5 @@
 [package]
-name = "my-onnx-ui"
+name = "my-nn-engine-ui"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,7 +8,7 @@ name = "web-server"
 path = "src/main.rs"
 
 [dependencies]
-my-onnx = { path = "../..", default-features = false }
+my-nn-engine = { path = "../..", default-features = false }
 
 tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["cors"] }

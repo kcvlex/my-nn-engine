@@ -4,23 +4,23 @@ mod common;
 
 use std::collections::HashMap;
 
-use my_onnx::onnx::model::Graph;
-use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::ValueId;
-use my_onnx::onnx::model::ValueInfo;
-use my_onnx::onnx::operator::*;
-use my_onnx::options::Options;
-use my_onnx::options::Target;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::session::SessionError;
-use my_onnx::tensor::data::TensorData;
-use my_onnx::tensor::types::DataType;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
-use my_onnx::tensor::types::ResolvedTensorType;
-use my_onnx::tensor::types::TensorType;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::onnx::model::Graph;
+use my_nn_engine::onnx::model::Node;
+use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::onnx::model::ValueInfo;
+use my_nn_engine::onnx::operator::*;
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::session::SessionError;
+use my_nn_engine::tensor::data::TensorData;
+use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::ResolvedTensorType;
+use my_nn_engine::tensor::types::TensorType;
+use my_nn_engine::tensor::Tensor;
 
 use crate::common::create_value;
 

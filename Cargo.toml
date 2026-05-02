@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/my-onnx-llm", "crates/my-onnx-test-tools", "crates/my-onnx-ui"]
+members = [".", "crates/llm", "crates/test-tools", "crates/ui"]
 
 [package]
-name = "my-onnx"
+name = "my-nn-engine"
 version = "0.1.0"
 edition = "2021"
 

@@ -1,17 +1,17 @@
-use my_onnx::onnx::model::ExternalTensorRef;
-use my_onnx::onnx::model::Graph;
-use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::ValueId;
-use my_onnx::onnx::model::ValueInfo;
-use my_onnx::onnx::operator::*;
-use my_onnx::tensor::data::TensorData;
-use my_onnx::tensor::types::DataType;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
-use my_onnx::tensor::types::ResolvedTensorType;
-use my_onnx::tensor::types::SIntType;
-use my_onnx::tensor::types::TensorType;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::onnx::model::ExternalTensorRef;
+use my_nn_engine::onnx::model::Graph;
+use my_nn_engine::onnx::model::Node;
+use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::onnx::model::ValueInfo;
+use my_nn_engine::onnx::operator::*;
+use my_nn_engine::tensor::data::TensorData;
+use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::ResolvedTensorType;
+use my_nn_engine::tensor::types::SIntType;
+use my_nn_engine::tensor::types::TensorType;
+use my_nn_engine::tensor::Tensor;
 
 pub struct Builder {
     pub graph: Graph,

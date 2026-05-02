@@ -3,16 +3,16 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
-use my_onnx::onnx::model::Graph;
-use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::ValueId;
-use my_onnx::onnx::operator::*;
-use my_onnx::options::*;
-use my_onnx::schedule::*;
-use my_onnx::session::SessionConfig;
-use my_onnx::tensor::types::DataType;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::transform::transform_graph;
+use my_nn_engine::onnx::model::Graph;
+use my_nn_engine::onnx::model::Node;
+use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::onnx::operator::*;
+use my_nn_engine::options::*;
+use my_nn_engine::schedule::*;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::transform::transform_graph;
 
 fn count_elementwise_kernels(schedule: &Schedule) -> usize {
     schedule

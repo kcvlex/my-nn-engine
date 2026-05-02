@@ -3,22 +3,22 @@ mod common;
 use std::collections::HashMap;
 
 use common::create_value;
-use my_onnx::onnx::model::Graph;
-use my_onnx::onnx::model::Node;
-use my_onnx::onnx::model::ValueId;
-use my_onnx::onnx::model::ValueInfo;
-use my_onnx::onnx::operator::*;
-use my_onnx::onnx::utils::compare_graphs_structural;
-use my_onnx::tensor::data::ScalarData;
-use my_onnx::tensor::types::DataType;
-use my_onnx::tensor::types::FloatType;
-use my_onnx::tensor::types::ResolvedTensorDims;
-use my_onnx::tensor::types::TensorType;
-use my_onnx::tensor::Tensor;
-use my_onnx::transform::modify::NodeDelete;
-use my_onnx::transform::modify::SimpleGraphOp;
-use my_onnx::transform::optimize::rms_norm_fusion::RMSNormFusion;
-use my_onnx::transform::Pass;
+use my_nn_engine::onnx::model::Graph;
+use my_nn_engine::onnx::model::Node;
+use my_nn_engine::onnx::model::ValueId;
+use my_nn_engine::onnx::model::ValueInfo;
+use my_nn_engine::onnx::operator::*;
+use my_nn_engine::onnx::utils::compare_graphs_structural;
+use my_nn_engine::tensor::data::ScalarData;
+use my_nn_engine::tensor::types::DataType;
+use my_nn_engine::tensor::types::FloatType;
+use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::TensorType;
+use my_nn_engine::tensor::Tensor;
+use my_nn_engine::transform::modify::NodeDelete;
+use my_nn_engine::transform::modify::SimpleGraphOp;
+use my_nn_engine::transform::optimize::rms_norm_fusion::RMSNormFusion;
+use my_nn_engine::transform::Pass;
 
 fn scalar_f32(value: f64) -> Tensor {
     let data = ScalarData::Float(FloatType::F32, value).to_tensor_data(1);

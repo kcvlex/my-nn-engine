@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-use my_onnx::onnx::load::*;
-use my_onnx::options::*;
-use my_onnx::session::Session;
-use my_onnx::session::SessionConfig;
-use my_onnx::session::SessionError;
-use my_onnx::tensor::data::CompPolicy;
-use my_onnx::tensor::Tensor;
+use my_nn_engine::onnx::load::*;
+use my_nn_engine::options::*;
+use my_nn_engine::session::Session;
+use my_nn_engine::session::SessionConfig;
+use my_nn_engine::session::SessionError;
+use my_nn_engine::tensor::data::CompPolicy;
+use my_nn_engine::tensor::Tensor;
 
 type Result = std::result::Result<(), SessionError>;
 

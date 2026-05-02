@@ -240,7 +240,7 @@ impl SessionCUDA {
 
 unsafe impl Send for SessionCUDA {}
 // TODO: Sync is unsound — concurrent run() calls would race on state.
-// Either protect with Mutex on the caller side, or remove Sync and use Mutex<Session> in my-onnx-ui.
+// Either protect with Mutex on the caller side, or remove Sync and use Mutex<Session> in my-nn-engine-ui.
 unsafe impl Sync for SessionCUDA {}
 
 impl Drop for SessionCUDA {
