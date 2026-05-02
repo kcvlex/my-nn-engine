@@ -39,9 +39,3 @@ withDefaults(
     </li>
   </ul>
 </template>
-
-<style scoped>
-.prob-label {
-  text-align: right;
-}
-</style>
