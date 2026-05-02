@@ -6,7 +6,8 @@
           <label for="model-id">Model</label>
           <select id="model-id" v-model.number="modelId">
             <option :value="ModelId.MNIST">MNIST</option>
-            <option :value="ModelId.RESNET">ResNet</option>
+            <option :value="ModelId.RESNET">ResNet18</option>
+            <option :value="ModelId.RESNET152">ResNet152</option>
             <option :value="ModelId.YOLO">YOLO</option>
             <option :value="ModelId.BERT">BERT</option>
             <option :value="ModelId.GPT2">GPT-2</option>
@@ -29,11 +30,13 @@
         :backend="backend"
       />
 
-      <!-- ResNet: image classification -->
+      <!-- ResNet: image classification (ResNet18 / ResNet152) -->
       <ResNet
-        v-else-if="modelId === ModelId.RESNET"
+        v-else-if="modelId === ModelId.RESNET || modelId === ModelId.RESNET152"
         ref="resnetRef"
+        :key="modelId"
         :backend="backend"
+        :model-id="modelId"
       />
 
       <!-- YOLO: object detection -->
@@ -107,6 +110,7 @@ const handleSubmit = async () => {
       await mnistRef.value?.runInference(backend.value);
       return;
     case ModelId.RESNET:
+    case ModelId.RESNET152:
       await resnetRef.value?.runInference(backend.value);
       return;
     case ModelId.YOLO:

@@ -41,6 +41,7 @@ impl OnnxInferenceServiceImpl {
         match ProtoModelId::try_from(proto_id) {
             Ok(ProtoModelId::Mnist) => Ok(ModelId::Mnist),
             Ok(ProtoModelId::Resnet) => Ok(ModelId::ResNet),
+            Ok(ProtoModelId::Resnet152) => Ok(ModelId::ResNet152),
             Ok(ProtoModelId::Yolo) => Ok(ModelId::Yolo),
             Ok(ProtoModelId::Bert) => Ok(ModelId::Bert),
             Ok(ProtoModelId::Gpt2) => Ok(ModelId::Gpt2),

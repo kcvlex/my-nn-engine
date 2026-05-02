@@ -14,6 +14,7 @@ use my_nn_engine::tensor::Tensor;
 pub enum ModelId {
     Mnist,
     ResNet,
+    ResNet152,
     Yolo,
     Bert,
     Gpt2,
@@ -24,6 +25,7 @@ impl ModelId {
         match self {
             ModelId::Mnist => "mnist-12/mnist-12.onnx",
             ModelId::ResNet => "resnet18-v2-7/resnet18-v2-7.onnx",
+            ModelId::ResNet152 => "resnet152-v2-7/resnet152-v2-7.onnx",
             ModelId::Yolo => "yolov4/yolov4.onnx",
             ModelId::Bert => "bertsquad-12/bertsquad-12.onnx",
             ModelId::Gpt2 => "GPT2/model.onnx",
@@ -33,7 +35,8 @@ impl ModelId {
     pub fn display_name(&self) -> &'static str {
         match self {
             ModelId::Mnist => "MNIST",
-            ModelId::ResNet => "ResNet",
+            ModelId::ResNet => "ResNet18",
+            ModelId::ResNet152 => "ResNet152",
             ModelId::Yolo => "YOLO",
             ModelId::Bert => "BERT",
             ModelId::Gpt2 => "GPT-2",

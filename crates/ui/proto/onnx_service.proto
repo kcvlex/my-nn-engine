@@ -13,6 +13,7 @@ enum ModelId {
   YOLO = 2;
   BERT = 3;
   GPT2 = 4;
+  RESNET152 = 5;
 }
 
 // Target backend for execution

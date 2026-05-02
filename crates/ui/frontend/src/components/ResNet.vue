@@ -15,6 +15,7 @@ import { serializeOutputs } from '../utils/tensor';
 
 const props = defineProps<{
   backend: Backend;
+  modelId: ModelId;
 }>();
 
 // ImageNet normalization constants: per-channel mean/std computed over the ILSVRC2012 training set
@@ -51,7 +52,7 @@ async function runInference(backend?: Backend) {
     const [labels, response] = await Promise.all([
       getImageNetLabels(),
       client.runInference({
-        modelId: ModelId.RESNET,
+        modelId: props.modelId,
         inputs: [
           {
             name: 'data',
