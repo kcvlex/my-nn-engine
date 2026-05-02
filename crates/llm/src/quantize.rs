@@ -185,6 +185,54 @@ fn copy_view(view: &TensorView<'_>) -> Result<OwnedTensor, QuantizeError> {
     })
 }
 
+fn cast_to_bf16(view: &TensorView<'_>) -> Result<OwnedTensor, QuantizeError> {
+    let f32_data = read_as_f32(view)?;
+    let bytes: Vec<u8> = f32_data
+        .iter()
+        .flat_map(|&x| f32_to_bf16_bits_rne(x).to_le_bytes())
+        .collect();
+    Ok(OwnedTensor {
+        dtype: Dtype::BF16,
+        shape: view.shape().to_vec(),
+        data: bytes,
+    })
+}
+
+pub fn cast_safetensors_bf16_dir(
+    src_dir: impl AsRef<Path>,
+    dst: impl AsRef<Path>,
+) -> Result<(), QuantizeError> {
+    let dir = src_dir.as_ref();
+    let index = dir.join("model.safetensors.index.json");
+    let files: Vec<std::path::PathBuf> = if index.exists() {
+        let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index)?)?;
+        let map = json
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .ok_or(QuantizeError::MalformedIndex)?;
+        let shards: std::collections::BTreeSet<&str> =
+            map.values().filter_map(|v| v.as_str()).collect();
+        shards.into_iter().map(|s| dir.join(s)).collect()
+    } else {
+        vec![dir.join("model.safetensors")]
+    };
+
+    let mut output: Vec<(String, OwnedTensor)> = Vec::new();
+    for src in &files {
+        let bytes = std::fs::read(src)?;
+        let st = SafeTensors::deserialize(&bytes)?;
+        for (name, view) in st.tensors() {
+            let converted = match view.dtype() {
+                Dtype::F32 | Dtype::BF16 => cast_to_bf16(&view)?,
+                _ => copy_view(&view)?,
+            };
+            output.push((name, converted));
+        }
+    }
+    safetensors::serialize_to_file(output, None, dst.as_ref())?;
+    Ok(())
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct QuantizeStats {
     pub quantized: usize,
