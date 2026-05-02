@@ -110,8 +110,14 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
-      - name: Lint
+      - name: Lint (eslint)
         run: pnpm lint
+
+      - name: Lint (knip dead-code)
+        run: pnpm lint:knip
+
+      - name: Unit tests
+        run: pnpm test
 
   frontend-build:
     name: Frontend Build

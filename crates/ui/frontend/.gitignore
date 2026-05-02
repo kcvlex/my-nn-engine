@@ -20,9 +20,6 @@ public/bert-vocab.txt
 # Generated protobuf code
 src/gen/
 
-# pnpm
-pnpm-lock.yaml
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
