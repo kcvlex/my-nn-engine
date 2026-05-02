@@ -5,8 +5,6 @@ pub mod mem_alloc;
 pub mod omp;
 pub mod stream;
 
-pub use ir::*;
-
 use std::any::Any;
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -15,6 +13,7 @@ use std::ops::IndexMut;
 
 use id_arena::Arena;
 use id_arena::Id;
+pub use ir::*;
 use log::info;
 use serde::Serialize;
 

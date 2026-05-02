@@ -34,8 +34,6 @@ use crate::graph::operator;
 use crate::graph::operator::*;
 use crate::graph::ValueId;
 use crate::options::Options;
-use crate::schedule::stream::KernelStreamAssignment;
-use crate::schedule::stream::StreamAllocResult;
 use crate::schedule::EventId;
 use crate::schedule::StreamId;
 use crate::schedule::*;
@@ -133,59 +131,6 @@ impl From<&ResolvedTensorType> for MemSize {
     }
 }
 
-#[derive(Default, Clone)]
-struct ChunkMemSize {
-    sizes: Vec<SingleMemSize>,
-}
-
-impl ChunkMemSize {
-    fn append(&mut self, size: SingleMemSize) {
-        for ele in self.sizes.iter_mut() {
-            if ele.ty == size.ty {
-                ele.elem_num = ele.elem_num.max(size.elem_num);
-                return;
-            }
-        }
-        self.sizes.push(size);
-    }
-
-    fn max_byte_size(&self) -> usize {
-        self.sizes
-            .iter()
-            .map(|s| {
-                let elem_size = match s.ty {
-                    DataType::Bool |
-                    DataType::SInt(SIntType::I8) |
-                    DataType::UInt(UIntType::U8) => 1,
-                    DataType::Float(FloatType::BF16) => 2,
-                    DataType::Float(FloatType::F32) | DataType::SInt(SIntType::I32) => 4,
-                    DataType::Float(FloatType::F64) |
-                    DataType::SInt(SIntType::I64) |
-                    DataType::UInt(UIntType::U64) => 8,
-                };
-                s.elem_num * elem_size
-            })
-            .max()
-            .unwrap_or(0)
-    }
-}
-
-impl std::fmt::Display for ChunkMemSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let res = self
-            .sizes
-            .iter()
-            .filter(|s| 0 < s.elem_num)
-            .map(|s| s.to_string())
-            .join(", ");
-        if res.is_empty() {
-            write!(f, "0")
-        } else {
-            write!(f, "std::max({{ {} }})", res)
-        }
-    }
-}
-
 #[derive(Clone, PartialEq)]
 enum Expr {
     Identifier(String),
@@ -239,6 +184,12 @@ enum Include {
     Local(&'static str),
 }
 
+struct KernelStreamView {
+    stream_id: StreamId,
+    event_id: EventId,
+    to_wait: Vec<EventId>,
+}
+
 pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
 
@@ -247,7 +198,7 @@ pub struct HostCodeGenerator<'sched> {
     destroy_stmts: Vec<Statement>,
     state_fields: Vec<String>,
 
-    streams: &'sched HashMap<KernelId, KernelStreamAssignment>,
+    streams: HashMap<KernelId, KernelStreamView>,
     to_record_events: BTreeSet<EventId>,
 
     value2chunk: HashMap<ValueId, ChunkId>,
@@ -479,12 +430,33 @@ struct InitializerPlan {
 
 impl<'sched> HostCodeGenerator<'sched> {
     pub fn new(schedule: &'sched Schedule) -> Self {
-        let streams = &schedule.analysis.get::<StreamAllocResult>().0;
-        let to_record_events = streams
-            .values()
-            .flat_map(|s| s.to_wait.iter())
-            .copied()
-            .collect();
+        let plan = schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let mut streams: HashMap<KernelId, KernelStreamView> = HashMap::new();
+        let mut to_record_events: BTreeSet<EventId> = BTreeSet::new();
+        let mut pending_waits: Vec<EventId> = Vec::new();
+        for step in &plan.steps {
+            match step {
+                Step::SyncWait { event, .. } => {
+                    to_record_events.insert(*event);
+                    pending_waits.push(*event);
+                }
+                Step::Kernel(k) => {
+                    streams.insert(
+                        k.kernel,
+                        KernelStreamView {
+                            stream_id: k.stream,
+                            event_id: k
+                                .records_event
+                                .expect("CUDA kernel step must have records_event"),
+                            to_wait: std::mem::take(&mut pending_waits),
+                        },
+                    );
+                }
+            }
+        }
         HostCodeGenerator {
             schedule,
             stmts: Vec::new(),
@@ -561,54 +533,44 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.session_state_devices.insert(*value, device_name);
         }
 
-        let mut mem_sizes = vec![
-            ChunkMemSize::default();
-            self.schedule.max_chunk_id().map(|id| id + 1).unwrap_or(0)
-        ];
-        let mem_alloc_result = self.schedule.analysis.get::<mem_alloc::MemAllocResult>();
-        for (kernel_id, _kernel) in self.schedule.kernels.iter() {
-            let mem_alloc = mem_alloc_result
-                .0
-                .get(&kernel_id)
-                .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?;
-            for mem in mem_alloc.iter() {
-                let chunk_id = match mem.ty {
-                    AllocateType::Chunk(chunk_id) => chunk_id,
-                    AllocateType::SessionState(state_value) => {
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        for step in &plan.steps {
+            let Step::Kernel(k) = step else {
+                continue;
+            };
+            for binding in &k.bindings {
+                match binding.place {
+                    AllocPlace::Chunk(chunk_id) => match self.value2chunk.entry(binding.value) {
+                        Entry::Occupied(entry) => {
+                            assert!(*entry.get() == chunk_id);
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(chunk_id);
+                        }
+                    },
+                    AllocPlace::SessionState(state_value) => {
                         let device_name = self
                             .session_state_devices
                             .get(&state_value)
-                            .ok_or(BuildError::UnresolvedAllocateInfo(kernel_id))?
+                            .ok_or(BuildError::UnresolvedAllocateInfo(k.kernel))?
                             .clone();
-                        self.session_state_devices.insert(mem.value_id, device_name);
-                        continue;
+                        self.session_state_devices
+                            .insert(binding.value, device_name);
                     }
-                    _ => unreachable!("non chunk"),
-                };
-
-                match self.value2chunk.entry(mem.value_id) {
-                    Entry::Occupied(entry) => {
-                        assert!(*entry.get() == chunk_id);
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(chunk_id);
-                    }
+                    _ => {}
                 }
-
-                let size = self.get_resolved_tensor_type(mem.value_id)?.into();
-                mem_sizes[chunk_id].append(size);
             }
         }
 
-        const ALIGNMENT: usize = 256;
-        let align_up = |size: usize| (size + ALIGNMENT - 1) & !(ALIGNMENT - 1);
-
-        let mut offsets = Vec::with_capacity(mem_sizes.len());
-        let mut arena_size: usize = 0;
-        for (chunk_id, mem_size) in mem_sizes.iter().enumerate() {
-            offsets.push(arena_size);
-            arena_size += align_up(mem_size.max_byte_size());
-            let name = format!("d_chunk_{chunk_id}");
+        let arena_size = plan.arenas.first().map(|a| a.size).unwrap_or(0);
+        let mut offsets = Vec::with_capacity(plan.chunks.len());
+        for chunk in &plan.chunks {
+            offsets.push(chunk.offset);
+            let name = format!("d_chunk_{}", chunk.id);
             self.devicemem2identifier.push(name);
         }
 
@@ -858,7 +820,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
         let kernel = &self.schedule.kernels[kernel_id];
-        let KernelStreamAssignment {
+        let KernelStreamView {
             stream_id,
             event_id,
             to_wait,
