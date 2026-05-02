@@ -216,7 +216,6 @@ fn attention_no_causal() {
     });
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn kv_cache_update() {
     let dir = fixture("kv_cache_update");
@@ -233,7 +232,7 @@ fn kv_cache_update() {
     let out = builder.sigmoid("sig", updated);
     builder.output(out);
 
-    let got = run_builder_with_target(builder.graph, &inputs, Target::CUDA);
+    let got = run_builder(builder.graph, &inputs);
     assert!(got.eq_with_epsilon(&expected, 1e-5, CompPolicy::Either));
 }
 

@@ -183,6 +183,16 @@ fn test_transpose_concat_cuda() -> Result {
 }
 
 #[test]
+fn test_transpose_matmul_and_someone_cpu() -> Result {
+    run_test(
+        "transpose_matmul_and_someone",
+        1e-2,
+        &Options::builder().target(Target::CPU).build(),
+        (2, 2),
+    )
+}
+
+#[test]
 #[cfg(feature = "cuda")]
 fn test_transpose_matmul_and_someone_cuda() -> Result {
     run_test(
