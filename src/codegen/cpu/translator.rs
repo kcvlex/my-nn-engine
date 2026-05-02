@@ -203,6 +203,84 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_truncate(high, i16_ty, "bf16.trunc")?)
     }
 
+    pub fn build_dequantize_linear(
+        &self,
+        dst: &TensorPtr<'ctx>,
+        x: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        axis: usize,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let total = dst.ty.dims.size() as u64;
+        let axis_dim = dst.ty.dims[axis] as u64;
+        let inner_size: u64 = dst.ty.dims[axis + 1..]
+            .iter()
+            .map(|d| *d as u64)
+            .product::<u64>()
+            .max(1);
+        let i64_ty = self.context.i64_type();
+        let preheader = self.builder.get_insert_block().unwrap_or(entry);
+        self.builder.position_at_end(entry);
+        let header = self.context.append_basic_block(*self.func, "dequant.h");
+        let after = self.context.append_basic_block(*self.func, "dequant.x");
+        self.builder.build_unconditional_branch(header)?;
+        let (phi, idx) = self.init_counted_loop(header)?;
+
+        let x_loaded = self.build_load(&x.clone().set_offset(idx))?;
+        let f_val = match x.ty.elem_type {
+            DataType::SInt(_) | DataType::Bool => self
+                .builder
+                .build_signed_int_to_float(
+                    x_loaded.into_int_value(),
+                    self.context.f32_type(),
+                    "dequant.x.f",
+                )?
+                .as_basic_value_enum(),
+            DataType::UInt(_) => self
+                .builder
+                .build_unsigned_int_to_float(
+                    x_loaded.into_int_value(),
+                    self.context.f32_type(),
+                    "dequant.x.f",
+                )?
+                .as_basic_value_enum(),
+            DataType::Float(_) => x_loaded,
+        };
+
+        let axis_idx = if axis_dim == 1 {
+            i64_ty.const_zero()
+        } else {
+            let div = self.builder.build_int_unsigned_div(
+                idx,
+                i64_ty.const_int(inner_size, false),
+                "dequant.div",
+            )?;
+            self.builder.build_int_unsigned_rem(
+                div,
+                i64_ty.const_int(axis_dim, false),
+                "dequant.axis",
+            )?
+        };
+        let scale_v = self.build_load(&scale.clone().set_offset(axis_idx))?;
+        let prod = self.builder.build_float_mul(
+            f_val.into_float_value(),
+            scale_v.into_float_value(),
+            "dequant.prod",
+        )?;
+        self.build_store(&dst.clone().set_offset(idx), prod)?;
+
+        self.finalize_counted_loop(
+            phi,
+            preheader,
+            i64_ty.const_int(total, false),
+            header,
+            after,
+            header,
+        )?;
+        self.builder.position_at_end(after);
+        Ok(after)
+    }
+
     // Returns ptr = workspace.ptr + workspace.offset + offset_elems (in f32 elements).
     fn workspace_offset(
         &self,

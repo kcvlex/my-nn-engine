@@ -1118,6 +1118,12 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::KVCacheUpdate => {
                     translator.build_kv_cache_update(&ptrs[1], &ptrs[2], &ptrs[3], entry)
                 }
+                Operator::DequantizeLinear(ref dq) => {
+                    let x = &ptrs[args::DEQUANTIZE_X + 1];
+                    let scale = &ptrs[args::DEQUANTIZE_SCALE + 1];
+                    let axis = dq.axis.index(x.ty.dims.ndim());
+                    translator.build_dequantize_linear(&ptrs[0], x, scale, axis, entry)
+                }
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {

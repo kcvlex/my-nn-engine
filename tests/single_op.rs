@@ -1090,10 +1090,9 @@ fn slice() -> TestResult {
     })
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn dequantize_linear() -> TestResult {
-    with_cuda_session_and_tensors(
+    with_all_sessions_and_tensors(
         "dequantize_linear",
         (2, 1),
         |session, (inputs, expected)| {
