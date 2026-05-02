@@ -56,7 +56,7 @@ const props = defineProps<{
 const {
   canvas: processedCanvas,
   processImage,
-  getTensorData,
+  tensorData,
 } = useImageCanvas(INPUT_SIZE, INPUT_SIZE, (pixels) => {
   const data: number[] = [];
   for (let i = 0; i < pixels.length; i += 4) {
@@ -215,7 +215,7 @@ function getCocoLabels(): Promise<string[]> {
 }
 
 async function runInference(backend?: Backend) {
-  if (getTensorData().length === 0) return;
+  if (tensorData.value.length === 0) return;
 
   await run(async (client) => {
     const [labels, response] = await Promise.all([
@@ -227,7 +227,7 @@ async function runInference(backend?: Backend) {
             name: 'input_1:0',
             dims: [1n, BigInt(INPUT_SIZE), BigInt(INPUT_SIZE), 3n],
             dataType: TensorProto_DataType.FLOAT,
-            floatData: getTensorData(),
+            floatData: tensorData.value,
           },
         ],
         backend: backend ?? props.backend,

@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { ref, shallowRef } from 'vue';
 
 export function useImageCanvas(
   width: number,
@@ -7,7 +7,7 @@ export function useImageCanvas(
   options?: { fillStyle?: string },
 ) {
   const canvas = ref<HTMLCanvasElement>();
-  let tensorData: number[] = [];
+  const tensorData = shallowRef<number[]>([]);
 
   function processImage(img: HTMLImageElement) {
     const c = canvas.value;
@@ -18,12 +18,10 @@ export function useImageCanvas(
       ctx.fillRect(0, 0, width, height);
     }
     ctx.drawImage(img, 0, 0, width, height);
-    tensorData = pixelTransform(ctx.getImageData(0, 0, width, height).data);
+    tensorData.value = pixelTransform(
+      ctx.getImageData(0, 0, width, height).data,
+    );
   }
 
-  function getTensorData() {
-    return tensorData;
-  }
-
-  return { canvas, processImage, getTensorData };
+  return { canvas, processImage, tensorData };
 }

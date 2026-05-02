@@ -45,7 +45,7 @@ function normalizeChannel(value: number, channelIdx: number): number {
 const {
   canvas: processedCanvas,
   processImage: onImageLoaded,
-  getTensorData,
+  tensorData,
 } = useImageCanvas(INPUT_SIZE, INPUT_SIZE, (pixels) => {
   if (props.layout === 'nchw') {
     const r: number[] = [];
@@ -75,7 +75,7 @@ const { loading, result, run } = useInference<
 >();
 
 async function runInference(backend?: Backend) {
-  if (getTensorData().length === 0) return;
+  if (tensorData.value.length === 0) return;
 
   await run(async (client) => {
     const dims =
@@ -92,7 +92,7 @@ async function runInference(backend?: Backend) {
             name: props.inputName,
             dims,
             dataType: TensorProto_DataType.FLOAT,
-            floatData: getTensorData(),
+            floatData: tensorData.value,
           },
         ],
         backend: backend ?? props.backend,

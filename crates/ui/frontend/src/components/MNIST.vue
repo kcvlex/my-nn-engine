@@ -20,7 +20,7 @@ const props = defineProps<{
 const {
   canvas: processedCanvas,
   processImage: onImageLoaded,
-  getTensorData,
+  tensorData,
 } = useImageCanvas(
   28,
   28,
@@ -47,7 +47,7 @@ const { loading, result, run } = useInference<
 >();
 
 async function runInference(backend?: Backend) {
-  if (getTensorData().length === 0) return;
+  if (tensorData.value.length === 0) return;
 
   await run(async (client) => {
     const response = await client.runInference({
@@ -57,7 +57,7 @@ async function runInference(backend?: Backend) {
           name: 'Input3',
           dims: [1n, 1n, 28n, 28n],
           dataType: TensorProto_DataType.FLOAT,
-          floatData: getTensorData(),
+          floatData: tensorData.value,
         },
       ],
       backend: backend ?? props.backend,
