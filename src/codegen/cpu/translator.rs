@@ -3165,6 +3165,57 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(entry)
     }
 
+    pub fn build_kv_cache_update(
+        &self,
+        cache: &TensorPtr<'ctx>,
+        new_kv: &TensorPtr<'ctx>,
+        offset_ptr: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert_eq!(cache.ty.dims.ndim(), 4);
+        assert_eq!(new_kv.ty.dims.ndim(), 4);
+        let head_dim = cache.ty.dims[3];
+
+        self.builder.position_at_end(entry);
+        let i64_ty = self.context.i64_type();
+        let offset_gep = unsafe {
+            self.builder.build_in_bounds_gep(
+                offset_ptr.ty.elem_type.llvm_type(self.context),
+                offset_ptr.ptr,
+                &[offset_ptr.offset],
+                "kvcu.offset.gep",
+            )?
+        };
+        let offset_val = self
+            .builder
+            .build_load(i64_ty, offset_gep, "kvcu.offset")?
+            .into_int_value();
+        let offset_in_elems = self.builder.build_int_mul(
+            offset_val,
+            i64_ty.const_int(head_dim as u64, false),
+            "kvcu.offset_elems",
+        )?;
+        let dst_offset =
+            self.builder
+                .build_int_add(cache.offset, offset_in_elems, "kvcu.dst_offset")?;
+
+        let sliced_cache = TensorPtr {
+            ptr: cache.ptr,
+            ty: ResolvedTensorType::with_stride(
+                cache.ty.elem_type,
+                new_kv.ty.dims.clone(),
+                cache.ty.strides().clone(),
+            ),
+            offset: dst_offset,
+            name: format!("{}.kv_slice", cache.name),
+        };
+        let op = Operation {
+            opcode: SingleOpcode::Transfer.into(),
+            operands: smallvec![sliced_cache, new_kv.clone()],
+        };
+        self.build_flat_loop(op, entry, false)
+    }
+
     fn scalar_to_llvm_value(
         &self,
         value: &ScalarData,
