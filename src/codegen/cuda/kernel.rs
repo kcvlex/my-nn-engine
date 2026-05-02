@@ -18,6 +18,7 @@ pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
     AttentionDecodeKernel(AttentionDecodeKernel),
     ConcatKernel(ConcatKernel),
+    DequantizeLinearKernel(DequantizeLinearKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -270,6 +271,7 @@ impl LaunchKernel {
             CUDAKernel::AttentionKernel(a) => a,
             CUDAKernel::AttentionDecodeKernel(a) => a,
             CUDAKernel::ConcatKernel(c) => c,
+            CUDAKernel::DequantizeLinearKernel(d) => d,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1253,6 +1255,33 @@ impl<'sched> OneHotBuilder<'sched> {
 }}
 "
         ))
+    }
+}
+
+pub struct DequantizeLinearKernel {
+    pub in_ty: DataType,
+    pub out_ty: DataType,
+    pub axis_dim: usize,
+    pub inner_size: usize,
+    pub total: usize,
+
+    pub out: Expr,
+    pub x: Expr,
+    pub scale: Expr,
+}
+
+impl DequantizeLinearKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!("dequantize_linear<{}, {}>", self.in_ty, self.out_ty);
+        let args = vec![
+            cast!(self.out_ty, self.out),
+            cast!(self.in_ty, self.x),
+            cast!(self.out_ty, self.scale),
+            self.axis_dim.to_string(),
+            self.inner_size.to_string(),
+            self.total.to_string(),
+        ];
+        (id, args)
     }
 }
 

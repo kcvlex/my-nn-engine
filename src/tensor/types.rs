@@ -241,6 +241,7 @@ impl Default for DataType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum SIntType {
+    I8,
     I32,
     I64,
 }
@@ -248,6 +249,7 @@ pub enum SIntType {
 impl SIntType {
     pub fn bit_width(&self) -> usize {
         match self {
+            SIntType::I8 => 8,
             SIntType::I32 => 32,
             SIntType::I64 => 64,
         }

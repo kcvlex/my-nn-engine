@@ -158,6 +158,7 @@ impl TensorData {
                     .map(|&b| if b != 0 { 1u8 } else { 0u8 })
                     .collect(),
             ),
+            DataType::SInt(ty @ SIntType::I8) => TensorData::SInt(ty, convert!(raw, i8, i64)),
             DataType::SInt(ty @ SIntType::I32) => TensorData::SInt(ty, convert!(raw, i32, i64)),
             DataType::SInt(ty @ SIntType::I64) => TensorData::SInt(ty, convert!(raw, i64, i64)),
             DataType::UInt(ty @ UIntType::U8) => {
@@ -217,6 +218,12 @@ impl From<Vec<u8>> for TensorData {
                 .map(|x| if x != 0 { 1u8 } else { 0u8 })
                 .collect(),
         )
+    }
+}
+
+impl From<Vec<i8>> for TensorData {
+    fn from(v: Vec<i8>) -> Self {
+        TensorData::SInt(SIntType::I8, v.into_iter().map(|x| x as i64).collect())
     }
 }
 

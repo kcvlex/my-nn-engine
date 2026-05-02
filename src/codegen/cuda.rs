@@ -66,6 +66,7 @@ impl std::fmt::Display for DataType {
             "{}",
             match self {
                 DataType::Bool => "int8_t",
+                DataType::SInt(SIntType::I8) => "int8_t",
                 DataType::SInt(SIntType::I32) => "i32",
                 DataType::SInt(SIntType::I64) => "i64",
                 DataType::UInt(UIntType::U8) => "uint8_t",
@@ -153,7 +154,9 @@ impl ChunkMemSize {
             .iter()
             .map(|s| {
                 let elem_size = match s.ty {
-                    DataType::Bool | DataType::UInt(UIntType::U8) => 1,
+                    DataType::Bool |
+                    DataType::SInt(SIntType::I8) |
+                    DataType::UInt(UIntType::U8) => 1,
                     DataType::Float(FloatType::BF16) => 2,
                     DataType::Float(FloatType::F32) | DataType::SInt(SIntType::I32) => 4,
                     DataType::Float(FloatType::F64) |
@@ -1264,6 +1267,38 @@ impl<'sched> HostCodeGenerator<'sched> {
                         ss = setting.state_setting(),
                         ctx = cudnn_handler.ctx(),
                     )));
+                }
+
+                Operator::DequantizeLinear(DequantizeLinear { axis }) => {
+                    self.includes.insert(Include::Local("dequantize.cuh"));
+                    let x_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[args::DEQUANTIZE_X].unwrap())?
+                        .clone();
+                    let scale_ty = self
+                        .get_resolved_tensor_type(kernel.inputs[args::DEQUANTIZE_SCALE].unwrap())?
+                        .clone();
+                    let axis_idx = axis.index(x_ty.dims.ndim());
+                    let axis_dim = x_ty.dims[axis_idx];
+                    let inner_size: usize = x_ty.dims[axis_idx + 1..].iter().product();
+                    let total = x_ty.dims.size();
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let x = self.device_identifier(kernel.inputs[args::DEQUANTIZE_X].unwrap())?;
+                    let scale =
+                        self.device_identifier(kernel.inputs[args::DEQUANTIZE_SCALE].unwrap())?;
+                    let cuda_kernel = kernel::CUDAKernel::DequantizeLinearKernel(
+                        kernel::DequantizeLinearKernel {
+                            in_ty: x_ty.elem_type,
+                            out_ty: scale_ty.elem_type,
+                            axis_dim,
+                            inner_size,
+                            total,
+                            out,
+                            x,
+                            scale,
+                        },
+                    );
+                    self.stmts
+                        .push(create_launch_kernel(cuda_kernel, total)?.into());
                 }
 
                 Operator::Gather(gather) => {

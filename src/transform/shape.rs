@@ -254,6 +254,17 @@ pub fn infer_node_output(
             let input = &inputs[0];
             res.push(ResolvedTensorType::new(*to, input.dims.clone()));
         }
+        Operator::DequantizeLinear(DequantizeLinear { axis }) => {
+            let x = &inputs[args::DEQUANTIZE_X];
+            let scale = &inputs[args::DEQUANTIZE_SCALE];
+            assert_eq!(scale.dims.ndim(), 1, "scale must be 1D (per-channel)");
+            let axis_idx = axis.index(x.dims.ndim());
+            assert_eq!(
+                scale.dims[0], x.dims[axis_idx],
+                "scale length must equal x.dims[axis]"
+            );
+            res.push(ResolvedTensorType::new(scale.elem_type, x.dims.clone()));
+        }
         Operator::Transpose(ref t) => {
             let data = &inputs[args::TRANSPOSE_DATA];
             let ty = transpose(data, t, mode)?;

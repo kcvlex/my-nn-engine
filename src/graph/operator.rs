@@ -54,6 +54,7 @@ pub enum Operator {
     ConstantOfShape(ConstantOfShape),
     Conv(Conv),
     Cos,
+    DequantizeLinear(DequantizeLinear),
     Div,
     Equal,
     Expand,
@@ -182,6 +183,11 @@ pub struct Cast {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Concat {
+    pub axis: TensorIndex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DequantizeLinear {
     pub axis: TensorIndex,
 }
 
@@ -810,6 +816,7 @@ impl Operator {
             Operator::ConstantOfShape(_) => "ConstantOfShape",
             Operator::Conv(_) => "Conv",
             Operator::Cos => "Cos",
+            Operator::DequantizeLinear(_) => "DequantizeLinear",
             Operator::Div => "Div",
             Operator::Equal => "Equal",
             Operator::Expand => "Expand",
@@ -915,6 +922,7 @@ impl Operator {
             Operator::Constant(_) |
             Operator::ConstantOfShape(_) |
             Operator::Conv(_) |
+            Operator::DequantizeLinear(_) |
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
@@ -1031,6 +1039,9 @@ pub mod args {
     pub const GEMM_A: usize = 0;
     pub const GEMM_B: usize = 1;
     pub const GEMM_C: usize = 2;
+
+    pub const DEQUANTIZE_X: usize = 0;
+    pub const DEQUANTIZE_SCALE: usize = 1;
 
     pub const KVCACHE_UPDATE_CACHE: usize = 0;
     pub const KVCACHE_UPDATE_NEW: usize = 1;

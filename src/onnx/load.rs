@@ -451,6 +451,9 @@ fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tenso
                     .map(|v| if v != 0 { 1u8 } else { 0u8 })
                     .collect(),
             ),
+            DataType::SInt(ty @ SIntType::I8) => {
+                TensorData::SInt(ty, tensor.int32_data.into_iter().map(i64::from).collect())
+            }
             DataType::SInt(ty @ SIntType::I32) => {
                 TensorData::SInt(ty, tensor.int32_data.into_iter().map(i64::from).collect())
             }
@@ -487,6 +490,7 @@ fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tenso
 pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
     let data_type = match tensor.data.elem_type() {
         DataType::Bool => tensor_proto::DataType::Bool as i32,
+        DataType::SInt(SIntType::I8) => tensor_proto::DataType::Int8 as i32,
         DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
         DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
@@ -515,6 +519,13 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
         ),
         TensorData::Float(FloatType::F64, v) => (vec![], v.clone(), vec![], vec![], vec![]),
         TensorData::Float(FloatType::BF16, _) => unimplemented!("BF16 inline tensor save"),
+        TensorData::SInt(SIntType::I8, v) => (
+            vec![],
+            vec![],
+            v.iter().map(|&x| x as i32).collect(),
+            vec![],
+            vec![],
+        ),
         TensorData::SInt(SIntType::I32, v) => (
             vec![],
             vec![],
@@ -592,6 +603,7 @@ impl TryFrom<i32> for DataType {
             tensor_proto::DataType::Bfloat16 => Ok(FloatType::BF16.into()),
             tensor_proto::DataType::Float => Ok(FloatType::F32.into()),
             tensor_proto::DataType::Double => Ok(FloatType::F64.into()),
+            tensor_proto::DataType::Int8 => Ok(SIntType::I8.into()),
             tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),
             tensor_proto::DataType::Int64 => Ok(SIntType::I64.into()),
             tensor_proto::DataType::Uint64 => Ok(UIntType::U64.into()),
@@ -708,6 +720,17 @@ impl Concat {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let axis = attributes.required("axis")?.index()?;
         Ok(Concat { axis })
+    }
+}
+
+impl DequantizeLinear {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|a| a.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(1));
+        Ok(DequantizeLinear { axis })
     }
 }
 
@@ -1150,6 +1173,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "AveragePool" => Ok(Operator::AveragePool(Pooling::load(attributes)?)),
         "Conv" => Ok(Operator::Conv(Conv::load(attributes)?)),
         "Cos" => Ok(Operator::Cos),
+        "DequantizeLinear" => Ok(Operator::DequantizeLinear(DequantizeLinear::load(
+            attributes,
+        )?)),
         "Div" => Ok(Operator::Div),
         "Equal" => Ok(Operator::Equal),
         "Expand" => Ok(Operator::Expand),

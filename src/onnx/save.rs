@@ -77,6 +77,7 @@ fn attr_tensor(name: &str, proto: TensorProto) -> AttributeProto {
 fn data_type_to_i32(dt: DataType) -> i32 {
     match dt {
         DataType::Bool => tensor_proto::DataType::Bool as i32,
+        DataType::SInt(SIntType::I8) => tensor_proto::DataType::Int8 as i32,
         DataType::SInt(SIntType::I32) => tensor_proto::DataType::Int32 as i32,
         DataType::SInt(SIntType::I64) => tensor_proto::DataType::Int64 as i32,
         DataType::UInt(UIntType::U8) => tensor_proto::DataType::Uint8 as i32,
@@ -108,6 +109,12 @@ fn scalar_to_tensor_proto(scalar: &ScalarData) -> TensorProto {
             ..Default::default()
         },
         ScalarData::Float(FloatType::BF16, _) => unimplemented!("BF16 scalar save"),
+        ScalarData::SInt(SIntType::I8, v) => TensorProto {
+            dims: vec![1],
+            data_type: tensor_proto::DataType::Int8 as i32,
+            int32_data: vec![*v as i32],
+            ..Default::default()
+        },
         ScalarData::SInt(SIntType::I32, v) => TensorProto {
             dims: vec![1],
             data_type: tensor_proto::DataType::Int32 as i32,
@@ -217,6 +224,8 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Cast(c) => vec![attr_int("to", data_type_to_i32(c.to) as i64)],
 
         Operator::Concat(c) => vec![attr_int("axis", c.axis.raw() as i64)],
+
+        Operator::DequantizeLinear(d) => vec![attr_int("axis", d.axis.raw() as i64)],
 
         Operator::Constant(c) => vec![attr_tensor("value", tensor_to_proto(&c.value))],
 

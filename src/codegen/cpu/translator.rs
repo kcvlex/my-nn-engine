@@ -3173,6 +3173,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             ScalarData::Bool(v) => self.context.i8_type().const_int(*v as u64, false).into(),
             ScalarData::SInt(ty, v) => {
                 let ty = match ty {
+                    SIntType::I8 => self.context.i8_type(),
                     SIntType::I32 => self.context.i32_type(),
                     SIntType::I64 => self.context.i64_type(),
                 };

@@ -156,6 +156,7 @@ impl<'ll> DebugStuff<'ll> {
 impl SIntType {
     pub fn llvm_type<'ctx>(&self, ctx: &'ctx Context) -> inkwell::types::IntType<'ctx> {
         match self {
+            SIntType::I8 => ctx.i8_type(),
             SIntType::I32 => ctx.i32_type(),
             SIntType::I64 => ctx.i64_type(),
         }

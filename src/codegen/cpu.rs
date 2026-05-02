@@ -159,6 +159,7 @@ fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
     let result_ty = sched.get_resolved_tensor_type(value).unwrap();
     let data_size = match result_ty.elem_type {
         DataType::Bool => 1,
+        DataType::SInt(SIntType::I8) => 1,
         DataType::SInt(SIntType::I32) => 4,
         DataType::SInt(SIntType::I64) => 8,
         DataType::UInt(UIntType::U8) => 1,
