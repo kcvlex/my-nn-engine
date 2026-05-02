@@ -14,7 +14,11 @@ fn main() {
     let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/tinyllama");
 
     let config = HfConfig::from_path(model_dir.join("config.json")).unwrap();
-    let hf = HfWeights::from_dir(&model_dir).unwrap();
+    let safetensors_name = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "model.safetensors".to_string());
+    let hf = HfWeights::from_safetensors(model_dir.join(&safetensors_name)).unwrap();
+    println!("loaded weights from {safetensors_name}");
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = 256;

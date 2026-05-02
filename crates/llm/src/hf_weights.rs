@@ -35,16 +35,28 @@ pub struct HfWeights {
 }
 
 fn safetensors_dtype(d: Dtype) -> Result<DataType, HfWeightsError> {
+    use my_nn_engine::tensor::types::SIntType;
     match d {
         Dtype::F32 => Ok(FloatType::F32.into()),
         Dtype::BF16 => Ok(FloatType::BF16.into()),
+        Dtype::I8 => Ok(SIntType::I8.into()),
         d => Err(HfWeightsError::UnsupportedDtype(d)),
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct WeightRef {
+    pub weight: ExternalTensorRef,
+    pub scale: Option<ExternalTensorRef>,
+}
+
 impl HfWeights {
     pub fn from_dir(model_dir: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
-        let path = model_dir.as_ref().join("model.safetensors");
+        Self::from_safetensors(model_dir.as_ref().join("model.safetensors"))
+    }
+
+    pub fn from_safetensors(path: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
+        let path = path.as_ref().to_path_buf();
         let file = std::fs::File::open(&path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         let (header_bytes, metadata) = SafeTensors::read_metadata(&mmap)?;
@@ -84,5 +96,11 @@ impl HfWeights {
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(|s| s.as_str())
+    }
+
+    pub fn weight_ref(&self, name: &str) -> Result<WeightRef, HfWeightsError> {
+        let weight = self.external_ref(name)?;
+        let scale = self.external_ref(&format!("{name}.scale")).ok();
+        Ok(WeightRef { weight, scale })
     }
 }

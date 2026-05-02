@@ -73,6 +73,29 @@ impl Builder {
         value
     }
 
+    pub fn load_weight(
+        &mut self,
+        name: &str,
+        weight: ExternalTensorRef,
+        scale: Option<ExternalTensorRef>,
+    ) -> ValueId {
+        let weight_id = self.external_initializer(name, weight);
+        let Some(scale) = scale else {
+            return weight_id;
+        };
+        let scale_id = self.external_initializer(&format!("{name}.scale"), scale);
+        let out = self.alloc_value(&format!("{name}_dequant"));
+        self.add_node(
+            &format!("{name}_dequant"),
+            Operator::DequantizeLinear(DequantizeLinear {
+                axis: TensorIndex::new(0),
+            }),
+            vec![weight_id, scale_id],
+            out,
+        );
+        out
+    }
+
     fn alloc_value(&mut self, name: &str) -> ValueId {
         self.graph.values.alloc(ValueInfo {
             name: name.to_string(),

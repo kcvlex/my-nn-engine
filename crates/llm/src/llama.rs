@@ -8,6 +8,7 @@ use crate::builder::Builder;
 use crate::hf_config::HfConfig;
 use crate::hf_weights::HfWeights;
 use crate::hf_weights::HfWeightsError;
+use crate::hf_weights::WeightRef;
 use crate::session::KVCache;
 
 pub struct LlamaGraph {
@@ -21,8 +22,8 @@ pub struct LlamaGraph {
 }
 
 pub struct LlamaWeights {
-    pub embed_tokens: ExternalTensorRef,
-    pub lm_head: ExternalTensorRef,
+    pub embed_tokens: WeightRef,
+    pub lm_head: WeightRef,
     pub final_norm: ExternalTensorRef,
     pub layers: Vec<LlamaLayerWeights>,
 }
@@ -30,13 +31,13 @@ pub struct LlamaWeights {
 pub struct LlamaLayerWeights {
     pub input_norm: ExternalTensorRef,
     pub post_norm: ExternalTensorRef,
-    pub q_proj: ExternalTensorRef,
-    pub k_proj: ExternalTensorRef,
-    pub v_proj: ExternalTensorRef,
-    pub o_proj: ExternalTensorRef,
-    pub gate_proj: ExternalTensorRef,
-    pub up_proj: ExternalTensorRef,
-    pub down_proj: ExternalTensorRef,
+    pub q_proj: WeightRef,
+    pub k_proj: WeightRef,
+    pub v_proj: WeightRef,
+    pub o_proj: WeightRef,
+    pub gate_proj: WeightRef,
+    pub up_proj: WeightRef,
+    pub down_proj: WeightRef,
 }
 
 impl LlamaWeights {
@@ -47,19 +48,19 @@ impl LlamaWeights {
                 Ok(LlamaLayerWeights {
                     input_norm: hf.external_ref(&format!("{p}.input_layernorm.weight"))?,
                     post_norm: hf.external_ref(&format!("{p}.post_attention_layernorm.weight"))?,
-                    q_proj: hf.external_ref(&format!("{p}.self_attn.q_proj.weight"))?,
-                    k_proj: hf.external_ref(&format!("{p}.self_attn.k_proj.weight"))?,
-                    v_proj: hf.external_ref(&format!("{p}.self_attn.v_proj.weight"))?,
-                    o_proj: hf.external_ref(&format!("{p}.self_attn.o_proj.weight"))?,
-                    gate_proj: hf.external_ref(&format!("{p}.mlp.gate_proj.weight"))?,
-                    up_proj: hf.external_ref(&format!("{p}.mlp.up_proj.weight"))?,
-                    down_proj: hf.external_ref(&format!("{p}.mlp.down_proj.weight"))?,
+                    q_proj: hf.weight_ref(&format!("{p}.self_attn.q_proj.weight"))?,
+                    k_proj: hf.weight_ref(&format!("{p}.self_attn.k_proj.weight"))?,
+                    v_proj: hf.weight_ref(&format!("{p}.self_attn.v_proj.weight"))?,
+                    o_proj: hf.weight_ref(&format!("{p}.self_attn.o_proj.weight"))?,
+                    gate_proj: hf.weight_ref(&format!("{p}.mlp.gate_proj.weight"))?,
+                    up_proj: hf.weight_ref(&format!("{p}.mlp.up_proj.weight"))?,
+                    down_proj: hf.weight_ref(&format!("{p}.mlp.down_proj.weight"))?,
                 })
             })
             .collect::<Result<Vec<_>, HfWeightsError>>()?;
         Ok(Self {
-            embed_tokens: hf.external_ref("model.embed_tokens.weight")?,
-            lm_head: hf.external_ref("lm_head.weight")?,
+            embed_tokens: hf.weight_ref("model.embed_tokens.weight")?,
+            lm_head: hf.weight_ref("lm_head.weight")?,
             final_norm: hf.external_ref("model.norm.weight")?,
             layers,
         })
@@ -136,9 +137,15 @@ fn build_llama_inner(
         .is_multiple_of(config.num_key_value_heads));
     assert_eq!(weights.layers.len(), config.num_hidden_layers);
 
-    let weight_float_ty = match weights.embed_tokens.elem_type {
-        DataType::Float(t) => t,
-        _ => panic!("expected float weights"),
+    let weight_float_ty = match weights.embed_tokens.scale.as_ref() {
+        Some(scale) => match scale.elem_type {
+            DataType::Float(t) => t,
+            _ => panic!("expected float scale"),
+        },
+        None => match weights.embed_tokens.weight.elem_type {
+            DataType::Float(t) => t,
+            _ => panic!("expected float weights or scale"),
+        },
     };
     let i64_ty = DataType::SInt(SIntType::I64);
     let head_dim = config.head_dim();
@@ -152,7 +159,11 @@ fn build_llama_inner(
     let past_len = b.input("past_len", i64_ty, &[]);
     let active_seq_kv = b.input("active_seq_kv", i64_ty, &[]);
 
-    let embed_w = b.external_initializer("model.embed_tokens.weight", weights.embed_tokens.clone());
+    let embed_w = b.load_weight(
+        "model.embed_tokens.weight",
+        weights.embed_tokens.weight.clone(),
+        weights.embed_tokens.scale.clone(),
+    );
     let mut x = b.gather("embed", embed_w, input_ids, 0);
 
     // RoPE table, shared across layers
@@ -200,7 +211,11 @@ fn build_llama_inner(
     let final_norm_w = b.external_initializer("model.norm.weight", weights.final_norm.clone());
     let final_norm = b.rms_norm("final_norm", x, final_norm_w, -1, ctx.eps);
 
-    let lm_head_w = b.external_initializer("lm_head.weight", weights.lm_head.clone());
+    let lm_head_w = b.load_weight(
+        "lm_head.weight",
+        weights.lm_head.weight.clone(),
+        weights.lm_head.scale.clone(),
+    );
     let lm_head_w = b.transpose("lm_head_t", lm_head_w, vec![1, 0]);
     let logits = b.matmul("lm_head", final_norm, lm_head_w);
     b.output(logits);
@@ -237,17 +252,20 @@ fn build_layer(
     );
 
     // Q/K/V projection
-    let q_w = b.external_initializer(
+    let q_w = b.load_weight(
         &format!("{prefix}.self_attn.q_proj.weight"),
-        lw.q_proj.clone(),
+        lw.q_proj.weight.clone(),
+        lw.q_proj.scale.clone(),
     );
-    let k_w = b.external_initializer(
+    let k_w = b.load_weight(
         &format!("{prefix}.self_attn.k_proj.weight"),
-        lw.k_proj.clone(),
+        lw.k_proj.weight.clone(),
+        lw.k_proj.scale.clone(),
     );
-    let v_w = b.external_initializer(
+    let v_w = b.load_weight(
         &format!("{prefix}.self_attn.v_proj.weight"),
-        lw.v_proj.clone(),
+        lw.v_proj.weight.clone(),
+        lw.v_proj.scale.clone(),
     );
     let q_w = b.transpose(&format!("{prefix}_q_w_t"), q_w, vec![1, 0]);
     let k_w = b.transpose(&format!("{prefix}_k_w_t"), k_w, vec![1, 0]);
@@ -340,9 +358,10 @@ fn build_layer(
     );
     let attn_out = b.reshape(&format!("{prefix}_attn_rs"), attn_out, attn_back_shape);
 
-    let o_w = b.external_initializer(
+    let o_w = b.load_weight(
         &format!("{prefix}.self_attn.o_proj.weight"),
-        lw.o_proj.clone(),
+        lw.o_proj.weight.clone(),
+        lw.o_proj.scale.clone(),
     );
     let o_w = b.transpose(&format!("{prefix}_o_w_t"), o_w, vec![1, 0]);
     let o = b.matmul(&format!("{prefix}_o_proj"), attn_out, o_w);
@@ -363,14 +382,20 @@ fn build_layer(
     );
 
     // MLP (SwiGLU)
-    let gate_w = b.external_initializer(
+    let gate_w = b.load_weight(
         &format!("{prefix}.mlp.gate_proj.weight"),
-        lw.gate_proj.clone(),
+        lw.gate_proj.weight.clone(),
+        lw.gate_proj.scale.clone(),
     );
-    let up_w = b.external_initializer(&format!("{prefix}.mlp.up_proj.weight"), lw.up_proj.clone());
-    let down_w = b.external_initializer(
+    let up_w = b.load_weight(
+        &format!("{prefix}.mlp.up_proj.weight"),
+        lw.up_proj.weight.clone(),
+        lw.up_proj.scale.clone(),
+    );
+    let down_w = b.load_weight(
         &format!("{prefix}.mlp.down_proj.weight"),
-        lw.down_proj.clone(),
+        lw.down_proj.weight.clone(),
+        lw.down_proj.scale.clone(),
     );
     let gate_w = b.transpose(&format!("{prefix}_gate_w_t"), gate_w, vec![1, 0]);
     let up_w = b.transpose(&format!("{prefix}_up_w_t"), up_w, vec![1, 0]);
