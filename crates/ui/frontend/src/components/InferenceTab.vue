@@ -5,16 +5,9 @@
         <div class="form-group">
           <label for="model-id">Model</label>
           <select id="model-id" v-model.number="modelId">
-            <option :value="ModelId.MNIST">MNIST</option>
-            <option :value="ModelId.RESNET">ResNet18</option>
-            <option :value="ModelId.RESNET152">ResNet152</option>
-            <option :value="ModelId.MOBILENETV2">MobileNetV2</option>
-            <option :value="ModelId.EFFICIENTNET_LITE4">
-              EfficientNet-Lite4
+            <option v-for="id in MODEL_ORDER" :key="id" :value="id">
+              {{ MODELS[id].label }}
             </option>
-            <option :value="ModelId.YOLO">YOLO</option>
-            <option :value="ModelId.BERT">BERT</option>
-            <option :value="ModelId.GPT2">GPT-2</option>
           </select>
         </div>
 
@@ -38,64 +31,27 @@
         </span>
       </div>
 
-      <!-- MNIST: image upload input -->
-      <MNIST
-        v-if="modelId === ModelId.MNIST"
-        ref="mnistRef"
-        :backend="backend"
-      />
-
-      <!-- ImageNet classifiers: ResNet18 / ResNet152 / MobileNetV2 / EfficientNet-Lite4 -->
-      <ImageNetClassifier
-        v-else-if="imageNetConfig"
-        ref="imageNetRef"
+      <component
+        :is="activeEntry.component"
+        ref="activeRef"
         :key="modelId"
-        :backend="backend"
-        :model-id="modelId"
-        :input-name="imageNetConfig.inputName"
-        :layout="imageNetConfig.layout"
-        :normalize="imageNetConfig.normalize"
-        :output-is-probability="imageNetConfig.outputIsProbability"
+        v-bind="activeEntry.props(backend)"
       />
-
-      <!-- YOLO: object detection -->
-      <YOLO
-        v-else-if="modelId === ModelId.YOLO"
-        ref="yoloRef"
-        :backend="backend"
-      />
-
-      <!-- BERT: question answering -->
-      <BERT
-        v-else-if="modelId === ModelId.BERT"
-        ref="bertRef"
-        :backend="backend"
-      />
-
-      <!-- GPT-2: text generation -->
-      <GPT2
-        v-else-if="modelId === ModelId.GPT2"
-        ref="gpt2Ref"
-        :backend="backend"
-      />
-
-      <template v-else />
     </form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import {
+  computed,
+  defineAsyncComponent,
+  ref,
+  watch,
+  type Component,
+} from 'vue';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { grpcClient } from '../api/grpc_client';
-import MNIST from './MNIST.vue';
-import ImageNetClassifier, {
-  type Layout,
-  type Normalization,
-} from './ImageNetClassifier.vue';
-import YOLO from './YOLO.vue';
-import BERT from './BERT.vue';
-import GPT2 from './GPT2.vue';
+import { type Layout, type Normalization } from './ImageNetClassifier.vue';
 
 type WarmupState =
   | { state: 'idle' }
@@ -137,10 +93,67 @@ const IMAGENET_CONFIGS: Partial<Record<ModelId, ImageNetConfig>> = {
   },
 };
 
+type ModelEntry = {
+  label: string;
+  component: Component;
+  props: (backend: Backend) => Record<string, unknown>;
+};
+
+const lazy = (loader: () => Promise<unknown>): Component =>
+  defineAsyncComponent(loader as Parameters<typeof defineAsyncComponent>[0]);
+
+const imageNetEntry = (modelId: ModelId, label: string): ModelEntry => ({
+  label,
+  component: lazy(() => import('./ImageNetClassifier.vue')),
+  props: (backend) => ({ backend, modelId, ...IMAGENET_CONFIGS[modelId]! }),
+});
+
+const MODELS: Record<ModelId, ModelEntry> = {
+  [ModelId.MNIST]: {
+    label: 'MNIST',
+    component: lazy(() => import('./MNIST.vue')),
+    props: (backend) => ({ backend }),
+  },
+  [ModelId.RESNET]: imageNetEntry(ModelId.RESNET, 'ResNet18'),
+  [ModelId.RESNET152]: imageNetEntry(ModelId.RESNET152, 'ResNet152'),
+  [ModelId.MOBILENETV2]: imageNetEntry(ModelId.MOBILENETV2, 'MobileNetV2'),
+  [ModelId.EFFICIENTNET_LITE4]: imageNetEntry(
+    ModelId.EFFICIENTNET_LITE4,
+    'EfficientNet-Lite4',
+  ),
+  [ModelId.YOLO]: {
+    label: 'YOLO',
+    component: lazy(() => import('./YOLO.vue')),
+    props: (backend) => ({ backend }),
+  },
+  [ModelId.BERT]: {
+    label: 'BERT',
+    component: lazy(() => import('./BERT.vue')),
+    props: (backend) => ({ backend }),
+  },
+  [ModelId.GPT2]: {
+    label: 'GPT-2',
+    component: lazy(() => import('./GPT2.vue')),
+    props: (backend) => ({ backend }),
+  },
+};
+
+// Display order for the dropdown (Record key order is numeric, not what we want).
+const MODEL_ORDER: ModelId[] = [
+  ModelId.MNIST,
+  ModelId.RESNET,
+  ModelId.RESNET152,
+  ModelId.MOBILENETV2,
+  ModelId.EFFICIENTNET_LITE4,
+  ModelId.YOLO,
+  ModelId.BERT,
+  ModelId.GPT2,
+];
+
 const modelId = ref<ModelId>(ModelId.MNIST);
 const backend = ref<Backend>(Backend.CPU);
 
-const imageNetConfig = computed(() => IMAGENET_CONFIGS[modelId.value]);
+const activeEntry = computed(() => MODELS[modelId.value]);
 
 const warmup = ref<WarmupState>({ state: 'idle' });
 let warmupSeq = 0;
@@ -178,31 +191,11 @@ watch(
   { immediate: true },
 );
 
-const mnistRef = ref<InstanceType<typeof MNIST>>();
-const imageNetRef = ref<InstanceType<typeof ImageNetClassifier>>();
-const yoloRef = ref<InstanceType<typeof YOLO>>();
-const bertRef = ref<InstanceType<typeof BERT>>();
-const gpt2Ref = ref<InstanceType<typeof GPT2>>();
+type Runner = { runInference: (backend: Backend) => Promise<void> };
+const activeRef = ref<Runner | null>(null);
 
 const handleSubmit = async () => {
-  if (imageNetConfig.value) {
-    await imageNetRef.value?.runInference(backend.value);
-    return;
-  }
-  switch (modelId.value) {
-    case ModelId.MNIST:
-      await mnistRef.value?.runInference(backend.value);
-      return;
-    case ModelId.YOLO:
-      await yoloRef.value?.runInference(backend.value);
-      return;
-    case ModelId.BERT:
-      await bertRef.value?.runInference(backend.value);
-      return;
-    case ModelId.GPT2:
-      await gpt2Ref.value?.runInference(backend.value);
-      return;
-  }
+  await activeRef.value?.runInference(backend.value);
 };
 </script>
 
