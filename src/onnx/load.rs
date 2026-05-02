@@ -1246,6 +1246,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
 
         // Custom
         "KVCacheUpdate" => Ok(Operator::KVCacheUpdate),
+        "QuantizingKVCacheUpdate" => Ok(Operator::QuantizingKVCacheUpdate),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),
     }
 }

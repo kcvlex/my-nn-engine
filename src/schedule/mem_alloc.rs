@@ -411,6 +411,7 @@ impl<'sched> MemoryPlanner<'sched> {
 fn must_in_place_input(op: &Operator) -> Option<usize> {
     match op {
         Operator::KVCacheUpdate => Some(args::KVCACHE_UPDATE_CACHE),
+        Operator::QuantizingKVCacheUpdate => Some(args::QKVCACHE_UPDATE_CACHE),
         _ => None,
     }
 }

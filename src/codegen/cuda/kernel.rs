@@ -24,6 +24,7 @@ pub enum CUDAKernel {
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
     KVCacheUpdateKernel(KVCacheUpdateKernel),
+    QuantizingKVCacheUpdateKernel(QuantizingKVCacheUpdateKernel),
     LayerNormKernel(LayerNormKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
     RMSNormKernel(RMSNormKernel),
@@ -160,6 +161,38 @@ impl KVCacheUpdateKernel {
     }
 }
 
+pub struct QuantizingKVCacheUpdateKernel {
+    pub new_ty: DataType,
+    pub scale_ty: DataType,
+    pub head_dim: usize,
+    pub block_size: usize,
+    pub max_seq_len: usize,
+    pub new_seq_len: usize,
+
+    pub cache: Expr,
+    pub scale: Expr,
+    pub new_kv: Expr,
+    pub offset: Expr,
+}
+
+impl QuantizingKVCacheUpdateKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "quantizing_kvcache_update<{}, {}, {}, {}>",
+            self.new_ty, self.scale_ty, self.head_dim, self.block_size
+        );
+        let args = vec![
+            format!("(signed char *)({})", self.cache),
+            cast!(self.scale_ty, self.scale),
+            cast!(self.new_ty, self.new_kv),
+            self.max_seq_len.to_string(),
+            self.new_seq_len.to_string(),
+            self.offset.to_string(),
+        ];
+        (id, args)
+    }
+}
+
 impl GeneratedKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
         let id = self.decl.name();
@@ -278,6 +311,7 @@ impl LaunchKernel {
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
             CUDAKernel::KVCacheUpdateKernel(k) => k,
+            CUDAKernel::QuantizingKVCacheUpdateKernel(k) => k,
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::ReduceMatrixKernel(r) => r,
             CUDAKernel::RMSNormKernel(r) => r,

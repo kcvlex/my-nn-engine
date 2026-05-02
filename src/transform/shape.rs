@@ -254,6 +254,9 @@ pub fn infer_node_output(
             let input = &inputs[0];
             res.push(ResolvedTensorType::new(*to, input.dims.clone()));
         }
+        Operator::QuantizingKVCacheUpdate => {
+            res.push(inputs[args::QKVCACHE_UPDATE_CACHE].clone());
+        }
         Operator::DequantizeLinear(DequantizeLinear { axis }) => {
             let x = &inputs[args::DEQUANTIZE_X];
             let scale = &inputs[args::DEQUANTIZE_SCALE];

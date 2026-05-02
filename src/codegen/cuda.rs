@@ -1562,6 +1562,63 @@ impl<'sched> HostCodeGenerator<'sched> {
                     todo!("MatMul with broadcast should be lowered to BatchedGemm or loop of Gemm")
                 }
 
+                Operator::QuantizingKVCacheUpdate => {
+                    self.includes
+                        .insert(Include::Local("quantizing_kvcache_update.cuh"));
+                    let cache_id = kernel.inputs[args::QKVCACHE_UPDATE_CACHE].unwrap();
+                    let scale_id = kernel.inputs[args::QKVCACHE_UPDATE_SCALE].unwrap();
+                    let new_id = kernel.inputs[args::QKVCACHE_UPDATE_NEW].unwrap();
+                    let offset_id = kernel.inputs[args::QKVCACHE_UPDATE_OFFSET].unwrap();
+
+                    let cache_ty = self.get_resolved_tensor_type(cache_id)?;
+                    let scale_ty = self.get_resolved_tensor_type(scale_id)?;
+                    let new_ty = self.get_resolved_tensor_type(new_id)?;
+
+                    assert!(cache_ty.is_contiguous());
+                    assert!(new_ty.is_contiguous());
+                    assert_eq!(cache_ty.dims.ndim(), 4);
+                    assert_eq!(new_ty.dims.ndim(), 4);
+                    assert_eq!(scale_ty.dims.ndim(), 3);
+                    let batch = cache_ty.dims[0];
+                    let heads = cache_ty.dims[1];
+                    let max_seq_len = cache_ty.dims[2];
+                    let head_dim = cache_ty.dims[3];
+                    let new_seq_len = new_ty.dims[2];
+
+                    let offset_host = self
+                        .hostmem2identifier
+                        .get(&offset_id)
+                        .ok_or(BuildError::NoHostVariable(offset_id))?;
+                    let offset_expr = Expr::Identifier(format!("(int)(*{})", offset_host));
+
+                    let block_size = DEFAULT_BLOCK_SIZE.min(head_dim).max(32);
+                    let cuda_kernel = kernel::CUDAKernel::QuantizingKVCacheUpdateKernel(
+                        kernel::QuantizingKVCacheUpdateKernel {
+                            new_ty: new_ty.elem_type,
+                            scale_ty: scale_ty.elem_type,
+                            head_dim,
+                            block_size,
+                            max_seq_len,
+                            new_seq_len,
+                            cache: self.device_identifier(kernel.outputs[0])?,
+                            scale: self.device_identifier(scale_id)?,
+                            new_kv: self.device_identifier(new_id)?,
+                            offset: offset_expr,
+                        },
+                    );
+                    let grid = batch * heads * new_seq_len;
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: grid.to_literal(),
+                            block_size: block_size.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::KVCacheUpdate => {
                     self.includes.insert(Include::Local("kvcache_update.cuh"));
                     let cache_id = kernel.inputs[args::KVCACHE_UPDATE_CACHE].unwrap();

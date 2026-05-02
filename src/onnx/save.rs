@@ -185,6 +185,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Identity |
         Operator::IsNaN |
         Operator::KVCacheUpdate |
+        Operator::QuantizingKVCacheUpdate |
         Operator::MatMul |
         Operator::Reshape |
         Operator::Slice |

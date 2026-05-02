@@ -120,6 +120,24 @@ pub enum Operator {
     // pre-allocated cache buffer keeps state across run() calls, and each step
     // writes the newly produced K/V slice at past_len.
     KVCacheUpdate,
+    // Quantizing variant of KVCacheUpdate. Writes new BF16 K/V into an INT8 cache
+    // and a per-token BF16 scale buffer at `offset`.
+    //
+    //   inputs:  cache_int8 [B, H, MAX_SEQ, D]    (INT8, in-place output #0)
+    //            scale      [B, H, MAX_SEQ]       (BF16, mutated in-place; not a graph output)
+    //            new        [B, H, NEW_SEQ, D]    (BF16)
+    //            offset     []  i64 host scalar
+    //   output:  cache_int8 (alias of input 0)
+    //
+    // The scale buffer is also written by this kernel, but its data flow is implicit:
+    // any consumer that already chains through the cache output is automatically
+    // synchronized against the same kernel completion (single launch covers both writes).
+    //
+    // For each (batch, head, token) in `new`:
+    //   s = max(|new[b,h,t,:]|) / 127
+    //   cache[b,h,offset+t,:] = round(new[b,h,t,:] / s).clamp(-128, 127)
+    //   scale[b,h,offset+t]   = s
+    QuantizingKVCacheUpdate,
     Transfer(TransferKind),
     NHWC2NCHW,
     ReduceMatrix(ReduceOp),
@@ -874,6 +892,7 @@ impl Operator {
             // Custom
             Operator::Contiguous(_) => "Contiguous",
             Operator::KVCacheUpdate => "KVCacheUpdate",
+            Operator::QuantizingKVCacheUpdate => "QuantizingKVCacheUpdate",
             Operator::Transfer(_) => "Transfer",
             Operator::NHWC2NCHW => "NHWC2NCHW",
             Operator::ReduceMatrix(_) => "ReduceMatrix",
@@ -936,6 +955,7 @@ impl Operator {
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
             Operator::KVCacheUpdate |
+            Operator::QuantizingKVCacheUpdate |
             Operator::LayerNormalization(_) |
             Operator::MatMul |
             Operator::MaxPool(_) |
@@ -1059,6 +1079,11 @@ pub mod args {
     pub const KVCACHE_UPDATE_CACHE: usize = 0;
     pub const KVCACHE_UPDATE_NEW: usize = 1;
     pub const KVCACHE_UPDATE_OFFSET: usize = 2;
+
+    pub const QKVCACHE_UPDATE_CACHE: usize = 0;
+    pub const QKVCACHE_UPDATE_SCALE: usize = 1;
+    pub const QKVCACHE_UPDATE_NEW: usize = 2;
+    pub const QKVCACHE_UPDATE_OFFSET: usize = 3;
 
     pub const BATCHNORM_DATA: usize = 0;
     pub const BATCHNORM_SCALE: usize = 1;
