@@ -453,11 +453,6 @@ impl Session {
 
         match options.target {
             Target::CPU => {
-                if !session_state_buffers.is_empty() {
-                    return Err(SessionError::OtherError(
-                        "SessionState is not supported on CPU target".to_string(),
-                    ));
-                }
                 if config.initializer_buffers.is_some() {
                     return Err(SessionError::OtherError(
                         "InitializerBuffers is not supported on CPU target".to_string(),
@@ -467,6 +462,7 @@ impl Session {
                     inputs_ty,
                     outputs_ty,
                     initializer,
+                    session_state_buffers,
                     schedule,
                     options,
                     &build_dir,

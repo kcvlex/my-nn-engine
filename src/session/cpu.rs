@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
@@ -12,12 +13,14 @@ use crate::codegen::cpu::blas;
 use crate::codegen::cpu::CodeGenContext;
 use crate::options::Options;
 use crate::schedule::Schedule;
+use crate::session::DeviceBuffer;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type CodeType = unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8);
+type CodeType =
+    unsafe extern "C" fn(*const *mut u8, *const *const u8, *const *const u8, *const *const u8);
 
 /// SAFETY: After JIT compilation is complete, the engine is only used via a raw function pointer.
 /// The engine and contexts are kept alive solely to prevent LLVM from deallocating the JIT code.
@@ -46,6 +49,7 @@ pub struct SessionCPU {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer: Vec<StrictTensor>,
+    session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
     codegen_ctx: CodeGenContext,
@@ -60,6 +64,7 @@ impl SessionCPU {
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,
         initializer: Vec<super::InitializerSource>,
+        session_state_buffers: Vec<Arc<DeviceBuffer>>,
         schedule: Schedule,
         opt: &Options,
         build_dir: &Path,
@@ -188,6 +193,7 @@ impl SessionCPU {
             },
             func,
             initializer,
+            session_state_buffers,
         })
     }
 
@@ -208,11 +214,17 @@ impl SessionCPU {
             .iter()
             .map(|t| t.as_ptr())
             .collect::<Vec<_>>();
+        let session_state_ptrs: Vec<*const u8> = self
+            .session_state_buffers
+            .iter()
+            .map(|b| b.ptr() as *const u8)
+            .collect();
         unsafe {
             (self.func)(
                 output_ptrs.as_ptr(),
                 input_ptrs.as_ptr(),
                 initializer_ptrs.as_ptr(),
+                session_state_ptrs.as_ptr(),
             )
         };
         let outputs = zip_eq(self.output_ty.iter(), output_bufs)

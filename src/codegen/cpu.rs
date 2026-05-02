@@ -217,9 +217,10 @@ impl CodeGenContext {
         let ptr_ty = ll_ctx
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum();
-        let fn_type = ll_ctx
-            .void_type()
-            .fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let fn_type = ll_ctx.void_type().fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
+            false,
+        );
         let main = module.add_function("main", fn_type, None);
         let entry = ll_ctx.append_basic_block(main, "entry");
         builder.position_at_end(entry);
@@ -507,6 +508,18 @@ impl<'ll> CodeGen<'ll, '_> {
             }
         }
 
+        {
+            let ptr = self
+                .unit
+                .func
+                .get_nth_param(3)
+                .unwrap()
+                .into_pointer_value();
+            for (i, value_id) in self.gen_ctx.schedule.session_states.iter().enumerate() {
+                init_ptr!(*value_id, ptr, i);
+            }
+        }
+
         Ok(ptr_values)
     }
 
@@ -598,12 +611,9 @@ impl<'ll> CodeGen<'ll, '_> {
             for alloc in mem_alloc.0[&kernel_id].iter() {
                 let dst_ptr = match alloc.ty {
                     AllocateType::Chunk(chunk) => *chunk2ptr.get(&chunk).unwrap(),
-                    AllocateType::Input(v) | AllocateType::Output(v) => {
-                        *ptr_values.get(&v).unwrap()
-                    }
-                    AllocateType::SessionState(_) => {
-                        unimplemented!("SessionState is not supported on CPU target")
-                    }
+                    AllocateType::Input(v) |
+                    AllocateType::Output(v) |
+                    AllocateType::SessionState(v) => *ptr_values.get(&v).unwrap(),
                 };
                 ptr_values.insert(alloc.value_id, dst_ptr);
             }
