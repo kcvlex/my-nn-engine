@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, watch } from 'vue';
+import { useFileDialog, useObjectUrl } from '@vueuse/core';
 
 defineProps<{
   runLabel: string;
@@ -11,40 +12,26 @@ const emit = defineEmits<{
   run: [];
 }>();
 
-const fileInput = ref<HTMLInputElement>();
-const fileName = ref('');
-const previewUrl = ref('');
+const { files, open } = useFileDialog({
+  accept: 'image/*',
+  multiple: false,
+});
 
-function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
+const file = computed<File | null>(() => files.value?.[0] ?? null);
+const fileName = computed(() => file.value?.name ?? '');
+const previewUrl = useObjectUrl(file);
 
-  fileName.value = file.name;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target?.result as string;
-    previewUrl.value = dataUrl;
-
-    const img = new Image();
-    img.onload = () => emit('imageLoaded', img);
-    img.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
-}
+watch(previewUrl, (url) => {
+  if (!url) return;
+  const img = new Image();
+  img.onload = () => emit('imageLoaded', img);
+  img.src = url;
+});
 </script>
 
 <template>
   <div class="upload-area">
-    <input
-      ref="fileInput"
-      type="file"
-      accept="image/*"
-      hidden
-      @change="handleFileChange"
-    />
-    <button type="button" class="upload-btn" @click="fileInput?.click()">
+    <button type="button" class="upload-btn" @click="open()">
       Choose Image
     </button>
     <span v-if="fileName" class="file-name">{{ fileName }}</span>
