@@ -118,7 +118,7 @@ async function runInference(backend?: Backend) {
 }
 
 function getImageNetLabels(): Promise<string[]> {
-  return loadLabels('/synset.txt', 1000, (line) => {
+  return loadLabels('/synset.txt', (line) => {
     // Format: "n01440764 tench, Tinca tinca" → "tench"
     const desc = line.substring(line.indexOf(' ') + 1);
     return desc.split(',')[0].trim();

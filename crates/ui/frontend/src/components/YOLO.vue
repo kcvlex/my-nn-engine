@@ -211,7 +211,7 @@ function drawDetections(detections: Detection[]) {
 }
 
 function getCocoLabels(): Promise<string[]> {
-  return loadLabels('/coco.names', 80);
+  return loadLabels('/coco.names');
 }
 
 async function runInference(backend?: Backend) {
