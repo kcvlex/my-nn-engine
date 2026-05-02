@@ -68,14 +68,22 @@ function basicTokenize(text: string): string[] {
   return tokens;
 }
 
+// Matches BERT's reference tokenizer: ASCII punctuation ranges plus any
+// character in the Unicode "P" general category (e.g. en-dash U+2013, smart
+// quotes). Without this, "24–10" is treated as a single non-punct token and
+// becomes [UNK] under WordPiece.
+const UNICODE_PUNCT = /\p{P}/u;
 function isPunctuation(ch: string): boolean {
   const code = ch.charCodeAt(0);
-  return (
+  if (
     (code >= 33 && code <= 47) ||
     (code >= 58 && code <= 64) ||
     (code >= 91 && code <= 96) ||
     (code >= 123 && code <= 126)
-  );
+  ) {
+    return true;
+  }
+  return UNICODE_PUNCT.test(ch);
 }
 
 function isWhitespace(ch: string): boolean {
