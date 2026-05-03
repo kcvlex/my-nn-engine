@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/llm", "crates/test-tools", "crates/ui"]
+members = [".", "crates/bench", "crates/llm", "crates/test-tools", "crates/ui"]
 
 [package]
 name = "my-nn-engine"
