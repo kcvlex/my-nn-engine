@@ -38,10 +38,7 @@ use crate::graph::ValueId;
 use crate::options::Options;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
-use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
-use crate::tensor::types::SIntType;
-use crate::tensor::types::UIntType;
 
 struct UnitInfo<'ll> {
     ty: UnitType,
@@ -58,8 +55,9 @@ enum UnitType {
 pub struct CodeGenContext {
     pub schedule: Schedule,
     blas_backend: blas::Backend,
-    mem_size: Vec<u64>,
-    value2alloc: HashMap<ValueId, AllocateInfo>,
+    chunk_bytes: Vec<u64>,
+    value2place: HashMap<ValueId, AllocPlace>,
+    kernel_bindings: HashMap<KernelId, Vec<ValueBinding>>,
 }
 
 pub struct CodeGen<'ll, 'gen> {
@@ -101,45 +99,42 @@ fn target_machine() -> Result<TargetMachine, CodeGenError> {
 
 impl CodeGenContext {
     pub fn new(schedule: Schedule, blas_backend: blas::Backend) -> Result<Self, CodeGenError> {
-        let mem_size = calc_memsize(&schedule);
-        let mem_alloc_result = schedule.analysis.get::<mem_alloc::MemAllocResult>();
-        let value2alloc = mem_alloc_result
-            .0
-            .values()
-            .flatten()
-            .map(|info| (info.value_id, *info))
-            .collect::<HashMap<_, _>>();
+        let plan = schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+
+        let chunk_bytes: Vec<u64> = plan.chunks.iter().map(|c| c.size as u64).collect();
+
+        let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
+        let mut kernel_bindings: HashMap<KernelId, Vec<ValueBinding>> = HashMap::new();
+        for step in &plan.steps {
+            if let Step::Kernel(k) = step {
+                kernel_bindings.insert(k.kernel, k.bindings.clone());
+                for b in &k.bindings {
+                    value2place.insert(b.value, b.place);
+                }
+            }
+        }
 
         Ok(CodeGenContext {
             schedule,
             blas_backend,
-            mem_size,
-            value2alloc,
+            chunk_bytes,
+            value2place,
+            kernel_bindings,
         })
     }
 
     fn need_to_generate(&self, kernel_id: KernelId) -> bool {
         let kernel = &self.schedule.kernels[kernel_id];
-        // if node.is_dummy() {
-        //     return false;
-        // }
         if matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
-            let chunk_in = self
-                .value2alloc
-                .get(&kernel.inputs[0].unwrap())
-                .map(|info| &info.ty);
-            let chunk_out = self
-                .value2alloc
-                .get(&kernel.outputs[0])
-                .map(|info| &info.ty);
-            // TODO: correct?
-            let res = match (chunk_in, chunk_out) {
-                (Some(AllocateType::Chunk(in_chunk)), Some(AllocateType::Chunk(out_chunk))) => {
-                    in_chunk != out_chunk
-                }
-                _ => false,
-            };
-            return res;
+            let chunk_in = self.value2place.get(&kernel.inputs[0].unwrap());
+            let chunk_out = self.value2place.get(&kernel.outputs[0]);
+            return matches!(
+                (chunk_in, chunk_out),
+                (Some(AllocPlace::Chunk(a)), Some(AllocPlace::Chunk(b))) if a != b,
+            );
         }
         true
     }
@@ -152,35 +147,6 @@ impl CodeGenContext {
             .filter(|&id| self.need_to_generate(id))
             .collect()
     }
-}
-
-// TODO: Target dependent value
-fn memory_usage(sched: &Schedule, value: ValueId) -> u64 {
-    let result_ty = sched.get_resolved_tensor_type(value).unwrap();
-    let data_size = match result_ty.elem_type {
-        DataType::Bool => 1,
-        DataType::SInt(SIntType::I8) => 1,
-        DataType::SInt(SIntType::I32) => 4,
-        DataType::SInt(SIntType::I64) => 8,
-        DataType::UInt(UIntType::U8) => 1,
-        DataType::UInt(UIntType::U64) => 8,
-        DataType::Float(FloatType::BF16) => 2,
-        DataType::Float(FloatType::F32) => 4,
-        DataType::Float(FloatType::F64) => 8,
-    };
-    (result_ty.dims.size() * data_size).try_into().unwrap()
-}
-
-fn calc_memsize(sched: &Schedule) -> Vec<u64> {
-    let max_chunk_id = sched.max_chunk_id().map(|x| x + 1).unwrap_or(0);
-    let mut mem_size = vec![0; max_chunk_id];
-    let mem_alloc_result = sched.analysis.get::<mem_alloc::MemAllocResult>();
-    for info in mem_alloc_result.0.values().flatten() {
-        if let Some(chunk_id) = info.ty.chunk_id() {
-            mem_size[chunk_id] = mem_size[chunk_id].max(memory_usage(sched, info.value_id));
-        }
-    }
-    mem_size
 }
 
 impl CodeGenContext {
@@ -372,18 +338,13 @@ impl CodeGenContext {
             .outputs
             .iter()
             .chain(kernel.inputs.iter().flatten())
-            .map(|&id| self.value2alloc.get(&id))
+            .map(|&id| self.value2place.get(&id).copied())
             .collect::<Vec<_>>();
         let mut is_noalias = vec![true; allocs.len()];
         for (i, alloc) in allocs.iter().enumerate() {
             // If it is None, it is an input or an initializer
-            if let Some(info) = alloc {
-                let cnt = allocs
-                    .iter()
-                    .filter_map(|x| *x)
-                    .map(|&a| a.ty == info.ty)
-                    .filter(|x| *x)
-                    .count();
+            if let Some(place) = alloc {
+                let cnt = allocs.iter().filter(|x| x.as_ref() == Some(place)).count();
                 is_noalias[i] = cnt == 1;
             }
         }
@@ -562,10 +523,11 @@ impl<'ll> CodeGen<'ll, '_> {
         let align_up = |size: u64| (size + alignment - 1) & !(alignment - 1);
         {
             let mut offset = 0u64;
-            for (chunk_id, &size) in self.gen_ctx.mem_size.iter().enumerate() {
+            for (chunk_id, &size) in self.gen_ctx.chunk_bytes.iter().enumerate() {
                 let ptr = if offset == 0 && chunk_id == 0 {
                     // first chunk: malloc the full arena
-                    let arena_size: u64 = self.gen_ctx.mem_size.iter().map(|&s| align_up(s)).sum();
+                    let arena_size: u64 =
+                        self.gen_ctx.chunk_bytes.iter().map(|&s| align_up(s)).sum();
                     let arena = builder.build_array_malloc(
                         i8_ty,
                         i64_ty.const_int(arena_size, false),
@@ -603,19 +565,15 @@ impl<'ll> CodeGen<'ll, '_> {
 
             builder.position_at_end(self.unit.entry);
 
-            let mem_alloc = self
-                .gen_ctx
-                .schedule
-                .analysis
-                .get::<mem_alloc::MemAllocResult>();
-            for alloc in mem_alloc.0[&kernel_id].iter() {
-                let dst_ptr = match alloc.ty {
-                    AllocateType::Chunk(chunk) => *chunk2ptr.get(&chunk).unwrap(),
-                    AllocateType::Input(v) |
-                    AllocateType::Output(v) |
-                    AllocateType::SessionState(v) => *ptr_values.get(&v).unwrap(),
+            for binding in self.gen_ctx.kernel_bindings[&kernel_id].iter() {
+                let dst_ptr = match binding.place {
+                    AllocPlace::Chunk(chunk) => *chunk2ptr.get(&chunk).unwrap(),
+                    AllocPlace::Input(v) |
+                    AllocPlace::Output(v) |
+                    AllocPlace::SessionState(v) |
+                    AllocPlace::Initializer(v) => *ptr_values.get(&v).unwrap(),
                 };
-                ptr_values.insert(alloc.value_id, dst_ptr);
+                ptr_values.insert(binding.value, dst_ptr);
             }
 
             if let Some(function) = function {
