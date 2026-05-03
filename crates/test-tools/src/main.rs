@@ -61,7 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let project_root = get_project_root()?;
-    let dockerfile_dir = project_root.join("crates").join("my-nn-engine-test-tools");
+    let dockerfile_dir = project_root.join("crates").join("test-tools");
 
     if !image_exists()? {
         build_image(&dockerfile_dir)?;
