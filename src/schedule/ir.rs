@@ -34,9 +34,22 @@ impl std::fmt::Display for EventId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Device {
+    CPU,
+    CUDA,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExecutionContext {
+    pub device: Device,
+    pub stream: StreamId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTier {
-    DeviceArena,
+    GpuArena,
+    HostArena,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,15 +100,31 @@ pub struct ValueBinding {
 #[derive(Debug, Clone)]
 pub struct KernelStep {
     pub kernel: KernelId,
-    pub stream: StreamId,
+    pub context: ExecutionContext,
     pub bindings: Vec<ValueBinding>,
+    pub records_event: Option<EventId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncWaitStep {
+    pub context: ExecutionContext,
+    pub event: EventId,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransferStep {
+    pub value: ValueId,
+    pub src: MemoryTier,
+    pub dst: MemoryTier,
+    pub context: ExecutionContext,
     pub records_event: Option<EventId>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Step {
     Kernel(KernelStep),
-    SyncWait { stream: StreamId, event: EventId },
+    SyncWait(SyncWaitStep),
+    Transfer(TransferStep),
 }
 
 #[derive(Debug, Clone, Default)]

@@ -439,7 +439,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         let mut pending_waits: Vec<EventId> = Vec::new();
         for step in &plan.steps {
             match step {
-                Step::SyncWait { event, .. } => {
+                Step::SyncWait(SyncWaitStep { event, .. }) => {
                     to_record_events.insert(*event);
                     pending_waits.push(*event);
                 }
@@ -447,13 +447,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                     streams.insert(
                         k.kernel,
                         KernelStreamView {
-                            stream_id: k.stream,
+                            stream_id: k.context.stream,
                             event_id: k
                                 .records_event
                                 .expect("CUDA kernel step must have records_event"),
                             to_wait: std::mem::take(&mut pending_waits),
                         },
                     );
+                }
+                Step::Transfer(_) => {
+                    unimplemented!("Transfer step not yet supported in CUDA codegen");
                 }
             }
         }

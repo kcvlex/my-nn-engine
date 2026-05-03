@@ -69,9 +69,13 @@ fn build(schedule: &Schedule) -> ExecutionPlan {
         });
         arena_size += align_up(size);
     }
+    let (device, tier) = match schedule.options.target {
+        Target::CUDA => (Device::CUDA, MemoryTier::GpuArena),
+        Target::CPU => (Device::CPU, MemoryTier::HostArena),
+    };
     let arenas = vec![ArenaInfo {
         id: arena_id,
-        tier: MemoryTier::DeviceArena,
+        tier,
         size: arena_size,
     }];
 
@@ -96,12 +100,16 @@ fn build(schedule: &Schedule) -> ExecutionPlan {
                 }
                 None => (StreamId(0), None, Vec::new()),
             };
+        let context = ExecutionContext {
+            device,
+            stream: stream_id,
+        };
 
         for evt in &to_wait {
-            steps.push(Step::SyncWait {
-                stream: stream_id,
+            steps.push(Step::SyncWait(SyncWaitStep {
+                context,
                 event: *evt,
-            });
+            }));
         }
 
         let kernel_alloc_infos: HashMap<ValueId, AllocateInfo> = mem_alloc_result
@@ -122,9 +130,10 @@ fn build(schedule: &Schedule) -> ExecutionPlan {
                 });
                 continue;
             }
-            let role = if defined.contains(input) || inputs_set.contains(input) {
-                BindingRole::Input
-            } else if session_states.contains(input) {
+            let role = if defined.contains(input) ||
+                inputs_set.contains(input) ||
+                session_states.contains(input)
+            {
                 BindingRole::Input
             } else {
                 BindingRole::Workspace
@@ -177,7 +186,7 @@ fn build(schedule: &Schedule) -> ExecutionPlan {
 
         steps.push(Step::Kernel(KernelStep {
             kernel: kernel_id,
-            stream: stream_id,
+            context,
             bindings,
             records_event: event_id,
         }));
