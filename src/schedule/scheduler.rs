@@ -73,61 +73,83 @@ impl Deps {
     }
 }
 
-struct ChunkAllocator {
-    chunk_max: Vec<usize>,
+struct ChunkState {
+    arena_id: ArenaId,
+    size: usize,
+    live_uses: usize,
+    first_use: bool,
+}
+
+struct ArenaChunks {
+    owned: Vec<ChunkId>,
     free_per_stream: Vec<Vec<ChunkId>>,
-    chunks_first_use: HashSet<ChunkId>,
-    chunk_live: HashMap<ChunkId, usize>,
+}
+
+impl ArenaChunks {
+    fn new(num_streams: usize) -> Self {
+        Self {
+            owned: Vec::new(),
+            free_per_stream: vec![Vec::new(); num_streams],
+        }
+    }
+}
+
+#[derive(Default)]
+struct ChunkAllocator {
+    arena2chunks: Vec<ArenaChunks>,
+    all_chunks: Vec<ChunkState>,
 }
 
 impl ChunkAllocator {
-    fn new(num_streams: usize) -> Self {
-        Self {
-            chunk_max: Vec::new(),
-            free_per_stream: vec![Vec::new(); num_streams.max(1)],
-            chunks_first_use: HashSet::new(),
-            chunk_live: HashMap::new(),
-        }
+    fn new_arena(&mut self, num_streams: usize) -> ArenaId {
+        let arena_id = self.arena2chunks.len();
+        self.arena2chunks.push(ArenaChunks::new(num_streams));
+        arena_id
     }
 
-    fn alloc(&mut self, size: usize, stream: StreamId, uses: usize) -> ChunkId {
-        let id = if let Some(id) = self.free_per_stream[stream.index()].pop() {
+    fn alloc(&mut self, size: usize, arena_id: ArenaId, stream: StreamId, uses: usize) -> ChunkId {
+        use std::cmp::max;
+        let id = if let Some(id) = self.arena2chunks[arena_id].free_per_stream[stream.index()].pop()
+        {
             id
         } else {
-            let id = self.chunk_max.len();
-            self.chunk_max.push(0);
+            let id = self.all_chunks.len();
+            self.arena2chunks[arena_id].owned.push(id);
+            self.all_chunks.push(ChunkState {
+                arena_id,
+                size: 0,
+                live_uses: 0,
+                first_use: false,
+            });
             id
         };
-        if self.chunk_max[id] < size {
-            self.chunk_max[id] = size;
-        }
-        *self.chunk_live.entry(id).or_insert(0) += uses;
+        let entry = &mut self.all_chunks[id];
+        entry.size = max(entry.size, size);
+        entry.live_uses += uses;
         id
     }
 
     fn add_uses(&mut self, id: ChunkId, uses: usize) {
-        *self.chunk_live.entry(id).or_insert(0) += uses;
+        self.all_chunks[id].live_uses += uses;
     }
 
     fn mark_as_first_use(&mut self, id: ChunkId) -> bool {
-        self.chunks_first_use.insert(id)
+        let res = !self.all_chunks[id].first_use;
+        self.all_chunks[id].first_use = true;
+        res
     }
 
     fn consume(&mut self, id: ChunkId, stream: StreamId) {
-        if let Some(live) = self.chunk_live.get_mut(&id) {
-            *live = live.saturating_sub(1);
-            if *live == 0 {
-                self.free(id, stream);
-            }
+        let entry = &mut self.all_chunks[id];
+        entry.live_uses = entry.live_uses.saturating_sub(1);
+        if entry.live_uses == 0 {
+            self.free(id, stream);
         }
     }
 
     fn free(&mut self, id: ChunkId, stream: StreamId) {
-        self.free_per_stream[stream.index()].push(id);
-    }
-
-    fn finalize(self) -> Vec<usize> {
-        self.chunk_max
+        let arena_id = self.all_chunks[id].arena_id;
+        self.arena2chunks[arena_id].free_per_stream[stream.index()].push(id);
     }
 }
 
@@ -199,10 +221,14 @@ struct Scheduler<'s> {
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
     device: Device,
-    tier: MemoryTier,
+    target_tier: MemoryTier,
+
+    // TODO: Per arena
     num_streams: usize,
 
     allocator: ChunkAllocator,
+    tier2arena: BTreeMap<MemoryTier, ArenaId>,
+
     value2place: HashMap<ValueId, AllocPlace>,
     value_remaining_uses: HashMap<ValueId, usize>,
     kernel_pending: BTreeMap<KernelId, usize>,
@@ -238,7 +264,7 @@ impl<'s> Scheduler<'s> {
 
         let value_remaining_uses = deps.value_uses_count.clone();
 
-        let (device, tier) = match schedule.options.target {
+        let (device, target_tier) = match schedule.options.target {
             Target::CUDA => (Device::CUDA, MemoryTier::GpuArena),
             Target::CPU => (Device::CPU, MemoryTier::HostArena),
         };
@@ -262,9 +288,10 @@ impl<'s> Scheduler<'s> {
             session_states,
             inputs_set,
             device,
-            tier,
+            target_tier,
             num_streams,
-            allocator: ChunkAllocator::new(num_streams),
+            allocator: ChunkAllocator::default(),
+            tier2arena: BTreeMap::new(),
             value2place,
             value_remaining_uses,
             kernel_pending,
@@ -273,6 +300,25 @@ impl<'s> Scheduler<'s> {
             stream_load: vec![0; num_streams],
             steps: Vec::new(),
         }
+    }
+
+    fn alloc_chunk(
+        &mut self,
+        tier: MemoryTier,
+        size: usize,
+        stream: StreamId,
+        uses: usize,
+    ) -> ChunkId {
+        use std::collections::btree_map::Entry;
+        let arena_id = match self.tier2arena.entry(tier) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let arena_id = self.allocator.new_arena(self.num_streams);
+                e.insert(arena_id);
+                arena_id
+            }
+        };
+        self.allocator.alloc(size, arena_id, stream, uses)
     }
 
     fn run(mut self) -> ExecutionPlan {
@@ -442,7 +488,7 @@ impl<'s> Scheduler<'s> {
             let place = if is_workspace {
                 let size = value_byte_size(self.schedule, input);
                 let uses = self.value_remaining_uses.get(&input).copied().unwrap_or(0);
-                let cid = self.allocator.alloc(size, stream, uses);
+                let cid = self.alloc_chunk(self.target_tier, size, stream, uses);
                 self.value2place.insert(input, AllocPlace::Chunk(cid));
                 AllocPlace::Chunk(cid)
             } else {
@@ -503,7 +549,7 @@ impl<'s> Scheduler<'s> {
                 (p, false)
             } else {
                 let size = value_byte_size(self.schedule, output);
-                let cid = self.allocator.alloc(size, stream, uses);
+                let cid = self.alloc_chunk(self.target_tier, size, stream, uses);
                 (AllocPlace::Chunk(cid), true)
             };
 
@@ -532,24 +578,26 @@ impl<'s> Scheduler<'s> {
     }
 
     fn into_plan(self) -> ExecutionPlan {
-        let chunk_max = self.allocator.finalize();
-        let arena_id: ArenaId = 0;
-        let mut chunks = Vec::with_capacity(chunk_max.len());
-        let mut arena_size = 0usize;
-        for (cid, &size) in chunk_max.iter().enumerate() {
-            chunks.push(ChunkInfo {
-                id: cid,
-                arena: arena_id,
-                size,
-                offset: arena_size,
+        let mut chunks = Vec::new();
+        let mut arenas = Vec::with_capacity(self.tier2arena.len());
+        for (tier, arena_id) in self.tier2arena {
+            let mut arena_size = 0usize;
+            for id in &self.allocator.arena2chunks[arena_id].owned {
+                let state = &self.allocator.all_chunks[*id];
+                chunks.push(ChunkInfo {
+                    id: *id,
+                    arena: arena_id,
+                    size: state.size,
+                    offset: arena_size,
+                });
+                arena_size += align_up(state.size);
+            }
+            arenas.push(ArenaInfo {
+                id: arena_id,
+                tier,
+                size: arena_size,
             });
-            arena_size += align_up(size);
         }
-        let arenas = vec![ArenaInfo {
-            id: arena_id,
-            tier: self.tier,
-            size: arena_size,
-        }];
 
         let mut events: Vec<EventInfo> = self
             .kernel_info

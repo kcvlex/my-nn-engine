@@ -46,7 +46,7 @@ pub struct ExecutionContext {
     pub stream: StreamId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryTier {
     GpuArena,
     HostArena,
