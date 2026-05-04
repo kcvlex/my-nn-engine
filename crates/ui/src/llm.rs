@@ -12,6 +12,7 @@ use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::ChatMessage;
 use my_nn_engine_llm::ChatTemplateError;
+use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
 use my_nn_engine_llm::LlamaWeights;
@@ -52,6 +53,7 @@ pub struct ChatSession {
     eos_token_str: String,
     bos_token_str: String,
     eos_token_id: u32,
+    stop_strings: Vec<String>,
     last_used: Instant,
     /// True iff the previous turn ended at the model emitting EOS. When false
     /// (i.e. we hit max_tokens), the KV cache state doesn't include a clean
@@ -210,6 +212,8 @@ impl ChatRegistry {
         let tokenizer = Tokenizer::from_file(path.join("tokenizer.json"))
             .map_err(|e| ChatError::LoadTokenizer(format!("{e}")))?;
         let tokenizer_for_decode = tokenizer.clone();
+        let stop_strings = load_stop_strings(&path, &eos_token_str, &tokenizer_for_decode)?;
+        log::info!("Stop strings for {model_dir}: {stop_strings:?}");
 
         let llm = if dir_uses_prefill(model_dir) {
             let p = build_llama_prefill(&config, &weights, MAX_SEQ_LEN, PREFILL_LEN);
@@ -246,6 +250,7 @@ impl ChatRegistry {
             eos_token_str,
             bos_token_str,
             eos_token_id: config.eos_token_id,
+            stop_strings,
             last_used: Instant::now(),
             last_turn_eos_emitted: true,
         };
@@ -309,13 +314,18 @@ impl ChatRegistry {
         };
 
         let started = Instant::now();
+        let opts = GenerateOptions {
+            max_new_tokens: max_tokens as usize,
+            stop_strings: session.stop_strings.clone(),
+        };
         let new_ids = session
             .llm
-            .generate_ids(&delta, max_tokens as usize)
+            .generate_ids_with(&delta, &opts)
             .map_err(ChatError::Llm)?;
         let elapsed = started.elapsed();
 
-        let eos_emitted = new_ids.last().copied() == Some(session.eos_token_id);
+        let eos_emitted = (new_ids.len() as u32) < max_tokens ||
+            new_ids.last().copied() == Some(session.eos_token_id);
         let assistant_text = session
             .tokenizer
             .decode(&new_ids, true)
@@ -378,6 +388,48 @@ fn load_chat_meta(path: &Path, _config: &HfConfig) -> Result<(String, String, St
         .and_then(|c| c.bos_token.as_ref().map(|t| t.as_str().to_string()))
         .unwrap_or_else(|| "<s>".to_string());
     Ok((chat_template, eos_token_str, bos_token_str))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EosIds {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerationConfig {
+    eos_token_id: Option<EosIds>,
+}
+
+fn load_stop_strings(
+    path: &Path,
+    eos_token_str: &str,
+    tokenizer: &Tokenizer,
+) -> Result<Vec<String>, ChatError> {
+    let mut out: Vec<String> = vec![eos_token_str.to_string()];
+
+    let gen_path = path.join("generation_config.json");
+    if gen_path.exists() {
+        let s = std::fs::read_to_string(&gen_path)
+            .map_err(|e| ChatError::LoadConfig(format!("generation_config.json: {e}")))?;
+        let parsed: GenerationConfig = serde_json::from_str(&s)
+            .map_err(|e| ChatError::LoadConfig(format!("generation_config.json parse: {e}")))?;
+        let ids: Vec<u32> = match parsed.eos_token_id {
+            Some(EosIds::One(x)) => vec![x],
+            Some(EosIds::Many(xs)) => xs,
+            None => vec![],
+        };
+        for id in ids {
+            if let Some(tok) = tokenizer.id_to_token(id) {
+                out.push(tok);
+            }
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 #[cfg(test)]
