@@ -1082,6 +1082,8 @@ pub mod args {
     pub const DEQUANT_MATMUL_LHS: usize = 0;
     pub const DEQUANT_MATMUL_RHS: usize = 1;
     pub const DEQUANT_MATMUL_SCALE: usize = 2;
+    // CPU only: f32 scratch buffer of size m*k + n*k + m*n (mirrors bf16 GEMM layout).
+    pub const DEQUANT_MATMUL_WORKSPACE: usize = 3;
 
     pub const KVCACHE_UPDATE_CACHE: usize = 0;
     pub const KVCACHE_UPDATE_NEW: usize = 1;

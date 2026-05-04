@@ -2792,6 +2792,168 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    // out[..., m, n] = scale[n] * sum_k (f32)act[..., m, k] * (f32)wq[n, k]
+    //
+    //   act:       [..., M, K] float
+    //   wq:        [N, K]      i8
+    //   scale:     [N]         same float type as out
+    //   out:       [..., M, N] float
+    //   workspace: [M*K + N*K + M*N] f32
+    //
+    // Pre-dequantize wq into workspace[M*K..M*K+N*K] as f32, optionally promote
+    // act to f32 (workspace[..M*K]), then dispatch BLAS sgemm and (if needed)
+    // round the f32 output back to bf16. Layout matches build_gemm's bf16 path.
+    pub fn build_dequant_matmul(
+        &self,
+        out: &TensorPtr<'ctx>,
+        act: &TensorPtr<'ctx>,
+        wq: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        workspace: &TensorPtr<'ctx>,
+        axis: usize,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert_eq!(axis, 0, "DequantMatMul kernel assumes axis=0");
+        assert!(act.ty.is_contiguous());
+        assert!(wq.ty.is_contiguous());
+        assert!(out.ty.is_contiguous());
+        assert_eq!(wq.ty.dims.ndim(), 2);
+        let n_dim = wq.ty.dims[0];
+        let k = wq.ty.dims[1];
+        assert_eq!(act.ty.dims.last().copied().unwrap(), k);
+        let m_total = act.ty.dims.size() / k;
+        assert_eq!(out.ty.dims.size(), m_total * n_dim);
+
+        let DataType::Float(act_float_ty) = act.ty.elem_type else {
+            panic!("DequantMatMul activation must be float");
+        };
+        let DataType::Float(out_float_ty) = out.ty.elem_type else {
+            panic!("DequantMatMul output must be float");
+        };
+        assert!(matches!(wq.ty.elem_type, DataType::SInt(SIntType::I8)));
+        assert_eq!(scale.ty.elem_type, out.ty.elem_type);
+        assert!(matches!(act_float_ty, FloatType::F32 | FloatType::BF16));
+        assert!(matches!(out_float_ty, FloatType::F32 | FloatType::BF16));
+        assert_eq!(
+            workspace.ty.elem_type,
+            DataType::Float(FloatType::F32),
+            "DequantMatMul workspace must be f32",
+        );
+
+        let m = m_total as u64;
+        let n = n_dim as u64;
+        let k_u = k as u64;
+        let i64_ty = self.context.i64_type();
+        let f32_ty = self.context.f32_type();
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+
+        self.builder.position_at_end(entry);
+        let act_gep = self.build_gep(act)?;
+        let wq_gep = self.build_gep(wq)?;
+        let out_gep = self.build_gep(out)?;
+        let ws_a = self.workspace_offset(workspace, 0, "dqmm.ws_a")?;
+        let ws_b = self.workspace_offset(workspace, m * k_u, "dqmm.ws_b")?;
+        let ws_c = self.workspace_offset(workspace, m * k_u + n * k_u, "dqmm.ws_c")?;
+
+        // ws_a <- act (no-op when act is already f32; just point at act_gep)
+        let a_for_gemm = match act_float_ty {
+            FloatType::BF16 => {
+                self.bf16_buf_to_f32(act_gep, ws_a, m * k_u)?;
+                ws_a
+            }
+            FloatType::F32 => act_gep,
+            FloatType::F64 => unreachable!(),
+        };
+
+        // ws_b[n*k + k_idx] = scale[n] * (f32)wq[n*k + k_idx]
+        {
+            let preheader = self.builder.get_insert_block().unwrap();
+            let header = self.context.append_basic_block(*self.func, "dqmm.dq.h");
+            let after = self.context.append_basic_block(*self.func, "dqmm.dq.x");
+            self.builder.build_unconditional_branch(header)?;
+            let (phi, idx) = self.init_counted_loop(header)?;
+
+            let n_idx = if n == 1 {
+                i64_ty.const_zero()
+            } else {
+                self.builder.build_int_unsigned_div(
+                    idx,
+                    i64_ty.const_int(k_u, false),
+                    "dqmm.dq.n",
+                )?
+            };
+            let scale_off = self
+                .builder
+                .build_int_add(scale.offset, n_idx, "dqmm.dq.scale.off")?;
+            let scale_v = self
+                .build_load(&scale.clone().set_offset(scale_off))?
+                .into_float_value();
+            let scale_f32 = match out_float_ty {
+                FloatType::F32 | FloatType::BF16 => scale_v,
+                FloatType::F64 => unreachable!(),
+            };
+
+            let wq_idx_gep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_ty, wq_gep, &[idx], "dqmm.dq.wq.gep")?
+            };
+            let wq_i8 = self
+                .builder
+                .build_load(i8_ty, wq_idx_gep, "dqmm.dq.wq.i8")?
+                .into_int_value();
+            let wq_i32 = self
+                .builder
+                .build_int_s_extend(wq_i8, i32_ty, "dqmm.dq.wq.sext")?;
+            let wq_f32 =
+                self.builder
+                    .build_signed_int_to_float(wq_i32, f32_ty, "dqmm.dq.wq.f32")?;
+            let prod = self
+                .builder
+                .build_float_mul(scale_f32, wq_f32, "dqmm.dq.prod")?;
+            let dst_gep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(f32_ty, ws_b, &[idx], "dqmm.dq.dst.gep")?
+            };
+            self.builder.build_store(dst_gep, prod)?;
+
+            self.finalize_counted_loop(
+                phi,
+                preheader,
+                i64_ty.const_int(n * k_u, false),
+                header,
+                after,
+                header,
+            )?;
+            self.builder.position_at_end(after);
+        }
+
+        // BLAS sgemm: C = A @ B^T  (B is [N, K], so trans_b=true)
+        let c_for_gemm = match out_float_ty {
+            FloatType::BF16 => ws_c,
+            FloatType::F32 => out_gep,
+            FloatType::F64 => unreachable!(),
+        };
+        let gemm_args = GemmArgs {
+            a: (a_for_gemm, false),
+            b: (ws_b, true),
+            c: c_for_gemm,
+            alpha: 1.0,
+            beta: 0.0,
+            m,
+            n,
+            k: k_u,
+        };
+        self.blas
+            .call_gemm(FloatType::F32, &gemm_args, self.builder)?;
+
+        if matches!(out_float_ty, FloatType::BF16) {
+            self.f32_buf_to_bf16(ws_c, out_gep, m * n)?;
+        }
+
+        Ok(self.builder.get_insert_block().unwrap())
+    }
+
     pub fn build_matrix_reduce(
         &self,
         ptrs: &[TensorPtr<'ctx>],

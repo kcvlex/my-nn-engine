@@ -1103,10 +1103,9 @@ fn dequantize_linear() -> TestResult {
     )
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn dequant_matmul() -> TestResult {
-    with_cuda_session_and_tensors("dequant_matmul", (3, 1), |session, (inputs, expected)| {
+    with_all_sessions_and_tensors("dequant_matmul", (3, 1), |session, (inputs, expected)| {
         let outputs = session.run(inputs)?;
         assert_eq_epsilon!(outputs[0], expected[0], 1e-1);
         Ok(())

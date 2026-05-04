@@ -281,6 +281,25 @@ impl KernelsBuilder {
                                     None
                                 }
                             }
+                            Operator::DequantMatMul(_) => {
+                                let a_ty = graph
+                                    .get_resolved_tensor_type(
+                                        n.inputs[args::DEQUANT_MATMUL_LHS].unwrap(),
+                                    )
+                                    .unwrap();
+                                let b_ty = graph
+                                    .get_resolved_tensor_type(
+                                        n.inputs[args::DEQUANT_MATMUL_RHS].unwrap(),
+                                    )
+                                    .unwrap();
+                                let k = b_ty.dims[1];
+                                let m = a_ty.dims.size() / k;
+                                let n_dim = b_ty.dims[0];
+                                Some((
+                                    args::DEQUANT_MATMUL_WORKSPACE,
+                                    m * k + n_dim * k + m * n_dim,
+                                ))
+                            }
                             _ => None,
                         };
                         if let Some((idx, ws_elems)) = bf16_workspace {

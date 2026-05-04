@@ -1099,6 +1099,15 @@ impl<'ll> CodeGen<'ll, '_> {
                     let axis = dq.axis.index(x.ty.dims.ndim());
                     translator.build_dequantize_linear(&ptrs[0], x, scale, axis, entry)
                 }
+                Operator::DequantMatMul(ref dqmm) => {
+                    let act = &ptrs[args::DEQUANT_MATMUL_LHS + 1];
+                    let wq = &ptrs[args::DEQUANT_MATMUL_RHS + 1];
+                    let scale = &ptrs[args::DEQUANT_MATMUL_SCALE + 1];
+                    let workspace = &ptrs[args::DEQUANT_MATMUL_WORKSPACE + 1];
+                    let axis = dqmm.axis.index(wq.ty.dims.ndim());
+                    translator
+                        .build_dequant_matmul(&ptrs[0], act, wq, scale, workspace, axis, entry)
+                }
                 _ => todo!("{:?}", op),
             },
             KernelBody::ElementWises(ElementWises { ops }) => {
