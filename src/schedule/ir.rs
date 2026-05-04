@@ -40,6 +40,15 @@ pub enum Device {
     CUDA,
 }
 
+impl Device {
+    pub fn tier(self) -> MemoryTier {
+        match self {
+            Device::CPU => MemoryTier::HostArena,
+            Device::CUDA => MemoryTier::GpuArena,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecutionContext {
     pub device: Device,

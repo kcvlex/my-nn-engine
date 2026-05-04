@@ -211,6 +211,7 @@ struct KernelInfo {
     order: usize,
     stream: StreamId,
     event: EventId,
+    device: Device,
 }
 
 struct Scheduler<'s> {
@@ -221,7 +222,6 @@ struct Scheduler<'s> {
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
     device: Device,
-    target_tier: MemoryTier,
 
     // TODO: Per arena
     num_streams: usize,
@@ -264,9 +264,9 @@ impl<'s> Scheduler<'s> {
 
         let value_remaining_uses = deps.value_uses_count.clone();
 
-        let (device, target_tier) = match schedule.options.target {
-            Target::CUDA => (Device::CUDA, MemoryTier::GpuArena),
-            Target::CPU => (Device::CPU, MemoryTier::HostArena),
+        let device = match schedule.options.target {
+            Target::CUDA => Device::CUDA,
+            Target::CPU => Device::CPU,
         };
 
         let kernel_pending: BTreeMap<KernelId, usize> = deps
@@ -288,7 +288,6 @@ impl<'s> Scheduler<'s> {
             session_states,
             inputs_set,
             device,
-            target_tier,
             num_streams,
             allocator: ChunkAllocator::default(),
             tier2arena: BTreeMap::new(),
@@ -376,7 +375,15 @@ impl<'s> Scheduler<'s> {
         }
     }
 
+    /// Choose the device for `kid`. Currently every kernel runs on the
+    /// target device; once hybrid placement lands this is where heuristics
+    /// or per-kernel hints will plug in.
+    fn pick_device(&self, _kid: KernelId) -> Device {
+        self.device
+    }
+
     fn schedule_kernel(&mut self, kid: KernelId) {
+        let device = self.pick_device(kid);
         let stream = self.pick_stream(kid);
         let order = self.kernel_info.len();
         let event = EventId(order);
@@ -386,14 +393,12 @@ impl<'s> Scheduler<'s> {
                 order,
                 stream,
                 event,
+                device,
             },
         );
         self.stream_load[stream.index()] += 1;
 
-        let context = ExecutionContext {
-            device: self.device,
-            stream,
-        };
+        let context = ExecutionContext { device, stream };
 
         // Cross-stream wait events.
         for pred in &self.deps.kernel_preds[&kid] {
@@ -464,6 +469,7 @@ impl<'s> Scheduler<'s> {
     fn bind_kernel(&mut self, kid: KernelId, stream: StreamId) -> Vec<ValueBinding> {
         let mut bindings = Vec::new();
         let inputs = self.schedule.kernels[kid].inputs.clone();
+        let tier = self.kernel_info[&kid].device.tier();
 
         for input in inputs.iter().flatten().copied() {
             if self.initializers.contains(&input) {
@@ -488,7 +494,7 @@ impl<'s> Scheduler<'s> {
             let place = if is_workspace {
                 let size = value_byte_size(self.schedule, input);
                 let uses = self.value_remaining_uses.get(&input).copied().unwrap_or(0);
-                let cid = self.alloc_chunk(self.target_tier, size, stream, uses);
+                let cid = self.alloc_chunk(tier, size, stream, uses);
                 self.value2place.insert(input, AllocPlace::Chunk(cid));
                 AllocPlace::Chunk(cid)
             } else {
@@ -549,7 +555,7 @@ impl<'s> Scheduler<'s> {
                 (p, false)
             } else {
                 let size = value_byte_size(self.schedule, output);
-                let cid = self.alloc_chunk(self.target_tier, size, stream, uses);
+                let cid = self.alloc_chunk(tier, size, stream, uses);
                 (AllocPlace::Chunk(cid), true)
             };
 
