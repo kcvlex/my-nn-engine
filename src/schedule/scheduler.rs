@@ -175,39 +175,32 @@ fn must_in_place_input(op: &Operator) -> Option<usize> {
 }
 
 fn compute_output_aliases(schedule: &Schedule) -> HashMap<ValueId, ValueId> {
-    use std::collections::hash_map::Entry;
-    let mut alias: HashMap<ValueId, ValueId> = HashMap::new();
-    for &out in &schedule.outputs {
-        alias.insert(out, out);
+    let mut passthrough_input: HashMap<ValueId, ValueId> = HashMap::new();
+    for (_, kernel) in schedule.kernels.iter() {
+        if !matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
+            continue;
+        }
+        let Some(out0) = kernel.outputs.first().copied() else {
+            continue;
+        };
+        let Some(in0) = kernel.inputs.first().and_then(|x| *x) else {
+            continue;
+        };
+        passthrough_input.insert(out0, in0);
     }
 
-    loop {
-        let mut changed = false;
-        for (_, kernel) in schedule.kernels.iter() {
-            let is_passthrough = match &kernel.body {
-                KernelBody::Opaque(Opaque { op }) => {
-                    matches!(op, Operator::Identity | Operator::Reinterpret(_))
-                }
-                _ => false,
-            };
-            if !is_passthrough {
-                continue;
+    let mut alias: HashMap<ValueId, ValueId> = HashMap::new();
+    let mut queue: Vec<ValueId> = Vec::with_capacity(schedule.outputs.len());
+    for &out in &schedule.outputs {
+        alias.insert(out, out);
+        queue.push(out);
+    }
+    while let Some(v) = queue.pop() {
+        let target = alias[&v];
+        if let Some(&pred) = passthrough_input.get(&v) {
+            if alias.insert(pred, target).is_none() {
+                queue.push(pred);
             }
-            let Some(out0) = kernel.outputs.first().copied() else {
-                continue;
-            };
-            let Some(in0) = kernel.inputs.first().and_then(|x| *x) else {
-                continue;
-            };
-            if let Some(&target) = alias.get(&out0) {
-                if let Entry::Vacant(e) = alias.entry(in0) {
-                    e.insert(target);
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
         }
     }
     alias
