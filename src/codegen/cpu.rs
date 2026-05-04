@@ -551,7 +551,22 @@ impl<'ll> CodeGen<'ll, '_> {
             }
         }
 
-        for (kernel_id, kernel) in self.gen_ctx.schedule.kernels.iter() {
+        let plan = self
+            .gen_ctx
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let scheduled_kernel_ids: Vec<KernelId> = plan
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Kernel(k) => Some(k.kernel),
+                _ => None,
+            })
+            .collect();
+        for kernel_id in scheduled_kernel_ids {
+            let kernel = &self.gen_ctx.schedule.kernels[kernel_id];
             let function = if !self.gen_ctx.need_to_generate(kernel_id) {
                 None
             } else {

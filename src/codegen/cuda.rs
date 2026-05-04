@@ -564,7 +564,25 @@ impl<'sched> HostCodeGenerator<'sched> {
                         self.session_state_devices
                             .insert(binding.value, device_name);
                     }
-                    _ => {}
+                    // Reinterpret(V_init) -> W is emitted as a no-op and W
+                    // shares V_init's buffer, but `initializer_plans` only
+                    // has the V_init entry. Mirror it under W so a downstream
+                    // kernel that consumes W resolves to the same d_init_*.
+                    // Same idea for Input/Output via hostmem2identifier.
+                    AllocPlace::Initializer(src) => {
+                        if binding.value != src {
+                            if let Some(plan) = self.initializer_plans.get(&src).cloned() {
+                                self.initializer_plans.insert(binding.value, plan);
+                            }
+                        }
+                    }
+                    AllocPlace::Input(src) | AllocPlace::Output(src) => {
+                        if binding.value != src {
+                            if let Some(name) = self.hostmem2identifier.get(&src).cloned() {
+                                self.hostmem2identifier.insert(binding.value, name);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -607,12 +625,16 @@ impl<'sched> HostCodeGenerator<'sched> {
             .iter()
             .copied()
             .collect();
+        let mut emitted: BTreeSet<String> = BTreeSet::new();
         for value in used {
             let InitializerPlan {
                 arg_idx,
                 device_name,
                 ..
             } = self.initializer_plans[&value].clone();
+            if !emitted.insert(device_name.clone()) {
+                continue;
+            }
             self.state_fields
                 .push(format!("void *{device_name} = nullptr;"));
             self.init_stmts.push(Statement::Raw(format!(
@@ -632,7 +654,20 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_computes(&mut self) -> Result<Vec<Statement>, BuildError> {
-        for (kernel_id, _) in self.schedule.kernels.iter() {
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let kernel_ids: Vec<KernelId> = plan
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Kernel(k) => Some(k.kernel),
+                _ => None,
+            })
+            .collect();
+        for kernel_id in kernel_ids {
             self.call_kernel(kernel_id)?;
         }
         Ok(self.move_statements())

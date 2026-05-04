@@ -40,7 +40,7 @@ struct ModelState {
 extern "C" void* model_init(void **initializer, void **session_state) {
   auto *state = new ModelState;
   (void)session_state;
-  cudaCheckErr(cudaMalloc(&state->d_arena, 32768));
+  cudaCheckErr(cudaMalloc(&state->d_arena, 24576));
   state->d_init_0 = initializer[0];
   state->d_init_1 = initializer[1];
   cudaCheckErr(cudaStreamCreate(&state->stream_0));
@@ -68,12 +68,12 @@ extern "C" void model(void *state_ptr, void **output, void **input) {
   float *h_input_2 = (float *)(input[0]);
   float *h_output_13 = (float *)(output[0]);
   void *d_chunk_0 = (char*)state->d_arena + 0;
-  void *d_chunk_1 = (char*)state->d_arena + 16384;
+  void *d_chunk_1 = (char*)state->d_arena + 8192;
   cudaStream_t stream_0 = state->stream_0;
   CudnnHandlerContext &cudnn_handler_ctx0 = state->cudnn_handler_ctx0;
-  cudaCheckErr(cudaMemcpyAsync(d_chunk_1, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
-  state->cudnn_setting1.execute(&cudnn_handler_ctx0, d_chunk_1, state->d_init_0, d_chunk_0, nullptr);
-  kernel_2_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_0, (float*)d_chunk_0);
+  cudaCheckErr(cudaMemcpyAsync(d_chunk_0, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
+  state->cudnn_setting1.execute(&cudnn_handler_ctx0, d_chunk_0, state->d_init_0, d_chunk_1, nullptr);
+  kernel_2_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_0, (float*)d_chunk_1);
   state->cudnn_setting3.execute(&cudnn_handler_ctx0, d_chunk_0, state->d_init_1, d_chunk_1, nullptr);
   cudaCheckErr(cudaMemcpyAsync(h_output_13, d_chunk_1, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
   cudaCheckErr(cudaDeviceSynchronize());

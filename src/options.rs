@@ -23,6 +23,9 @@ pub struct Options {
     #[builder(default = 16)]
     pub num_cuda_streams: usize,
 
+    #[builder(default = true)]
+    pub experimental_scheduler: bool,
+
     #[builder(default)]
     pub enable_nhwc_optimization: Option<bool>,
 

@@ -3,6 +3,7 @@ pub mod ir;
 pub mod kernel;
 pub mod mem_alloc;
 pub mod omp;
+pub mod scheduler;
 pub mod stream;
 
 use std::any::Any;
@@ -77,13 +78,19 @@ impl SchedulePassManager {
 
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
-    if options.target == Target::CUDA {
-        manager.add_pass(Box::new(stream::StreamAllocPass {
+    if options.experimental_scheduler {
+        manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
             num_streams: options.num_cuda_streams,
         }));
+    } else {
+        if options.target == Target::CUDA {
+            manager.add_pass(Box::new(stream::StreamAllocPass {
+                num_streams: options.num_cuda_streams,
+            }));
+        }
+        manager.add_pass(Box::new(mem_alloc::MemAllocPass));
+        manager.add_pass(Box::new(execution_plan::BuildExecutionPlanPass));
     }
-    manager.add_pass(Box::new(mem_alloc::MemAllocPass));
-    manager.add_pass(Box::new(execution_plan::BuildExecutionPlanPass));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
