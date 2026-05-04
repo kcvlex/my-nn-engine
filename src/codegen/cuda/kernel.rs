@@ -20,6 +20,7 @@ pub enum CUDAKernel {
     ConcatKernel(ConcatKernel),
     DequantizeLinearKernel(DequantizeLinearKernel),
     DequantMatMulKernel(DequantMatMulKernel),
+    DequantMatMulWmmaKernel(DequantMatMulWmmaKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -360,6 +361,7 @@ impl LaunchKernel {
             CUDAKernel::ConcatKernel(c) => c,
             CUDAKernel::DequantizeLinearKernel(d) => d,
             CUDAKernel::DequantMatMulKernel(d) => d,
+            CUDAKernel::DequantMatMulWmmaKernel(d) => d,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1399,6 +1401,33 @@ impl DequantMatMulKernel {
             cast!(self.act_ty, self.act),
             format!("(const signed char *)({})", self.wq),
             cast!(self.out_ty, self.scale),
+            self.m.to_string(),
+            self.n.to_string(),
+            self.k.to_string(),
+        ];
+        (id, args)
+    }
+}
+
+pub struct DequantMatMulWmmaKernel {
+    pub m: usize,
+    pub n: usize,
+    pub k: usize,
+
+    pub out: Expr,
+    pub act: Expr,
+    pub wq: Expr,
+    pub scale: Expr,
+}
+
+impl DequantMatMulWmmaKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = "dequant_matmul_wmma".to_string();
+        let args = vec![
+            format!("(__nv_bfloat16 *)({})", self.out),
+            format!("(const __nv_bfloat16 *)({})", self.act),
+            format!("(const int8_t *)({})", self.wq),
+            format!("(const __nv_bfloat16 *)({})", self.scale),
             self.m.to_string(),
             self.n.to_string(),
             self.k.to_string(),

@@ -2,4 +2,11 @@ If:
   PathMatch: .*\.cuh?
 CompileFlags:
   Compiler: /opt/cuda/bin/nvcc
-  Add: [-x, cuda]
+  Add:
+    - -xcuda
+    - --cuda-gpu-arch=sm_89
+    - --cuda-path=/opt/cuda
+    - -I/opt/cuda/include
+    - -I/opt/cuda/include/cccl
+    - -std=c++17
+    - -D__CUDACC__

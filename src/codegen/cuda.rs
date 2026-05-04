@@ -1333,7 +1333,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                 }
 
                 Operator::DequantMatMul(DequantMatMul { axis }) => {
-                    self.includes.insert(Include::Local("dequant_matmul.cuh"));
                     let lhs_ty = self
                         .get_resolved_tensor_type(kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap())?
                         .clone();
@@ -1350,36 +1349,79 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let n = rhs_ty.dims[0];
                     let k = rhs_ty.dims[1];
                     let m = lhs_ty.dims.size() / k;
-                    let block_size = DEFAULT_BLOCK_SIZE;
-                    let cuda_kernel =
-                        kernel::CUDAKernel::DequantMatMulKernel(kernel::DequantMatMulKernel {
-                            act_ty: lhs_ty.elem_type,
-                            out_ty: scale_ty.elem_type,
-                            block_size,
-                            m,
-                            n,
-                            k,
-                            out: self.device_identifier(kernel.outputs[0])?,
-                            act: self.device_identifier(
-                                kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap(),
-                            )?,
-                            wq: self.device_identifier(
-                                kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap(),
-                            )?,
-                            scale: self.device_identifier(
-                                kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap(),
-                            )?,
-                        });
-                    self.stmts.push(
-                        kernel::LaunchKernel {
-                            cuda_kernel,
-                            grid_size: Expr::Identifier(format!("dim3({}, {}, 1)", n, m)),
-                            block_size: block_size.to_literal(),
-                            shared_mem_bytes: None,
-                            stream_id,
-                        }
-                        .into(),
-                    );
+                    let out = self.device_identifier(kernel.outputs[0])?;
+                    let act = self.device_identifier(
+                        kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap(),
+                    )?;
+                    let wq = self.device_identifier(
+                        kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap(),
+                    )?;
+                    let scale = self.device_identifier(
+                        kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap(),
+                    )?;
+
+                    let use_wmma = matches!(lhs_ty.elem_type, DataType::Float(FloatType::BF16))
+                        && matches!(scale_ty.elem_type, DataType::Float(FloatType::BF16))
+                        && m % 32 == 0
+                        && n % 32 == 0
+                        && k % 16 == 0;
+
+                    if use_wmma {
+                        self.includes
+                            .insert(Include::Local("dequant_matmul_wmma.cuh"));
+                        let cuda_kernel = kernel::CUDAKernel::DequantMatMulWmmaKernel(
+                            kernel::DequantMatMulWmmaKernel {
+                                m,
+                                n,
+                                k,
+                                out,
+                                act,
+                                wq,
+                                scale,
+                            },
+                        );
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: Expr::Identifier(format!(
+                                    "dim3({}, {}, 1)",
+                                    n / 32,
+                                    m / 32
+                                )),
+                                block_size: 128usize.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        self.includes.insert(Include::Local("dequant_matmul.cuh"));
+                        let block_size = DEFAULT_BLOCK_SIZE;
+                        let cuda_kernel = kernel::CUDAKernel::DequantMatMulKernel(
+                            kernel::DequantMatMulKernel {
+                                act_ty: lhs_ty.elem_type,
+                                out_ty: scale_ty.elem_type,
+                                block_size,
+                                m,
+                                n,
+                                k,
+                                out,
+                                act,
+                                wq,
+                                scale,
+                            },
+                        );
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: Expr::Identifier(format!("dim3({}, {}, 1)", n, m)),
+                                block_size: block_size.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    }
                 }
 
                 Operator::DequantizeLinear(DequantizeLinear { axis }) => {
