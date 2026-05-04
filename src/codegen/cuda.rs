@@ -578,8 +578,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 continue;
             }
             let field = format!("d_arena_{}", arena.id);
-            self.state_fields
-                .push(format!("void *{field} = nullptr;"));
+            self.state_fields.push(format!("void *{field} = nullptr;"));
             match arena.tier {
                 MemoryTier::GpuArena => {
                     self.init_stmts.push(
