@@ -81,13 +81,15 @@ struct ChunkState {
 }
 
 struct ArenaChunks {
+    tier: MemoryTier,
     owned: Vec<ChunkId>,
     free_per_stream: Vec<Vec<ChunkId>>,
 }
 
 impl ArenaChunks {
-    fn new(num_streams: usize) -> Self {
+    fn new(tier: MemoryTier, num_streams: usize) -> Self {
         Self {
+            tier,
             owned: Vec::new(),
             free_per_stream: vec![Vec::new(); num_streams],
         }
@@ -101,10 +103,14 @@ struct ChunkAllocator {
 }
 
 impl ChunkAllocator {
-    fn new_arena(&mut self, num_streams: usize) -> ArenaId {
+    fn new_arena(&mut self, tier: MemoryTier, num_streams: usize) -> ArenaId {
         let arena_id = self.arena2chunks.len();
-        self.arena2chunks.push(ArenaChunks::new(num_streams));
+        self.arena2chunks.push(ArenaChunks::new(tier, num_streams));
         arena_id
+    }
+
+    fn chunk_tier(&self, id: ChunkId) -> MemoryTier {
+        self.arena2chunks[self.all_chunks[id].arena_id].tier
     }
 
     fn alloc(&mut self, size: usize, arena_id: ArenaId, stream: StreamId, uses: usize) -> ChunkId {
@@ -228,6 +234,8 @@ struct Scheduler<'s> {
 
     allocator: ChunkAllocator,
     tier2arena: BTreeMap<MemoryTier, ArenaId>,
+    value_on_tier: HashMap<(ValueId, MemoryTier), AllocPlace>,
+    next_event_id: usize,
 
     value2place: HashMap<ValueId, AllocPlace>,
     value_remaining_uses: HashMap<ValueId, usize>,
@@ -291,6 +299,8 @@ impl<'s> Scheduler<'s> {
             num_streams,
             allocator: ChunkAllocator::default(),
             tier2arena: BTreeMap::new(),
+            value_on_tier: HashMap::new(),
+            next_event_id: 0,
             value2place,
             value_remaining_uses,
             kernel_pending,
@@ -312,7 +322,7 @@ impl<'s> Scheduler<'s> {
         let arena_id = match self.tier2arena.entry(tier) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
-                let arena_id = self.allocator.new_arena(self.num_streams);
+                let arena_id = self.allocator.new_arena(tier, self.num_streams);
                 e.insert(arena_id);
                 arena_id
             }
@@ -375,18 +385,75 @@ impl<'s> Scheduler<'s> {
         }
     }
 
-    /// Choose the device for `kid`. Currently every kernel runs on the
-    /// target device; once hybrid placement lands this is where heuristics
-    /// or per-kernel hints will plug in.
     fn pick_device(&self, _kid: KernelId) -> Device {
         self.device
+    }
+
+    fn fresh_event(&mut self) -> EventId {
+        let id = EventId(self.next_event_id);
+        self.next_event_id += 1;
+        id
+    }
+
+    fn ensure_value_on_tier(
+        &mut self,
+        value: ValueId,
+        original: AllocPlace,
+        dst_tier: MemoryTier,
+        stream: StreamId,
+    ) -> AllocPlace {
+        let needs_transfer = match original {
+            AllocPlace::Chunk(cid) => self.allocator.chunk_tier(cid) != dst_tier,
+            _ => false,
+        };
+        if !needs_transfer {
+            return original;
+        }
+        if let Some(cached) = self.value_on_tier.get(&(value, dst_tier)).copied() {
+            if let AllocPlace::Chunk(cid) = cached {
+                self.allocator.add_uses(cid, 1);
+            }
+            return cached;
+        }
+        let size = value_byte_size(self.schedule, value);
+        let dst_cid = self.alloc_chunk(dst_tier, size, stream, 1);
+        let dst_place = AllocPlace::Chunk(dst_cid);
+        let event = self.fresh_event();
+        let device = match dst_tier {
+            MemoryTier::HostArena => Device::CPU,
+            MemoryTier::GpuArena => Device::CUDA,
+        };
+        let context = ExecutionContext { device, stream };
+        let src_first_use = match original {
+            AllocPlace::Chunk(cid) => self.allocator.mark_as_first_use(cid),
+            _ => false,
+        };
+        let dst_first_use = self.allocator.mark_as_first_use(dst_cid);
+        self.steps.push(Step::Transfer(TransferStep {
+            src: ValueBinding {
+                value,
+                role: BindingRole::Input,
+                place: original,
+                is_first_use: src_first_use,
+            },
+            dst: ValueBinding {
+                value,
+                role: BindingRole::Output,
+                place: dst_place,
+                is_first_use: dst_first_use,
+            },
+            context,
+            records_event: Some(event),
+        }));
+        self.value_on_tier.insert((value, dst_tier), dst_place);
+        dst_place
     }
 
     fn schedule_kernel(&mut self, kid: KernelId) {
         let device = self.pick_device(kid);
         let stream = self.pick_stream(kid);
         let order = self.kernel_info.len();
-        let event = EventId(order);
+        let event = self.fresh_event();
         self.kernel_info.insert(
             kid,
             KernelInfo {
@@ -498,10 +565,11 @@ impl<'s> Scheduler<'s> {
                 self.value2place.insert(input, AllocPlace::Chunk(cid));
                 AllocPlace::Chunk(cid)
             } else {
-                *self
+                let original = *self
                     .value2place
                     .get(&input)
-                    .unwrap_or_else(|| panic!("unresolved place for {input:?}"))
+                    .unwrap_or_else(|| panic!("unresolved place for {input:?}"));
+                self.ensure_value_on_tier(input, original, tier, stream)
             };
 
             let is_first_use =
