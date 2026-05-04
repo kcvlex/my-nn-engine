@@ -226,7 +226,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         self.builder.build_unconditional_branch(header)?;
         let (phi, idx) = self.init_counted_loop(header)?;
 
-        let x_loaded = self.build_load(&x.clone().set_offset(idx))?;
+        let x_loaded = self.build_load(&x.clone().add_offset(self.builder, idx)?)?;
         let f_val = match x.ty.elem_type {
             DataType::SInt(_) | DataType::Bool => self
                 .builder
@@ -261,13 +261,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 "dequant.axis",
             )?
         };
-        let scale_v = self.build_load(&scale.clone().set_offset(axis_idx))?;
+        let scale_v = self.build_load(&scale.clone().add_offset(self.builder, axis_idx)?)?;
         let prod = self.builder.build_float_mul(
             f_val.into_float_value(),
             scale_v.into_float_value(),
             "dequant.prod",
         )?;
-        self.build_store(&dst.clone().set_offset(idx), prod)?;
+        self.build_store(&dst.clone().add_offset(self.builder, idx)?, prod)?;
 
         self.finalize_counted_loop(
             phi,
@@ -2844,17 +2844,28 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let n = n_dim as u64;
         let k_u = k as u64;
         let i64_ty = self.context.i64_type();
-        let f32_ty = self.context.f32_type();
-        let i8_ty = self.context.i8_type();
-        let i32_ty = self.context.i32_type();
 
         self.builder.position_at_end(entry);
         let act_gep = self.build_gep(act)?;
-        let wq_gep = self.build_gep(wq)?;
         let out_gep = self.build_gep(out)?;
         let ws_a = self.workspace_offset(workspace, 0, "dqmm.ws_a")?;
-        let ws_b = self.workspace_offset(workspace, m * k_u, "dqmm.ws_b")?;
         let ws_c = self.workspace_offset(workspace, m * k_u + n * k_u, "dqmm.ws_c")?;
+
+        // View workspace[m*k .. m*k + n*k] as a contiguous [N, K] f32 buffer.
+        let ws_b_offset = self.builder.build_int_add(
+            workspace.offset,
+            i64_ty.const_int(m * k_u, false),
+            "dqmm.ws_b.offset",
+        )?;
+        let ws_b_tp = TensorPtr {
+            ptr: workspace.ptr,
+            ty: ResolvedTensorType::new(
+                DataType::Float(FloatType::F32),
+                ResolvedTensorDims::new(&[n_dim, k]),
+            ),
+            offset: ws_b_offset,
+            name: format!("{}.ws_b", workspace.name),
+        };
 
         // ws_a <- act (no-op when act is already f32; just point at act_gep)
         let a_for_gemm = match act_float_ty {
@@ -2866,67 +2877,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             FloatType::F64 => unreachable!(),
         };
 
-        // ws_b[n*k + k_idx] = scale[n] * (f32)wq[n*k + k_idx]
-        {
-            let preheader = self.builder.get_insert_block().unwrap();
-            let header = self.context.append_basic_block(*self.func, "dqmm.dq.h");
-            let after = self.context.append_basic_block(*self.func, "dqmm.dq.x");
-            self.builder.build_unconditional_branch(header)?;
-            let (phi, idx) = self.init_counted_loop(header)?;
-
-            let n_idx = if n == 1 {
-                i64_ty.const_zero()
-            } else {
-                self.builder.build_int_unsigned_div(
-                    idx,
-                    i64_ty.const_int(k_u, false),
-                    "dqmm.dq.n",
-                )?
-            };
-            let scale_off = self
-                .builder
-                .build_int_add(scale.offset, n_idx, "dqmm.dq.scale.off")?;
-            let scale_v = self
-                .build_load(&scale.clone().set_offset(scale_off))?
-                .into_float_value();
-            let scale_f32 = match out_float_ty {
-                FloatType::F32 | FloatType::BF16 => scale_v,
-                FloatType::F64 => unreachable!(),
-            };
-
-            let wq_idx_gep = unsafe {
-                self.builder
-                    .build_in_bounds_gep(i8_ty, wq_gep, &[idx], "dqmm.dq.wq.gep")?
-            };
-            let wq_i8 = self
-                .builder
-                .build_load(i8_ty, wq_idx_gep, "dqmm.dq.wq.i8")?
-                .into_int_value();
-            let wq_i32 = self
-                .builder
-                .build_int_s_extend(wq_i8, i32_ty, "dqmm.dq.wq.sext")?;
-            let wq_f32 =
-                self.builder
-                    .build_signed_int_to_float(wq_i32, f32_ty, "dqmm.dq.wq.f32")?;
-            let prod = self
-                .builder
-                .build_float_mul(scale_f32, wq_f32, "dqmm.dq.prod")?;
-            let dst_gep = unsafe {
-                self.builder
-                    .build_in_bounds_gep(f32_ty, ws_b, &[idx], "dqmm.dq.dst.gep")?
-            };
-            self.builder.build_store(dst_gep, prod)?;
-
-            self.finalize_counted_loop(
-                phi,
-                preheader,
-                i64_ty.const_int(n * k_u, false),
-                header,
-                after,
-                header,
-            )?;
-            self.builder.position_at_end(after);
-        }
+        // ws_b[n, k] = scale[n] * (f32)wq[n, k]
+        let after_dequant = self.builder.get_insert_block().unwrap();
+        let after_dequant = self.build_dequantize_linear(&ws_b_tp, wq, scale, 0, after_dequant)?;
+        self.builder.position_at_end(after_dequant);
+        let ws_b = self.build_gep(&ws_b_tp)?;
 
         // BLAS sgemm: C = A @ B^T  (B is [N, K], so trans_b=true)
         let c_for_gemm = match out_float_ty {
