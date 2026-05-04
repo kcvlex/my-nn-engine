@@ -202,12 +202,10 @@ pub struct HostCodeGenerator<'sched> {
     transfer_streams: HashMap<usize, KernelStreamView>,
     to_record_events: BTreeSet<EventId>,
 
-    value2chunk: HashMap<ValueId, ChunkId>,
-    hostmem2identifier: HashMap<ValueId, String>,
-    devicemem2identifier: HashMap<ChunkId, String>,
-    initializer_plans: IndexMap<ValueId, InitializerPlan>,
+    value2place: HashMap<ValueId, AllocPlace>,
+    chunk_names: HashMap<ChunkId, String>,
+    initializer_arg_idx: HashMap<ValueId, usize>,
     used_device_initializers: std::cell::RefCell<BTreeSet<ValueId>>,
-    session_state_devices: IndexMap<ValueId, String>,
 
     cublas_handlers: IndexMap<StreamId, CublasHandler>,
     cudnn_ctxs: IndexMap<StreamId, Vec<KernelId>>,
@@ -423,12 +421,6 @@ fn ceil_pow2(mut x: usize) -> usize {
     x + 1
 }
 
-#[derive(Clone)]
-struct InitializerPlan {
-    arg_idx: usize,
-    device_name: String,
-}
-
 impl<'sched> HostCodeGenerator<'sched> {
     pub fn new(schedule: &'sched Schedule) -> Self {
         let plan = schedule
@@ -480,12 +472,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             streams,
             transfer_streams,
             to_record_events,
-            value2chunk: HashMap::new(),
-            hostmem2identifier: HashMap::new(),
-            devicemem2identifier: HashMap::new(),
-            initializer_plans: IndexMap::new(),
+            value2place: HashMap::new(),
+            chunk_names: HashMap::new(),
+            initializer_arg_idx: HashMap::new(),
             used_device_initializers: std::cell::RefCell::new(BTreeSet::new()),
-            session_state_devices: IndexMap::new(),
             cublas_handlers: IndexMap::new(),
             cudnn_ctxs: IndexMap::new(),
             separated_codes: Vec::new(),
@@ -504,8 +494,6 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn gen_decl_values(&mut self) -> Result<Vec<Statement>, BuildError> {
-        use std::collections::hash_map::Entry;
-
         for (arg_name, value_ids) in &[
             (ARG_INPUT, &self.schedule.inputs[..]),
             (ARG_OUTPUT, &self.schedule.outputs[..]),
@@ -515,26 +503,11 @@ impl<'sched> HostCodeGenerator<'sched> {
                 let value_name = format!("h_{}_{}", arg_name, value.index());
                 let stmt = format!("{ty} *{value_name} = ({ty} *)({arg_name}[{idx}]);");
                 self.stmts.push(Statement::Raw(stmt));
-                match self.hostmem2identifier.entry(*value) {
-                    Entry::Occupied(_) => {
-                        unreachable!("duplicate host value");
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(value_name);
-                    }
-                }
             }
         }
 
         for (idx, value) in self.schedule.initializers.iter().enumerate() {
-            let device_name = format!("d_init_{}", value.index());
-            self.initializer_plans.insert(
-                *value,
-                InitializerPlan {
-                    arg_idx: idx,
-                    device_name,
-                },
-            );
+            self.initializer_arg_idx.insert(*value, idx);
         }
 
         for (idx, value) in self.schedule.session_states.iter().enumerate() {
@@ -545,7 +518,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.init_stmts.push(Statement::Raw(format!(
                 "state->{device_name} = {ARG_SESSION_STATE}[{idx}];"
             )));
-            self.session_state_devices.insert(*value, device_name);
         }
 
         let plan = self
@@ -553,16 +525,28 @@ impl<'sched> HostCodeGenerator<'sched> {
             .execution_plan
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
+        for v in &self.schedule.inputs {
+            self.value2place.insert(*v, AllocPlace::Input(*v));
+        }
+        for v in &self.schedule.outputs {
+            self.value2place.insert(*v, AllocPlace::Output(*v));
+        }
+        for v in &self.schedule.initializers {
+            self.value2place.insert(*v, AllocPlace::Initializer(*v));
+        }
+        for v in &self.schedule.session_states {
+            self.value2place.insert(*v, AllocPlace::SessionState(*v));
+        }
         for step in &plan.steps {
             match step {
                 Step::Kernel(k) => {
-                    for binding in &k.bindings {
-                        self.register_binding(binding, Some(k.kernel))?;
+                    for b in &k.bindings {
+                        self.value2place.insert(b.value, b.place);
                     }
                 }
                 Step::Transfer(t) => {
-                    self.register_binding(&t.src, None)?;
-                    self.register_binding(&t.dst, None)?;
+                    self.value2place.insert(t.src.value, t.src.place);
+                    self.value2place.insert(t.dst.value, t.dst.place);
                 }
                 Step::SyncWait(_) => {}
             }
@@ -570,7 +554,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
         for chunk in &plan.chunks {
             let name = format!("d_chunk_{}", chunk.id);
-            self.devicemem2identifier.insert(chunk.id, name);
+            self.chunk_names.insert(chunk.id, name);
         }
 
         for arena in &plan.arenas {
@@ -597,7 +581,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             }
         }
         for chunk in &plan.chunks {
-            let name = &self.devicemem2identifier[&chunk.id];
+            let name = &self.chunk_names[&chunk.id];
             let offset = chunk.offset;
             let arena_id = chunk.arena;
             self.stmts.push(Statement::Raw(format!(
@@ -617,11 +601,8 @@ impl<'sched> HostCodeGenerator<'sched> {
             .collect();
         let mut emitted: BTreeSet<String> = BTreeSet::new();
         for value in used {
-            let InitializerPlan {
-                arg_idx,
-                device_name,
-                ..
-            } = self.initializer_plans[&value].clone();
+            let arg_idx = self.initializer_arg_idx[&value];
+            let device_name = format!("d_init_{}", value.index());
             if !emitted.insert(device_name.clone()) {
                 continue;
             }
@@ -777,76 +758,54 @@ impl<'sched> HostCodeGenerator<'sched> {
         Ok(self.move_statements())
     }
 
-    fn register_binding(
-        &mut self,
-        binding: &ValueBinding,
-        kernel_id: Option<KernelId>,
-    ) -> Result<(), BuildError> {
-        use std::collections::hash_map::Entry;
-        match binding.place {
-            AllocPlace::Chunk(chunk_id) => match self.value2chunk.entry(binding.value) {
-                Entry::Occupied(entry) => {
-                    assert!(*entry.get() == chunk_id);
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(chunk_id);
-                }
-            },
-            AllocPlace::SessionState(state_value) => {
-                let device_name = self
-                    .session_state_devices
-                    .get(&state_value)
-                    .ok_or_else(|| {
-                        BuildError::UnresolvedAllocateInfo(
-                            kernel_id.expect("session state outside kernel binding"),
-                        )
-                    })?
-                    .clone();
-                self.session_state_devices
-                    .insert(binding.value, device_name);
-            }
-            // Reinterpret(V_init) -> W is emitted as a no-op and W shares
-            // V_init's buffer, but `initializer_plans` only has the V_init
-            // entry. Mirror it under W so a downstream kernel that consumes W
-            // resolves to the same d_init_*. Same idea for Input/Output via
-            // hostmem2identifier.
+    fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
+        let place = self
+            .value2place
+            .get(&value_id)
+            .copied()
+            .ok_or(BuildError::ChunkNotFound(value_id))?;
+        match place {
+            AllocPlace::Chunk(c) => self
+                .chunk_names
+                .get(&c)
+                .map(|n| Expr::Identifier(n.clone()))
+                .ok_or(BuildError::NoDeviceVariable(c)),
             AllocPlace::Initializer(src) => {
-                if binding.value != src {
-                    if let Some(plan) = self.initializer_plans.get(&src).cloned() {
-                        self.initializer_plans.insert(binding.value, plan);
-                    }
-                }
+                self.used_device_initializers.borrow_mut().insert(src);
+                Ok(Expr::Identifier(format!("state->d_init_{}", src.index())))
             }
-            AllocPlace::Input(src) | AllocPlace::Output(src) => {
-                if binding.value != src {
-                    if let Some(name) = self.hostmem2identifier.get(&src).cloned() {
-                        self.hostmem2identifier.insert(binding.value, name);
-                    }
-                }
+            AllocPlace::SessionState(src) => Ok(Expr::Identifier(format!(
+                "state->d_session_state_{}",
+                src.index()
+            ))),
+            AllocPlace::Input(_) | AllocPlace::Output(_) => {
+                panic!("device_identifier called for host place: {:?}", place)
             }
         }
-        Ok(())
     }
 
-    fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
-        if let Some(plan) = self.initializer_plans.get(&value_id) {
-            let name = plan.device_name.clone();
-            self.used_device_initializers.borrow_mut().insert(value_id);
-            return Ok(Expr::Identifier(format!("state->{name}")));
-        }
-        if let Some(name) = self.session_state_devices.get(&value_id) {
-            return Ok(Expr::Identifier(format!("state->{name}")));
-        }
-        let chunk_id = self
-            .value2chunk
+    fn host_name(&self, value_id: ValueId) -> String {
+        let place = self
+            .value2place
             .get(&value_id)
-            .ok_or(BuildError::ChunkNotFound(value_id))?;
-        Ok(Expr::Identifier(
-            self.devicemem2identifier
-                .get(chunk_id)
-                .ok_or(BuildError::NoDeviceVariable(*chunk_id))?
-                .clone(),
-        ))
+            .copied()
+            .unwrap_or_else(|| panic!("host_name: no place for {value_id:?}"));
+        match place {
+            AllocPlace::Input(src) => format!("h_input_{}", src.index()),
+            AllocPlace::Output(src) => format!("h_output_{}", src.index()),
+            _ => panic!("host_name called for device place: {:?}", place),
+        }
+    }
+
+    fn host_identifier(&self, value_id: ValueId) -> Expr {
+        Expr::Identifier(self.host_name(value_id))
+    }
+
+    fn same_device_buffer(&self, a: ValueId, b: ValueId) -> bool {
+        match (self.value2place.get(&a), self.value2place.get(&b)) {
+            (Some(pa), Some(pb)) => pa == pb,
+            _ => false,
+        }
     }
 
     fn single_mem_size(&self, value_id: ValueId) -> Result<SingleMemSize, BuildError> {
@@ -951,13 +910,13 @@ impl<'sched> HostCodeGenerator<'sched> {
         // / AllocPlace::Output are host-resident; Chunk is device-resident.
         let (src_expr, dst_expr, kind) = match (src_place, dst_place) {
             (AllocPlace::Input(_), _) => {
-                let src = Expr::Identifier(self.hostmem2identifier[&src_value].clone());
+                let src = self.host_identifier(src_value);
                 let dst = self.device_identifier(dst_value)?;
                 (src, dst, CudaMemcpyKind::HostToDevice)
             }
             (_, AllocPlace::Output(_)) => {
                 let src = self.device_identifier(src_value)?;
-                let dst = Expr::Identifier(self.hostmem2identifier[&dst_value].clone());
+                let dst = self.host_identifier(dst_value);
                 (src, dst, CudaMemcpyKind::DeviceToHost)
             }
             other => panic!("unsupported Transfer place pair: {:?}", other),
@@ -1026,13 +985,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                 ),
 
                 Operator::Identity | Operator::Reinterpret(_) => {
-                    let input_chunk = self.value2chunk.get(&kernel.inputs[0].unwrap());
-                    let output_chunk = self.value2chunk.get(&kernel.outputs[0]);
-                    let same_chunk = match (input_chunk, output_chunk) {
-                        (Some(ic), Some(oc)) => ic == oc,
-                        _ => false,
-                    };
-                    if !same_chunk {
+                    let in_v = kernel.inputs[0].unwrap();
+                    let out_v = kernel.outputs[0];
+                    if !self.same_device_buffer(in_v, out_v) {
                         let output_size = self
                             .get_resolved_tensor_type(kernel.outputs[0])?
                             .dims
@@ -1130,10 +1085,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .get(args::ATTENTION_ACTIVE_SEQ_KV)
                             .and_then(|x| *x)
                         {
-                            let host_name = self
-                                .hostmem2identifier
-                                .get(&active_id)
-                                .ok_or(BuildError::NoHostVariable(active_id))?;
+                            let host_name = self.host_name(active_id);
                             Expr::Identifier(format!("(int)(*{host_name})"))
                         } else {
                             seq_k.to_literal()
@@ -1215,10 +1167,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .get(args::ATTENTION_ACTIVE_SEQ_KV)
                             .and_then(|x| *x)
                         {
-                            let host_name = self
-                                .hostmem2identifier
-                                .get(&active_id)
-                                .ok_or(BuildError::NoHostVariable(active_id))?;
+                            let host_name = self.host_name(active_id);
                             Expr::Identifier(format!("(int)(*{host_name})"))
                         } else {
                             seq_k.to_literal()
@@ -1694,10 +1643,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let head_dim = cache_ty.dims[3];
                     let new_seq_len = new_ty.dims[2];
 
-                    let offset_host = self
-                        .hostmem2identifier
-                        .get(&offset_id)
-                        .ok_or(BuildError::NoHostVariable(offset_id))?;
+                    let offset_host = self.host_name(offset_id);
                     let offset_expr = Expr::Identifier(format!("(int)(*{})", offset_host));
 
                     let block_size = DEFAULT_BLOCK_SIZE.min(head_dim).max(32);
@@ -1750,10 +1696,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let new_seq_len = new_ty.dims[2];
                     let head_dim = cache_ty.dims[3];
 
-                    let offset_host = self
-                        .hostmem2identifier
-                        .get(&offset_id)
-                        .ok_or(BuildError::NoHostVariable(offset_id))?;
+                    let offset_host = self.host_name(offset_id);
                     let offset_expr = Expr::Identifier(format!("(int)(*{})", offset_host));
 
                     let block_size = DEFAULT_BLOCK_SIZE.min(new_seq_len * head_dim).max(32);
