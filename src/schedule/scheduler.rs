@@ -362,12 +362,37 @@ impl<'s> Scheduler<'s> {
 
         let bindings = self.bind_kernel(kid, stream);
 
-        self.steps.push(Step::Kernel(KernelStep {
-            kernel: kid,
-            context,
-            bindings,
-            records_event: Some(event),
-        }));
+        let is_transfer = matches!(
+            &self.schedule.kernels[kid].body,
+            KernelBody::Opaque(Opaque {
+                op: Operator::Transfer(_)
+            })
+        );
+        if is_transfer {
+            // Operator::Transfer: 1 input + 1 output. Lower to Step::Transfer
+            // so the codegen treats it as a memcpy rather than a kernel launch.
+            let src = *bindings
+                .iter()
+                .find(|b| b.role == BindingRole::Input)
+                .unwrap();
+            let dst = *bindings
+                .iter()
+                .find(|b| b.role == BindingRole::Output)
+                .unwrap();
+            self.steps.push(Step::Transfer(TransferStep {
+                src,
+                dst,
+                context,
+                records_event: Some(event),
+            }));
+        } else {
+            self.steps.push(Step::Kernel(KernelStep {
+                kernel: kid,
+                context,
+                bindings,
+                records_event: Some(event),
+            }));
+        }
 
         // Decrement remaining uses; release chunks whose live count hits 0.
         for input in self.schedule.kernels[kid].inputs.clone().iter().flatten() {

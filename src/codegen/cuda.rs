@@ -199,6 +199,7 @@ pub struct HostCodeGenerator<'sched> {
     state_fields: Vec<String>,
 
     streams: HashMap<KernelId, KernelStreamView>,
+    transfer_streams: HashMap<usize, KernelStreamView>,
     to_record_events: BTreeSet<EventId>,
 
     value2chunk: HashMap<ValueId, ChunkId>,
@@ -435,9 +436,10 @@ impl<'sched> HostCodeGenerator<'sched> {
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
         let mut streams: HashMap<KernelId, KernelStreamView> = HashMap::new();
+        let mut transfer_streams: HashMap<usize, KernelStreamView> = HashMap::new();
         let mut to_record_events: BTreeSet<EventId> = BTreeSet::new();
         let mut pending_waits: Vec<EventId> = Vec::new();
-        for step in &plan.steps {
+        for (idx, step) in plan.steps.iter().enumerate() {
             match step {
                 Step::SyncWait(SyncWaitStep { event, .. }) => {
                     to_record_events.insert(*event);
@@ -455,8 +457,17 @@ impl<'sched> HostCodeGenerator<'sched> {
                         },
                     );
                 }
-                Step::Transfer(_) => {
-                    unimplemented!("Transfer step not yet supported in CUDA codegen");
+                Step::Transfer(t) => {
+                    transfer_streams.insert(
+                        idx,
+                        KernelStreamView {
+                            stream_id: t.context.stream,
+                            event_id: t
+                                .records_event
+                                .expect("CUDA transfer step must have records_event"),
+                            to_wait: std::mem::take(&mut pending_waits),
+                        },
+                    );
                 }
             }
         }
@@ -467,6 +478,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             destroy_stmts: Vec::new(),
             state_fields: Vec::new(),
             streams,
+            transfer_streams,
             to_record_events,
             value2chunk: HashMap::new(),
             hostmem2identifier: HashMap::new(),
@@ -542,48 +554,17 @@ impl<'sched> HostCodeGenerator<'sched> {
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
         for step in &plan.steps {
-            let Step::Kernel(k) = step else {
-                continue;
-            };
-            for binding in &k.bindings {
-                match binding.place {
-                    AllocPlace::Chunk(chunk_id) => match self.value2chunk.entry(binding.value) {
-                        Entry::Occupied(entry) => {
-                            assert!(*entry.get() == chunk_id);
-                        }
-                        Entry::Vacant(entry) => {
-                            entry.insert(chunk_id);
-                        }
-                    },
-                    AllocPlace::SessionState(state_value) => {
-                        let device_name = self
-                            .session_state_devices
-                            .get(&state_value)
-                            .ok_or(BuildError::UnresolvedAllocateInfo(k.kernel))?
-                            .clone();
-                        self.session_state_devices
-                            .insert(binding.value, device_name);
-                    }
-                    // Reinterpret(V_init) -> W is emitted as a no-op and W
-                    // shares V_init's buffer, but `initializer_plans` only
-                    // has the V_init entry. Mirror it under W so a downstream
-                    // kernel that consumes W resolves to the same d_init_*.
-                    // Same idea for Input/Output via hostmem2identifier.
-                    AllocPlace::Initializer(src) => {
-                        if binding.value != src {
-                            if let Some(plan) = self.initializer_plans.get(&src).cloned() {
-                                self.initializer_plans.insert(binding.value, plan);
-                            }
-                        }
-                    }
-                    AllocPlace::Input(src) | AllocPlace::Output(src) => {
-                        if binding.value != src {
-                            if let Some(name) = self.hostmem2identifier.get(&src).cloned() {
-                                self.hostmem2identifier.insert(binding.value, name);
-                            }
-                        }
+            match step {
+                Step::Kernel(k) => {
+                    for binding in &k.bindings {
+                        self.register_binding(binding, Some(k.kernel))?;
                     }
                 }
+                Step::Transfer(t) => {
+                    self.register_binding(&t.src, None)?;
+                    self.register_binding(&t.dst, None)?;
+                }
+                Step::SyncWait(_) => {}
             }
         }
 
@@ -659,16 +640,27 @@ impl<'sched> HostCodeGenerator<'sched> {
             .execution_plan
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
-        let kernel_ids: Vec<KernelId> = plan
+        // Snapshot dispatch list so we don't borrow `plan` across the &mut self
+        // emit calls.
+        enum Op {
+            Kernel(KernelId),
+            Transfer(usize),
+        }
+        let ops: Vec<Op> = plan
             .steps
             .iter()
-            .filter_map(|s| match s {
-                Step::Kernel(k) => Some(k.kernel),
-                _ => None,
+            .enumerate()
+            .filter_map(|(idx, s)| match s {
+                Step::Kernel(k) => Some(Op::Kernel(k.kernel)),
+                Step::Transfer(_) => Some(Op::Transfer(idx)),
+                Step::SyncWait(_) => None,
             })
             .collect();
-        for kernel_id in kernel_ids {
-            self.call_kernel(kernel_id)?;
+        for op in ops {
+            match op {
+                Op::Kernel(kid) => self.call_kernel(kid)?,
+                Op::Transfer(idx) => self.emit_transfer(idx)?,
+            }
         }
         Ok(self.move_statements())
     }
@@ -692,7 +684,15 @@ impl<'sched> HostCodeGenerator<'sched> {
             )));
         }
 
-        for stream_id in self.streams.values().map(|s| s.stream_id).unique().sorted() {
+        let active_streams: Vec<StreamId> = self
+            .streams
+            .values()
+            .map(|s| s.stream_id)
+            .chain(self.transfer_streams.values().map(|s| s.stream_id))
+            .unique()
+            .sorted()
+            .collect();
+        for stream_id in active_streams {
             self.state_fields
                 .push(format!("cudaStream_t {stream_id} = nullptr;"));
             self.init_stmts.push(
@@ -766,6 +766,57 @@ impl<'sched> HostCodeGenerator<'sched> {
     fn gen_finalize(&mut self) -> Result<Vec<Statement>, BuildError> {
         self.stmts.push(CudaRuntimeApi::DeviceSynchronize.into());
         Ok(self.move_statements())
+    }
+
+    fn register_binding(
+        &mut self,
+        binding: &ValueBinding,
+        kernel_id: Option<KernelId>,
+    ) -> Result<(), BuildError> {
+        use std::collections::hash_map::Entry;
+        match binding.place {
+            AllocPlace::Chunk(chunk_id) => match self.value2chunk.entry(binding.value) {
+                Entry::Occupied(entry) => {
+                    assert!(*entry.get() == chunk_id);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(chunk_id);
+                }
+            },
+            AllocPlace::SessionState(state_value) => {
+                let device_name = self
+                    .session_state_devices
+                    .get(&state_value)
+                    .ok_or_else(|| {
+                        BuildError::UnresolvedAllocateInfo(
+                            kernel_id.expect("session state outside kernel binding"),
+                        )
+                    })?
+                    .clone();
+                self.session_state_devices
+                    .insert(binding.value, device_name);
+            }
+            // Reinterpret(V_init) -> W is emitted as a no-op and W shares
+            // V_init's buffer, but `initializer_plans` only has the V_init
+            // entry. Mirror it under W so a downstream kernel that consumes W
+            // resolves to the same d_init_*. Same idea for Input/Output via
+            // hostmem2identifier.
+            AllocPlace::Initializer(src) => {
+                if binding.value != src {
+                    if let Some(plan) = self.initializer_plans.get(&src).cloned() {
+                        self.initializer_plans.insert(binding.value, plan);
+                    }
+                }
+            }
+            AllocPlace::Input(src) | AllocPlace::Output(src) => {
+                if binding.value != src {
+                    if let Some(name) = self.hostmem2identifier.get(&src).cloned() {
+                        self.hostmem2identifier.insert(binding.value, name);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
@@ -856,6 +907,76 @@ impl<'sched> HostCodeGenerator<'sched> {
         Ok(GeneratedKernel { decl, args })
     }
 
+    fn emit_transfer(&mut self, step_idx: usize) -> Result<(), BuildError> {
+        // Pull the step + stream view out into local copies so we can mutate
+        // self below without overlapping borrows.
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let Step::Transfer(t) = &plan.steps[step_idx] else {
+            unreachable!()
+        };
+        let src_value = t.src.value;
+        let dst_value = t.dst.value;
+        let src_place = t.src.place;
+        let dst_place = t.dst.place;
+
+        let view = &self.transfer_streams[&step_idx];
+        let stream_id = view.stream_id;
+        let event_id = view.event_id;
+        let to_wait = view.to_wait.clone();
+
+        for event in to_wait {
+            self.stmts.push(
+                WaitEvent {
+                    stream_id,
+                    event_id: event,
+                }
+                .into(),
+            );
+        }
+
+        // Direction is decided by where each binding lives. AllocPlace::Input
+        // / AllocPlace::Output are host-resident; Chunk is device-resident.
+        let (src_expr, dst_expr, kind) = match (src_place, dst_place) {
+            (AllocPlace::Input(_), _) => {
+                let src = Expr::Identifier(self.hostmem2identifier[&src_value].clone());
+                let dst = self.device_identifier(dst_value)?;
+                (src, dst, CudaMemcpyKind::HostToDevice)
+            }
+            (_, AllocPlace::Output(_)) => {
+                let src = self.device_identifier(src_value)?;
+                let dst = Expr::Identifier(self.hostmem2identifier[&dst_value].clone());
+                (src, dst, CudaMemcpyKind::DeviceToHost)
+            }
+            other => panic!("unsupported Transfer place pair: {:?}", other),
+        };
+        let mem_size = MemSize::Single(self.single_mem_size(dst_value)?);
+        self.stmts.push(
+            Memcpy {
+                dst: dst_expr,
+                src: src_expr,
+                mem_size,
+                kind,
+                stream: stream_id,
+            }
+            .into(),
+        );
+
+        if self.to_record_events.contains(&event_id) {
+            self.stmts.push(
+                RecordEvent {
+                    event_id,
+                    stream_id,
+                }
+                .into(),
+            );
+        }
+        Ok(())
+    }
+
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
         let kernel = &self.schedule.kernels[kernel_id];
         let KernelStreamView {
@@ -891,42 +1012,9 @@ impl<'sched> HostCodeGenerator<'sched> {
         // Launch the kernel
         match kernel.body {
             KernelBody::Opaque(Opaque { ref op }) => match op {
-                Operator::Transfer(kind) => {
-                    let value_id = kernel.inputs[0].unwrap();
-                    let mem_size = MemSize::Single(self.single_mem_size(kernel.outputs[0])?);
-                    match kind {
-                        TransferKind::HostToDevice => {
-                            let src = Expr::Identifier(self.hostmem2identifier[&value_id].clone());
-                            let dst = self.device_identifier(kernel.outputs[0])?;
-                            self.stmts.push(
-                                Memcpy {
-                                    dst,
-                                    src,
-                                    mem_size,
-                                    kind: CudaMemcpyKind::HostToDevice,
-                                    stream: stream_id,
-                                }
-                                .into(),
-                            );
-                        }
-                        TransferKind::DeviceToHost => {
-                            let src = self.device_identifier(value_id)?;
-                            let dst = Expr::Identifier(
-                                self.hostmem2identifier[&kernel.outputs[0]].clone(),
-                            );
-                            self.stmts.push(
-                                Memcpy {
-                                    dst,
-                                    src,
-                                    mem_size,
-                                    kind: CudaMemcpyKind::DeviceToHost,
-                                    stream: stream_id,
-                                }
-                                .into(),
-                            );
-                        }
-                    }
-                }
+                Operator::Transfer(_) => unreachable!(
+                    "Operator::Transfer should be lowered to Step::Transfer by the scheduler"
+                ),
 
                 Operator::Identity | Operator::Reinterpret(_) => {
                     let input_chunk = self.value2chunk.get(&kernel.inputs[0].unwrap());

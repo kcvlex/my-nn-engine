@@ -113,9 +113,8 @@ pub struct SyncWaitStep {
 
 #[derive(Debug, Clone)]
 pub struct TransferStep {
-    pub value: ValueId,
-    pub src: MemoryTier,
-    pub dst: MemoryTier,
+    pub src: ValueBinding,
+    pub dst: ValueBinding,
     pub context: ExecutionContext,
     pub records_event: Option<EventId>,
 }
