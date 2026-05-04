@@ -1,10 +1,7 @@
-pub mod execution_plan;
 pub mod ir;
 pub mod kernel;
-pub mod mem_alloc;
 pub mod omp;
 pub mod scheduler;
-pub mod stream;
 
 use std::any::Any;
 use std::any::TypeId;
@@ -16,7 +13,6 @@ use id_arena::Arena;
 use id_arena::Id;
 pub use ir::*;
 use log::info;
-use serde::Serialize;
 
 use crate::graph::operator::Operator;
 use crate::graph::Graph;
@@ -78,19 +74,9 @@ impl SchedulePassManager {
 
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
-    if options.experimental_scheduler {
-        manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
-            num_streams: options.num_cuda_streams,
-        }));
-    } else {
-        if options.target == Target::CUDA {
-            manager.add_pass(Box::new(stream::StreamAllocPass {
-                num_streams: options.num_cuda_streams,
-            }));
-        }
-        manager.add_pass(Box::new(mem_alloc::MemAllocPass));
-        manager.add_pass(Box::new(execution_plan::BuildExecutionPlanPass));
-    }
+    manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
+        num_streams: options.num_cuda_streams,
+    }));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
@@ -148,63 +134,7 @@ pub struct ElementWises {
     pub ops: Vec<(Operator, Vec<ElementwiseOpArg>)>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize)]
-pub struct AllocateInfo {
-    #[serde(serialize_with = "serialize_value_id")]
-    pub value_id: ValueId,
-    pub ty: AllocateType,
-    pub is_first_use: bool,
-}
-
-fn serialize_value_id<S>(value_id: &ValueId, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_u64(value_id.index() as u64)
-}
-
 pub type ChunkId = usize;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AllocateType {
-    Chunk(ChunkId),
-    Input(ValueId),
-    Output(ValueId),
-    SessionState(ValueId),
-}
-
-impl Serialize for AllocateType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            AllocateType::Chunk(id) => {
-                serializer.serialize_newtype_variant("AllocateType", 0, "Chunk", id)
-            }
-            AllocateType::Input(id) => {
-                serializer.serialize_newtype_variant("AllocateType", 1, "Input", &id.index())
-            }
-            AllocateType::Output(id) => {
-                serializer.serialize_newtype_variant("AllocateType", 2, "Output", &id.index())
-            }
-            AllocateType::SessionState(id) => {
-                serializer.serialize_newtype_variant("AllocateType", 3, "SessionState", &id.index())
-            }
-        }
-    }
-}
-
-impl AllocateType {
-    pub fn chunk_id(&self) -> Option<ChunkId> {
-        match self {
-            AllocateType::Chunk(id) => Some(*id),
-            AllocateType::Input(_) | AllocateType::Output(_) | AllocateType::SessionState(_) => {
-                None
-            }
-        }
-    }
-}
 
 impl Kernels {
     pub fn iter(&self) -> impl Iterator<Item = (KernelId, &Kernel)> {
@@ -276,16 +206,6 @@ impl Schedule {
 
     pub fn graph(&self) -> &Graph {
         &self.graph
-    }
-
-    pub fn max_chunk_id(&self) -> Option<usize> {
-        let mem_alloc = self.analysis.get::<mem_alloc::MemAllocResult>();
-        mem_alloc
-            .0
-            .values()
-            .flatten()
-            .filter_map(|info| info.ty.chunk_id())
-            .max()
     }
 }
 
