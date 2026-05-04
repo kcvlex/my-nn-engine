@@ -139,15 +139,6 @@ where
     with_session_and_tensors(p, targets, nums, f)
 }
 
-#[cfg(feature = "cuda")]
-fn with_cuda_session_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
-where
-    P: AsRef<std::path::Path>,
-    F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
-{
-    with_session_and_tensors(p, &[Target::CUDA], nums, f)
-}
-
 #[test]
 fn add() -> TestResult {
     with_all_sessions_and_tensors("add", (2, 1), |session, (inputs, expected)| {
