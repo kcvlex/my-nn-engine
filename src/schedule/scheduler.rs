@@ -226,7 +226,6 @@ struct Scheduler<'s> {
     num_streams: usize,
 
     allocator: ChunkAllocator,
-    tier2arena: BTreeMap<MemoryTier, ArenaId>,
     value_on_tier: HashMap<(ValueId, MemoryTier), AllocPlace>,
     next_event_id: usize,
 
@@ -291,7 +290,6 @@ impl<'s> Scheduler<'s> {
             device,
             num_streams,
             allocator: ChunkAllocator::default(),
-            tier2arena: BTreeMap::new(),
             value_on_tier: HashMap::new(),
             next_event_id: 0,
             value2place,
@@ -311,15 +309,12 @@ impl<'s> Scheduler<'s> {
         stream: StreamId,
         uses: usize,
     ) -> ChunkId {
-        use std::collections::btree_map::Entry;
-        let arena_id = match self.tier2arena.entry(tier) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let arena_id = self.allocator.new_arena(tier, self.num_streams);
-                e.insert(arena_id);
-                arena_id
-            }
-        };
+        let arena_id = self
+            .allocator
+            .arena2chunks
+            .iter()
+            .position(|a| a.tier == tier)
+            .unwrap_or_else(|| self.allocator.new_arena(tier, self.num_streams));
         self.allocator.alloc(size, arena_id, stream, uses)
     }
 
@@ -645,14 +640,18 @@ impl<'s> Scheduler<'s> {
     }
 
     fn into_plan(self) -> ExecutionPlan {
+        let ChunkAllocator {
+            arena2chunks,
+            all_chunks,
+        } = self.allocator;
         let mut chunks = Vec::new();
-        let mut arenas = Vec::with_capacity(self.tier2arena.len());
-        for (tier, arena_id) in self.tier2arena {
+        let mut arenas = Vec::with_capacity(arena2chunks.len());
+        for (arena_id, arena) in arena2chunks.into_iter().enumerate() {
             let mut arena_size = 0usize;
-            for id in &self.allocator.arena2chunks[arena_id].owned {
-                let state = &self.allocator.all_chunks[*id];
+            for cid in arena.owned {
+                let state = &all_chunks[cid];
                 chunks.push(ChunkInfo {
-                    id: *id,
+                    id: cid,
                     arena: arena_id,
                     size: state.size,
                     offset: arena_size,
@@ -661,7 +660,7 @@ impl<'s> Scheduler<'s> {
             }
             arenas.push(ArenaInfo {
                 id: arena_id,
-                tier,
+                tier: arena.tier,
                 size: arena_size,
             });
         }
