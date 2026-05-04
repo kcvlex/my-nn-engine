@@ -1071,7 +1071,17 @@ impl<'ll> CodeGen<'ll, '_> {
                         .get(args::ATTENTION_ACTIVE_SEQ_KV)
                         .and_then(|x| *x)
                         .map(|i| &ptrs[i]);
-                    translator.build_attention(&ptrs[0], q, kk, vv, mask_p, active_p, attn, entry)
+                    let k_scale_p = input_ptrs
+                        .get(args::ATTENTION_K_SCALE)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    let v_scale_p = input_ptrs
+                        .get(args::ATTENTION_V_SCALE)
+                        .and_then(|x| *x)
+                        .map(|i| &ptrs[i]);
+                    translator.build_attention(
+                        &ptrs[0], q, kk, vv, mask_p, active_p, k_scale_p, v_scale_p, attn, entry,
+                    )
                 }
                 Operator::BatchedGemm(ref gemm) => {
                     let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];

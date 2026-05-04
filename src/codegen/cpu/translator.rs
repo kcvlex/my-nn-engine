@@ -281,18 +281,41 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(after)
     }
 
-    fn load_tensor_f32(
+    // Load one element as f32, dequantizing on the fly when storage is i8.
+    // bf16 goes through the bf16<->f32 bit dance; f32 is loaded as-is.
+    fn load_elem_f32(
         &self,
         storage_ty: BasicTypeEnum<'ctx>,
         ptr: PointerValue<'ctx>,
-        is_bf16: bool,
+        elem_type: DataType,
         name: &str,
     ) -> Result<FloatValue<'ctx>, BuilderError> {
-        let raw = self.builder.build_load(storage_ty, ptr, name)?;
-        if is_bf16 {
-            self.bf16_bits_to_f32(raw.into_int_value())
-        } else {
-            Ok(raw.into_float_value())
+        match elem_type {
+            DataType::Float(FloatType::BF16) => {
+                let raw = self.builder.build_load(storage_ty, ptr, name)?;
+                self.bf16_bits_to_f32(raw.into_int_value())
+            }
+            DataType::Float(FloatType::F32) => Ok(self
+                .builder
+                .build_load(storage_ty, ptr, name)?
+                .into_float_value()),
+            DataType::SInt(SIntType::I8) => {
+                let raw = self
+                    .builder
+                    .build_load(storage_ty, ptr, name)?
+                    .into_int_value();
+                let extended = self.builder.build_int_s_extend(
+                    raw,
+                    self.context.i32_type(),
+                    &format!("{name}.sext"),
+                )?;
+                Ok(self.builder.build_signed_int_to_float(
+                    extended,
+                    self.context.f32_type(),
+                    &format!("{name}.f"),
+                )?)
+            }
+            other => panic!("load_elem_f32: unsupported elem type {:?}", other),
         }
     }
 
@@ -4042,6 +4065,8 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         v: &TensorPtr<'ctx>,
         mask: Option<&TensorPtr<'ctx>>,
         active_seq_kv: Option<&TensorPtr<'ctx>>,
+        k_scale: Option<&TensorPtr<'ctx>>,
+        v_scale: Option<&TensorPtr<'ctx>>,
         attn: &operator::Attention,
         entry: BasicBlock<'ctx>,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
@@ -4068,6 +4093,17 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let llvm_float = float_ty.llvm_type(self.context);
         let storage_ty = q.ty.elem_type.llvm_type(self.context);
         let is_bf16 = matches!(float_ty, FloatType::BF16);
+        let kv_quantized = matches!(k.ty.elem_type, DataType::SInt(SIntType::I8));
+        if kv_quantized {
+            assert!(matches!(v.ty.elem_type, DataType::SInt(SIntType::I8)));
+            assert!(k_scale.is_some() && v_scale.is_some());
+        } else {
+            assert_eq!(k.ty.elem_type, q.ty.elem_type);
+            assert_eq!(v.ty.elem_type, q.ty.elem_type);
+            assert!(k_scale.is_none() && v_scale.is_none());
+        }
+        let k_storage_ty = k.ty.elem_type.llvm_type(self.context);
+        let v_storage_ty = v.ty.elem_type.llvm_type(self.context);
         let i64_ty = self.context.i64_type();
 
         let qk_dims = ResolvedTensorDims::new(&[b_dim, hq, seq_q, seq_k]);
@@ -4206,7 +4242,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(k.offset, k_base_off, "k.total")?;
         let k_head_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(storage_ty, k.ptr, &[k_total], "k.head")?
+                .build_in_bounds_gep(k_storage_ty, k.ptr, &[k_total], "k.head")?
         };
 
         let v_base_off = self.builder.build_int_mul(
@@ -4219,7 +4255,19 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_int_add(v.offset, v_base_off, "v.total")?;
         let v_head_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(storage_ty, v.ptr, &[v_total], "v.head")?
+                .build_in_bounds_gep(v_storage_ty, v.ptr, &[v_total], "v.head")?
+        };
+
+        // Quantized cache: K/V scales are [B, H_kv, MAX_SEQ]. Per-token row offset
+        // is bh_kv * seq_k; the per-k-token addend is added inside the k loop.
+        let kv_scale_row_off = if kv_quantized {
+            Some(self.builder.build_int_mul(
+                bh_kv_idx,
+                i64_ty.const_int(seq_k as u64, false),
+                "kv.scale.row",
+            )?)
+        } else {
+            None
         };
 
         let mask_bh_sq_off = if let (Some(mptr), Some(mty)) = (mask, mask_bc.as_ref()) {
@@ -4358,15 +4406,30 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .build_int_mul(k_idx, i64_ty.const_int(k_stride_sk, false), "k.row.off")?;
         let k_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(storage_ty, k_head_ptr, &[k_row_off], "k.row.gep")?
+                .build_in_bounds_gep(k_storage_ty, k_head_ptr, &[k_row_off], "k.row.gep")?
         };
         let v_row_off =
             self.builder
                 .build_int_mul(k_idx, i64_ty.const_int(v_stride_sk, false), "v.row.off")?;
         let v_row_ptr = unsafe {
             self.builder
-                .build_in_bounds_gep(storage_ty, v_head_ptr, &[v_row_off], "v.row.gep")?
+                .build_in_bounds_gep(v_storage_ty, v_head_ptr, &[v_row_off], "v.row.gep")?
         };
+
+        // Per-token K/V scales (only loaded when KV cache is quantized).
+        let (k_scale_v, v_scale_v) =
+            if let (Some(ks), Some(vs), Some(row_off)) = (k_scale, v_scale, kv_scale_row_off) {
+                let scale_idx = self.builder.build_int_add(row_off, k_idx, "kv.scale.idx")?;
+                let k_v = self
+                    .build_load(&ks.clone().add_offset(self.builder, scale_idx)?)?
+                    .into_float_value();
+                let v_v = self
+                    .build_load(&vs.clone().add_offset(self.builder, scale_idx)?)?
+                    .into_float_value();
+                (Some(k_v), Some(v_v))
+            } else {
+                (None, None)
+            };
 
         // [E]: qk = scale * <Q[b,h,sq,:], K[b,h,k,:]>. D is unrolled.
         let mut sum = zero_f;
@@ -4382,14 +4445,16 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             };
             let k_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    storage_ty,
+                    k_storage_ty,
                     k_row_ptr,
                     &[d_const],
                     &format!("k.d{}.gep", d),
                 )?
             };
-            let q_v = self.load_tensor_f32(storage_ty, q_d_ptr, is_bf16, &format!("q.d{}", d))?;
-            let k_v = self.load_tensor_f32(storage_ty, k_d_ptr, is_bf16, &format!("k.d{}", d))?;
+            let q_v =
+                self.load_elem_f32(storage_ty, q_d_ptr, q.ty.elem_type, &format!("q.d{}", d))?;
+            let k_v =
+                self.load_elem_f32(k_storage_ty, k_d_ptr, k.ty.elem_type, &format!("k.d{}", d))?;
             let prod = self
                 .builder
                 .build_float_mul(q_v, k_v, &format!("dot.prod{}", d))?;
@@ -4397,6 +4462,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                 .builder
                 .build_float_add(sum, prod, &format!("dot.sum{}", d))?;
         }
+        let sum = if let Some(ks_v) = k_scale_v {
+            self.builder.build_float_mul(sum, ks_v, "dot.kscale")?
+        } else {
+            sum
+        };
         let qk = self.builder.build_float_mul(sum, scale_const, "qk")?;
 
         // [F]: qk += mask[b,h,sq,k] using broadcast strides on the mask tensor.
@@ -4462,19 +4532,25 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let s_scaled = self.builder.build_float_mul(s_val, factor, "s.scaled")?;
         let s_new = self.builder.build_float_add(s_scaled, e, "s.new")?;
 
-        // [H]: o[d] = o[d] * factor + e * V[b,h,k,d]. D is unrolled.
+        // [H]: o[d] = o[d] * factor + e_eff * V[b,h,k,d]. D is unrolled.
+        // e_eff folds in the per-token V scale when the cache is quantized.
+        let e_eff = if let Some(vs_v) = v_scale_v {
+            self.builder.build_float_mul(e, vs_v, "e.vscale")?
+        } else {
+            e
+        };
         for d in 0..d_dim {
             let d_const = i64_ty.const_int(d as u64, false);
             let v_d_ptr = unsafe {
                 self.builder.build_in_bounds_gep(
-                    storage_ty,
+                    v_storage_ty,
                     v_row_ptr,
                     &[d_const],
                     &format!("v.d{}.gep", d),
                 )?
             };
             let v_d_val =
-                self.load_tensor_f32(storage_ty, v_d_ptr, is_bf16, &format!("v.d{}", d))?;
+                self.load_elem_f32(v_storage_ty, v_d_ptr, v.ty.elem_type, &format!("v.d{}", d))?;
             let o_d_val = self
                 .builder
                 .build_load(llvm_float, o_d_ptrs[d], &format!("o.d{}.load", d))?
@@ -4484,7 +4560,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
                     .build_float_mul(o_d_val, factor, &format!("o.d{}.scaled", d))?;
             let e_v = self
                 .builder
-                .build_float_mul(e, v_d_val, &format!("o.d{}.ev", d))?;
+                .build_float_mul(e_eff, v_d_val, &format!("o.d{}.ev", d))?;
             let o_new = self
                 .builder
                 .build_float_add(o_scaled, e_v, &format!("o.d{}.new", d))?;
