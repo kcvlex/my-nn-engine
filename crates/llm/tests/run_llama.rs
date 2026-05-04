@@ -7,6 +7,7 @@ use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::build_llama_with_options;
 use my_nn_engine_llm::llama::build_llama_prefill;
+use my_nn_engine_llm::llama::build_llama_prefill_with_options;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
 use my_nn_engine_llm::LlamaOptions;
@@ -63,16 +64,21 @@ fn llama2_int8() {
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = 2048;
+    let prefill_len = 16;
     let llama_opts = LlamaOptions {
         quant_kv_cache: true,
     };
     let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+    let p =
+        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
 
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
-    let mut llm = LlmSession::for_llama(
+    let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
+        p.graph,
         r.kv_cache_names,
+        prefill_len,
         tokenizer,
         &opts,
         max_seq_len,

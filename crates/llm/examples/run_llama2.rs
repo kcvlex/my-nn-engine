@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama_with_options;
+use my_nn_engine_llm::llama::build_llama_prefill_with_options;
 use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
@@ -40,6 +41,7 @@ fn main() {
     // 8GB GPU ceiling: weight (6.7GB) + INT8 KV @ max_seq_len caps around ~2700.
     // Llama2's max_position_embeddings=4096 needs further weight quantization (INT4).
     let max_seq_len = 2048;
+    let prefill_len = 16;
     let n_generate = 24;
 
     let llama_opts = LlamaOptions {
@@ -51,13 +53,21 @@ fn main() {
     let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
     println!("  decode graph built in {:.2?}", t0.elapsed());
 
+    println!("building prefill graph...");
+    let t0 = std::time::Instant::now();
+    let p =
+        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
+    println!("  prefill graph built in {:.2?}", t0.elapsed());
+
     println!("compiling session (CUDA)...");
     let t0 = std::time::Instant::now();
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
-    let mut llm = LlmSession::for_llama(
+    let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
+        p.graph,
         r.kv_cache_names,
+        prefill_len,
         tokenizer,
         &opts,
         max_seq_len,
