@@ -1350,27 +1350,36 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let k = rhs_ty.dims[1];
                     let m = lhs_ty.dims.size() / k;
                     let out = self.device_identifier(kernel.outputs[0])?;
-                    let act = self.device_identifier(
-                        kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap(),
-                    )?;
-                    let wq = self.device_identifier(
-                        kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap(),
-                    )?;
-                    let scale = self.device_identifier(
-                        kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap(),
-                    )?;
+                    let act =
+                        self.device_identifier(kernel.inputs[args::DEQUANT_MATMUL_LHS].unwrap())?;
+                    let wq =
+                        self.device_identifier(kernel.inputs[args::DEQUANT_MATMUL_RHS].unwrap())?;
+                    let scale =
+                        self.device_identifier(kernel.inputs[args::DEQUANT_MATMUL_SCALE].unwrap())?;
 
-                    let use_wmma = matches!(lhs_ty.elem_type, DataType::Float(FloatType::BF16))
-                        && matches!(scale_ty.elem_type, DataType::Float(FloatType::BF16))
-                        && m % 32 == 0
-                        && n % 32 == 0
-                        && k % 16 == 0;
+                    let dtype_ok = matches!(lhs_ty.elem_type, DataType::Float(FloatType::BF16)) &&
+                        matches!(scale_ty.elem_type, DataType::Float(FloatType::BF16));
+                    let wmma_tile = if !dtype_ok || m < 16 {
+                        None
+                    } else if 64 <= m && 64 <= n {
+                        Some((64usize, 64usize))
+                    } else if 32 <= m && 32 <= n {
+                        Some((32usize, 32usize))
+                    } else if 16 <= m && 32 <= n {
+                        Some((16usize, 32usize))
+                    } else {
+                        Some((16usize, 16usize))
+                    };
 
-                    if use_wmma {
+                    if let Some((bm, bn)) = wmma_tile {
                         self.includes
                             .insert(Include::Local("dequant_matmul_wmma.cuh"));
+                        let warps = (bm / 16) * (bn / 16);
+                        let block_size = warps * 32;
                         let cuda_kernel = kernel::CUDAKernel::DequantMatMulWmmaKernel(
                             kernel::DequantMatMulWmmaKernel {
+                                bm,
+                                bn,
                                 m,
                                 n,
                                 k,
@@ -1380,15 +1389,16 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 scale,
                             },
                         );
+                        let grid_x = n.div_ceil(bn);
+                        let grid_y = m.div_ceil(bm);
                         self.stmts.push(
                             kernel::LaunchKernel {
                                 cuda_kernel,
                                 grid_size: Expr::Identifier(format!(
                                     "dim3({}, {}, 1)",
-                                    n / 32,
-                                    m / 32
+                                    grid_x, grid_y,
                                 )),
-                                block_size: 128usize.to_literal(),
+                                block_size: block_size.to_literal(),
                                 shared_mem_bytes: None,
                                 stream_id,
                             }
@@ -1397,8 +1407,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                     } else {
                         self.includes.insert(Include::Local("dequant_matmul.cuh"));
                         let block_size = DEFAULT_BLOCK_SIZE;
-                        let cuda_kernel = kernel::CUDAKernel::DequantMatMulKernel(
-                            kernel::DequantMatMulKernel {
+                        let cuda_kernel =
+                            kernel::CUDAKernel::DequantMatMulKernel(kernel::DequantMatMulKernel {
                                 act_ty: lhs_ty.elem_type,
                                 out_ty: scale_ty.elem_type,
                                 block_size,
@@ -1409,8 +1419,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 act,
                                 wq,
                                 scale,
-                            },
-                        );
+                            });
                         self.stmts.push(
                             kernel::LaunchKernel {
                                 cuda_kernel,

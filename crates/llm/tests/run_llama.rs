@@ -96,7 +96,7 @@ fn tinyllama() {
 #[test]
 #[serial(gpu)]
 fn llama2_int8() {
-    const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
+    const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of Italy";
     let text = run_llama2_int8(Target::CUDA);
     assert_eq!(text, EXPECTED_TEXT);
 }

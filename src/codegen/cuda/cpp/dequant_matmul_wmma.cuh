@@ -11,9 +11,8 @@ using namespace nvcuda::wmma;
 #define WMMA_M 16
 #define WMMA_N 16
 #define WMMA_K 16
-#define BM 32
-#define BN 32
 
+template <int BM, int BN>
 __global__ void dequant_matmul_wmma(
         __nv_bfloat16 *out,
         const __nv_bfloat16 *act,
