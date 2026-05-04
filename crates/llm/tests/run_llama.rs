@@ -107,3 +107,10 @@ fn tinyllama_cpu() {
     let text = run_tinyllama(Target::CPU);
     assert_eq!(text, EXPECTED_TEXT);
 }
+
+#[test]
+fn llama2_int8_cpu() {
+    const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
+    let text = run_llama2_int8(Target::CPU);
+    assert_eq!(text, EXPECTED_TEXT);
+}
