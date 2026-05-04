@@ -12,19 +12,19 @@ expression: code
 #include "common.cuh"
 #include "cudnn_setting.h"
 
-__device__ float kernel_2_device(float value_4) {
+__device__ float kernel_1_device(float value_4) {
     float local_0 = ((0 <= value_4) ? value_4 : 0);
 return local_0;
 };
-__global__ void kernel_2_global(float* value_5, float* value_4) {
+__global__ void kernel_1_global(float* value_5, float* value_4) {
     int gid = blockIdx.x * blockDim.x + threadIdx.x;
     if (2048 <= gid) return;
-    value_5[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)] = kernel_2_device(value_4[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)]);
+    value_5[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)] = kernel_1_device(value_4[to_tensor_idx4d(gid, 16, 16, 8, 0, 128, 8, 1)]);
 }
-void init_cudnn_1(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
+void init_cudnn_0(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
   setting.build(&cudnn_handler_ctx, CUDNN_DATA_FLOAT, 1, 3, 16, 16, 8, 3, 3, 16, 16, 1, 1, 1, 1, 1, 1, 1, 1, 1, false, false, false, true);
 }
-void init_cudnn_3(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
+void init_cudnn_2(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_ctx) {
   setting.build(&cudnn_handler_ctx, CUDNN_DATA_FLOAT, 1, 8, 16, 16, 16, 3, 3, 16, 16, 1, 1, 1, 1, 1, 1, 1, 1, 1, false, false, true, false);
 }
 struct ModelState {
@@ -33,23 +33,23 @@ struct ModelState {
   void *d_init_1 = nullptr;
   cudaStream_t stream_0 = nullptr;
   CudnnHandlerContext cudnn_handler_ctx0;
-  CudnnConvSetting cudnn_setting1;
-  CudnnConvSetting cudnn_setting3;
+  CudnnConvSetting cudnn_setting0;
+  CudnnConvSetting cudnn_setting2;
 };
 
 extern "C" void* model_init(void **initializer, void **session_state) {
   auto *state = new ModelState;
   (void)session_state;
-  cudaCheckErr(cudaMalloc(&state->d_arena_0, 24576));
+  cudaCheckErr(cudaMalloc(&state->d_arena_0, 27648));
   state->d_init_0 = initializer[0];
   state->d_init_1 = initializer[1];
   cudaCheckErr(cudaStreamCreate(&state->stream_0));
   cudnnCheckErr(cudnnCreate(&state->cudnn_handler_ctx0.handle));
   cudnnCheckErr(cudnnSetStream(state->cudnn_handler_ctx0.handle, state->stream_0));
-  init_cudnn_1(state->cudnn_setting1, state->cudnn_handler_ctx0);
-  cudaCheckErr(cudaMalloc(&state->cudnn_setting1.workspace, state->cudnn_setting1.workspace_size));
-  init_cudnn_3(state->cudnn_setting3, state->cudnn_handler_ctx0);
-  cudaCheckErr(cudaMalloc(&state->cudnn_setting3.workspace, state->cudnn_setting3.workspace_size));
+  init_cudnn_0(state->cudnn_setting0, state->cudnn_handler_ctx0);
+  cudaCheckErr(cudaMalloc(&state->cudnn_setting0.workspace, state->cudnn_setting0.workspace_size));
+  init_cudnn_2(state->cudnn_setting2, state->cudnn_handler_ctx0);
+  cudaCheckErr(cudaMalloc(&state->cudnn_setting2.workspace, state->cudnn_setting2.workspace_size));
   return state;
 }
 
@@ -58,23 +58,24 @@ extern "C" void model_destroy(void *ptr) {
   cudaCheckErr(cudaFree(state->d_arena_0));
   cudaCheckErr(cudaStreamDestroy(state->stream_0));
   cudnnCheckErr(cudnnDestroy(state->cudnn_handler_ctx0.handle));
-  cudaCheckErr(cudaFree(state->cudnn_setting1.workspace));
-  cudaCheckErr(cudaFree(state->cudnn_setting3.workspace));
+  cudaCheckErr(cudaFree(state->cudnn_setting0.workspace));
+  cudaCheckErr(cudaFree(state->cudnn_setting2.workspace));
   delete state;
 }
 
 extern "C" void model(void *state_ptr, void **output, void **input) {
   auto *state = static_cast<ModelState*>(state_ptr);
   float *h_input_2 = (float *)(input[0]);
-  float *h_output_13 = (float *)(output[0]);
+  float *h_output_3 = (float *)(output[0]);
   void *d_chunk_0 = (char*)state->d_arena_0 + 0;
-  void *d_chunk_1 = (char*)state->d_arena_0 + 8192;
+  void *d_chunk_1 = (char*)state->d_arena_0 + 3072;
+  void *d_chunk_2 = (char*)state->d_arena_0 + 19456;
   cudaStream_t stream_0 = state->stream_0;
   CudnnHandlerContext &cudnn_handler_ctx0 = state->cudnn_handler_ctx0;
   cudaCheckErr(cudaMemcpyAsync(d_chunk_0, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));
-  state->cudnn_setting1.execute(&cudnn_handler_ctx0, d_chunk_0, state->d_init_0, d_chunk_1, nullptr);
-  kernel_2_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_0, (float*)d_chunk_1);
-  state->cudnn_setting3.execute(&cudnn_handler_ctx0, d_chunk_0, state->d_init_1, d_chunk_1, nullptr);
-  cudaCheckErr(cudaMemcpyAsync(h_output_13, d_chunk_1, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
+  state->cudnn_setting0.execute(&cudnn_handler_ctx0, d_chunk_0, state->d_init_0, d_chunk_1, nullptr);
+  kernel_1_global<<<8, 256, 0, stream_0>>>((float*)d_chunk_2, (float*)d_chunk_1);
+  state->cudnn_setting2.execute(&cudnn_handler_ctx0, d_chunk_2, state->d_init_1, d_chunk_1, nullptr);
+  cudaCheckErr(cudaMemcpyAsync(h_output_3, d_chunk_1, 4096 * sizeof(float), cudaMemcpyDeviceToHost, stream_0));
   cudaCheckErr(cudaDeviceSynchronize());
 }

@@ -7,6 +7,8 @@ use crate::graph::operator::args;
 use crate::graph::operator::Operator;
 use crate::graph::ValueId;
 use crate::schedule::*;
+use crate::tensor::types::DataType;
+use crate::tensor::types::SIntType;
 
 const ALIGNMENT: usize = 256;
 
@@ -213,6 +215,19 @@ struct KernelInfo {
     device: Device,
 }
 
+#[derive(Clone, Copy)]
+struct TransferRecord {
+    place: AllocPlace,
+    event: EventId,
+    stream: StreamId,
+}
+
+#[derive(Clone, Copy)]
+struct PostTransfer {
+    src: ValueBinding,
+    dst: ValueBinding,
+}
+
 struct Scheduler<'s> {
     schedule: &'s Schedule,
     deps: Deps,
@@ -226,7 +241,7 @@ struct Scheduler<'s> {
     num_streams: usize,
 
     allocator: ChunkAllocator,
-    value_on_tier: HashMap<(ValueId, MemoryTier), AllocPlace>,
+    value_on_tier: HashMap<(ValueId, MemoryTier), TransferRecord>,
     next_event_id: usize,
 
     value2place: HashMap<ValueId, AllocPlace>,
@@ -323,7 +338,63 @@ impl<'s> Scheduler<'s> {
             self.ready.remove(&kid);
             self.schedule_kernel(kid);
         }
+        self.finalize_outputs();
         self.into_plan()
+    }
+
+    /// Catch graph outputs that no kernel produces (e.g. const-folded
+    /// initializers that flow straight to a graph output) and emit a
+    /// trailing Step::Transfer to land them on the host buffer.
+    fn finalize_outputs(&mut self) {
+        let already: HashSet<ValueId> = self
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Transfer(t) if matches!(t.dst.place, AllocPlace::Output(_)) => {
+                    Some(t.dst.value)
+                }
+                _ => None,
+            })
+            .collect();
+        let outputs = self.schedule.outputs.clone();
+        for v in outputs {
+            if already.contains(&v) {
+                continue;
+            }
+            let place = match self.value2place.get(&v).copied() {
+                Some(p) => p,
+                None => continue,
+            };
+            if matches!(place, AllocPlace::Output(_)) {
+                continue;
+            }
+            let stream = self
+                .deps
+                .value2producer
+                .get(&v)
+                .map(|kid| self.kernel_info[kid].stream)
+                .unwrap_or(StreamId(0));
+            let event = self.fresh_event();
+            self.steps.push(Step::Transfer(TransferStep {
+                src: ValueBinding {
+                    value: v,
+                    role: BindingRole::Input,
+                    place,
+                    is_first_use: false,
+                },
+                dst: ValueBinding {
+                    value: v,
+                    role: BindingRole::Output,
+                    place: AllocPlace::Output(v),
+                    is_first_use: false,
+                },
+                context: ExecutionContext {
+                    device: self.device,
+                    stream,
+                },
+                records_event: Some(event),
+            }));
+        }
     }
 
     fn pick_best(&self) -> Option<KernelId> {
@@ -392,16 +463,35 @@ impl<'s> Scheduler<'s> {
     ) -> AllocPlace {
         let needs_transfer = match original {
             AllocPlace::Chunk(cid) => self.allocator.chunk_tier(cid) != dst_tier,
-            _ => false,
+            AllocPlace::Input(_) | AllocPlace::Output(_) => dst_tier != MemoryTier::HostArena,
+            AllocPlace::SessionState(_) | AllocPlace::Initializer(_) => false,
         };
         if !needs_transfer {
             return original;
         }
+        // 0-d i64 scalars (offset / past_len) are passed through to kernels as
+        // host-dereferenced launch arguments; never materialise them on a
+        // device arena.
+        if let Some(rty) = self.schedule.get_resolved_tensor_type(value) {
+            if rty.dims.is_scalar() && matches!(rty.elem_type, DataType::SInt(SIntType::I64)) {
+                return original;
+            }
+        }
         if let Some(cached) = self.value_on_tier.get(&(value, dst_tier)).copied() {
-            if let AllocPlace::Chunk(cid) = cached {
+            if let AllocPlace::Chunk(cid) = cached.place {
                 self.allocator.add_uses(cid, 1);
             }
-            return cached;
+            if cached.stream != stream {
+                let device = match dst_tier {
+                    MemoryTier::HostArena => Device::CPU,
+                    MemoryTier::GpuArena => Device::CUDA,
+                };
+                self.steps.push(Step::SyncWait(SyncWaitStep {
+                    context: ExecutionContext { device, stream },
+                    event: cached.event,
+                }));
+            }
+            return cached.place;
         }
         let size = value_byte_size(self.schedule, value);
         let dst_cid = self.alloc_chunk(dst_tier, size, stream, 1);
@@ -433,7 +523,14 @@ impl<'s> Scheduler<'s> {
             context,
             records_event: Some(event),
         }));
-        self.value_on_tier.insert((value, dst_tier), dst_place);
+        self.value_on_tier.insert(
+            (value, dst_tier),
+            TransferRecord {
+                place: dst_place,
+                event,
+                stream,
+            },
+        );
         dst_place
     }
 
@@ -466,7 +563,7 @@ impl<'s> Scheduler<'s> {
             }
         }
 
-        let bindings = self.bind_kernel(kid, stream);
+        let (bindings, post_transfers) = self.bind_kernel(kid, stream);
 
         let is_transfer = matches!(
             &self.schedule.kernels[kid].body,
@@ -475,8 +572,6 @@ impl<'s> Scheduler<'s> {
             })
         );
         if is_transfer {
-            // Operator::Transfer: 1 input + 1 output. Lower to Step::Transfer
-            // so the codegen treats it as a memcpy rather than a kernel launch.
             let src = *bindings
                 .iter()
                 .find(|b| b.role == BindingRole::Input)
@@ -500,7 +595,19 @@ impl<'s> Scheduler<'s> {
             }));
         }
 
-        // Decrement remaining uses; release chunks whose live count hits 0.
+        for pt in post_transfers {
+            let event = self.fresh_event();
+            self.steps.push(Step::Transfer(TransferStep {
+                src: pt.src,
+                dst: pt.dst,
+                context,
+                records_event: Some(event),
+            }));
+            if let AllocPlace::Chunk(cid) = pt.src.place {
+                self.allocator.consume(cid, stream);
+            }
+        }
+
         for input in self.schedule.kernels[kid].inputs.clone().iter().flatten() {
             if let Some(count) = self.value_remaining_uses.get_mut(input) {
                 *count -= 1;
@@ -521,8 +628,13 @@ impl<'s> Scheduler<'s> {
         }
     }
 
-    fn bind_kernel(&mut self, kid: KernelId, stream: StreamId) -> Vec<ValueBinding> {
+    fn bind_kernel(
+        &mut self,
+        kid: KernelId,
+        stream: StreamId,
+    ) -> (Vec<ValueBinding>, Vec<PostTransfer>) {
         let mut bindings = Vec::new();
+        let mut post_transfers: Vec<PostTransfer> = Vec::new();
         let inputs = self.schedule.kernels[kid].inputs.clone();
         let tier = self.kernel_info[&kid].device.tier();
 
@@ -573,42 +685,56 @@ impl<'s> Scheduler<'s> {
 
         // Alias Identity/Reinterpret output to its input's place so codegen
         // elides the copy. Chunk inputs need single-use; persistent places
-        // are always safe.
+        // are always safe. Reads the input's *binding* place (post-auto-
+        // Transfer), not value2place.
         let try_in_place_identity = match &self.schedule.kernels[kid].body {
             KernelBody::Opaque(Opaque {
                 op: Operator::Identity | Operator::Reinterpret(_),
-            }) => inputs[0].and_then(|in0| match self.value2place.get(&in0).copied() {
-                Some(p @ AllocPlace::Chunk(_)) => {
-                    if self.value_remaining_uses.get(&in0).copied().unwrap_or(0) == 1 {
-                        Some(p)
-                    } else {
-                        None
+            }) => inputs[0].and_then(|in0| {
+                let p = bindings.iter().find(|b| b.value == in0).map(|b| b.place)?;
+                match p {
+                    AllocPlace::Chunk(_) => {
+                        if self.value_remaining_uses.get(&in0).copied().unwrap_or(0) == 1 {
+                            Some(p)
+                        } else {
+                            None
+                        }
                     }
+                    _ => Some(p),
                 }
-                place => place,
             }),
             _ => None,
         };
 
-        let must_in_place = match &self.schedule.kernels[kid].body {
-            KernelBody::Opaque(Opaque { op }) => must_in_place_input(op),
+        let must_in_place_place = match &self.schedule.kernels[kid].body {
+            KernelBody::Opaque(Opaque { op }) => must_in_place_input(op).map(|idx| {
+                let input_v = inputs[idx].expect("must_in_place input is None");
+                bindings
+                    .iter()
+                    .find(|b| b.value == input_v)
+                    .expect("must_in_place input not in bindings")
+                    .place
+            }),
             _ => None,
         };
 
         let outputs = self.schedule.kernels[kid].outputs.clone();
         for output in outputs {
             let uses = self.value_remaining_uses.get(&output).copied().unwrap_or(0);
-            let (place, allocated) = if let Some(&target) = self.output_alias.get(&output) {
-                (AllocPlace::Output(target), false)
-            } else if let Some(p) = try_in_place_identity {
+            let target_output_alias = self.output_alias.get(&output).copied();
+
+            let (place, allocated) = if let Some(p) = try_in_place_identity {
                 (p, false)
-            } else if let Some(idx) = must_in_place {
-                let input_v = inputs[idx].expect("must_in_place input is None");
-                let p = *self
-                    .value2place
-                    .get(&input_v)
-                    .expect("must_in_place input not yet placed");
+            } else if let Some(p) = must_in_place_place {
                 (p, false)
+            } else if let Some(target) = target_output_alias {
+                if tier == MemoryTier::HostArena {
+                    (AllocPlace::Output(target), false)
+                } else {
+                    let size = value_byte_size(self.schedule, output);
+                    let cid = self.alloc_chunk(tier, size, stream, uses);
+                    (AllocPlace::Chunk(cid), true)
+                }
             } else {
                 let size = value_byte_size(self.schedule, output);
                 let cid = self.alloc_chunk(tier, size, stream, uses);
@@ -617,12 +743,32 @@ impl<'s> Scheduler<'s> {
 
             self.value2place.insert(output, place);
 
-            // Output placed on an already-allocated chunk via aliasing: bump
-            // the live count so the chunk survives until this output is also
-            // fully consumed. `alloc` already accounted for the freshly-
-            // allocated path.
             if let (AllocPlace::Chunk(cid), false) = (place, allocated) {
                 self.allocator.add_uses(cid, uses);
+            }
+
+            // Graph output produced on a non-host place: schedule a post-
+            // Kernel Transfer so the host output buffer is populated.
+            if let Some(target) = target_output_alias {
+                if !matches!(place, AllocPlace::Output(_)) {
+                    if let AllocPlace::Chunk(cid) = place {
+                        self.allocator.add_uses(cid, 1);
+                    }
+                    post_transfers.push(PostTransfer {
+                        src: ValueBinding {
+                            value: output,
+                            role: BindingRole::Input,
+                            place,
+                            is_first_use: false,
+                        },
+                        dst: ValueBinding {
+                            value: output,
+                            role: BindingRole::Output,
+                            place: AllocPlace::Output(target),
+                            is_first_use: false,
+                        },
+                    });
+                }
             }
 
             let is_first_use =
@@ -636,7 +782,7 @@ impl<'s> Scheduler<'s> {
             });
         }
 
-        bindings
+        (bindings, post_transfers)
     }
 
     fn into_plan(self) -> ExecutionPlan {

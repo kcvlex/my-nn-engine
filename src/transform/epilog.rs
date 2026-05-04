@@ -1,11 +1,9 @@
 mod cleanup;
 mod lower_nhwc2nchw;
-mod transfer_insertion;
 
 use crate::options::*;
 use crate::transform::epilog::cleanup::CleanupTensors;
 use crate::transform::epilog::lower_nhwc2nchw::NHWC2NCHWLowering;
-use crate::transform::epilog::transfer_insertion::TransferInsertion;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::utils::ContiguousElimination;
 use crate::transform::utils::ContiguousFolding;
@@ -21,9 +19,6 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
         manager.add_pass(Box::new(ContiguousElimination::default()));
     }
     manager.add_pass(Box::new(ContiguousFolding::default()));
-    if matches!(opt.target, Target::CUDA) {
-        manager.add_pass(Box::new(TransferInsertion::default()));
-    }
     manager.add_pass(Box::new(CleanupTensors::default()));
     manager
 }

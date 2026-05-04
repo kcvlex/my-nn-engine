@@ -544,11 +544,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                         self.value2place.insert(b.value, b.place);
                     }
                 }
-                Step::Transfer(t) => {
-                    self.value2place.insert(t.src.value, t.src.place);
-                    self.value2place.insert(t.dst.value, t.dst.place);
-                }
-                Step::SyncWait(_) => {}
+                Step::Transfer(_) | Step::SyncWait(_) => {}
             }
         }
 
@@ -797,8 +793,24 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
     }
 
-    fn host_identifier(&self, value_id: ValueId) -> Expr {
-        Expr::Identifier(self.host_name(value_id))
+    fn place_identifier(&self, place: AllocPlace) -> Result<Expr, BuildError> {
+        match place {
+            AllocPlace::Chunk(c) => self
+                .chunk_names
+                .get(&c)
+                .map(|n| Expr::Identifier(n.clone()))
+                .ok_or(BuildError::NoDeviceVariable(c)),
+            AllocPlace::Initializer(src) => {
+                self.used_device_initializers.borrow_mut().insert(src);
+                Ok(Expr::Identifier(format!("state->d_init_{}", src.index())))
+            }
+            AllocPlace::SessionState(src) => Ok(Expr::Identifier(format!(
+                "state->d_session_state_{}",
+                src.index()
+            ))),
+            AllocPlace::Input(src) => Ok(Expr::Identifier(format!("h_input_{}", src.index()))),
+            AllocPlace::Output(src) => Ok(Expr::Identifier(format!("h_output_{}", src.index()))),
+        }
     }
 
     fn same_device_buffer(&self, a: ValueId, b: ValueId) -> bool {
@@ -906,19 +918,12 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
-        // Direction is decided by where each binding lives. AllocPlace::Input
-        // / AllocPlace::Output are host-resident; Chunk is device-resident.
-        let (src_expr, dst_expr, kind) = match (src_place, dst_place) {
-            (AllocPlace::Input(_), _) => {
-                let src = self.host_identifier(src_value);
-                let dst = self.device_identifier(dst_value)?;
-                (src, dst, CudaMemcpyKind::HostToDevice)
-            }
-            (_, AllocPlace::Output(_)) => {
-                let src = self.device_identifier(src_value)?;
-                let dst = self.host_identifier(dst_value);
-                (src, dst, CudaMemcpyKind::DeviceToHost)
-            }
+        let _ = src_value;
+        let src_expr = self.place_identifier(src_place)?;
+        let dst_expr = self.place_identifier(dst_place)?;
+        let kind = match (src_place, dst_place) {
+            (AllocPlace::Input(_), _) => CudaMemcpyKind::HostToDevice,
+            (_, AllocPlace::Output(_)) => CudaMemcpyKind::DeviceToHost,
             other => panic!("unsupported Transfer place pair: {:?}", other),
         };
         let mem_size = MemSize::Single(self.single_mem_size(dst_value)?);
