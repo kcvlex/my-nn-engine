@@ -1093,6 +1093,14 @@ impl<'ll> CodeGen<'ll, '_> {
                 Operator::KVCacheUpdate => {
                     translator.build_kv_cache_update(&ptrs[1], &ptrs[2], &ptrs[3], entry)
                 }
+                Operator::QuantizingKVCacheUpdate => {
+                    let cache = &ptrs[1 + args::QKVCACHE_UPDATE_CACHE];
+                    let scale = &ptrs[1 + args::QKVCACHE_UPDATE_SCALE];
+                    let new_kv = &ptrs[1 + args::QKVCACHE_UPDATE_NEW];
+                    let offset_p = &ptrs[1 + args::QKVCACHE_UPDATE_OFFSET];
+                    translator
+                        .build_quantizing_kv_cache_update(cache, scale, new_kv, offset_p, entry)
+                }
                 Operator::DequantizeLinear(ref dq) => {
                     let x = &ptrs[args::DEQUANTIZE_X + 1];
                     let scale = &ptrs[args::DEQUANTIZE_SCALE + 1];

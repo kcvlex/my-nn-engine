@@ -1112,10 +1112,9 @@ fn dequant_matmul() -> TestResult {
     })
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn quantizing_kvcache_update() -> TestResult {
-    with_cuda_session_and_tensors(
+    with_all_sessions_and_tensors(
         "quantizing_kvcache_update",
         (4, 1),
         |session, (inputs, expected)| {

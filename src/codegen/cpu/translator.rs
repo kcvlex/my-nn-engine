@@ -3717,6 +3717,302 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(entry)
     }
 
+    // Quantize new[B, H, NEW_SEQ, D] into the i8 cache slot starting at `offset`,
+    // recording the per-token scale alongside.
+    //
+    //   for each (b, h, t):
+    //       max_abs = max_d |new[b,h,t,d]|
+    //       s       = max_abs / 127
+    //       cache[b, h, offset+t, d] = round(new[..] / s) clamped to [-128, 127]
+    //       scale[b, h, offset+t]    = s
+    //
+    // round() is round-half-away-from-zero (matches CUDA roundf). Implemented via
+    // a 0.5 sign-bias plus truncation-toward-zero, since we already need to clamp
+    // into i8 afterwards.
+    pub fn build_quantizing_kv_cache_update(
+        &self,
+        cache: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        new_kv: &TensorPtr<'ctx>,
+        offset_ptr: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert_eq!(cache.ty.dims.ndim(), 4);
+        assert_eq!(new_kv.ty.dims.ndim(), 4);
+        assert_eq!(scale.ty.dims.ndim(), 3);
+        assert!(matches!(cache.ty.elem_type, DataType::SInt(SIntType::I8)));
+        let DataType::Float(scale_float_ty) = scale.ty.elem_type else {
+            panic!("QuantizingKVCacheUpdate scale must be float");
+        };
+        let DataType::Float(new_float_ty) = new_kv.ty.elem_type else {
+            panic!("QuantizingKVCacheUpdate new must be float");
+        };
+        assert_eq!(scale_float_ty, new_float_ty);
+        assert!(matches!(scale_float_ty, FloatType::F32 | FloatType::BF16));
+        let b_dim = cache.ty.dims[0];
+        let h_dim = cache.ty.dims[1];
+        let max_seq = cache.ty.dims[2];
+        let head_dim = cache.ty.dims[3];
+        assert_eq!(new_kv.ty.dims[0], b_dim);
+        assert_eq!(new_kv.ty.dims[1], h_dim);
+        let new_seq = new_kv.ty.dims[2];
+        assert_eq!(new_kv.ty.dims[3], head_dim);
+        assert_eq!(scale.ty.dims[0], b_dim);
+        assert_eq!(scale.ty.dims[1], h_dim);
+        assert_eq!(scale.ty.dims[2], max_seq);
+        let total_outer = b_dim * h_dim * new_seq;
+
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let i8_ty = self.context.i8_type();
+        let f32_ty = self.context.f32_type();
+        let fmax_fn = self.intrinsics.fmax.get(FloatType::F32);
+
+        self.builder.position_at_end(entry);
+        let offset_gep = unsafe {
+            self.builder.build_in_bounds_gep(
+                offset_ptr.ty.elem_type.llvm_type(self.context),
+                offset_ptr.ptr,
+                &[offset_ptr.offset],
+                "qkvcu.offset.gep",
+            )?
+        };
+        let offset_val = self
+            .builder
+            .build_load(i64_ty, offset_gep, "qkvcu.offset")?
+            .into_int_value();
+
+        let outer_header = self.context.append_basic_block(*self.func, "qkvcu.outer.h");
+        let after_max_loop = self
+            .context
+            .append_basic_block(*self.func, "qkvcu.maxloop.x");
+        let after_quant_loop = self
+            .context
+            .append_basic_block(*self.func, "qkvcu.quantloop.x");
+        let outer_latch = self
+            .context
+            .append_basic_block(*self.func, "qkvcu.outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "qkvcu.exit");
+
+        self.builder.build_unconditional_branch(outer_header)?;
+        let (outer_phi, outer_idx) = self.init_counted_loop(outer_header)?;
+        self.builder.position_at_end(outer_header);
+
+        // bh = outer / new_seq, t = outer % new_seq
+        let new_seq_const = i64_ty.const_int(new_seq as u64, false);
+        let max_seq_const = i64_ty.const_int(max_seq as u64, false);
+        let head_dim_const = i64_ty.const_int(head_dim as u64, false);
+        let bh = self
+            .builder
+            .build_int_unsigned_div(outer_idx, new_seq_const, "qkvcu.bh")?;
+        let t = self
+            .builder
+            .build_int_unsigned_rem(outer_idx, new_seq_const, "qkvcu.t")?;
+        let dst_token = self
+            .builder
+            .build_int_add(offset_val, t, "qkvcu.dst_token")?;
+
+        // src_base = (bh * new_seq + t) * head_dim
+        let src_token_idx = self
+            .builder
+            .build_int_mul(bh, new_seq_const, "qkvcu.src.bh_x_ns")?;
+        let src_token_idx = self
+            .builder
+            .build_int_add(src_token_idx, t, "qkvcu.src.bh_t")?;
+        let src_base =
+            self.builder
+                .build_int_mul(src_token_idx, head_dim_const, "qkvcu.src.base_local")?;
+        let src_base = self
+            .builder
+            .build_int_add(new_kv.offset, src_base, "qkvcu.src.base")?;
+
+        // dst_base = (bh * max_seq + dst_token) * head_dim (cache row)
+        let dst_token_idx = self
+            .builder
+            .build_int_mul(bh, max_seq_const, "qkvcu.dst.bh_x_ms")?;
+        let dst_token_idx =
+            self.builder
+                .build_int_add(dst_token_idx, dst_token, "qkvcu.dst.bh_t")?;
+        let dst_base =
+            self.builder
+                .build_int_mul(dst_token_idx, head_dim_const, "qkvcu.dst.base_local")?;
+        let dst_base = self
+            .builder
+            .build_int_add(cache.offset, dst_base, "qkvcu.dst.base")?;
+
+        // Pass 1: max_abs reduction.
+        let max_loop_h = self
+            .context
+            .append_basic_block(*self.func, "qkvcu.maxloop.h");
+        self.builder.build_unconditional_branch(max_loop_h)?;
+        self.builder.position_at_end(max_loop_h);
+        let d_phi = self.builder.build_phi(i64_ty, "qkvcu.d")?;
+        let max_phi = self.builder.build_phi(f32_ty, "qkvcu.max")?;
+        let d = d_phi.as_basic_value().into_int_value();
+        let cur_max = max_phi.as_basic_value().into_float_value();
+
+        let src_idx = self.builder.build_int_add(src_base, d, "qkvcu.src.idx")?;
+        let v_f32 = self
+            .build_load(&new_kv.clone().set_offset(src_idx))?
+            .into_float_value();
+        let neg_v = self.builder.build_float_neg(v_f32, "qkvcu.neg")?;
+        let abs_v = self
+            .build_tail_call(fmax_fn, &[v_f32.into(), neg_v.into()], "qkvcu.abs")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let new_max = self
+            .build_tail_call(fmax_fn, &[cur_max.into(), abs_v.into()], "qkvcu.max.new")?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_float_value();
+        let d_next = self
+            .builder
+            .build_int_add(d, i64_ty.const_int(1, false), "qkvcu.d.next")?;
+        let done = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            d_next,
+            head_dim_const,
+            "qkvcu.maxloop.done",
+        )?;
+        self.builder
+            .build_conditional_branch(done, after_max_loop, max_loop_h)?;
+        d_phi.add_incoming(&[(&i64_ty.const_zero(), outer_header), (&d_next, max_loop_h)]);
+        max_phi.add_incoming(&[(&f32_ty.const_zero(), outer_header), (&new_max, max_loop_h)]);
+
+        self.builder.position_at_end(after_max_loop);
+        let max_abs = new_max;
+        let inv127 = f32_ty.const_float(1.0 / 127.0);
+        let s_f32 = self.builder.build_float_mul(max_abs, inv127, "qkvcu.s")?;
+        let is_zero = self.builder.build_float_compare(
+            inkwell::FloatPredicate::OEQ,
+            max_abs,
+            f32_ty.const_zero(),
+            "qkvcu.iszero",
+        )?;
+        let inv_s_raw =
+            self.builder
+                .build_float_div(f32_ty.const_float(127.0), max_abs, "qkvcu.inv_s_raw")?;
+        let inv_s = self
+            .builder
+            .build_select(is_zero, f32_ty.const_zero(), inv_s_raw, "qkvcu.inv_s")?
+            .into_float_value();
+
+        // scale[bh, dst_token] = s
+        let scale_token_idx =
+            self.builder
+                .build_int_mul(bh, max_seq_const, "qkvcu.scale.bh_x_ms")?;
+        let scale_token_idx =
+            self.builder
+                .build_int_add(scale_token_idx, dst_token, "qkvcu.scale.idx_local")?;
+        let scale_idx =
+            self.builder
+                .build_int_add(scale.offset, scale_token_idx, "qkvcu.scale.idx")?;
+        self.build_store(&scale.clone().set_offset(scale_idx), s_f32)?;
+
+        // Pass 2: quantize and write i8.
+        let quant_loop_h = self
+            .context
+            .append_basic_block(*self.func, "qkvcu.quantloop.h");
+        self.builder.build_unconditional_branch(quant_loop_h)?;
+        self.builder.position_at_end(quant_loop_h);
+        let qd_phi = self.builder.build_phi(i64_ty, "qkvcu.qd")?;
+        let qd = qd_phi.as_basic_value().into_int_value();
+
+        let src_idx2 = self.builder.build_int_add(src_base, qd, "qkvcu.src.idx2")?;
+        let v2_f32 = self
+            .build_load(&new_kv.clone().set_offset(src_idx2))?
+            .into_float_value();
+        let scaled = self
+            .builder
+            .build_float_mul(v2_f32, inv_s, "qkvcu.scaled")?;
+        let pos = self.builder.build_float_compare(
+            inkwell::FloatPredicate::OGE,
+            scaled,
+            f32_ty.const_zero(),
+            "qkvcu.pos",
+        )?;
+        let bias = self
+            .builder
+            .build_select(
+                pos,
+                f32_ty.const_float(0.5),
+                f32_ty.const_float(-0.5),
+                "qkvcu.bias",
+            )?
+            .into_float_value();
+        let biased = self.builder.build_float_add(scaled, bias, "qkvcu.biased")?;
+        let q_i32 = self
+            .builder
+            .build_float_to_signed_int(biased, i32_ty, "qkvcu.q.i32")?;
+        let q_clamped_lo = self
+            .build_tail_call(
+                self.intrinsics.smax_i32,
+                &[
+                    q_i32.into(),
+                    i32_ty.const_int((-128i32) as u64, true).into(),
+                ],
+                "qkvcu.q.lo",
+            )?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+        let q_clamped = self
+            .build_tail_call(
+                self.intrinsics.smin_i32,
+                &[q_clamped_lo.into(), i32_ty.const_int(127, false).into()],
+                "qkvcu.q.hi",
+            )?
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+        let q_i8 = self
+            .builder
+            .build_int_truncate(q_clamped, i8_ty, "qkvcu.q.i8")?;
+
+        let dst_idx = self.builder.build_int_add(dst_base, qd, "qkvcu.dst.idx")?;
+        let dst_gep = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, cache.ptr, &[dst_idx], "qkvcu.dst.gep")?
+        };
+        self.builder.build_store(dst_gep, q_i8)?;
+
+        let qd_next =
+            self.builder
+                .build_int_add(qd, i64_ty.const_int(1, false), "qkvcu.qd.next")?;
+        let q_done = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            qd_next,
+            head_dim_const,
+            "qkvcu.quantloop.done",
+        )?;
+        self.builder
+            .build_conditional_branch(q_done, after_quant_loop, quant_loop_h)?;
+        qd_phi.add_incoming(&[
+            (&i64_ty.const_zero(), after_max_loop),
+            (&qd_next, quant_loop_h),
+        ]);
+
+        self.builder.position_at_end(after_quant_loop);
+        self.builder.build_unconditional_branch(outer_latch)?;
+
+        self.finalize_counted_loop(
+            outer_phi,
+            entry,
+            i64_ty.const_int(total_outer as u64, false),
+            outer_header,
+            exit,
+            outer_latch,
+        )?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_kv_cache_update(
         &self,
         cache: &TensorPtr<'ctx>,
