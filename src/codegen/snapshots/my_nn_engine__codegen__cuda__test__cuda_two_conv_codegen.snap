@@ -28,7 +28,7 @@ void init_cudnn_3(CudnnConvSetting &setting, CudnnHandlerContext &cudnn_handler_
   setting.build(&cudnn_handler_ctx, CUDNN_DATA_FLOAT, 1, 8, 16, 16, 16, 3, 3, 16, 16, 1, 1, 1, 1, 1, 1, 1, 1, 1, false, false, true, false);
 }
 struct ModelState {
-  void *d_arena = nullptr;
+  void *d_arena_0 = nullptr;
   void *d_init_0 = nullptr;
   void *d_init_1 = nullptr;
   cudaStream_t stream_0 = nullptr;
@@ -40,7 +40,7 @@ struct ModelState {
 extern "C" void* model_init(void **initializer, void **session_state) {
   auto *state = new ModelState;
   (void)session_state;
-  cudaCheckErr(cudaMalloc(&state->d_arena, 24576));
+  cudaCheckErr(cudaMalloc(&state->d_arena_0, 24576));
   state->d_init_0 = initializer[0];
   state->d_init_1 = initializer[1];
   cudaCheckErr(cudaStreamCreate(&state->stream_0));
@@ -55,7 +55,7 @@ extern "C" void* model_init(void **initializer, void **session_state) {
 
 extern "C" void model_destroy(void *ptr) {
   auto *state = static_cast<ModelState*>(ptr);
-  cudaCheckErr(cudaFree(state->d_arena));
+  cudaCheckErr(cudaFree(state->d_arena_0));
   cudaCheckErr(cudaStreamDestroy(state->stream_0));
   cudnnCheckErr(cudnnDestroy(state->cudnn_handler_ctx0.handle));
   cudaCheckErr(cudaFree(state->cudnn_setting1.workspace));
@@ -67,8 +67,8 @@ extern "C" void model(void *state_ptr, void **output, void **input) {
   auto *state = static_cast<ModelState*>(state_ptr);
   float *h_input_2 = (float *)(input[0]);
   float *h_output_13 = (float *)(output[0]);
-  void *d_chunk_0 = (char*)state->d_arena + 0;
-  void *d_chunk_1 = (char*)state->d_arena + 8192;
+  void *d_chunk_0 = (char*)state->d_arena_0 + 0;
+  void *d_chunk_1 = (char*)state->d_arena_0 + 8192;
   cudaStream_t stream_0 = state->stream_0;
   CudnnHandlerContext &cudnn_handler_ctx0 = state->cudnn_handler_ctx0;
   cudaCheckErr(cudaMemcpyAsync(d_chunk_0, h_input_2, 768 * sizeof(float), cudaMemcpyHostToDevice, stream_0));

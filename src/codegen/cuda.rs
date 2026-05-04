@@ -204,7 +204,7 @@ pub struct HostCodeGenerator<'sched> {
 
     value2chunk: HashMap<ValueId, ChunkId>,
     hostmem2identifier: HashMap<ValueId, String>,
-    devicemem2identifier: Vec<String>,
+    devicemem2identifier: HashMap<ChunkId, String>,
     initializer_plans: IndexMap<ValueId, InitializerPlan>,
     used_device_initializers: std::cell::RefCell<BTreeSet<ValueId>>,
     session_state_devices: IndexMap<ValueId, String>,
@@ -482,7 +482,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             to_record_events,
             value2chunk: HashMap::new(),
             hostmem2identifier: HashMap::new(),
-            devicemem2identifier: Vec::new(),
+            devicemem2identifier: HashMap::new(),
             initializer_plans: IndexMap::new(),
             used_device_initializers: std::cell::RefCell::new(BTreeSet::new()),
             session_state_devices: IndexMap::new(),
@@ -568,32 +568,42 @@ impl<'sched> HostCodeGenerator<'sched> {
             }
         }
 
-        let arena_size = plan.arenas.first().map(|a| a.size).unwrap_or(0);
-        let mut offsets = Vec::with_capacity(plan.chunks.len());
         for chunk in &plan.chunks {
-            offsets.push(chunk.offset);
             let name = format!("d_chunk_{}", chunk.id);
-            self.devicemem2identifier.push(name);
+            self.devicemem2identifier.insert(chunk.id, name);
         }
 
-        if arena_size > 0 {
-            self.state_fields
-                .push("void *d_arena = nullptr;".to_string());
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier("state->d_arena".to_string()),
-                    mem_size: MemSize::Raw(Expr::Identifier(format!("{arena_size}"))),
-                }
-                .into(),
-            );
-            self.destroy_stmts
-                .push(Free(Expr::Identifier("state->d_arena".to_string())).into());
-            for (chunk_id, offset) in offsets.iter().enumerate() {
-                let name = &self.devicemem2identifier[chunk_id];
-                self.stmts.push(Statement::Raw(format!(
-                    "void *{name} = (char*)state->d_arena + {offset};"
-                )));
+        for arena in &plan.arenas {
+            if arena.size == 0 {
+                continue;
             }
+            let field = format!("d_arena_{}", arena.id);
+            self.state_fields
+                .push(format!("void *{field} = nullptr;"));
+            match arena.tier {
+                MemoryTier::GpuArena => {
+                    self.init_stmts.push(
+                        Malloc {
+                            dst: Expr::Identifier(format!("state->{field}")),
+                            mem_size: MemSize::Raw(Expr::Identifier(format!("{}", arena.size))),
+                        }
+                        .into(),
+                    );
+                    self.destroy_stmts
+                        .push(Free(Expr::Identifier(format!("state->{field}"))).into());
+                }
+                MemoryTier::HostArena => {
+                    unimplemented!("HostArena allocation not yet supported in CUDA codegen");
+                }
+            }
+        }
+        for chunk in &plan.chunks {
+            let name = &self.devicemem2identifier[&chunk.id];
+            let offset = chunk.offset;
+            let arena_id = chunk.arena;
+            self.stmts.push(Statement::Raw(format!(
+                "void *{name} = (char*)state->d_arena_{arena_id} + {offset};"
+            )));
         }
 
         Ok(self.move_statements())
@@ -834,7 +844,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             .ok_or(BuildError::ChunkNotFound(value_id))?;
         Ok(Expr::Identifier(
             self.devicemem2identifier
-                .get(*chunk_id)
+                .get(chunk_id)
                 .ok_or(BuildError::NoDeviceVariable(*chunk_id))?
                 .clone(),
         ))

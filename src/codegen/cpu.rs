@@ -55,7 +55,6 @@ enum UnitType {
 pub struct CodeGenContext {
     pub schedule: Schedule,
     blas_backend: blas::Backend,
-    chunk_bytes: Vec<u64>,
     value2place: HashMap<ValueId, AllocPlace>,
     kernel_bindings: HashMap<KernelId, Vec<ValueBinding>>,
 }
@@ -104,8 +103,6 @@ impl CodeGenContext {
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
 
-        let chunk_bytes: Vec<u64> = plan.chunks.iter().map(|c| c.size as u64).collect();
-
         let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
         let mut kernel_bindings: HashMap<KernelId, Vec<ValueBinding>> = HashMap::new();
         for step in &plan.steps {
@@ -120,7 +117,6 @@ impl CodeGenContext {
         Ok(CodeGenContext {
             schedule,
             blas_backend,
-            chunk_bytes,
             value2place,
             kernel_bindings,
         })
@@ -515,40 +511,46 @@ impl<'ll> CodeGen<'ll, '_> {
             None
         };
 
-        // Arena: allocate one big buffer, assign chunks at offsets
+        // Allocate one buffer per arena and assign each chunk's pointer at
+        // its offset within the right arena.
         builder.position_at_end(self.unit.entry);
         let i8_ty = self.ll_ctx.i8_type();
         let i64_ty = self.ll_ctx.i64_type();
-        let alignment = 256u64;
-        let align_up = |size: u64| (size + alignment - 1) & !(alignment - 1);
-        {
-            let mut offset = 0u64;
-            for (chunk_id, &size) in self.gen_ctx.chunk_bytes.iter().enumerate() {
-                let ptr = if offset == 0 && chunk_id == 0 {
-                    // first chunk: malloc the full arena
-                    let arena_size: u64 =
-                        self.gen_ctx.chunk_bytes.iter().map(|&s| align_up(s)).sum();
-                    let arena = builder.build_array_malloc(
-                        i8_ty,
-                        i64_ty.const_int(arena_size, false),
-                        "arena",
-                    )?;
-                    chunk2ptr.insert(usize::MAX, arena); // store arena base
-                    arena
-                } else {
-                    let arena = *chunk2ptr.get(&usize::MAX).unwrap();
-                    unsafe {
-                        builder.build_in_bounds_gep(
-                            i8_ty,
-                            arena,
-                            &[i64_ty.const_int(offset, false)],
-                            &format!("chunk.{chunk_id}"),
-                        )?
-                    }
-                };
-                chunk2ptr.insert(chunk_id, ptr);
-                offset += align_up(size);
+        let mut arena2ptr: HashMap<ArenaId, PointerValue> = HashMap::new();
+        let plan = self
+            .gen_ctx
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        for arena in &plan.arenas {
+            if arena.size == 0 {
+                continue;
             }
+            let base = builder.build_array_malloc(
+                i8_ty,
+                i64_ty.const_int(arena.size as u64, false),
+                &format!("arena.{}", arena.id),
+            )?;
+            arena2ptr.insert(arena.id, base);
+        }
+        for chunk in &plan.chunks {
+            let base = *arena2ptr
+                .get(&chunk.arena)
+                .expect("chunk references unknown arena");
+            let ptr = if chunk.offset == 0 {
+                base
+            } else {
+                unsafe {
+                    builder.build_in_bounds_gep(
+                        i8_ty,
+                        base,
+                        &[i64_ty.const_int(chunk.offset as u64, false)],
+                        &format!("chunk.{}", chunk.id),
+                    )?
+                }
+            };
+            chunk2ptr.insert(chunk.id, ptr);
         }
 
         let plan = self
@@ -653,8 +655,8 @@ impl<'ll> CodeGen<'ll, '_> {
         }
         builder.position_at_end(self.unit.entry);
 
-        if let Some(arena) = chunk2ptr.get(&usize::MAX) {
-            builder.build_free(*arena)?;
+        for ptr in arena2ptr.values() {
+            builder.build_free(*ptr)?;
         }
 
         builder.build_return(None)?;
