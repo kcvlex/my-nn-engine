@@ -3099,12 +3099,23 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             wq.ty.elem_type,
             "dqmmd.wq",
         )?;
+        // Full fast-math is safe on this localized fmul/fadd pair: it's a
+        // straight dot-product reduction over finite act*wq values, so NoNaNs /
+        // NoInfs never bite us here. The flags unblock LLVM's loop vectorizer
+        // from emitting a SIMD <8 x f32> reduction (raptorlake AVX2).
+        let fmf = inkwell::llvm_sys::LLVMFastMathAll;
         let prod = self.builder.build_float_mul(act_v, wq_v, "dqmmd.prod")?;
+        if let Some(inst) = prod.as_instruction() {
+            inst.set_fast_math_flags(fmf);
+        }
         let cur = self
             .builder
             .build_load(f32_ty, acc_slot, "dqmmd.acc.cur")?
             .into_float_value();
         let new_acc = self.builder.build_float_add(cur, prod, "dqmmd.acc.new")?;
+        if let Some(inst) = new_acc.as_instruction() {
+            inst.set_fast_math_flags(fmf);
+        }
         self.builder.build_store(acc_slot, new_acc)?;
         let k_next = self
             .builder
