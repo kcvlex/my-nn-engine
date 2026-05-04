@@ -185,13 +185,18 @@ impl LlmSession {
 
         let make_specs = || shared_specs.clone();
 
-        let initializer_buffers = Arc::new(InitializerBuffers::new());
+        // CPU sessions allocate initializers per-graph (no shared device buffer pool yet),
+        // so the cache only applies on CUDA.
+        let initializer_buffers = match opts.target {
+            Target::CUDA => Some(Arc::new(InitializerBuffers::new())),
+            Target::CPU => None,
+        };
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: make_specs(),
-                initializer_buffers: Some(Arc::clone(&initializer_buffers)),
+                initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
             },
         )?;
         let prefill_session = Session::from_graph(
@@ -199,7 +204,7 @@ impl LlmSession {
             opts,
             &SessionConfig {
                 session_states: make_specs(),
-                initializer_buffers: Some(initializer_buffers),
+                initializer_buffers,
             },
         )?;
 

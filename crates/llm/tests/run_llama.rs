@@ -1,4 +1,4 @@
-#![cfg(all(feature = "local", feature = "cuda"))]
+#![cfg(feature = "local")]
 
 use std::path::PathBuf;
 
@@ -13,16 +13,14 @@ use my_nn_engine_llm::HfWeights;
 use my_nn_engine_llm::LlamaOptions;
 use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+#[cfg(feature = "cuda")]
 use serial_test::serial;
 use tokenizers::Tokenizer;
 
 const PROMPT: &str = "The capital of France is";
 
-#[test]
-#[serial(gpu)]
-fn tinyllama() {
+fn run_tinyllama(target: Target) -> String {
     const N_GENERATE: usize = 16;
-    const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
 
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/tinyllama");
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
@@ -34,7 +32,7 @@ fn tinyllama() {
     let r = build_llama(&config, &weights, max_seq_len);
     let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
@@ -48,15 +46,11 @@ fn tinyllama() {
     )
     .unwrap();
 
-    let text = llm.generate(PROMPT, N_GENERATE).unwrap();
-    assert_eq!(text, EXPECTED_TEXT);
+    llm.generate(PROMPT, N_GENERATE).unwrap()
 }
 
-#[test]
-#[serial(gpu)]
-fn llama2_int8() {
+fn run_llama2_int8(target: Target) -> String {
     const N_GENERATE: usize = 24;
-    const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
 
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/llama2-7b-sft");
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
@@ -72,7 +66,7 @@ fn llama2_int8() {
     let p =
         build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
@@ -86,6 +80,30 @@ fn llama2_int8() {
     )
     .unwrap();
 
-    let text = llm.generate(PROMPT, N_GENERATE).unwrap();
+    llm.generate(PROMPT, N_GENERATE).unwrap()
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
+fn tinyllama() {
+    const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
+    let text = run_tinyllama(Target::CUDA);
+    assert_eq!(text, EXPECTED_TEXT);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
+fn llama2_int8() {
+    const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
+    let text = run_llama2_int8(Target::CUDA);
+    assert_eq!(text, EXPECTED_TEXT);
+}
+
+#[test]
+fn tinyllama_cpu() {
+    const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
+    let text = run_tinyllama(Target::CPU);
     assert_eq!(text, EXPECTED_TEXT);
 }
