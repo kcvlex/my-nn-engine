@@ -54,21 +54,47 @@ impl Annotator {
                         continue;
                     }
                 }
-                KernelBody::Opaque(Opaque { op }) => {
-                    let Operator::Softmax(softmax) = op else {
-                        continue;
-                    };
-                    let input = kernel.inputs[0].unwrap();
-                    let dims = &schedule.get_resolved_tensor_type(input).unwrap().dims;
-                    let axis = softmax.axis.index(dims.ndim());
-                    if axis != dims.ndim() - 1 {
-                        continue;
+                KernelBody::Opaque(Opaque { op }) => match op {
+                    Operator::Softmax(softmax) => {
+                        let input = kernel.inputs[0].unwrap();
+                        let dims = &schedule.get_resolved_tensor_type(input).unwrap().dims;
+                        let axis = softmax.axis.index(dims.ndim());
+                        if axis != dims.ndim() - 1 {
+                            continue;
+                        }
+                        let outer: usize = dims.iter().take(axis).product();
+                        if outer < self.softmax_threshold {
+                            continue;
+                        }
                     }
-                    let outer: usize = dims.iter().take(axis).product();
-                    if outer < self.softmax_threshold {
-                        continue;
+                    Operator::DequantMatMul(_) => {
+                        // Only the M=1 path benefits from our OMP — M>1 already goes through BLAS.
+                        let act_ty = schedule
+                            .get_resolved_tensor_type(
+                                kernel.inputs[crate::graph::operator::args::DEQUANT_MATMUL_LHS]
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                        let wq_ty = schedule
+                            .get_resolved_tensor_type(
+                                kernel.inputs[crate::graph::operator::args::DEQUANT_MATMUL_RHS]
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                        let k = wq_ty.dims[1];
+                        let m = act_ty.dims.size() / k;
+                        if m != 1 {
+                            continue;
+                        }
+                        // Each N row does a length-K dot product; even N=4096, K=4096
+                        // is plenty of work to amortize fork/join.
+                        let n = wq_ty.dims[0];
+                        if n < self.softmax_threshold {
+                            continue;
+                        }
                     }
-                }
+                    _ => continue,
+                },
             };
             set.insert(id);
         }

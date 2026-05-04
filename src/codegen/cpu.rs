@@ -1123,8 +1123,9 @@ impl<'ll> CodeGen<'ll, '_> {
                     let scale = &ptrs[args::DEQUANT_MATMUL_SCALE + 1];
                     let workspace = &ptrs[args::DEQUANT_MATMUL_WORKSPACE + 1];
                     let axis = dqmm.axis.index(wq.ty.dims.ndim());
-                    translator
-                        .build_dequant_matmul(&ptrs[0], act, wq, scale, workspace, axis, entry)
+                    translator.build_dequant_matmul(
+                        &ptrs[0], act, wq, scale, workspace, axis, entry, use_omp,
+                    )
                 }
                 _ => todo!("{:?}", op),
             },

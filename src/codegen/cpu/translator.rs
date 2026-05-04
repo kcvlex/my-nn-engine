@@ -2835,6 +2835,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         workspace: &TensorPtr<'ctx>,
         axis: usize,
         entry: BasicBlock<'ctx>,
+        use_omp: bool,
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         assert_eq!(axis, 0, "DequantMatMul kernel assumes axis=0");
         assert!(act.ty.is_contiguous());
@@ -2867,6 +2868,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let n = n_dim as u64;
         let k_u = k as u64;
         let i64_ty = self.context.i64_type();
+
+        // Decode (M=1) bypasses the workspace+BLAS path: the BLAS sgemv is small
+        // enough that materializing the dequantized weights wastes bandwidth.
+        // The fused kernel streams wq once; OMP splits the N rows across threads.
+        if m == 1 {
+            return self
+                .build_dequant_matmul_fused_decode(out, act, wq, scale, n_dim, k, entry, use_omp);
+        }
 
         self.builder.position_at_end(entry);
         let act_gep = self.build_gep(act)?;
@@ -2930,6 +2939,202 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         }
 
         Ok(self.builder.get_insert_block().unwrap())
+    }
+
+    // out[n] = scale[n] * sum_k (f32)act[k] * (f32)wq[n, k]
+    //
+    // Fused decode kernel for M=1: streams wq exactly once with no workspace and
+    // no BLAS call. With `use_omp` the N rows are split across threads via the
+    // existing omp_for_static plumbing.
+    fn build_dequant_matmul_fused_decode(
+        &self,
+        out: &TensorPtr<'ctx>,
+        act: &TensorPtr<'ctx>,
+        wq: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        n_dim: usize,
+        k: usize,
+        entry: BasicBlock<'ctx>,
+        use_omp: bool,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        if use_omp {
+            let exit = self.context.append_basic_block(*self.func, "dqmmd.exit");
+            let act_ty = act.ty.clone();
+            let wq_ty = wq.ty.clone();
+            let scale_ty = scale.ty.clone();
+            let out_ty = out.ty.clone();
+            let act_name = act.name.clone();
+            let wq_name = wq.name.clone();
+            let scale_name = scale.name.clone();
+            let out_name = out.name.clone();
+            let captures: Vec<BasicValueEnum<'ctx>> = vec![
+                act.ptr.as_basic_value_enum(),
+                act.offset.as_basic_value_enum(),
+                wq.ptr.as_basic_value_enum(),
+                wq.offset.as_basic_value_enum(),
+                scale.ptr.as_basic_value_enum(),
+                scale.offset.as_basic_value_enum(),
+                out.ptr.as_basic_value_enum(),
+                out.offset.as_basic_value_enum(),
+            ];
+            self.builder.position_at_end(entry);
+            self.omp_parallel(&captures, |translator, omp_ctx, loaded, loop_bb| {
+                let act = TensorPtr {
+                    ptr: loaded[0].into_pointer_value(),
+                    ty: act_ty.clone(),
+                    offset: loaded[1].into_int_value(),
+                    name: act_name.clone(),
+                };
+                let wq = TensorPtr {
+                    ptr: loaded[2].into_pointer_value(),
+                    ty: wq_ty.clone(),
+                    offset: loaded[3].into_int_value(),
+                    name: wq_name.clone(),
+                };
+                let scale = TensorPtr {
+                    ptr: loaded[4].into_pointer_value(),
+                    ty: scale_ty.clone(),
+                    offset: loaded[5].into_int_value(),
+                    name: scale_name.clone(),
+                };
+                let out = TensorPtr {
+                    ptr: loaded[6].into_pointer_value(),
+                    ty: out_ty.clone(),
+                    offset: loaded[7].into_int_value(),
+                    name: out_name.clone(),
+                };
+                let range = translator.omp_for_static(omp_ctx, n_dim as u64, loop_bb.exit)?;
+                translator.build_dequant_matmul_fused_decode_range(
+                    &out,
+                    &act,
+                    &wq,
+                    &scale,
+                    k,
+                    range.body_bb,
+                    range.lb,
+                    range.ub,
+                )?;
+                translator
+                    .builder
+                    .build_unconditional_branch(range.epilog_bb)?;
+                Ok(())
+            })?;
+            self.builder.position_at_end(entry);
+            self.builder.build_unconditional_branch(exit)?;
+            self.builder.position_at_end(exit);
+            Ok(exit)
+        } else {
+            let i64_ty = self.context.i64_type();
+            let lb = i64_ty.const_zero();
+            let ub = i64_ty.const_int(n_dim as u64, false);
+            self.build_dequant_matmul_fused_decode_range(out, act, wq, scale, k, entry, lb, ub)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_dequant_matmul_fused_decode_range(
+        &self,
+        out: &TensorPtr<'ctx>,
+        act: &TensorPtr<'ctx>,
+        wq: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        k: usize,
+        entry: BasicBlock<'ctx>,
+        lb: IntValue<'ctx>,
+        ub: IntValue<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        let i64_ty = self.context.i64_type();
+        let f32_ty = self.context.f32_type();
+        let k_const = i64_ty.const_int(k as u64, false);
+
+        let n_header = self.context.append_basic_block(*self.func, "dqmmd.n.h");
+        let n_body = self.context.append_basic_block(*self.func, "dqmmd.n.b");
+        let k_header = self.context.append_basic_block(*self.func, "dqmmd.k.h");
+        let k_body = self.context.append_basic_block(*self.func, "dqmmd.k.b");
+        let after_k = self.context.append_basic_block(*self.func, "dqmmd.k.x");
+        let n_latch = self.context.append_basic_block(*self.func, "dqmmd.n.l");
+        let exit = self.context.append_basic_block(*self.func, "dqmmd.exit");
+
+        self.builder.position_at_end(entry);
+        let acc_slot = self.builder.build_alloca(f32_ty, "dqmmd.acc")?;
+        self.builder.build_unconditional_branch(n_header)?;
+
+        self.builder.position_at_end(n_header);
+        let n_phi = self.builder.build_phi(i64_ty, "dqmmd.n.ind")?;
+        let ni = n_phi.as_basic_value().into_int_value();
+        let n_cond =
+            self.builder
+                .build_int_compare(inkwell::IntPredicate::SLT, ni, ub, "dqmmd.n.cond")?;
+        self.builder
+            .build_conditional_branch(n_cond, n_body, exit)?;
+
+        self.builder.position_at_end(n_body);
+        self.builder.build_store(acc_slot, f32_ty.const_zero())?;
+        let wq_row_off = self.builder.build_int_mul(ni, k_const, "dqmmd.wq.row")?;
+        self.builder.build_unconditional_branch(k_header)?;
+
+        self.builder.position_at_end(k_header);
+        let k_phi = self.builder.build_phi(i64_ty, "dqmmd.k.ind")?;
+        let ki = k_phi.as_basic_value().into_int_value();
+        let k_cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            ki,
+            k_const,
+            "dqmmd.k.cond",
+        )?;
+        self.builder
+            .build_conditional_branch(k_cond, k_body, after_k)?;
+
+        self.builder.position_at_end(k_body);
+        let act_v = self
+            .build_load(&act.clone().add_offset(self.builder, ki)?)?
+            .into_float_value();
+        let wq_off = self
+            .builder
+            .build_int_add(wq_row_off, ki, "dqmmd.wq.off_local")?;
+        let wq_ptr = self.build_gep(&wq.clone().add_offset(self.builder, wq_off)?)?;
+        let wq_v = self.load_elem_f32(
+            wq.ty.elem_type.llvm_type(self.context),
+            wq_ptr,
+            wq.ty.elem_type,
+            "dqmmd.wq",
+        )?;
+        let prod = self.builder.build_float_mul(act_v, wq_v, "dqmmd.prod")?;
+        let cur = self
+            .builder
+            .build_load(f32_ty, acc_slot, "dqmmd.acc.cur")?
+            .into_float_value();
+        let new_acc = self.builder.build_float_add(cur, prod, "dqmmd.acc.new")?;
+        self.builder.build_store(acc_slot, new_acc)?;
+        let k_next = self
+            .builder
+            .build_int_add(ki, i64_ty.const_int(1, false), "dqmmd.k.next")?;
+        self.builder.build_unconditional_branch(k_header)?;
+        k_phi.add_incoming(&[(&i64_ty.const_zero(), n_body), (&k_next, k_body)]);
+
+        self.builder.position_at_end(after_k);
+        let scale_v = self
+            .build_load(&scale.clone().add_offset(self.builder, ni)?)?
+            .into_float_value();
+        let final_acc = self
+            .builder
+            .build_load(f32_ty, acc_slot, "dqmmd.acc.final")?
+            .into_float_value();
+        let res = self
+            .builder
+            .build_float_mul(final_acc, scale_v, "dqmmd.res")?;
+        self.build_store(&out.clone().add_offset(self.builder, ni)?, res)?;
+        self.builder.build_unconditional_branch(n_latch)?;
+
+        self.builder.position_at_end(n_latch);
+        let n_next = self
+            .builder
+            .build_int_add(ni, i64_ty.const_int(1, false), "dqmmd.n.next")?;
+        self.builder.build_unconditional_branch(n_header)?;
+        n_phi.add_incoming(&[(&lb, entry), (&n_next, n_latch)]);
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
     }
 
     pub fn build_matrix_reduce(
