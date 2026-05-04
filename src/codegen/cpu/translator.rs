@@ -281,6 +281,12 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(after)
     }
 
+    fn tag_fast(&self, v: FloatValue<'ctx>) {
+        if let Some(inst) = v.as_instruction() {
+            inst.set_fast_math_flags(inkwell::llvm_sys::LLVMFastMathAll);
+        }
+    }
+
     // Load one element as f32, dequantizing on the fly when storage is i8.
     // bf16 goes through the bf16<->f32 bit dance; f32 is loaded as-is.
     fn load_elem_f32(
@@ -3099,23 +3105,14 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             wq.ty.elem_type,
             "dqmmd.wq",
         )?;
-        // Full fast-math is safe on this localized fmul/fadd pair: it's a
-        // straight dot-product reduction over finite act*wq values, so NoNaNs /
-        // NoInfs never bite us here. The flags unblock LLVM's loop vectorizer
-        // from emitting a SIMD <8 x f32> reduction (raptorlake AVX2).
-        let fmf = inkwell::llvm_sys::LLVMFastMathAll;
         let prod = self.builder.build_float_mul(act_v, wq_v, "dqmmd.prod")?;
-        if let Some(inst) = prod.as_instruction() {
-            inst.set_fast_math_flags(fmf);
-        }
+        self.tag_fast(prod);
         let cur = self
             .builder
             .build_load(f32_ty, acc_slot, "dqmmd.acc.cur")?
             .into_float_value();
         let new_acc = self.builder.build_float_add(cur, prod, "dqmmd.acc.new")?;
-        if let Some(inst) = new_acc.as_instruction() {
-            inst.set_fast_math_flags(fmf);
-        }
+        self.tag_fast(new_acc);
         self.builder.build_store(acc_slot, new_acc)?;
         let k_next = self
             .builder
@@ -4674,9 +4671,11 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let prod = self
                 .builder
                 .build_float_mul(q_v, k_v, &format!("dot.prod{}", d))?;
+            self.tag_fast(prod);
             sum = self
                 .builder
                 .build_float_add(sum, prod, &format!("dot.sum{}", d))?;
+            self.tag_fast(sum);
         }
         let sum = if let Some(ks_v) = k_scale_v {
             self.builder.build_float_mul(sum, ks_v, "dot.kscale")?
@@ -4774,12 +4773,15 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             let o_scaled =
                 self.builder
                     .build_float_mul(o_d_val, factor, &format!("o.d{}.scaled", d))?;
+            self.tag_fast(o_scaled);
             let e_v = self
                 .builder
                 .build_float_mul(e_eff, v_d_val, &format!("o.d{}.ev", d))?;
+            self.tag_fast(e_v);
             let o_new = self
                 .builder
                 .build_float_add(o_scaled, e_v, &format!("o.d{}.new", d))?;
+            self.tag_fast(o_new);
             self.builder.build_store(o_d_ptrs[d], o_new)?;
         }
 
@@ -5779,11 +5781,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             .build_load(&src.clone().set_offset(offset))?
             .into_float_value();
         let sq = self.builder.build_float_mul(src_val, src_val, "sq")?;
+        self.tag_fast(sq);
         let sumsq_next = self.builder.build_float_add(
             sumsq_acc.as_basic_value().into_float_value(),
             sq,
             "sumsq.next",
         )?;
+        self.tag_fast(sumsq_next);
         self.finalize_counted_loop(
             sumsq_idx_phi,
             outer_hdr,
