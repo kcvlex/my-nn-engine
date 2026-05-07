@@ -267,6 +267,77 @@ pub fn quantize_safetensors_int8_dir(
     quantize_safetensors_int8_files(&files, dst)
 }
 
+// Streaming quantization.
+pub fn quantize_safetensors_int8_to_dir(
+    src_dir: impl AsRef<Path>,
+    dst_dir: impl AsRef<Path>,
+) -> Result<QuantizeStats, QuantizeError> {
+    let src_dir = src_dir.as_ref();
+    let dst_dir = dst_dir.as_ref();
+    std::fs::create_dir_all(dst_dir)?;
+
+    let index_path = src_dir.join("model.safetensors.index.json");
+    let shard_names: Vec<String> = if index_path.exists() {
+        let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index_path)?)?;
+        let map = json
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .ok_or(QuantizeError::MalformedIndex)?;
+        let set: std::collections::BTreeSet<&str> =
+            map.values().filter_map(|v| v.as_str()).collect();
+        set.into_iter().map(String::from).collect()
+    } else {
+        vec!["model.safetensors".to_string()]
+    };
+
+    let mut stats = QuantizeStats::default();
+    let mut weight_map = serde_json::Map::new();
+    let mut total_size: u64 = 0;
+
+    for shard_name in &shard_names {
+        let src = src_dir.join(shard_name);
+        let bytes = std::fs::read(&src)?;
+        let st = SafeTensors::deserialize(&bytes)?;
+        let mut output: Vec<(String, OwnedTensor)> = Vec::new();
+        for (name, view) in st.tensors() {
+            if should_quantize(&name) {
+                let (q, scale) = quantize_per_channel(&view)?;
+                let scale_name = format!("{name}.scale");
+                total_size += q.data.len() as u64 + scale.data.len() as u64;
+                weight_map.insert(name.clone(), serde_json::Value::String(shard_name.clone()));
+                weight_map.insert(
+                    scale_name.clone(),
+                    serde_json::Value::String(shard_name.clone()),
+                );
+                output.push((name.clone(), q));
+                output.push((scale_name, scale));
+                stats.quantized += 1;
+            } else {
+                let owned = copy_view(&view)?;
+                total_size += owned.data.len() as u64;
+                weight_map.insert(name.clone(), serde_json::Value::String(shard_name.clone()));
+                output.push((name, owned));
+                stats.passthrough += 1;
+            }
+        }
+        let dst = dst_dir.join(shard_name);
+        safetensors::serialize_to_file(output, None, &dst)?;
+    }
+
+    if shard_names.len() > 1 || index_path.exists() {
+        let index_out = serde_json::json!({
+            "metadata": { "total_size": total_size },
+            "weight_map": serde_json::Value::Object(weight_map),
+        });
+        std::fs::write(
+            dst_dir.join("model.safetensors.index.json"),
+            serde_json::to_string_pretty(&index_out)?,
+        )?;
+    }
+
+    Ok(stats)
+}
+
 fn quantize_safetensors_int8_files(
     src_files: &[std::path::PathBuf],
     dst: impl AsRef<Path>,
