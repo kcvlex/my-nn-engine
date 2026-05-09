@@ -6,7 +6,7 @@ members = [".", "crates/bench", "crates/llm", "crates/test-tools", "crates/ui"]
 version = "0.1.0"
 edition = "2021"
 license = "CC0-1.0"
-repository = "https://github.com/kcvlex/my-onnx-runtime"
+repository = "https://github.com/kcvlex/my-nn-engine"
 authors = ["kcvlex <krkr9893@gmail.com>"]
 
 [workspace.dependencies]
