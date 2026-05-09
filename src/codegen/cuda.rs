@@ -233,6 +233,13 @@ pub struct HostCode {
     decl_values: Vec<Statement>,
     decl_cuda_objs: Vec<Statement>,
     per_step_stmts: Vec<(StepKey, Vec<Statement>)>,
+    /// Local declaration strings for GPU chunks: `void *d_chunk_X = (char*)state->d_arena_Y + offset;`.
+    /// Used to construct model_chunks() body without dragging in input/output
+    /// references from decl_values.
+    gpu_chunk_decls: Vec<String>,
+    /// Chunk ids exposed via model_chunks (parallel to gpu_chunk_decls order
+    /// is not required since we emit `out[cid] = d_chunk_<cid>;` per id).
+    gpu_chunk_ids: Vec<ChunkId>,
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
 
@@ -982,24 +989,31 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
 
         let _ = src_value;
-        let src_expr = self.place_identifier(src_place)?;
-        let dst_expr = self.place_identifier(dst_place)?;
         let kind = match (src_place, dst_place) {
-            (AllocPlace::Input(_), _) => CudaMemcpyKind::HostToDevice,
-            (_, AllocPlace::Output(_)) => CudaMemcpyKind::DeviceToHost,
-            other => panic!("unsupported Transfer place pair: {:?}", other),
+            (AllocPlace::Input(_), _) => Some(CudaMemcpyKind::HostToDevice),
+            (_, AllocPlace::Output(_)) => Some(CudaMemcpyKind::DeviceToHost),
+            // Cross-tier transfers (HostArena <-> GpuArena chunks, SessionState
+            // -> HostArena chunk, etc.) cannot be emitted from this wrapper
+            // because host-arena buffers are not visible to the .so. Hybrid
+            // runtime dispatches these via direct cudaMemcpy. Skip the body
+            // (the wait/record events still need to land for stream sync).
+            _ => None,
         };
-        let mem_size = MemSize::Single(self.single_mem_size(dst_value)?);
-        self.stmts.push(
-            Memcpy {
-                dst: dst_expr,
-                src: src_expr,
-                mem_size,
-                kind,
-                stream: stream_id,
-            }
-            .into(),
-        );
+        if let Some(kind) = kind {
+            let src_expr = self.place_identifier(src_place)?;
+            let dst_expr = self.place_identifier(dst_place)?;
+            let mem_size = MemSize::Single(self.single_mem_size(dst_value)?);
+            self.stmts.push(
+                Memcpy {
+                    dst: dst_expr,
+                    src: src_expr,
+                    mem_size,
+                    kind,
+                    stream: stream_id,
+                }
+                .into(),
+            );
+        }
 
         if self.to_record_events.contains(&event_id) {
             self.stmts.push(
@@ -1014,6 +1028,30 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
+        // value2place is populated globally with last-write-wins, which is
+        // wrong when the same value gets rebound by a later cross-tier
+        // Transfer (e.g. SessionState produced by a CUDA kernel and consumed
+        // by a CPU kernel via a Transfer to a HostArena chunk). Rebind the
+        // value2place to this kernel's own bindings for the duration of
+        // emission so device_identifier resolves per-kernel.
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let step_bindings: Vec<ValueBinding> = plan
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::Kernel(k) if k.kernel == kernel_id => Some(k.bindings.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let saved_places: Vec<(ValueId, Option<AllocPlace>)> = step_bindings
+            .iter()
+            .map(|b| (b.value, self.value2place.insert(b.value, b.place)))
+            .collect();
+
         let kernel = &self.schedule.kernels[kernel_id];
         let KernelStreamView {
             stream_id,
@@ -2258,6 +2296,17 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
+        for (v, prior) in saved_places {
+            match prior {
+                Some(p) => {
+                    self.value2place.insert(v, p);
+                }
+                None => {
+                    self.value2place.remove(&v);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -2266,6 +2315,28 @@ impl<'sched> HostCodeGenerator<'sched> {
         let ComputeGen {
             per_step: per_step_stmts,
         } = self.gen_computes()?;
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("execution_plan");
+        let gpu_chunk_ids: Vec<ChunkId> = plan
+            .chunks
+            .iter()
+            .filter(|c| plan.arenas[c.arena].tier == MemoryTier::GpuArena)
+            .map(|c| c.id)
+            .collect();
+        let gpu_chunk_decls: Vec<String> = plan
+            .chunks
+            .iter()
+            .filter(|c| plan.arenas[c.arena].tier == MemoryTier::GpuArena)
+            .map(|c| {
+                format!(
+                    "void *d_chunk_{} = (char*)state->d_arena_{} + {};",
+                    c.id, c.arena, c.offset
+                )
+            })
+            .collect();
         self.emit_used_initializers();
         let finalize = self.gen_finalize()?;
 
@@ -2306,6 +2377,8 @@ impl<'sched> HostCodeGenerator<'sched> {
             decl_values,
             decl_cuda_objs,
             per_step_stmts,
+            gpu_chunk_decls,
+            gpu_chunk_ids,
             finalize,
             kernel_codes,
             includes: self.includes.clone(),
@@ -2419,6 +2492,23 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
             writer,
             "\nextern \"C\" void model_device_sync() {{ cudaCheckErr(cudaDeviceSynchronize()); }}"
         )?;
+        writeln!(
+            writer,
+            "\nextern \"C\" int model_memcpy(void *dst, const void *src, size_t n, int kind) {{ return (int)cudaMemcpy(dst, src, n, (cudaMemcpyKind)kind); }}"
+        )?;
+        // model_chunks: write all GPU chunk ptrs into out[].
+        writeln!(
+            writer,
+            "\nextern \"C\" void model_chunks(void *state_ptr, void **out) {{
+  auto *state = static_cast<ModelState*>(state_ptr);"
+        )?;
+        for decl in self.gpu_chunk_decls.iter() {
+            writeln!(writer, "  {decl}")?;
+        }
+        for cid in self.gpu_chunk_ids.iter().copied() {
+            writeln!(writer, "  out[{cid}] = d_chunk_{cid};")?;
+        }
+        writeln!(writer, "}}")?;
 
         // Per-step wrappers: each step gets its own extern "C" function so
         // HybridSession can dispatch CUDA work step-by-step. The prologue

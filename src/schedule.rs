@@ -86,7 +86,13 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
         num_streams: options.num_cuda_streams,
         placement_strategy,
     }));
-    if options.target == Target::CPU {
+    let needs_cpu_omp = options.target == Target::CPU ||
+        matches!(
+            placement_strategy,
+            scheduler::PlacementStrategy::StructuralKvTouch |
+                scheduler::PlacementStrategy::Uniform(ir::Device::CPU)
+        );
+    if needs_cpu_omp {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
             softmax_threshold: options.omp_softmax_threshold,

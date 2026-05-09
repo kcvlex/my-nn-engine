@@ -1,6 +1,6 @@
 ---
 source: src/codegen/cuda.rs
-assertion_line: 2400
+assertion_line: 2448
 expression: code
 ---
 #include <algorithm>
@@ -82,6 +82,18 @@ extern "C" void model(void *state_ptr, void **output, void **input) {
 }
 
 extern "C" void model_device_sync() { cudaCheckErr(cudaDeviceSynchronize()); }
+
+extern "C" int model_memcpy(void *dst, const void *src, size_t n, int kind) { return (int)cudaMemcpy(dst, src, n, (cudaMemcpyKind)kind); }
+
+extern "C" void model_chunks(void *state_ptr, void **out) {
+  auto *state = static_cast<ModelState*>(state_ptr);
+  void *d_chunk_0 = (char*)state->d_arena_0 + 0;
+  void *d_chunk_1 = (char*)state->d_arena_0 + 3072;
+  void *d_chunk_2 = (char*)state->d_arena_0 + 19456;
+  out[0] = d_chunk_0;
+  out[1] = d_chunk_1;
+  out[2] = d_chunk_2;
+}
 
 extern "C" void model_step_transfer_0(void *state_ptr, void **output, void **input) {
   auto *state = static_cast<ModelState*>(state_ptr);

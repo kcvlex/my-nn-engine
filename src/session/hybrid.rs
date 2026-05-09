@@ -31,13 +31,59 @@ use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::Tensor;
 
-type KernelFn = unsafe extern "C" fn(*const *mut u8);
+// CPU kernels are emitted with one *mut u8 parameter per binding (output then
+// input). We dispatch by arity since varargs ABI isn't stable across
+// platforms.
+type KernelFn0 = unsafe extern "C" fn();
+type KernelFn1 = unsafe extern "C" fn(*mut u8);
+type KernelFn2 = unsafe extern "C" fn(*mut u8, *mut u8);
+type KernelFn3 = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8);
+type KernelFn4 = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8);
+type KernelFn5 = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut u8);
+type KernelFn6 = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8);
+type KernelFn7 =
+    unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8);
+type KernelFn8 =
+    unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8);
+
+unsafe fn call_kernel_fn(addr: u64, args: &[*mut u8]) {
+    unsafe {
+        match args.len() {
+            0 => (std::mem::transmute::<u64, KernelFn0>(addr))(),
+            1 => (std::mem::transmute::<u64, KernelFn1>(addr))(args[0]),
+            2 => (std::mem::transmute::<u64, KernelFn2>(addr))(args[0], args[1]),
+            3 => (std::mem::transmute::<u64, KernelFn3>(addr))(args[0], args[1], args[2]),
+            4 => (std::mem::transmute::<u64, KernelFn4>(addr))(args[0], args[1], args[2], args[3]),
+            5 => (std::mem::transmute::<u64, KernelFn5>(addr))(
+                args[0], args[1], args[2], args[3], args[4],
+            ),
+            6 => (std::mem::transmute::<u64, KernelFn6>(addr))(
+                args[0], args[1], args[2], args[3], args[4], args[5],
+            ),
+            7 => (std::mem::transmute::<u64, KernelFn7>(addr))(
+                args[0], args[1], args[2], args[3], args[4], args[5], args[6],
+            ),
+            8 => (std::mem::transmute::<u64, KernelFn8>(addr))(
+                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
+            ),
+            n => panic!("CPU kernel arity {n} not supported"),
+        }
+    }
+}
 
 type CudaInitFn =
     unsafe extern "C" fn(*const *const u8, *const *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 type CudaDestroyFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 type CudaStepFn = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type CudaSyncFn = unsafe extern "C" fn();
+type CudaChunksFn = unsafe extern "C" fn(*mut std::ffi::c_void, *mut *mut std::ffi::c_void);
+type CudaMemcpyFn =
+    unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, usize, i32) -> i32;
+
+const CUDA_MEMCPY_HOST_TO_HOST: i32 = 0;
+const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1;
+const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2;
+const CUDA_MEMCPY_DEVICE_TO_DEVICE: i32 = 3;
 
 struct CpuJitState {
     _engine: ExecutionEngine<'static>,
@@ -48,23 +94,30 @@ unsafe impl Send for CpuJitState {}
 unsafe impl Sync for CpuJitState {}
 
 struct CudaState {
+    // Declaration order = drop order. initializer_buffers must drop BEFORE lib
+    // so cudaFree runs while the model .so (and through it cudart) is still
+    // mapped.
     #[allow(dead_code)]
-    lib: libloading::Library,
+    initializer_buffers: Vec<Arc<DeviceBuffer>>,
     kernel_fns: HashMap<KernelId, CudaStepFn>,
+    #[allow(dead_code)]
     transfer_fns: HashMap<usize, CudaStepFn>,
     destroy_func: CudaDestroyFn,
     sync_func: CudaSyncFn,
+    memcpy_func: CudaMemcpyFn,
+    gpu_chunks: HashMap<ChunkId, *mut std::ffi::c_void>,
     state: *mut std::ffi::c_void,
     #[allow(dead_code)]
-    initializer_buffers: Vec<Arc<DeviceBuffer>>,
+    lib: libloading::Library,
 }
 
 unsafe impl Send for CudaState {}
 unsafe impl Sync for CudaState {}
 
-impl Drop for CudaState {
-    fn drop(&mut self) {
+impl CudaState {
+    fn destroy(&mut self) {
         if !self.state.is_null() {
+            unsafe { (self.sync_func)() };
             unsafe { (self.destroy_func)(self.state) };
             self.state = std::ptr::null_mut();
         }
@@ -81,7 +134,9 @@ pub struct SessionHybrid {
     #[allow(dead_code)]
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
-    cpu_kernel_fns: HashMap<KernelId, KernelFn>,
+    /// Raw addresses (u64) of JIT-compiled CPU kernel functions; arity is
+    /// determined per-call from kernel.outputs.len() + inputs.
+    cpu_kernel_fns: HashMap<KernelId, u64>,
     #[allow(dead_code)]
     cpu_jit: CpuJitState,
 
@@ -146,15 +201,14 @@ impl SessionHybrid {
                 .map_err(|()| SessionError::OtherError("add_module failed".to_string()))?;
         }
 
-        let mut cpu_kernel_fns: HashMap<KernelId, KernelFn> = HashMap::new();
+        let mut cpu_kernel_fns: HashMap<KernelId, u64> = HashMap::new();
         for &kid in &kernel_ids {
             let kernel = &codegen_ctx.schedule.kernels[kid];
             let name = get_kernel_name_or(kernel, kid);
             let addr = engine
                 .get_function_address(&name)
                 .map_err(|e| SessionError::OtherError(format!("get_function_address: {:?}", e)))?;
-            let f: KernelFn = unsafe { std::mem::transmute(addr) };
-            cpu_kernel_fns.insert(kid, f);
+            cpu_kernel_fns.insert(kid, addr as u64);
         }
 
         drop(kernel_modules);
@@ -242,6 +296,14 @@ impl SessionHybrid {
                 SessionError::OtherError(format!("dlsym model_device_sync: {:?}", e))
             })?
         };
+        let memcpy_func: CudaMemcpyFn = unsafe {
+            *lib.get::<CudaMemcpyFn>(b"model_memcpy")
+                .map_err(|e| SessionError::OtherError(format!("dlsym model_memcpy: {:?}", e)))?
+        };
+        let chunks_func: CudaChunksFn = unsafe {
+            *lib.get::<CudaChunksFn>(b"model_chunks")
+                .map_err(|e| SessionError::OtherError(format!("dlsym model_chunks: {:?}", e)))?
+        };
 
         let plan = schedule
             .execution_plan
@@ -281,6 +343,22 @@ impl SessionHybrid {
             session_state_buffers.iter().map(|b| b.ptr()).collect();
         let state = unsafe { (init_func)(initializer_ptrs.as_ptr(), session_state_ptrs.as_ptr()) };
 
+        let chunk_count = plan
+            .chunks
+            .iter()
+            .map(|c| c.id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        let mut chunk_buf: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); chunk_count];
+        unsafe { (chunks_func)(state, chunk_buf.as_mut_ptr()) };
+        let mut gpu_chunks: HashMap<ChunkId, *mut std::ffi::c_void> = HashMap::new();
+        for chunk in &plan.chunks {
+            if plan.arenas[chunk.arena].tier == MemoryTier::GpuArena {
+                gpu_chunks.insert(chunk.id, chunk_buf[chunk.id]);
+            }
+        }
+
         Ok(Self {
             input_ty,
             output_ty,
@@ -298,6 +376,8 @@ impl SessionHybrid {
                 transfer_fns,
                 destroy_func,
                 sync_func,
+                memcpy_func,
+                gpu_chunks,
                 state,
                 initializer_buffers,
             },
@@ -333,7 +413,9 @@ impl SessionHybrid {
         }
 
         let mut chunk_ptrs: HashMap<ChunkId, *mut u8> = HashMap::new();
+        let mut chunk_tiers: HashMap<ChunkId, MemoryTier> = HashMap::new();
         for chunk in &plan.chunks {
+            chunk_tiers.insert(chunk.id, plan.arenas[chunk.arena].tier);
             let Some(arena) = host_arenas.get_mut(&chunk.arena) else {
                 continue;
             };
@@ -389,7 +471,7 @@ impl SessionHybrid {
             })
         };
 
-        for (idx, step) in plan.steps.iter().enumerate() {
+        for step in plan.steps.iter() {
             match step {
                 Step::Kernel(k) if k.context.device == Device::CPU => {
                     let kernel = &self.schedule.kernels[k.kernel];
@@ -411,10 +493,10 @@ impl SessionHybrid {
                     }
                     // Identity / Reinterpret with aliased input/output chunk
                     // is elided by need_to_generate; skip silently here.
-                    let Some(f) = self.cpu_kernel_fns.get(&k.kernel) else {
+                    let Some(&addr) = self.cpu_kernel_fns.get(&k.kernel) else {
                         continue;
                     };
-                    unsafe { f(args.as_ptr()) };
+                    unsafe { call_kernel_fn(addr, &args) };
                 }
                 Step::Kernel(k) => {
                     let f = self.cuda.kernel_fns.get(&k.kernel).ok_or_else(|| {
@@ -428,16 +510,105 @@ impl SessionHybrid {
                         );
                     }
                 }
-                Step::Transfer(_) => {
-                    let f = self.cuda.transfer_fns.get(&idx).ok_or_else(|| {
-                        SessionError::OtherError(format!("Transfer step {idx} not loaded"))
-                    })?;
-                    unsafe {
-                        (*f)(
-                            self.cuda.state,
-                            output_ptrs.as_ptr(),
-                            input_ptrs.as_ptr() as _,
-                        );
+                Step::Transfer(t) => {
+                    let resolve_with_tier =
+                        |place: AllocPlace| -> Result<(*mut u8, MemoryTier), SessionError> {
+                            Ok(match place {
+                                AllocPlace::Chunk(cid) => {
+                                    // chunk_tiers is keyed by ChunkId; plan.chunks
+                                    // is grouped per-arena, so plan.chunks[cid] is
+                                    // not the same chunk as id=cid in general.
+                                    let tier = *chunk_tiers.get(&cid).ok_or_else(|| {
+                                        SessionError::OtherError(format!("unknown chunk {cid:?}"))
+                                    })?;
+                                    let p = match tier {
+                                        MemoryTier::HostArena => {
+                                            *chunk_ptrs.get(&cid).ok_or_else(|| {
+                                                SessionError::OtherError(format!(
+                                                    "missing host chunk {cid:?}"
+                                                ))
+                                            })?
+                                        }
+                                        MemoryTier::GpuArena => {
+                                            *self.cuda.gpu_chunks.get(&cid).ok_or_else(|| {
+                                                SessionError::OtherError(format!(
+                                                    "missing gpu chunk {cid:?}"
+                                                ))
+                                            })?
+                                                as *mut u8
+                                        }
+                                    };
+                                    (p, tier)
+                                }
+                                AllocPlace::Input(v) => {
+                                    let i = self
+                                        .schedule
+                                        .inputs
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!("input {v:?}"))
+                                        })?;
+                                    (input_ptrs[i], MemoryTier::HostArena)
+                                }
+                                AllocPlace::Output(v) => {
+                                    let i = self
+                                        .schedule
+                                        .outputs
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!("output {v:?}"))
+                                        })?;
+                                    (output_ptrs[i], MemoryTier::HostArena)
+                                }
+                                AllocPlace::SessionState(v) => {
+                                    let i = self
+                                        .schedule
+                                        .session_states
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!(
+                                                "session_state {v:?} not found"
+                                            ))
+                                        })?;
+                                    (
+                                        self.session_state_buffers[i].ptr() as *mut u8,
+                                        MemoryTier::GpuArena,
+                                    )
+                                }
+                                AllocPlace::Initializer(_) => {
+                                    return Err(SessionError::OtherError(format!(
+                                        "Transfer with {place:?} not yet supported"
+                                    )));
+                                }
+                            })
+                        };
+                    let (src_ptr, src_tier) = resolve_with_tier(t.src.place)?;
+                    let (dst_ptr, dst_tier) = resolve_with_tier(t.dst.place)?;
+                    let size =
+                        crate::schedule::scheduler::value_byte_size(&self.schedule, t.dst.value);
+                    let kind = match (src_tier, dst_tier) {
+                        (MemoryTier::HostArena, MemoryTier::HostArena) => CUDA_MEMCPY_HOST_TO_HOST,
+                        (MemoryTier::HostArena, MemoryTier::GpuArena) => CUDA_MEMCPY_HOST_TO_DEVICE,
+                        (MemoryTier::GpuArena, MemoryTier::HostArena) => CUDA_MEMCPY_DEVICE_TO_HOST,
+                        (MemoryTier::GpuArena, MemoryTier::GpuArena) => {
+                            CUDA_MEMCPY_DEVICE_TO_DEVICE
+                        }
+                    };
+                    let rc = unsafe {
+                        (self.cuda.memcpy_func)(
+                            dst_ptr as *mut std::ffi::c_void,
+                            src_ptr as *const std::ffi::c_void,
+                            size,
+                            kind,
+                        )
+                    };
+                    if rc != 0 {
+                        return Err(SessionError::OtherError(format!(
+                            "cudaMemcpy failed: rc={rc}"
+                        )));
                     }
                 }
                 Step::SyncWait(_) => {}
@@ -452,5 +623,11 @@ impl SessionHybrid {
             .map(|(buf, ty)| buf.into_tensor(ty.dims.clone()))
             .collect();
         Ok(outputs)
+    }
+}
+
+impl Drop for SessionHybrid {
+    fn drop(&mut self) {
+        self.cuda.destroy();
     }
 }
