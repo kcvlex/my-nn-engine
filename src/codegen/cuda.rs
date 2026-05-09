@@ -6,6 +6,7 @@ mod runtime_api;
 use std::cmp::min;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use delegate::delegate;
 use derive_more::From;
@@ -555,30 +556,31 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.chunk_names.insert(chunk.id, name);
         }
 
+        let mut emitted_arenas: HashSet<crate::schedule::ir::ArenaId> = HashSet::new();
         for arena in &plan.arenas {
             if arena.size == 0 {
                 continue;
             }
+            if arena.tier != MemoryTier::GpuArena {
+                continue;
+            }
             let field = format!("d_arena_{}", arena.id);
             self.state_fields.push(format!("void *{field} = nullptr;"));
-            match arena.tier {
-                MemoryTier::GpuArena => {
-                    self.init_stmts.push(
-                        Malloc {
-                            dst: Expr::Identifier(format!("state->{field}")),
-                            mem_size: MemSize::Raw(Expr::Identifier(format!("{}", arena.size))),
-                        }
-                        .into(),
-                    );
-                    self.destroy_stmts
-                        .push(Free(Expr::Identifier(format!("state->{field}"))).into());
+            self.init_stmts.push(
+                Malloc {
+                    dst: Expr::Identifier(format!("state->{field}")),
+                    mem_size: MemSize::Raw(Expr::Identifier(format!("{}", arena.size))),
                 }
-                MemoryTier::HostArena => {
-                    unimplemented!("HostArena allocation not yet supported in CUDA codegen");
-                }
-            }
+                .into(),
+            );
+            self.destroy_stmts
+                .push(Free(Expr::Identifier(format!("state->{field}"))).into());
+            emitted_arenas.insert(arena.id);
         }
         for chunk in &plan.chunks {
+            if !emitted_arenas.contains(&chunk.arena) {
+                continue;
+            }
             let name = &self.chunk_names[&chunk.id];
             let offset = chunk.offset;
             let arena_id = chunk.arena;
@@ -639,9 +641,9 @@ impl<'sched> HostCodeGenerator<'sched> {
             .iter()
             .enumerate()
             .filter_map(|(idx, s)| match s {
-                Step::Kernel(k) => Some(Op::Kernel(k.kernel)),
+                Step::Kernel(k) if k.context.device == Device::CUDA => Some(Op::Kernel(k.kernel)),
                 Step::Transfer(_) => Some(Op::Transfer(idx)),
-                Step::SyncWait(_) => None,
+                Step::Kernel(_) | Step::SyncWait(_) => None,
             })
             .collect();
         for op in ops {
