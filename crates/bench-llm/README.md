@@ -98,4 +98,4 @@ podman run --rm --device nvidia.com/gpu=all \
 
 ## Results
 
-See [`../../docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md).
+Per-row raw logs are written under `target/bench/raw/`, and the aggregated markdown table at `target/bench/results/SUMMARY.md`.

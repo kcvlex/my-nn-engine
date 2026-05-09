@@ -22,10 +22,6 @@ cargo run --release -p my-nn-engine-llm --bin quantize_int8 -- model-dir model-d
 cargo run --release -p my-nn-engine-llm --example run_tinyllama
 ```
 
-## Benchmarks
-
-See [`BENCHMARKS.md`](../../docs/BENCHMARKS.md) for details.
-
 ## Roadmap
 
 - INT4 quantization (AWQ / GPTQ / custom; design open).
