@@ -1,5 +1,6 @@
 use minijinja::context;
 use minijinja::Environment;
+use minijinja_contrib::pycompat::unknown_method_callback;
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +46,7 @@ pub fn apply_chat_template(
     add_generation_prompt: bool,
 ) -> Result<String, ChatTemplateError> {
     let mut env = Environment::new();
+    env.set_unknown_method_callback(unknown_method_callback);
     env.add_template("chat", template_src)?;
     let tmpl = env.get_template("chat")?;
     let rendered = tmpl.render(context! {
