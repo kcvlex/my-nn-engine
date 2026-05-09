@@ -502,6 +502,20 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
 
     let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
 
+    // BF16 has no inline field in TensorProto; encode as little-endian raw_data.
+    if let TensorData::Float(FloatType::BF16, v) = &tensor.data {
+        let raw_data: Vec<u8> = v
+            .iter()
+            .flat_map(|&x| f64_to_bf16_bits(x).to_le_bytes())
+            .collect();
+        return TensorProto {
+            dims,
+            data_type,
+            raw_data,
+            ..Default::default()
+        };
+    }
+
     let (float_data, double_data, int32_data, int64_data, uint64_data) = match &tensor.data {
         TensorData::Bool(v) => (
             vec![],
@@ -518,7 +532,7 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
             vec![],
         ),
         TensorData::Float(FloatType::F64, v) => (vec![], v.clone(), vec![], vec![], vec![]),
-        TensorData::Float(FloatType::BF16, _) => unimplemented!("BF16 inline tensor save"),
+        TensorData::Float(FloatType::BF16, _) => unreachable!("BF16 handled above as raw_data"),
         TensorData::SInt(SIntType::I8, v) => (
             vec![],
             vec![],
@@ -554,6 +568,17 @@ pub(crate) fn tensor_to_proto(tensor: &Tensor) -> TensorProto {
         uint64_data,
         ..Default::default()
     }
+}
+
+fn f64_to_bf16_bits(x: f64) -> u16 {
+    let x = x as f32;
+    if x.is_nan() {
+        // Canonical bf16 quiet NaN.
+        return 0x7FC0;
+    }
+    let bits = x.to_bits();
+    let rounding_bias = 0x7FFF + ((bits >> 16) & 1);
+    ((bits + rounding_bias) >> 16) as u16
 }
 
 fn load_type(ty: TypeProto) -> LoadResult<TensorType> {
