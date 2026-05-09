@@ -62,6 +62,114 @@ pub struct SessionCUDA {
     state: *mut std::ffi::c_void,
 }
 
+/// Compile the schedule's CUDA codegen output into a shared library and return
+/// its path. Shared between SessionCUDA and SessionHybrid.
+pub(super) fn compile_cuda_shared_lib(
+    schedule: &Schedule,
+    opt: &Options,
+    build_dir: &Path,
+) -> Result<PathBuf, SessionError> {
+    let cuda_arch = Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output()
+        .map(|o| {
+            let arch = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("75")
+                .replace('.', "");
+            format!("sm_{}", arch)
+        })
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                SessionError::OtherError(
+                    "nvidia-smi not found in PATH. Install the NVIDIA driver and ensure nvidia-smi is on PATH."
+                        .to_string(),
+                )
+            } else {
+                SessionError::OtherError(format!("nvidia-smi invocation failed: {e}"))
+            }
+        })?;
+    let cuda_arch_num: u32 = cuda_arch
+        .strip_prefix("sm_")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(75);
+
+    let mut hostcode_gen = HostCodeGenerator::new(schedule, cuda_arch_num);
+    let hostcode = hostcode_gen
+        .generate(opt)
+        .map_err(CodeGenError::CudaBuildError)
+        .map_err(SessionError::CodeGenError)?;
+
+    let main_file = build_dir.join("main.cu");
+    let mut writer = std::fs::File::create(&main_file)
+        .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
+        .map(BufWriter::new)?;
+    hostcode
+        .write(&mut writer)
+        .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+    writer
+        .flush()
+        .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+
+    let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/cpp");
+    let paths = vec![
+        (main_file.clone(), main_file.with_extension("o")),
+        (kernel_dir.join("common.cu"), build_dir.join("common.o")),
+    ];
+    info!("Generated");
+
+    let shared_lib = build_dir.join("libmodel.so");
+
+    info!("Compiling");
+
+    let objs = paths
+        .par_iter()
+        .map(|(src, obj)| {
+            Command::new("nvcc")
+                .args([
+                    src.to_str().unwrap(),
+                    format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
+                    "-std=c++17",
+                    "-dc",
+                    "-o",
+                    obj.to_str().unwrap(),
+                    "-lcudnn",
+                    "-lcublas",
+                    "-Xcompiler",
+                    "-fPIC",
+                    "-arch",
+                    cuda_arch.as_str(),
+                    "--expt-relaxed-constexpr",
+                    "--diag-suppress=177", // unused variable
+                ])
+                .status()
+                .map_err(nvcc_invocation_error)?;
+            Ok::<PathBuf, SessionError>(obj.to_path_buf())
+        })
+        .collect::<Result<Vec<_>, SessionError>>()?;
+
+    Command::new("nvcc")
+        .args([
+            "--shared",
+            "-o",
+            shared_lib.to_str().unwrap(),
+            "-lcudnn",
+            "-lcublas",
+            "-Xcompiler",
+            "-fPIC",
+            "-arch",
+            cuda_arch.as_str(),
+            "--expt-relaxed-constexpr",
+        ])
+        .args(objs.iter().map(|p| p.to_str().unwrap()))
+        .status()
+        .map_err(nvcc_invocation_error)?;
+
+    info!("Compiled");
+    Ok(shared_lib)
+}
+
 impl SessionCUDA {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -75,104 +183,7 @@ impl SessionCUDA {
         opt: &Options,
         build_dir: &Path,
     ) -> Result<Self, SessionError> {
-        let cuda_arch = Command::new("nvidia-smi")
-            .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
-            .output()
-            .map(|o| {
-                let arch = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("75")
-                    .replace('.', "");
-                format!("sm_{}", arch)
-            })
-            .map_err(|e| {
-                if e.kind() == ErrorKind::NotFound {
-                    SessionError::OtherError(
-                        "nvidia-smi not found in PATH. Install the NVIDIA driver and ensure nvidia-smi is on PATH."
-                            .to_string(),
-                    )
-                } else {
-                    SessionError::OtherError(format!("nvidia-smi invocation failed: {e}"))
-                }
-            })?;
-        let cuda_arch_num: u32 = cuda_arch
-            .strip_prefix("sm_")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(75);
-
-        let mut hostcode_gen = HostCodeGenerator::new(&schedule, cuda_arch_num);
-        let hostcode = hostcode_gen
-            .generate(opt)
-            .map_err(CodeGenError::CudaBuildError)
-            .map_err(SessionError::CodeGenError)?;
-
-        let main_file = build_dir.join("main.cu");
-        let mut writer = std::fs::File::create(&main_file)
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))
-            .map(BufWriter::new)?;
-        hostcode
-            .write(&mut writer)
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-        writer
-            .flush()
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
-
-        let kernel_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/codegen/cuda/cpp");
-        let paths = vec![
-            (main_file.clone(), main_file.with_extension("o")),
-            (kernel_dir.join("common.cu"), build_dir.join("common.o")),
-        ];
-        info!("Generated");
-
-        let shared_lib = build_dir.join("libmodel.so");
-
-        info!("Compiling");
-
-        let objs = paths
-            .par_iter()
-            .map(|(src, obj)| {
-                Command::new("nvcc")
-                    .args([
-                        src.to_str().unwrap(),
-                        format!("-I{}", kernel_dir.to_str().unwrap()).as_str(),
-                        "-std=c++17",
-                        "-dc",
-                        "-o",
-                        obj.to_str().unwrap(),
-                        "-lcudnn",
-                        "-lcublas",
-                        "-Xcompiler",
-                        "-fPIC",
-                        "-arch",
-                        cuda_arch.as_str(),
-                        "--expt-relaxed-constexpr",
-                        "--diag-suppress=177", // unused variable
-                    ])
-                    .status()
-                    .map_err(nvcc_invocation_error)?;
-                Ok::<PathBuf, SessionError>(obj.to_path_buf())
-            })
-            .collect::<Result<Vec<_>, SessionError>>()?;
-
-        Command::new("nvcc")
-            .args([
-                "--shared",
-                "-o",
-                shared_lib.to_str().unwrap(),
-                "-lcudnn",
-                "-lcublas",
-                "-Xcompiler",
-                "-fPIC",
-                "-arch",
-                cuda_arch.as_str(),
-                "--expt-relaxed-constexpr",
-            ])
-            .args(objs.iter().map(|p| p.to_str().unwrap()))
-            .status()
-            .map_err(nvcc_invocation_error)?;
-
-        info!("Compiled");
+        let shared_lib = compile_cuda_shared_lib(&schedule, opt, build_dir)?;
 
         let _lock = cuda_lock();
 
