@@ -243,7 +243,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
         }
 
         eprintln!(
-            "[step {}] range=[{}, {}] mid={}/{} — extracting...",
+            "[step {}] range=[{}, {}] mid={}/{} - extracting...",
             step,
             left,
             right,

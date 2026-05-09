@@ -55,7 +55,7 @@ fn match_pattern<T: GraphOp>(graph: &Graph, modifier: &T, gemm_id: NodeId) -> Op
     if gemm.alpha != 1.0 {
         return None;
     }
-    // Bias (C) makes fusion non-trivial — skip for now.
+    // Bias (C) makes fusion non-trivial - skip for now.
     if gemm_node
         .inputs
         .get(args::GEMM_C)

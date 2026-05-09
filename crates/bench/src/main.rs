@@ -1,4 +1,4 @@
-// LLM benchmark orchestrator — runs my-nn-engine + llama.cpp + ORT-GenAI
+// LLM benchmark orchestrator - runs my-nn-engine + llama.cpp + ORT-GenAI
 // baselines, polls VRAM/RSS, aggregates timings into a markdown table.
 //
 // CLI flags:
@@ -400,7 +400,7 @@ fn aggregate_llamacpp(log: &str, prompt_tokens: u32) -> Aggregate {
 fn fmt_row(label: &str, runtime: &str, model: &str, dtype: &str, a: &Aggregate) -> String {
     let pp = match a.prefill_tok_s {
         Some(v) if v > 0.0 => format!("{v:.1}"),
-        _ => "—".into(),
+        _ => "-".into(),
     };
     format!(
         "| {runtime} | {model} | {dtype} | {decode:.1} | {pp} | {ttft:.2} | {vram} | {rss:.1} |",

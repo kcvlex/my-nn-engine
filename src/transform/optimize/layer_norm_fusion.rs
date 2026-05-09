@@ -114,7 +114,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
     let mut inv_stddev: Option<ValueId> = None;
     let mut scale_inv_node: Option<NodeId> = None;
 
-    // Match: Mean → Sub → Mul(D,D) → ReduceMean → Add(eps) → Sqrt → Reciprocal → Mul(gamma)
+    // Match: Mean -> Sub -> Mul(D,D) -> ReduceMean -> Add(eps) -> Sqrt -> Reciprocal -> Mul(gamma)
     let _ = PatternMatcher::new(graph, modifier, (mean_node, 0))
         .then(|(node, mean)| {
             matches!(&node.op, Operator::Sub) &&
@@ -140,7 +140,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
     let scale_inv_node = scale_inv_node?;
     let gamma = extract_other_binary_input(&graph.nodes[scale_inv_node], inv_stddev)?;
 
-    // Branch A: Mul(X, ScaleInv) → YUnbiased
+    // Branch A: Mul(X, ScaleInv) -> YUnbiased
     let mut y_unbiased_node: Option<NodeId> = None;
     let _ = PatternMatcher::new(graph, modifier, (scale_inv_node, 0))
         .then(|(node, scale_inv)| {
@@ -149,7 +149,7 @@ fn match_batchnorm_layer_norm_pattern<T: GraphOp>(
         })?
         .capture_node(&mut y_unbiased_node);
 
-    // Branch B: Mul(Mean, ScaleInv) → Sub(beta, MeanScaled) → EffBias
+    // Branch B: Mul(Mean, ScaleInv) -> Sub(beta, MeanScaled) -> EffBias
     let mut eff_bias_node: Option<NodeId> = None;
     let _ = PatternMatcher::new(graph, modifier, (scale_inv_node, 0))
         .then(|(node, scale_inv)| {

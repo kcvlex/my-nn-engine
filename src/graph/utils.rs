@@ -487,7 +487,7 @@ mod comp_structural {
                 (None, None) => (),
             }
 
-            // Defined by nodes — compare defining nodes
+            // Defined by nodes - compare defining nodes
             let (left_node_id, left_idx) = *self.left.defined.get(&left_id).unwrap();
             let (right_node_id, right_idx) = *self.right.defined.get(&right_id).unwrap();
             let left_node = &self.left.graph.nodes[left_node_id];

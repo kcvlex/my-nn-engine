@@ -68,7 +68,7 @@ impl Annotator {
                         }
                     }
                     Operator::DequantMatMul(_) => {
-                        // Only the M=1 path benefits from our OMP — M>1 already goes through BLAS.
+                        // Only the M=1 path benefits from our OMP - M>1 already goes through BLAS.
                         let act_ty = schedule
                             .get_resolved_tensor_type(
                                 kernel.inputs[crate::graph::operator::args::DEQUANT_MATMUL_LHS]

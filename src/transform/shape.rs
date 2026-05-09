@@ -280,7 +280,7 @@ pub fn infer_node_output(
                 scale.dims[0], rhs.dims[axis_idx],
                 "scale length must equal weight.dims[axis]"
             );
-            // weight is [N, K] (axis=0 → N is per-channel), output is [..., M, N]
+            // weight is [N, K] (axis=0 -> N is per-channel), output is [..., M, N]
             let n = rhs.dims[axis_idx];
             let k = rhs.dims[1 - axis_idx];
             assert_eq!(lhs.dims[lhs.dims.ndim() - 1], k, "matmul K dim mismatch");

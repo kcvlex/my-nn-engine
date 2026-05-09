@@ -80,10 +80,10 @@ pub struct GenerateOptions {
 
 /// Per-step input convention. Selected by which constructor is used.
 enum DecodeKind {
-    /// `[input_ids: i64[1], past_len: i64[]]` — used by simple test fixtures.
+    /// `[input_ids: i64[1], past_len: i64[]]` - used by simple test fixtures.
     Mock,
     /// `[input_ids: i64[1,1], position_id: i64[1], past_len: i64[], active_seq_kv: i64[]]`
-    /// + SessionState K/V caches — produced by [`crate::build_llama`].
+    /// + SessionState K/V caches - produced by [`crate::build_llama`].
     Llama,
 }
 
