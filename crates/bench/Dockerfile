@@ -9,7 +9,8 @@ RUN apt-get update && \
 
 RUN pip3 install --no-cache-dir onnxruntime-genai-cuda==0.11.4
 
-# For onnxruntime_genai.models.builder (export/quantization)
-RUN pip3 install --no-cache-dir onnx-ir transformers torch onnx
+# For onnxruntime_genai.models.builder (export/quantization) and
+# llama.cpp's convert_hf_to_gguf.py.
+RUN pip3 install --no-cache-dir onnx-ir transformers torch onnx sentencepiece
 
 WORKDIR /workspace

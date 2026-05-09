@@ -33,4 +33,4 @@ honest but cross-row prefill comparisons should be read with that in mind.
 | RAM | 62 GiB |
 | Kernel | 7.0.2-arch1-1 |
 
-How to reproduce: see [`bench/README.md`](../bench/README.md).
+How to reproduce: see [`crates/bench/README.md`](../crates/bench/README.md).

@@ -438,8 +438,8 @@ fn main() -> std::io::Result<()> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()?;
-    let raw_dir = repo_root.join("bench/llm/raw");
-    let results_dir = repo_root.join("bench/llm/results");
+    let raw_dir = repo_root.join("target/bench/raw");
+    let results_dir = repo_root.join("target/bench/results");
     fs::create_dir_all(&raw_dir)?;
     fs::create_dir_all(&results_dir)?;
 
