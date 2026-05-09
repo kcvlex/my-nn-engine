@@ -36,4 +36,4 @@ so dtype-mismatched rows are reference points rather than apples-to-apples.
 | RAM | 62 GiB |
 | Kernel | 7.0.2-arch1-1 |
 
-How to reproduce: see [`crates/bench/README.md`](../crates/bench/README.md).
+How to reproduce: see [`crates/bench-llm/README.md`](../crates/bench-llm/README.md).

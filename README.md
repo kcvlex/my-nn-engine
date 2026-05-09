@@ -47,7 +47,7 @@ Cargo workspace; the root crate is the engine, the sub-crates are applications a
 |-|-|-|
 | `.` | `my-nn-engine` | ONNX compiler and runtime; CPU + CUDA backends. |
 | `crates/llm` | `my-nn-engine-llm` | LLM runtime built on the engine. See [`crates/llm/README.md`](crates/llm/README.md). |
-| `crates/bench` | `bench-llm` | LLM bench harness vs llama.cpp / ORT-GenAI. See [`crates/bench/README.md`](crates/bench/README.md). |
+| `crates/bench-llm` | `my-nn-bench-llm` | LLM bench harness vs llama.cpp / ORT-GenAI. See [`crates/bench-llm/README.md`](crates/bench-llm/README.md). |
 | `crates/test-tools` | `my-nn-engine-test-tools` | Subgraph extraction + binary-search debugger via Podman. See [`crates/test-tools/README.md`](crates/test-tools/README.md). |
 | `crates/ui` | `my-nn-engine-ui` | gRPC backend + Vue chat frontend (uses the LLM crate). See [`crates/ui/README.md`](crates/ui/README.md). |
 

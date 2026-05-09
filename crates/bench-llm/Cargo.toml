@@ -1,5 +1,5 @@
 [package]
-name = "bench-llm"
+name = "my-nn-bench-llm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "bench-llm"
+name = "my-nn-bench-llm"
 path = "src/main.rs"
 
 [dependencies]

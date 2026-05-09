@@ -1,4 +1,4 @@
-# bench-llm
+# my-nn-bench-llm
 
 Orchestrator that runs side-by-side LLM benchmarks against my-nn-engine,
 llama.cpp, and ORT-GenAI; aggregates timing, peak VRAM, and peak RSS into
@@ -8,13 +8,13 @@ a markdown table.
 
 ```sh
 # Run all configured rows (~5-10 minutes on the reference machine).
-cargo run --release -p bench-llm
+cargo run --release -p my-nn-bench-llm
 
 # Quick mode (1 measured iter instead of 3).
-cargo run --release -p bench-llm -- --quick
+cargo run --release -p my-nn-bench-llm -- --quick
 
 # Filter rows by substring of label.
-cargo run --release -p bench-llm -- --filter llama2
+cargo run --release -p my-nn-bench-llm -- --filter llama2
 ```
 
 Output: `target/bench/results/SUMMARY.md` and per-row raw logs under
@@ -35,7 +35,7 @@ The ORT-GenAI baseline and the llama.cpp `convert_hf_to_gguf.py` script
 both run inside a CUDA container built from this crate's Dockerfile:
 
 ```sh
-podman build -t ortgenai-bench crates/bench/
+podman build -t ortgenai-bench crates/bench-llm/
 ```
 
 Bundled tooling: `onnxruntime-genai-cuda==0.11.4`, `transformers`, `torch`,
@@ -94,7 +94,7 @@ podman run --rm --device nvidia.com/gpu=all \
     -i /model -o /output/<name>-fp16 -p fp16 -e cuda -c /cache
 ```
 
-`bench-llm` silently skips any row whose ortgenai dir is missing.
+`my-nn-bench-llm` silently skips any row whose ortgenai dir is missing.
 
 ## Results
 
