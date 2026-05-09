@@ -198,13 +198,9 @@ fn cast_to_bf16(view: &TensorView<'_>) -> Result<OwnedTensor, QuantizeError> {
     })
 }
 
-pub fn cast_safetensors_bf16_dir(
-    src_dir: impl AsRef<Path>,
-    dst: impl AsRef<Path>,
-) -> Result<(), QuantizeError> {
-    let dir = src_dir.as_ref();
+fn list_shards(dir: &Path) -> Result<Vec<std::path::PathBuf>, QuantizeError> {
     let index = dir.join("model.safetensors.index.json");
-    let files: Vec<std::path::PathBuf> = if index.exists() {
+    if index.exists() {
         let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index)?)?;
         let map = json
             .get("weight_map")
@@ -212,10 +208,18 @@ pub fn cast_safetensors_bf16_dir(
             .ok_or(QuantizeError::MalformedIndex)?;
         let shards: std::collections::BTreeSet<&str> =
             map.values().filter_map(|v| v.as_str()).collect();
-        shards.into_iter().map(|s| dir.join(s)).collect()
+        Ok(shards.into_iter().map(|s| dir.join(s)).collect())
     } else {
-        vec![dir.join("model.safetensors")]
-    };
+        Ok(vec![dir.join("model.safetensors")])
+    }
+}
+
+pub fn cast_safetensors_bf16_dir(
+    src_dir: impl AsRef<Path>,
+    dst: impl AsRef<Path>,
+) -> Result<(), QuantizeError> {
+    let dir = src_dir.as_ref();
+    let files = list_shards(dir)?;
 
     let mut output: Vec<(String, OwnedTensor)> = Vec::new();
     for src in &files {
@@ -250,20 +254,7 @@ pub fn quantize_safetensors_int8_dir(
     src_dir: impl AsRef<Path>,
     dst: impl AsRef<Path>,
 ) -> Result<QuantizeStats, QuantizeError> {
-    let dir = src_dir.as_ref();
-    let index = dir.join("model.safetensors.index.json");
-    let files: Vec<std::path::PathBuf> = if index.exists() {
-        let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index)?)?;
-        let map = json
-            .get("weight_map")
-            .and_then(|v| v.as_object())
-            .ok_or(QuantizeError::MalformedIndex)?;
-        let shards: std::collections::BTreeSet<&str> =
-            map.values().filter_map(|v| v.as_str()).collect();
-        shards.into_iter().map(|s| dir.join(s)).collect()
-    } else {
-        vec![dir.join("model.safetensors")]
-    };
+    let files = list_shards(src_dir.as_ref())?;
     quantize_safetensors_int8_files(&files, dst)
 }
 
@@ -277,18 +268,15 @@ pub fn quantize_safetensors_int8_to_dir(
     std::fs::create_dir_all(dst_dir)?;
 
     let index_path = src_dir.join("model.safetensors.index.json");
-    let shard_names: Vec<String> = if index_path.exists() {
-        let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index_path)?)?;
-        let map = json
-            .get("weight_map")
-            .and_then(|v| v.as_object())
-            .ok_or(QuantizeError::MalformedIndex)?;
-        let set: std::collections::BTreeSet<&str> =
-            map.values().filter_map(|v| v.as_str()).collect();
-        set.into_iter().map(String::from).collect()
-    } else {
-        vec!["model.safetensors".to_string()]
-    };
+    let shard_names: Vec<String> = list_shards(src_dir)?
+        .into_iter()
+        .map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .ok_or(QuantizeError::MalformedIndex)
+        })
+        .collect::<Result<_, _>>()?;
 
     let mut stats = QuantizeStats::default();
     let mut weight_map = serde_json::Map::new();
