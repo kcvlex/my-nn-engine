@@ -81,25 +81,40 @@ type CudaInitFn =
 type CudaDestroyFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 type CudaStepFn = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type CudaSyncFn = unsafe extern "C" fn();
+type CudaChunksFn = unsafe extern "C" fn(*mut std::ffi::c_void, *mut *mut std::ffi::c_void);
+type CudaMemcpyFn =
+    unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, usize, i32) -> i32;
+
+const CUDA_MEMCPY_HOST_TO_HOST: i32 = 0;
+const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1;
+const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2;
+const CUDA_MEMCPY_DEVICE_TO_DEVICE: i32 = 3;
 
 struct CudaState {
+    // Declaration order = drop order. initializer_buffers must drop BEFORE lib
+    // so cudaFree runs while the model .so (and through it cudart) is still
+    // mapped.
     #[allow(dead_code)]
-    lib: libloading::Library,
+    initializer_buffers: Vec<Arc<DeviceBuffer>>,
     kernel_fns: HashMap<KernelId, CudaStepFn>,
+    #[allow(dead_code)]
     transfer_fns: HashMap<usize, CudaStepFn>,
     destroy_func: CudaDestroyFn,
     sync_func: CudaSyncFn,
+    memcpy_func: CudaMemcpyFn,
+    gpu_chunks: HashMap<ChunkId, *mut std::ffi::c_void>,
     state: *mut std::ffi::c_void,
     #[allow(dead_code)]
-    initializer_buffers: Vec<Arc<DeviceBuffer>>,
+    lib: libloading::Library,
 }
 
 unsafe impl Send for CudaState {}
 unsafe impl Sync for CudaState {}
 
-impl Drop for CudaState {
-    fn drop(&mut self) {
+impl CudaState {
+    fn destroy(&mut self) {
         if !self.state.is_null() {
+            unsafe { (self.sync_func)() };
             unsafe { (self.destroy_func)(self.state) };
             self.state = std::ptr::null_mut();
         }
@@ -192,6 +207,14 @@ fn build_cuda_state(
         *lib.get::<CudaSyncFn>(b"model_device_sync")
             .map_err(|e| SessionError::OtherError(format!("dlsym model_device_sync: {:?}", e)))?
     };
+    let memcpy_func: CudaMemcpyFn = unsafe {
+        *lib.get::<CudaMemcpyFn>(b"model_memcpy")
+            .map_err(|e| SessionError::OtherError(format!("dlsym model_memcpy: {:?}", e)))?
+    };
+    let chunks_func: CudaChunksFn = unsafe {
+        *lib.get::<CudaChunksFn>(b"model_chunks")
+            .map_err(|e| SessionError::OtherError(format!("dlsym model_chunks: {:?}", e)))?
+    };
 
     let plan = schedule
         .execution_plan
@@ -229,12 +252,30 @@ fn build_cuda_state(
         session_state_buffers.iter().map(|b| b.ptr()).collect();
     let state = unsafe { (init_func)(initializer_ptrs.as_ptr(), session_state_ptrs.as_ptr()) };
 
+    let chunk_count = plan
+        .chunks
+        .iter()
+        .map(|c| c.id)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+    let mut chunk_buf: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); chunk_count];
+    unsafe { (chunks_func)(state, chunk_buf.as_mut_ptr()) };
+    let mut gpu_chunks: HashMap<ChunkId, *mut std::ffi::c_void> = HashMap::new();
+    for chunk in &plan.chunks {
+        if plan.arenas[chunk.arena].tier == MemoryTier::GpuArena {
+            gpu_chunks.insert(chunk.id, chunk_buf[chunk.id]);
+        }
+    }
+
     Ok(CudaState {
         lib,
         kernel_fns,
         transfer_fns,
         destroy_func,
         sync_func,
+        memcpy_func,
+        gpu_chunks,
         state,
         initializer_buffers,
     })
@@ -441,6 +482,11 @@ impl SessionHybrid {
             .collect_vec();
         let output_ptrs = output_bufs.iter_mut().map(|t| t.as_mut_ptr()).collect_vec();
 
+        let mut chunk_tiers: HashMap<ChunkId, MemoryTier> = HashMap::new();
+        for chunk in &plan.chunks {
+            chunk_tiers.insert(chunk.id, plan.arenas[chunk.arena].tier);
+        }
+
         let resolve = |place: AllocPlace| -> Result<*mut u8, SessionError> {
             Ok(match place {
                 AllocPlace::Chunk(cid) => self
@@ -490,7 +536,7 @@ impl SessionHybrid {
             })
         };
 
-        for (idx, step) in plan.steps.iter().enumerate() {
+        for step in plan.steps.iter() {
             match step {
                 Step::Kernel(k) if k.context.device == Device::CPU => {
                     let kernel = &self.schedule.kernels[k.kernel];
@@ -529,17 +575,109 @@ impl SessionHybrid {
                         (*f)(cuda.state, output_ptrs.as_ptr(), input_ptrs.as_ptr() as _);
                     }
                 }
-                Step::Transfer(_) => {
+                Step::Transfer(t) => {
                     let cuda = self.cuda.as_ref().ok_or_else(|| {
                         SessionError::OtherError(
                             "Transfer step encountered but CudaState was not built".to_string(),
                         )
                     })?;
-                    let f = cuda.transfer_fns.get(&idx).ok_or_else(|| {
-                        SessionError::OtherError(format!("Transfer step {idx} not loaded"))
-                    })?;
-                    unsafe {
-                        (*f)(cuda.state, output_ptrs.as_ptr(), input_ptrs.as_ptr() as _);
+                    let resolve_with_tier =
+                        |place: AllocPlace| -> Result<(*mut u8, MemoryTier), SessionError> {
+                            Ok(match place {
+                                AllocPlace::Chunk(cid) => {
+                                    let tier = *chunk_tiers.get(&cid).ok_or_else(|| {
+                                        SessionError::OtherError(format!("unknown chunk {cid:?}"))
+                                    })?;
+                                    let p = match tier {
+                                        MemoryTier::HostArena => {
+                                            *self.host_arenas.chunk2ptrs.get(&cid).ok_or_else(
+                                                || {
+                                                    SessionError::OtherError(format!(
+                                                        "missing host chunk {cid:?}"
+                                                    ))
+                                                },
+                                            )?
+                                        }
+                                        MemoryTier::GpuArena => {
+                                            *cuda.gpu_chunks.get(&cid).ok_or_else(|| {
+                                                SessionError::OtherError(format!(
+                                                    "missing gpu chunk {cid:?}"
+                                                ))
+                                            })?
+                                                as *mut u8
+                                        }
+                                    };
+                                    (p, tier)
+                                }
+                                AllocPlace::Input(v) => {
+                                    let i = self
+                                        .schedule
+                                        .inputs
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!("input {v:?}"))
+                                        })?;
+                                    (input_ptrs[i], MemoryTier::HostArena)
+                                }
+                                AllocPlace::Output(v) => {
+                                    let i = self
+                                        .schedule
+                                        .outputs
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!("output {v:?}"))
+                                        })?;
+                                    (output_ptrs[i], MemoryTier::HostArena)
+                                }
+                                AllocPlace::SessionState(v) => {
+                                    let i = self
+                                        .schedule
+                                        .session_states
+                                        .iter()
+                                        .position(|x| *x == v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!(
+                                                "session_state {v:?} not found"
+                                            ))
+                                        })?;
+                                    (
+                                        self.session_state_buffers[i].ptr() as *mut u8,
+                                        MemoryTier::GpuArena,
+                                    )
+                                }
+                                AllocPlace::Initializer(_) => {
+                                    return Err(SessionError::OtherError(format!(
+                                        "Transfer with {place:?} not yet supported"
+                                    )));
+                                }
+                            })
+                        };
+                    let (src_ptr, src_tier) = resolve_with_tier(t.src.place)?;
+                    let (dst_ptr, dst_tier) = resolve_with_tier(t.dst.place)?;
+                    let size =
+                        crate::schedule::scheduler::value_byte_size(&self.schedule, t.dst.value);
+                    let kind = match (src_tier, dst_tier) {
+                        (MemoryTier::HostArena, MemoryTier::HostArena) => CUDA_MEMCPY_HOST_TO_HOST,
+                        (MemoryTier::HostArena, MemoryTier::GpuArena) => CUDA_MEMCPY_HOST_TO_DEVICE,
+                        (MemoryTier::GpuArena, MemoryTier::HostArena) => CUDA_MEMCPY_DEVICE_TO_HOST,
+                        (MemoryTier::GpuArena, MemoryTier::GpuArena) => {
+                            CUDA_MEMCPY_DEVICE_TO_DEVICE
+                        }
+                    };
+                    let rc = unsafe {
+                        (cuda.memcpy_func)(
+                            dst_ptr as *mut std::ffi::c_void,
+                            src_ptr as *const std::ffi::c_void,
+                            size,
+                            kind,
+                        )
+                    };
+                    if rc != 0 {
+                        return Err(SessionError::OtherError(format!(
+                            "cudaMemcpy failed: rc={rc}"
+                        )));
                     }
                 }
                 Step::SyncWait(_) => {}
@@ -556,5 +694,13 @@ impl SessionHybrid {
             .map(|(buf, ty)| buf.into_tensor(ty.dims.clone()))
             .collect();
         Ok(outputs)
+    }
+}
+
+impl Drop for SessionHybrid {
+    fn drop(&mut self) {
+        if let Some(cuda) = self.cuda.as_mut() {
+            cuda.destroy();
+        }
     }
 }
