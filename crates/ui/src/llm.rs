@@ -27,18 +27,6 @@ const MAX_SEQ_LEN: usize = 1024;
 const PREFILL_LEN: usize = 16;
 const DEFAULT_MAX_TOKENS: u32 = 256;
 
-/// Llama-2-Chat style template, used as a fallback when the model's
-/// `tokenizer_config.json` doesn't ship a `chat_template` field. Works for
-/// most Llama-family chat fine-tunes; if your model uses a different format
-/// you'll need to override this per directory.
-const LLAMA2_CHAT_TEMPLATE: &str = "{% for message in messages %}\n\
-{% if message['role'] == 'user' %}\
-{{ bos_token + '[INST] ' + message['content'] + ' [/INST]' }}\n\
-{% elif message['role'] == 'assistant' %}\
-{{ ' ' + message['content'] + ' ' + eos_token }}\n\
-{% endif %}\n\
-{% endfor %}";
-
 pub type SessionId = String;
 
 pub struct ChatSession {
@@ -86,6 +74,7 @@ pub enum ChatError {
     InvalidModelDir(String),
     LoadConfig(String),
     LoadTokenizer(String),
+    MissingChatTemplate(String),
 }
 
 impl std::fmt::Display for ChatError {
@@ -97,6 +86,7 @@ impl std::fmt::Display for ChatError {
             ChatError::InvalidModelDir(s) => write!(f, "invalid model_dir: {s}"),
             ChatError::LoadConfig(s) => write!(f, "config load failed: {s}"),
             ChatError::LoadTokenizer(s) => write!(f, "tokenizer load failed: {s}"),
+            ChatError::MissingChatTemplate(s) => write!(f, "model has no chat_template: {s}"),
         }
     }
 }
@@ -161,11 +151,9 @@ impl ChatRegistry {
         }
     }
 
-    /// List immediate subdirectories under `<models_root>/hf/`. Does not
-    /// validate that any given directory actually contains a loadable model.
     pub fn list(&self) -> Vec<String> {
-        let dir = self.models_root.join("hf");
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let dir = &self.models_root;
+        let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
         let mut out: Vec<String> = entries
@@ -177,6 +165,7 @@ impl ChatRegistry {
             })
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|name| !name.starts_with('.'))
+            .filter(|name| has_chat_template(&dir.join(name)))
             .collect();
         out.sort();
         out
@@ -189,7 +178,7 @@ impl ChatRegistry {
     ) -> Result<(SessionId, Duration), ChatError> {
         validate_model_dir(model_dir)?;
         let started = Instant::now();
-        let path = self.models_root.join("hf").join(model_dir);
+        let path = self.models_root.join(model_dir);
 
         log::info!(
             "Loading {} from {} for chat session",
@@ -204,7 +193,7 @@ impl ChatRegistry {
         let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers)
             .map_err(|e| ChatError::LoadConfig(format!("llama weights: {e}")))?;
 
-        let (chat_template, eos_token_str, bos_token_str) = load_chat_meta(&path, &config)?;
+        let (chat_template, eos_token_str, bos_token_str) = load_chat_meta(&path)?;
 
         let r = build_llama(&config, &weights, MAX_SEQ_LEN);
 
@@ -359,35 +348,46 @@ impl ChatRegistry {
     }
 }
 
-/// Resolve the chat template, EOS token string, and BOS token string for a
-/// model directory. Falls back to the Llama-2 chat template / "</s>" / "<s>"
-/// when `tokenizer_config.json` is absent or doesn't carry the field.
-fn load_chat_meta(path: &Path, _config: &HfConfig) -> Result<(String, String, String), ChatError> {
+fn load_chat_meta(path: &Path) -> Result<(String, String, String), ChatError> {
     let cfg_path = path.join("tokenizer_config.json");
-    let parsed: Option<TokenizerConfig> = if cfg_path.exists() {
-        let s = std::fs::read_to_string(&cfg_path)
-            .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json: {e}")))?;
-        Some(
-            serde_json::from_str(&s)
-                .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json parse: {e}")))?,
-        )
-    } else {
-        None
-    };
+    if !cfg_path.exists() {
+        return Err(ChatError::MissingChatTemplate(format!(
+            "{} not found",
+            cfg_path.display()
+        )));
+    }
+    let s = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json: {e}")))?;
+    let parsed: TokenizerConfig = serde_json::from_str(&s)
+        .map_err(|e| ChatError::LoadConfig(format!("tokenizer_config.json parse: {e}")))?;
 
-    let chat_template = parsed
-        .as_ref()
-        .and_then(|c| c.chat_template.clone())
-        .unwrap_or_else(|| LLAMA2_CHAT_TEMPLATE.to_string());
+    let chat_template = parsed.chat_template.ok_or_else(|| {
+        ChatError::MissingChatTemplate(format!(
+            "chat_template field missing in {}",
+            cfg_path.display()
+        ))
+    })?;
     let eos_token_str = parsed
+        .eos_token
         .as_ref()
-        .and_then(|c| c.eos_token.as_ref().map(|t| t.as_str().to_string()))
+        .map(|t| t.as_str().to_string())
         .unwrap_or_else(|| "</s>".to_string());
     let bos_token_str = parsed
+        .bos_token
         .as_ref()
-        .and_then(|c| c.bos_token.as_ref().map(|t| t.as_str().to_string()))
+        .map(|t| t.as_str().to_string())
         .unwrap_or_else(|| "<s>".to_string());
     Ok((chat_template, eos_token_str, bos_token_str))
+}
+
+fn has_chat_template(model_path: &Path) -> bool {
+    let cfg_path = model_path.join("tokenizer_config.json");
+    let Ok(s) = std::fs::read_to_string(&cfg_path) else {
+        return false;
+    };
+    serde_json::from_str::<TokenizerConfig>(&s)
+        .map(|c| c.chat_template.is_some())
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]
@@ -435,6 +435,14 @@ fn load_stop_strings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LLAMA2_CHAT_TEMPLATE: &str = "{% for message in messages %}\n\
+{% if message['role'] == 'user' %}\
+{{ bos_token + '[INST] ' + message['content'] + ' [/INST]' }}\n\
+{% elif message['role'] == 'assistant' %}\
+{{ ' ' + message['content'] + ' ' + eos_token }}\n\
+{% endif %}\n\
+{% endfor %}";
 
     const TINYLLAMA_TEMPLATE: &str = r#"{% for message in messages %}
 {% if message['role'] == 'user' %}
@@ -492,6 +500,69 @@ mod tests {
 
         let e = ChatError::InvalidModelDir("traversal".to_string());
         assert_eq!(e.to_string(), "invalid model_dir: traversal");
+
+        let e = ChatError::MissingChatTemplate("chat_template field missing in foo".to_string());
+        assert_eq!(
+            e.to_string(),
+            "model has no chat_template: chat_template field missing in foo"
+        );
+    }
+
+    #[test]
+    fn load_chat_meta_rejects_missing_tokenizer_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = load_chat_meta(tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, ChatError::MissingChatTemplate(_)),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn load_chat_meta_rejects_tokenizer_config_without_chat_template() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tokenizer_config.json"),
+            r#"{"eos_token": "</s>"}"#,
+        )
+        .unwrap();
+        let err = load_chat_meta(tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, ChatError::MissingChatTemplate(_)),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn load_chat_meta_accepts_valid_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tokenizer_config.json"),
+            r#"{"chat_template": "TPL", "eos_token": "<eos>", "bos_token": "<bos>"}"#,
+        )
+        .unwrap();
+        let (tpl, eos, bos) = load_chat_meta(tmp.path()).unwrap();
+        assert_eq!(tpl, "TPL");
+        assert_eq!(eos, "<eos>");
+        assert_eq!(bos, "<bos>");
+    }
+
+    #[test]
+    fn has_chat_template_detects_presence() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!has_chat_template(tmp.path()));
+        std::fs::write(
+            tmp.path().join("tokenizer_config.json"),
+            r#"{"eos_token": "</s>"}"#,
+        )
+        .unwrap();
+        assert!(!has_chat_template(tmp.path()));
+        std::fs::write(
+            tmp.path().join("tokenizer_config.json"),
+            r#"{"chat_template": "TPL"}"#,
+        )
+        .unwrap();
+        assert!(has_chat_template(tmp.path()));
     }
 
     /// KV-cache reuse correctness invariant: rendering the conversation
