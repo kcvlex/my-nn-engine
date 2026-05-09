@@ -1,6 +1,7 @@
 pub mod ir;
 pub mod kernel;
 pub mod omp;
+pub mod placement;
 pub mod scheduler;
 
 use std::any::Any;
@@ -74,8 +75,16 @@ impl SchedulePassManager {
 
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
+    let placement_strategy = match options.placement_strategy {
+        Some(s) => s,
+        None => scheduler::PlacementStrategy::Uniform(match options.target {
+            Target::CUDA => ir::Device::CUDA,
+            Target::CPU => ir::Device::CPU,
+        }),
+    };
     manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
         num_streams: options.num_cuda_streams,
+        placement_strategy,
     }));
     if options.target == Target::CPU {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
@@ -196,7 +205,14 @@ impl Schedule {
             })
             .collect::<Vec<_>>();
         let initializers = graph.initializer_ids();
-        let kernels = kernel::build_kernels(&mut graph, &mut graph_op, options.target);
+        let include_cpu_workspaces =
+            options.target == crate::options::Target::CPU || options.placement_strategy.is_some();
+        let kernels = kernel::build_kernels(
+            &mut graph,
+            &mut graph_op,
+            options.target,
+            include_cpu_workspaces,
+        );
         Self {
             inputs,
             outputs,

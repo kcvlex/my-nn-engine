@@ -34,4 +34,7 @@ pub struct Options {
 
     #[builder(default = std::env::var("MY_ONNX_SAVE_BUILD_DIR").is_ok())]
     pub save_transformed_model: bool,
+
+    #[builder(default)]
+    pub placement_strategy: Option<crate::schedule::scheduler::PlacementStrategy>,
 }
