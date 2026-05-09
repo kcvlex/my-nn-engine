@@ -1,6 +1,7 @@
 #ifndef INCLUDE_QUANTIZING_KVCACHE_UPDATE_CUH_
 #define INCLUDE_QUANTIZING_KVCACHE_UPDATE_CUH_
 #include <cuda.h>
+#include "common.cuh"
 
 // Block: BLOCK_SIZE threads (1D), one block per (batch * head * new_seq_token).
 // For each (b, h, t):
@@ -19,16 +20,20 @@ __global__ void quantizing_kvcache_update(
     const TNew *new_kv,
     int max_seq_len,
     int new_seq_len,
-    int offset
+    int offset,
+    int ring_sink,
+    int ring_window,
+    int ring_start
 ) {
     int gid = blockIdx.x;
     int t = gid % new_seq_len;
     int bh = gid / new_seq_len;
     int tid = threadIdx.x;
+    int phys = ring_phys_index(offset + t, ring_sink, ring_window, ring_start);
 
     const TNew *src = new_kv + bh * new_seq_len * HEAD_DIM + t * HEAD_DIM;
-    signed char *dst = cache + bh * max_seq_len * HEAD_DIM + (offset + t) * HEAD_DIM;
-    TScale *scale_dst = scale + bh * max_seq_len + (offset + t);
+    signed char *dst = cache + bh * max_seq_len * HEAD_DIM + phys * HEAD_DIM;
+    TScale *scale_dst = scale + bh * max_seq_len + phys;
 
     __shared__ float reduction[BLOCK_SIZE];
 

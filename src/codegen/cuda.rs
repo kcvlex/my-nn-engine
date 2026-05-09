@@ -1111,6 +1111,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 num_q_heads,
                                 num_kv_heads,
                                 kv_quant: kv_quant.clone(),
+                                ring: None,
                                 attn: *attn,
                             },
                         );
@@ -1205,6 +1206,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             num_kv_heads,
                             out: self.device_identifier(kernel.outputs[0])?,
                             kv_quant,
+                            ring: None,
                             attn: *attn,
                         });
 
@@ -1721,6 +1723,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             scale: self.device_identifier(scale_id)?,
                             new_kv: self.device_identifier(new_id)?,
                             offset: offset_expr,
+                            ring: None,
                         },
                     );
                     let grid = batch * heads * new_seq_len;
@@ -1771,6 +1774,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             cache: self.device_identifier(kernel.outputs[0])?,
                             new_kv: self.device_identifier(new_id)?,
                             offset: offset_expr,
+                            ring: None,
                         });
                     self.stmts.push(
                         kernel::LaunchKernel {

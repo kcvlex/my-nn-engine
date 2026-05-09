@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cooperative_groups.h>
 #include <type_traits>
+#include "common.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -28,7 +29,10 @@ __global__ void attention(
     int kv_cache_stride,
     int q_pos_offset,
     int num_q_heads,
-    int num_kv_heads
+    int num_kv_heads,
+    int ring_sink,
+    int ring_window,
+    int ring_start
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
@@ -79,13 +83,15 @@ __global__ void attention(
         for (int j = threadIdx.x; j < num_kv_row * HEAD_DIM; j += blockDim.x) {
             int kv_row = j / HEAD_DIM;
             int kv_col = j % HEAD_DIM;
-            s_K[kv_row][kv_col] = K[i * Bc * HEAD_DIM + j];
-            s_V[kv_row][kv_col] = V[i * Bc * HEAD_DIM + j];
+            int phys = ring_phys_index(i * Bc + kv_row, ring_sink, ring_window, ring_start);
+            s_K[kv_row][kv_col] = K[phys * HEAD_DIM + kv_col];
+            s_V[kv_row][kv_col] = V[phys * HEAD_DIM + kv_col];
         }
         if constexpr (QUANT) {
             for (int j = threadIdx.x; j < num_kv_row; j += blockDim.x) {
-                s_K_scale[j] = (float)k_scale[i * Bc + j];
-                s_V_scale[j] = (float)v_scale[i * Bc + j];
+                int phys = ring_phys_index(i * Bc + j, ring_sink, ring_window, ring_start);
+                s_K_scale[j] = (float)k_scale[phys];
+                s_V_scale[j] = (float)v_scale[phys];
             }
         }
         cg::sync(cta);
@@ -168,7 +174,10 @@ __global__ void attention_decode(
     int cache_seq_len,
     int active_seq_kv,
     int num_q_heads,
-    int num_kv_heads
+    int num_kv_heads,
+    int ring_sink,
+    int ring_window,
+    int ring_start
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
     __shared__ T s_Q[HEAD_DIM];
@@ -201,13 +210,14 @@ __global__ void attention_decode(
     float row_max = -INFINITY;
     float row_sum = 0.0f;
     for (int row_K = 0; row_K < active_seq_kv; row_K++) {
+        int phys_K = ring_phys_index(row_K, ring_sink, ring_window, ring_start);
         float old_max = row_max;
         float dot = 0.0f;
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
-            dot += (float)s_Q[i] * (float)K[row_K * HEAD_DIM + i];
+            dot += (float)s_Q[i] * (float)K[phys_K * HEAD_DIM + i];
         }
         if constexpr (QUANT) {
-            dot *= (float)k_scale[row_K];
+            dot *= (float)k_scale[phys_K];
         }
 
         for (int s = tile.size() / 2; 0 < s; s /= 2) {
@@ -228,12 +238,12 @@ __global__ void attention_decode(
         float coeff = expf(old_max - row_max);
         row_sum = row_sum * coeff + score;
         if constexpr (QUANT) {
-            score *= (float)v_scale[row_K];
+            score *= (float)v_scale[phys_K];
         }
 
         for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
             s_O[i] *= coeff;
-            s_O[i] += score * (float)V[row_K * HEAD_DIM + i];
+            s_O[i] += score * (float)V[phys_K * HEAD_DIM + i];
         }
     }
 
