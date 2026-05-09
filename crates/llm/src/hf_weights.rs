@@ -63,17 +63,19 @@ pub struct WeightRef {
 impl HfWeights {
     pub fn from_dir(model_dir: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
         let dir = model_dir.as_ref();
+        let int8 = dir.join("model.int8.safetensors");
+        if int8.exists() {
+            return Self::from_safetensors(int8);
+        }
         let index = dir.join("model.safetensors.index.json");
         if index.exists() {
-            Self::from_index(index)
-        } else {
-            let single = dir.join("model.safetensors");
-            if single.exists() {
-                Self::from_safetensors(single)
-            } else {
-                Err(HfWeightsError::MissingSafetensors(dir.to_path_buf()))
-            }
+            return Self::from_index(index);
         }
+        let single = dir.join("model.safetensors");
+        if single.exists() {
+            return Self::from_safetensors(single);
+        }
+        Err(HfWeightsError::MissingSafetensors(dir.to_path_buf()))
     }
 
     pub fn from_safetensors(path: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
