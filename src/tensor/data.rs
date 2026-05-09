@@ -67,7 +67,7 @@ pub enum CompPolicy {
 }
 
 impl TensorData {
-    pub fn eq_with_epsillong(&self, other: &Self, epsilon: f64, comp: CompPolicy) -> bool {
+    pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64, comp: CompPolicy) -> bool {
         match (self, other) {
             (TensorData::Bool(a), TensorData::Bool(b)) => a == b,
             (TensorData::SInt(a0, a1), TensorData::SInt(b0, b1)) => a0 == b0 && a1 == b1,

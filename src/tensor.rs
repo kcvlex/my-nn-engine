@@ -23,7 +23,7 @@ pub struct Tensor {
 
 impl Tensor {
     pub fn eq_with_epsilon(&self, other: &Self, epsilon: f64, policy: CompPolicy) -> bool {
-        self.dims == other.dims && self.data.eq_with_epsillong(&other.data, epsilon, policy)
+        self.dims == other.dims && self.data.eq_with_epsilon(&other.data, epsilon, policy)
     }
 
     pub fn to_indices(&self) -> Option<Vec<TensorIndex>> {
