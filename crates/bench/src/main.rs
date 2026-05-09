@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-const PROMPT: &str = "The capital of France is";
-const PROMPT_TOKENS: u32 = 5;
+const PROMPT: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias excepturi sint occaecati cupiditate non provident.";
+const PROMPT_TOKENS: u32 = 256;
 const N_GENERATE: u32 = 64;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -83,9 +83,9 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
             runtime: Runtime::Mynn {
                 model_dir: models.join("tinyllama"),
                 dtype: "bf16",
-                max_seq_len: 256,
-                prefill_len: 16,
-                prefill_padded_for_aggr: 16,
+                max_seq_len: 640,
+                prefill_len: 512,
+                prefill_padded_for_aggr: 512,
             },
         },
         RunSpec {
@@ -93,9 +93,9 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
             runtime: Runtime::Mynn {
                 model_dir: models.join("tinyllama"),
                 dtype: "int8",
-                max_seq_len: 256,
-                prefill_len: 16,
-                prefill_padded_for_aggr: 16,
+                max_seq_len: 640,
+                prefill_len: 512,
+                prefill_padded_for_aggr: 512,
             },
         },
         RunSpec {
@@ -103,16 +103,16 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
             runtime: Runtime::Mynn {
                 model_dir: models.join("llama2-7b-sft"),
                 dtype: "int8",
-                max_seq_len: 128,
-                prefill_len: 16,
-                prefill_padded_for_aggr: 16,
+                max_seq_len: 640,
+                prefill_len: 512,
+                prefill_padded_for_aggr: 512,
             },
         },
         RunSpec {
             label: "llamacpp-tinyllama-q8_0".into(),
             runtime: Runtime::LlamaCpp {
                 gguf: gguf_dir.join("tinyllama-q8_0.gguf"),
-                prefill_n: 16,
+                prefill_n: 512,
                 gen_n: 64,
             },
         },
@@ -120,16 +120,16 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
             label: "llamacpp-llama2-q8_0".into(),
             runtime: Runtime::LlamaCpp {
                 gguf: gguf_dir.join("llama2-7b-sft-q8_0.gguf"),
-                prefill_n: 16,
+                prefill_n: 512,
                 gen_n: 64,
             },
         },
     ];
 
     for (sub, label, max_seq) in [
-        ("tinyllama-fp16", "ortgenai-tinyllama-fp16", 256u32),
-        ("tinyllama-int4", "ortgenai-tinyllama-int4", 256),
-        ("llama2-7b-int4", "ortgenai-llama2-7b-int4", 128),
+        ("tinyllama-fp16", "ortgenai-tinyllama-fp16", 640u32),
+        ("tinyllama-int4", "ortgenai-tinyllama-int4", 640),
+        ("llama2-7b-int4", "ortgenai-llama2-7b-int4", 640),
     ] {
         let dir = ortgenai_dir.join(sub);
         if dir.is_dir() {
