@@ -18,6 +18,10 @@ pub struct LlamaOptions {
     /// If true, KV cache is stored as INT8 with per-token BF16 scale.
     /// Halves KV cache footprint at small accuracy cost.
     pub quant_kv_cache: bool,
+    /// If true, lay out KV cache as `[sink][ring]` (StreamingLLM): K is stored
+    /// unrotated and re-rotated against per-slot recency ranks each step.
+    /// Mutually exclusive with `quant_kv_cache` for now.
+    pub streaming_kv: bool,
 }
 
 pub struct LlamaGraph {
@@ -28,6 +32,19 @@ pub struct LlamaGraph {
     pub active_seq_kv: ValueId,
     pub logits: ValueId,
     pub kv_cache_names: Vec<KVCache>,
+    /// Streaming-KV inputs. Populated only when [`LlamaOptions::streaming_kv`]
+    /// is set. Each i64 scalar host input drives `ring_phys_index` in the
+    /// CUDA kernels; `kv_position` is a `[max_seq]` device tensor giving the
+    /// per-slot logical recency rank for the K-cache RoPE recompute.
+    pub streaming: Option<StreamingInputs>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StreamingInputs {
+    pub ring_sink: ValueId,
+    pub ring_window: ValueId,
+    pub ring_start: ValueId,
+    pub kv_position: ValueId,
 }
 
 pub struct LlamaWeights {
@@ -98,6 +115,8 @@ impl Mode {
 struct LayerCtx {
     cos_4d: ValueId,
     sin_4d: ValueId,
+    cos_table: ValueId,
+    sin_table: ValueId,
     past_len: ValueId,
     active_seq_kv: ValueId,
     num_q_heads: usize,
@@ -111,6 +130,7 @@ struct LayerCtx {
     activation_ty: DataType,
     quant_kv_cache: bool,
     scale_ty: FloatType,
+    streaming: Option<StreamingInputs>,
 }
 
 pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize) -> LlamaGraph {
@@ -198,10 +218,21 @@ fn build_llama_inner(
 
     let mut b = Builder::new(if is_prefill { "llama_prefill" } else { "llama" });
 
+    assert!(
+        !(options.streaming_kv && options.quant_kv_cache),
+        "streaming_kv + quant_kv_cache is not supported yet (rope_fused has no INT8 path)",
+    );
+
     let input_ids = b.input("input_ids", i64_ty, &[1, seq_q]);
     let position_id = b.input("position_id", i64_ty, &[seq_q]);
     let past_len = b.input("past_len", i64_ty, &[]);
     let active_seq_kv = b.input("active_seq_kv", i64_ty, &[]);
+    let streaming = options.streaming_kv.then(|| StreamingInputs {
+        ring_sink: b.input("ring_sink", i64_ty, &[]),
+        ring_window: b.input("ring_window", i64_ty, &[]),
+        ring_start: b.input("ring_start", i64_ty, &[]),
+        kv_position: b.input("kv_position", i64_ty, &[max_seq_len]),
+    });
 
     let embed_w = b.load_weight(
         "model.embed_tokens.weight",
@@ -230,6 +261,8 @@ fn build_llama_inner(
     let ctx = LayerCtx {
         cos_4d,
         sin_4d,
+        cos_table,
+        sin_table,
         past_len,
         active_seq_kv,
         num_q_heads: config.num_attention_heads,
@@ -243,6 +276,7 @@ fn build_llama_inner(
         activation_ty: DataType::Float(weight_float_ty),
         quant_kv_cache: options.quant_kv_cache,
         scale_ty: weight_float_ty,
+        streaming,
     };
 
     let mut kv_cache_names = Vec::new();
@@ -274,6 +308,7 @@ fn build_llama_inner(
         active_seq_kv,
         logits,
         kv_cache_names,
+        streaming,
     }
 }
 
@@ -346,7 +381,10 @@ fn build_layer(
     let k = b.transpose(&format!("{prefix}_k_tr"), k, vec![0, 2, 1, 3]);
     let v = b.transpose(&format!("{prefix}_v_tr"), v, vec![0, 2, 1, 3]);
 
-    // RoPE on Q and K (V is unrotated)
+    // Q is always rotated per-token via the absolute (or recency-rank, in
+    // streaming) position. K is rotated only in the legacy path; in streaming
+    // we keep the cache unrotated and re-rotate the whole K cache against
+    // per-slot recency ranks before attention.
     let q = b.rope(
         &format!("{prefix}_q_rope"),
         q,
@@ -354,13 +392,17 @@ fn build_layer(
         ctx.sin_4d,
         ctx.head_dim,
     );
-    let k = b.rope(
-        &format!("{prefix}_k_rope"),
-        k,
-        ctx.cos_4d,
-        ctx.sin_4d,
-        ctx.head_dim,
-    );
+    let k = if ctx.streaming.is_none() {
+        b.rope(
+            &format!("{prefix}_k_rope"),
+            k,
+            ctx.cos_4d,
+            ctx.sin_4d,
+            ctx.head_dim,
+        )
+    } else {
+        k
+    };
 
     // K/V cache (graph inputs; SessionConfig converts to SessionState)
     let k_cache_name = format!("{prefix}.past_key");
@@ -410,6 +452,23 @@ fn build_layer(
                 bytes_per_scale,
             }),
         )
+    } else if let Some(s) = ctx.streaming {
+        let ring = (s.ring_sink, s.ring_window, s.ring_start);
+        let k_updated = b.kv_cache_update_streaming(
+            &format!("{prefix}_k_update"),
+            k_cache,
+            k,
+            ctx.past_len,
+            ring,
+        );
+        let v_updated = b.kv_cache_update_streaming(
+            &format!("{prefix}_v_update"),
+            v_cache,
+            v,
+            ctx.past_len,
+            ring,
+        );
+        (k_updated, v_updated, None, None)
     } else {
         let k_updated = b.kv_cache_update(&format!("{prefix}_k_update"), k_cache, k, ctx.past_len);
         let v_updated = b.kv_cache_update(&format!("{prefix}_v_update"), v_cache, v, ctx.past_len);
@@ -423,17 +482,41 @@ fn build_layer(
         scale: kv_cache_scale,
     };
 
-    let attn_out = b.attention_quant(
-        &format!("{prefix}_attn"),
-        q,
-        k_updated,
-        v_updated,
-        kv_scales,
-        None,
-        Some(ctx.active_seq_kv),
-        ctx.is_prefill,
-        scale,
-    );
+    let attn_out = if let Some(s) = ctx.streaming {
+        let k_recomputed = b.rope_fused(
+            &format!("{prefix}_k_rope_recompute"),
+            k_updated,
+            ctx.cos_table,
+            ctx.sin_table,
+            s.kv_position,
+            ctx.head_dim,
+        );
+        let ring = (s.ring_sink, s.ring_window, s.ring_start);
+        b.attention_streaming(
+            &format!("{prefix}_attn"),
+            q,
+            k_recomputed,
+            v_updated,
+            kv_scales,
+            None,
+            ctx.active_seq_kv,
+            ring,
+            ctx.is_prefill,
+            scale,
+        )
+    } else {
+        b.attention_quant(
+            &format!("{prefix}_attn"),
+            q,
+            k_updated,
+            v_updated,
+            kv_scales,
+            None,
+            Some(ctx.active_seq_kv),
+            ctx.is_prefill,
+            scale,
+        )
+    };
 
     let attn_out = b.transpose(&format!("{prefix}_attn_tr"), attn_out, vec![0, 2, 1, 3]);
     let attn_back_shape = b.i64_initializer(
