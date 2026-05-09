@@ -397,7 +397,7 @@ fn aggregate_llamacpp(log: &str, prompt_tokens: u32) -> Aggregate {
     a
 }
 
-fn fmt_row(label: &str, runtime: &str, model: &str, dtype: &str, a: &Aggregate) -> String {
+fn fmt_row(runtime: &str, model: &str, dtype: &str, a: &Aggregate) -> String {
     let pp = match a.prefill_tok_s {
         Some(v) if v > 0.0 => format!("{v:.1}"),
         _ => "-".into(),
@@ -409,7 +409,6 @@ fn fmt_row(label: &str, runtime: &str, model: &str, dtype: &str, a: &Aggregate) 
         vram = a.peak_vram_mib,
         rss = a.peak_rss_mib,
     )
-    .replacen("{label}", label, 0) // suppress unused warning equivalent
 }
 
 fn label_to_runtime_model_dtype(label: &str) -> (&'static str, &'static str, &'static str) {
@@ -495,7 +494,7 @@ fn main() -> std::io::Result<()> {
     out.push_str("|---|---|---|---:|---:|---:|---:|---:|\n");
     for (label, a) in &rows {
         let (rt, model, dtype) = label_to_runtime_model_dtype(label);
-        out.push_str(&fmt_row(label, rt, model, dtype, a));
+        out.push_str(&fmt_row(rt, model, dtype, a));
         out.push('\n');
     }
     let summary_path = results_dir.join("SUMMARY.md");
