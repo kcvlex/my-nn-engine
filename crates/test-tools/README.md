@@ -1,3 +1,7 @@
+# my-nn-engine-test-tools
+
+A collection of tools primarily intended for debugging.
+
 ## Build
 
 ```bash
@@ -7,6 +11,8 @@ cargo build -p my-nn-engine-test-tools --release
 ## Usage
 
 ### Extraction
+
+Extract a subgraph from an ONNX model whose last node is the specified one.
 
 ```bash
 ./target/release/my-nn-engine-test-tools \
@@ -19,7 +25,8 @@ cargo build -p my-nn-engine-test-tools --release
 
 ### Binary Search
 
-Binary search runs the ONNX extraction and onnxruntime inference inside a container, but executes the test command on the host. This way the test binary can link against host libraries (e.g. `libLLVM.so`).
+Run a binary search to find the node responsible for a test failure.
+Reference outputs are generated via onnxruntime for the extracted subgraph and compared against the test command's output.
 
 ```bash
 # Build the test helper
