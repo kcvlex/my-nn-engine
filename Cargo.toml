@@ -2,6 +2,14 @@
 resolver = "2"
 members = [".", "crates/bench", "crates/llm", "crates/test-tools", "crates/ui"]
 
+[workspace.dependencies]
+itertools = "0.14.0"
+libloading = "0.9"
+log = "0.4.29"
+memmap2 = "0.9"
+serde = { version = "1.0.228", features = ["derive"] }
+tempfile = "3.15.0"
+
 [package]
 name = "my-nn-engine"
 version = "0.1.0"
@@ -21,22 +29,22 @@ id-arena = "2.2.1"
 image = "0.25.5"
 indexmap = "2.7.1"
 inkwell = { version = "0.5.0", features = ["llvm18-0-prefer-static"] }
-itertools = "0.13.0"
-libloading = "0.8.6"
-memmap2 = "0.9"
+itertools = { workspace = true }
+libloading = { workspace = true }
+memmap2 = { workspace = true }
 env_logger = "0.11"
-log = "0.4.29"
+log = { workspace = true }
 ndarray = "0.16.0"
 num = "0.4.3"
 num-integer = "0.1.46"
 prost = "0.13.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rayon = "1.10.0"
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { workspace = true }
 smallvec = "1.15.0"
 strum = "0.26.3"
 strum_macros = "0.26.4"
-tempfile = "3.15.0"
+tempfile = { workspace = true }
 typed-builder = "0.21.0"
 
 [build-dependencies]
