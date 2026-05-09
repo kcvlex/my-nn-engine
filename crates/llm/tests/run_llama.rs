@@ -121,7 +121,7 @@ fn llama2_int8_cpu() {
 }
 
 fn run_llama3_int8_with(opts: Options) -> String {
-    const N_GENERATE: usize = 8;
+    const N_GENERATE: usize = 32;
 
     let dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/llama3-8b-instruct-int8");
@@ -139,6 +139,7 @@ fn run_llama3_int8_with(opts: Options) -> String {
         build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
 
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
+    let init_start = std::time::Instant::now();
     let mut llm = LlmSession::for_llama_with_prefill(
         r.graph,
         p.graph,
@@ -150,8 +151,20 @@ fn run_llama3_int8_with(opts: Options) -> String {
         config.eos_token_id,
     )
     .unwrap();
+    let init_secs = init_start.elapsed().as_secs_f64();
 
-    llm.generate(PROMPT, N_GENERATE).unwrap()
+    let gen_start = std::time::Instant::now();
+    let text = llm.generate(PROMPT, N_GENERATE).unwrap();
+    let gen_secs = gen_start.elapsed().as_secs_f64();
+
+    eprintln!(
+        "TIMING init={:.2}s prefill+decode({} new tokens)={:.2}s ({:.1} tok/s)",
+        init_secs,
+        N_GENERATE,
+        gen_secs,
+        (N_GENERATE as f64) / gen_secs,
+    );
+    text
 }
 
 #[cfg(feature = "cuda")]
@@ -170,11 +183,37 @@ fn llama3_int8_hybrid() {
 #[cfg(feature = "cuda")]
 #[test]
 #[serial(gpu)]
+#[ignore = "experimental: llama3-8b-int8 attention-subgraph"]
+fn llama3_int8_attention_subgraph() {
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .placement_strategy(Some(PlacementStrategy::AttentionSubgraph))
+        .build();
+    let text = run_llama3_int8_with(opts);
+    eprintln!("llama3_int8_attention_subgraph output: {:?}", text);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
 fn tinyllama_hybrid() {
     const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
     let opts = Options::builder()
         .target(Target::CUDA)
         .placement_strategy(Some(PlacementStrategy::StructuralKvTouch))
+        .build();
+    let text = run_tinyllama_with(opts);
+    assert_eq!(text, EXPECTED_TEXT);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
+fn tinyllama_attention_subgraph() {
+    const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .placement_strategy(Some(PlacementStrategy::AttentionSubgraph))
         .build();
     let text = run_tinyllama_with(opts);
     assert_eq!(text, EXPECTED_TEXT);

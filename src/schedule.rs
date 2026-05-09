@@ -90,6 +90,7 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
         matches!(
             placement_strategy,
             scheduler::PlacementStrategy::StructuralKvTouch |
+                scheduler::PlacementStrategy::AttentionSubgraph |
                 scheduler::PlacementStrategy::Uniform(ir::Device::CPU)
         );
     if needs_cpu_omp {

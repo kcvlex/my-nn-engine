@@ -26,6 +26,7 @@ pub struct MemoryAwareSchedulePass {
 pub enum PlacementStrategy {
     Uniform(Device),
     StructuralKvTouch,
+    AttentionSubgraph,
 }
 
 impl SchedulePass for MemoryAwareSchedulePass {
@@ -37,7 +38,53 @@ impl SchedulePass for MemoryAwareSchedulePass {
         let placement = match self.placement_strategy {
             PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
             PlacementStrategy::StructuralKvTouch => placement::structural_kv_touch(schedule),
+            PlacementStrategy::AttentionSubgraph => placement::attention_subgraph(schedule),
         };
+        let (gpu_count, cpu_count) = placement.iter().fold((0, 0), |(g, c), (_, d)| match d {
+            Device::CUDA => (g + 1, c),
+            Device::CPU => (g, c + 1),
+        });
+        log::info!(
+            "Placement ({:?}): {} CUDA / {} CPU kernels",
+            self.placement_strategy,
+            gpu_count,
+            cpu_count,
+        );
+        if log::log_enabled!(log::Level::Info) {
+            let initializer_set: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
+            let mut by_bucket: BTreeMap<(String, &'static str), (usize, usize)> = BTreeMap::new();
+            for (kid, kernel) in schedule.kernels.iter() {
+                let dev = match placement.device_of(kid) {
+                    Device::CUDA => "CUDA",
+                    Device::CPU => "CPU",
+                };
+                let name_key = kernel
+                    .name
+                    .split(|c: char| c == '_' || c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let weight = kernel
+                    .inputs
+                    .iter()
+                    .filter_map(|v| v.as_ref())
+                    .filter(|v| initializer_set.contains(v))
+                    .map(|v| value_byte_size(schedule, *v))
+                    .sum::<usize>();
+                let entry = by_bucket.entry((name_key, dev)).or_default();
+                entry.0 += 1;
+                entry.1 += weight;
+            }
+            for ((name, dev), (count, weight)) in &by_bucket {
+                log::info!(
+                    "  {:<4} {:>4} x {:<28} weight={} bytes",
+                    dev,
+                    count,
+                    name,
+                    weight
+                );
+            }
+        }
         let plan = build(schedule, self.num_streams, placement);
         schedule.execution_plan = Some(plan);
     }

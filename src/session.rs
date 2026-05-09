@@ -501,7 +501,8 @@ impl Session {
 
         let use_hybrid_runtime = matches!(
             options.placement_strategy,
-            Some(crate::schedule::scheduler::PlacementStrategy::StructuralKvTouch)
+            Some(crate::schedule::scheduler::PlacementStrategy::StructuralKvTouch) |
+                Some(crate::schedule::scheduler::PlacementStrategy::AttentionSubgraph)
         );
         let inner = if use_hybrid_runtime {
             SessionHybrid::new(
