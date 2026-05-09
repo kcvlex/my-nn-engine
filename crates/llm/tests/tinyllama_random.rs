@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::quantize::cast_safetensors_bf16_dir;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
@@ -71,6 +72,63 @@ fn run_bf16(target: Target) {
 #[test]
 fn cpu() {
     run(Target::CPU);
+}
+
+fn build_session(dir: &Path, prefill_len: Option<usize>) -> LlmSession {
+    let config = HfConfig::from_path(dir.join("config.json")).unwrap();
+    let hf = HfWeights::from_dir(dir).unwrap();
+    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+
+    let max_seq_len = 32;
+    let r = build_llama(&config, &weights, max_seq_len);
+    let opts = Options::builder().target(Target::CPU).build();
+    let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
+
+    match prefill_len {
+        Some(prefill_len) => {
+            let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
+            LlmSession::for_llama_with_prefill(
+                r.graph,
+                p.graph,
+                r.kv_cache_names,
+                prefill_len,
+                tokenizer,
+                &opts,
+                max_seq_len,
+                config.eos_token_id,
+            )
+            .unwrap()
+        }
+        None => LlmSession::for_llama(
+            r.graph,
+            r.kv_cache_names,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+        )
+        .unwrap(),
+    }
+}
+
+#[test]
+fn cpu_multi_turn_prefill_matches_decode_only() {
+    let dir = model_dir();
+
+    let mut decode_only = build_session(&dir, None);
+    let ref1 = decode_only.generate_ids(PROMPT, 1).unwrap();
+    let ref2 = decode_only.generate_ids(" world", 3).unwrap();
+    let ref_ids: Vec<u32> = ref1.into_iter().chain(ref2).collect();
+
+    let mut with_prefill = build_session(&dir, Some(4));
+    let p1 = with_prefill.generate_ids(PROMPT, 1).unwrap();
+    let past_after_first = with_prefill.past_len();
+    assert!(0 < past_after_first);
+    let p2 = with_prefill.generate_ids(" world", 3).unwrap();
+    assert!(past_after_first < with_prefill.past_len());
+    let prefill_ids: Vec<u32> = p1.into_iter().chain(p2).collect();
+
+    assert_eq!(ref_ids, prefill_ids);
 }
 
 #[test]
