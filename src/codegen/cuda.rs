@@ -1362,7 +1362,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let dtype_ok = matches!(lhs_ty.elem_type, DataType::Float(FloatType::BF16)) &&
                         matches!(scale_ty.elem_type, DataType::Float(FloatType::BF16));
                     // BF16 WMMA fragments require sm_80+ (Ampere); fall back on older arches.
-                    let wmma_tile = if !dtype_ok || m < 16 || self.cuda_arch < 80 {
+                    // cp.async.cg requires 16-byte-aligned src addresses; with row stride K
+                    // in bf16, that needs K % 8 == 0.
+                    let k_aligned = k % 8 == 0;
+                    let wmma_tile = if !dtype_ok || m < 16 || self.cuda_arch < 80 || !k_aligned {
                         None
                     } else if 64 <= m && 64 <= n {
                         Some((64usize, 64usize))
@@ -2302,7 +2305,7 @@ mod test {
         let schedule_passes = crate::schedule::create_schedule_passes(&options);
         schedule_passes.run(&mut schedule);
 
-        let mut host_gen = HostCodeGenerator::new(&schedule);
+        let mut host_gen = HostCodeGenerator::new(&schedule, 80);
         host_gen.gen_decl_values().unwrap();
 
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("a.cu");
@@ -2334,7 +2337,7 @@ mod test {
         let schedule_passes = crate::schedule::create_schedule_passes(&options);
         schedule_passes.run(&mut schedule);
 
-        let mut host_gen = HostCodeGenerator::new(&schedule);
+        let mut host_gen = HostCodeGenerator::new(&schedule, 80);
         let code = host_gen.generate(&options).unwrap();
         let mut buf = Vec::new();
         code.write(&mut buf).unwrap();

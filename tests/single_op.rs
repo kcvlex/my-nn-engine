@@ -1103,6 +1103,29 @@ fn dequant_matmul() -> TestResult {
     })
 }
 
+macro_rules! dequant_matmul_size_test {
+    ($name:ident, $fixture:literal) => {
+        #[test]
+        fn $name() -> TestResult {
+            with_all_sessions_and_tensors($fixture, (3, 1), |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1e-1);
+                Ok(())
+            })
+        }
+    };
+}
+
+dequant_matmul_size_test!(dequant_matmul_16x16x16, "dequant_matmul_16x16x16");
+dequant_matmul_size_test!(dequant_matmul_16x32x32, "dequant_matmul_16x32x32");
+dequant_matmul_size_test!(dequant_matmul_32x32x64, "dequant_matmul_32x32x64");
+dequant_matmul_size_test!(dequant_matmul_64x64x128, "dequant_matmul_64x64x128");
+dequant_matmul_size_test!(dequant_matmul_128x128x64, "dequant_matmul_128x128x64");
+dequant_matmul_size_test!(dequant_matmul_24x48x40, "dequant_matmul_24x48x40");
+dequant_matmul_size_test!(dequant_matmul_17x17x17, "dequant_matmul_17x17x17");
+dequant_matmul_size_test!(dequant_matmul_50x50x50, "dequant_matmul_50x50x50");
+dequant_matmul_size_test!(dequant_matmul_80x96x96, "dequant_matmul_80x96x96");
+
 #[test]
 fn quantizing_kvcache_update() -> TestResult {
     with_all_sessions_and_tensors(
