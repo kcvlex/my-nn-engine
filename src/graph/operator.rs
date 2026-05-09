@@ -10,7 +10,6 @@ use crate::tensor::data::ScalarData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
 use crate::tensor::Tensor;
-//use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
@@ -39,7 +38,7 @@ impl TensorIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, strum_macros::IntoStaticStr)]
 pub enum Operator {
     Add,
     And,
@@ -62,12 +61,14 @@ pub enum Operator {
     Exp,
     Flatten(Flatten),
     Gather(Gather),
+    #[strum(serialize = "Gelu")]
     GeLU(GeLU),
     Gemm(Gemm),
     GlobalAveragePool,
     Identity,
     IsNaN,
     LayerNormalization(LayerNormalization),
+    #[strum(serialize = "LeakyRelu")]
     LeakyReLU(LeakyReLU),
     LessOrEqual,
     Log,
@@ -83,6 +84,7 @@ pub enum Operator {
     ReduceMax(Reduce),
     ReduceMean(Reduce),
     ReduceSum(Reduce),
+    #[strum(serialize = "Relu")]
     ReLU,
     Reshape,
     Resize(Resize),
@@ -826,83 +828,8 @@ pub enum OperatorType {
 }
 
 impl Operator {
-    pub fn name(&self) -> &str {
-        match self {
-            Operator::Add => "Add",
-            Operator::And => "And",
-            Operator::Attention(_) => "Attention",
-            Operator::AveragePool(_) => "AveragePool",
-            Operator::BatchedGemm(_) => "BatchedGemm",
-            Operator::BatchNormalization(_) => "BatchNormalization",
-            Operator::Cast(_) => "Cast",
-            Operator::Clip(_) => "Clip",
-            Operator::Concat(_) => "Concat",
-            Operator::Constant(_) => "Constant",
-            Operator::ConstantOfShape(_) => "ConstantOfShape",
-            Operator::Conv(_) => "Conv",
-            Operator::Cos => "Cos",
-            Operator::DequantizeLinear(_) => "DequantizeLinear",
-            Operator::DequantMatMul(_) => "DequantMatMul",
-            Operator::Div => "Div",
-            Operator::Equal => "Equal",
-            Operator::Expand => "Expand",
-            Operator::Exp => "Exp",
-            Operator::Flatten(_) => "Flatten",
-            Operator::Gather(_) => "Gather",
-            Operator::GeLU(_) => "Gelu",
-            Operator::Gemm(_) => "Gemm",
-            Operator::GlobalAveragePool => "GlobalAveragePool",
-            Operator::Identity => "Identity",
-            Operator::IsNaN => "IsNaN",
-            Operator::LayerNormalization(_) => "LayerNormalization",
-            Operator::LeakyReLU(_) => "LeakyRelu",
-            Operator::LessOrEqual => "LessOrEqual",
-            Operator::Log => "Log",
-            Operator::MatMul => "MatMul",
-            Operator::MaxPool(_) => "MaxPool",
-            Operator::Mul => "Mul",
-            Operator::Neg => "Neg",
-            Operator::NonZero => "NonZero",
-            Operator::OneHot(_) => "OneHot",
-            Operator::Pow => "Pow",
-            Operator::Range => "Range",
-            Operator::Reciprocal => "Reciprocal",
-            Operator::ReduceMax(_) => "ReduceMax",
-            Operator::ReduceMean(_) => "ReduceMean",
-            Operator::ReduceSum(_) => "ReduceSum",
-            Operator::ReLU => "Relu",
-            Operator::Reshape => "Reshape",
-            Operator::Resize(_) => "Resize",
-            Operator::RMSNormalization(_) => "RMSNormalization",
-            Operator::Shape(_) => "Shape",
-            Operator::Sigmoid => "Sigmoid",
-            Operator::Sin => "Sin",
-            Operator::Slice => "Slice",
-            Operator::Softmax(_) => "Softmax",
-            Operator::Split(_) => "Split",
-            Operator::Sqrt => "Sqrt",
-            Operator::Squeeze(_) => "Squeeze",
-            Operator::Sub => "Sub",
-            Operator::Swish(_) => "Swish",
-            Operator::Tanh => "Tanh",
-            Operator::Transpose(_) => "Transpose",
-            Operator::Unsqueeze(_) => "Unsqueeze",
-            Operator::Where => "Where",
-
-            // Custom
-            Operator::Contiguous(_) => "Contiguous",
-            Operator::KVCacheUpdate => "KVCacheUpdate",
-            Operator::QuantizingKVCacheUpdate => "QuantizingKVCacheUpdate",
-            Operator::Transfer(_) => "Transfer",
-            Operator::NHWC2NCHW => "NHWC2NCHW",
-            Operator::ReduceMatrix(_) => "ReduceMatrix",
-            Operator::Reinterpret(_) => "Reinterpret",
-
-            // Dummy
-            Operator::Input(_) => "Input",
-            Operator::Output(_) => "Output",
-            Operator::SessionState(_) => "SessionState",
-        }
+    pub fn name(&self) -> &'static str {
+        self.into()
     }
 
     pub fn operator_type(&self) -> OperatorType {
@@ -1118,10 +1045,3 @@ pub mod args {
     pub const WHERE_X: usize = 1;
     pub const WHERE_Y: usize = 2;
 }
-
-//#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-//#[derive(Debug, Clone, EnumString, PartialEq)]
-//#[test]
-//fn test_enum_string() {
-//    assert_eq!(AutoPad::try_from("NOT_SET"), Ok(AutoPad::NotSet));
-//}
