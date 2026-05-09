@@ -107,6 +107,16 @@ impl Tensor {
         let proto = TensorProto::decode(bytes).map_err(ModelLoadError::Decode)?;
         load_tensor(proto, None)
     }
+
+    /// Load `(name, Tensor)` pair from TensorProto bytes; the name is
+    /// taken from `TensorProto.name` (may be empty if the file did not
+    /// store one).
+    pub fn from_proto_bytes_with_name(bytes: &[u8]) -> LoadResult<(String, Self)> {
+        let proto = TensorProto::decode(bytes).map_err(ModelLoadError::Decode)?;
+        let name = proto.name.clone();
+        let tensor = load_tensor(proto, None)?;
+        Ok((name, tensor))
+    }
 }
 
 #[derive(Default)]

@@ -247,9 +247,15 @@ pub enum SessionError {
 
 unsafe impl Send for SessionError {}
 
-pub enum Session {
+pub enum SessionInner {
     CPU(SessionCPU),
     CUDA(SessionCUDA),
+}
+
+pub struct Session {
+    inner: SessionInner,
+    input_names: Vec<String>,
+    output_names: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +360,35 @@ impl Session {
         Self::from_graph_inner(graph, None, options, config)
     }
 
+    /// Load a model and resolve unknown input shapes from the actual
+    /// `inputs` map (matched by `TensorProto.name`). Useful for models
+    /// declaring symbolic dimensions like `N` for batch size.
+    pub fn new_with_inputs<P: AsRef<Path>>(
+        p: P,
+        inputs: &HashMap<String, Tensor>,
+        options: &Options,
+        config: &SessionConfig,
+    ) -> Result<Self, SessionError> {
+        let _ = env_logger::try_init();
+        let model = Model::load_from_path(p).map_err(SessionError::ModelLoadError)?;
+        let graph = model.graph;
+        let input_ty: Vec<ResolvedTensorType> = graph
+            .input_values()
+            .iter()
+            .map(|&id| -> Result<ResolvedTensorType, SessionError> {
+                let name = &graph.values[id].name;
+                let tensor = inputs
+                    .get(name)
+                    .ok_or_else(|| SessionError::OtherError(format!("missing input {name:?}")))?;
+                Ok(ResolvedTensorType::new(
+                    tensor.data.elem_type(),
+                    tensor.dims.clone(),
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+        Self::from_graph_inner(graph, Some(&input_ty), options, config)
+    }
+
     fn from_graph_inner(
         mut graph: Graph,
         input_ty: Option<&[ResolvedTensorType]>,
@@ -380,8 +415,18 @@ impl Session {
             info!("Transformed model saved to {:?}", path);
         }
 
-        let inputs_ty = get_argument_types(&graph, &graph.input_values())?;
-        let outputs_ty = get_argument_types(&graph, &graph.output_values())?;
+        let input_values = graph.input_values();
+        let output_values = graph.output_values();
+        let input_names: Vec<String> = input_values
+            .iter()
+            .map(|&id| graph.values[id].name.clone())
+            .collect();
+        let output_names: Vec<String> = output_values
+            .iter()
+            .map(|&id| graph.values[id].name.clone())
+            .collect();
+        let inputs_ty = get_argument_types(&graph, &input_values)?;
+        let outputs_ty = get_argument_types(&graph, &output_values)?;
         let initializer_ids = graph.initializer_ids();
         let initializer_names: Vec<String> = initializer_ids
             .iter()
@@ -451,7 +496,7 @@ impl Session {
             info!("Build directory saved at {:?}", path);
         }
 
-        match options.target {
+        let inner = match options.target {
             Target::CPU => {
                 if config.initializer_buffers.is_some() {
                     return Err(SessionError::OtherError(
@@ -467,7 +512,7 @@ impl Session {
                     options,
                     &build_dir,
                 )
-                .map(Session::CPU)
+                .map(SessionInner::CPU)?
             }
             Target::CUDA => SessionCUDA::new(
                 inputs_ty,
@@ -480,15 +525,37 @@ impl Session {
                 options,
                 &build_dir,
             )
-            .map(Session::CUDA),
-        }
+            .map(SessionInner::CUDA)?,
+        };
+        Ok(Session {
+            inner,
+            input_names,
+            output_names,
+        })
     }
 
     // TODO: Type check
     pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, SessionError> {
-        match self {
-            Session::CPU(session) => session.run(inputs),
-            Session::CUDA(session) => session.run(inputs),
+        match &mut self.inner {
+            SessionInner::CPU(session) => session.run(inputs),
+            SessionInner::CUDA(session) => session.run(inputs),
         }
+    }
+
+    pub fn run_named(
+        &mut self,
+        mut inputs: HashMap<String, Tensor>,
+    ) -> Result<HashMap<String, Tensor>, SessionError> {
+        let inputs_vec: Vec<Tensor> = self
+            .input_names
+            .iter()
+            .map(|name| {
+                inputs
+                    .remove(name)
+                    .ok_or_else(|| SessionError::OtherError(format!("missing input {name:?}")))
+            })
+            .collect::<Result<_, _>>()?;
+        let outputs = self.run(&inputs_vec)?;
+        Ok(self.output_names.iter().cloned().zip(outputs).collect())
     }
 }
