@@ -1,4 +1,2 @@
 [alias]
 test-cpu = "test --no-default-features"
-bench-cpu = ["test", "--release", "--no-default-features", "--test", "bench_inference", "--", "--ignored", "--nocapture"]
-bench-cuda = ["test", "--release", "--test", "bench_inference", "--", "--ignored", "--nocapture"]

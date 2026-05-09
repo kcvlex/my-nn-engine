@@ -7,8 +7,6 @@ ONNX model compiler with CPU and CUDA backends.
 ```sh
 cargo test-cpu                # CPU-only tests
 cargo test                    # All tests (including CUDA)
-cargo bench-cpu               # CPU benchmarks
-cargo bench-cuda              # CUDA benchmarks
 ```
 
 ### Saving build artifacts
