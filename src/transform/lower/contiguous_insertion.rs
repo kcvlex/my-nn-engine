@@ -28,7 +28,8 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
                         Operator::Conv(_) |
                         Operator::MaxPool(_) |
                         Operator::KVCacheUpdate |
-                        Operator::QuantizingKVCacheUpdate
+                        Operator::QuantizingKVCacheUpdate |
+                        Operator::Rope(_)
                 )
             })
             .map(|(id, _)| id)
@@ -45,6 +46,7 @@ impl<T: GraphOp> Pass<T> for ContiguousInsertion {
                 Operator::QuantizingKVCacheUpdate => {
                     self.handle_quantizing_kv_cache_update(graph, modifier, id)
                 }
+                Operator::Rope(_) => self.handle_rope(graph, modifier, id),
                 _ => unreachable!(),
             }
         }
@@ -144,6 +146,17 @@ impl ContiguousInsertion {
         let input = node.inputs[args::QKVCACHE_UPDATE_NEW].unwrap();
         let new_value =
             find_or_create_contiguous(graph, modifier, input, &format!("{}_input_new", name));
+        modifier
+            .replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| id == id2);
+    }
+
+    fn handle_rope<T: GraphOp>(&self, graph: &mut Graph, modifier: &mut T, id: NodeId) {
+        let node = &graph.nodes[id];
+        let name = node.name.clone();
+        assert!(matches!(node.op, Operator::Rope(_)));
+        let input = node.inputs[args::ROPE_X].unwrap();
+        let new_value =
+            find_or_create_contiguous(graph, modifier, input, &format!("{}_input_x", name));
         modifier
             .replace_input_value_if_without_typecheck(graph, input, new_value, |id2, _| id == id2);
     }

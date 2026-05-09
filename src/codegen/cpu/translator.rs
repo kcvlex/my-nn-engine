@@ -5859,6 +5859,158 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    pub fn build_rope(
+        &self,
+        dst: TensorPtr<'ctx>,
+        x: TensorPtr<'ctx>,
+        cos: TensorPtr<'ctx>,
+        sin: TensorPtr<'ctx>,
+        position: TensorPtr<'ctx>,
+        head_dim: usize,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        assert!(x.ty.is_contiguous() && dst.ty.is_contiguous());
+        assert_eq!(x.ty.elem_type, dst.ty.elem_type);
+        let ndim = x.ty.dims.ndim();
+        assert!(2 <= ndim);
+        assert_eq!(x.ty.dims[ndim - 1], head_dim);
+        let seq_len = x.ty.dims[ndim - 2];
+        let outer = x.ty.dims.size() / (seq_len * head_dim);
+        let half = head_dim / 2;
+        assert_eq!(2 * half, head_dim);
+
+        match x.ty.elem_type {
+            DataType::Float(_) => {}
+            _ => unimplemented!(),
+        }
+        let i64_ty = self.context.i64_type();
+
+        let outer_hdr = self
+            .context
+            .append_basic_block(*self.func, "rope.outer.hdr");
+        let s_hdr = self.context.append_basic_block(*self.func, "rope.s.hdr");
+        let j_hdr = self.context.append_basic_block(*self.func, "rope.j.hdr");
+        let j_latch = self.context.append_basic_block(*self.func, "rope.j.latch");
+        let s_latch = self.context.append_basic_block(*self.func, "rope.s.latch");
+        let outer_latch = self
+            .context
+            .append_basic_block(*self.func, "rope.outer.latch");
+        let exit = self.context.append_basic_block(*self.func, "rope.exit");
+
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(outer_hdr)?;
+
+        let (outer_phi, outer_i) = self.init_counted_loop(outer_hdr)?;
+        let outer_off = self.builder.build_int_mul(
+            outer_i,
+            i64_ty.const_int((seq_len * head_dim) as u64, false),
+            "rope.outer.off",
+        )?;
+        self.builder.build_unconditional_branch(s_hdr)?;
+
+        let (s_phi, s_i) = self.init_counted_loop(s_hdr)?;
+        let s_row = self.builder.build_int_mul(
+            s_i,
+            i64_ty.const_int(head_dim as u64, false),
+            "rope.s.row",
+        )?;
+        let row_off = self
+            .builder
+            .build_int_add(outer_off, s_row, "rope.row.off")?;
+        let pos_val = self
+            .build_load(&position.clone().set_offset(s_i))?
+            .into_int_value();
+        let pos_off = self.builder.build_int_mul(
+            pos_val,
+            i64_ty.const_int(head_dim as u64, false),
+            "rope.pos.off",
+        )?;
+        self.builder.build_unconditional_branch(j_hdr)?;
+
+        let (j_phi, j_i) = self.init_counted_loop(j_hdr)?;
+        let j_plus_half =
+            self.builder
+                .build_int_add(j_i, i64_ty.const_int(half as u64, false), "rope.j.high")?;
+        let off_lo = self.builder.build_int_add(row_off, j_i, "rope.off.lo")?;
+        let off_hi = self
+            .builder
+            .build_int_add(row_off, j_plus_half, "rope.off.hi")?;
+        let tab_lo = self.builder.build_int_add(pos_off, j_i, "rope.tab.lo")?;
+        let tab_hi = self
+            .builder
+            .build_int_add(pos_off, j_plus_half, "rope.tab.hi")?;
+
+        let x_lo = self
+            .build_load(&x.clone().set_offset(off_lo))?
+            .into_float_value();
+        let x_hi = self
+            .build_load(&x.clone().set_offset(off_hi))?
+            .into_float_value();
+        let cos_lo = self
+            .build_load(&cos.clone().set_offset(tab_lo))?
+            .into_float_value();
+        let cos_hi = self
+            .build_load(&cos.clone().set_offset(tab_hi))?
+            .into_float_value();
+        let sin_lo = self
+            .build_load(&sin.clone().set_offset(tab_lo))?
+            .into_float_value();
+        let sin_hi = self
+            .build_load(&sin.clone().set_offset(tab_hi))?
+            .into_float_value();
+
+        let xl_cl = self.builder.build_float_mul(x_lo, cos_lo, "rope.xl.cl")?;
+        let xh_sl = self.builder.build_float_mul(x_hi, sin_lo, "rope.xh.sl")?;
+        let out_lo = self.builder.build_float_sub(xl_cl, xh_sl, "rope.out.lo")?;
+        let xh_ch = self.builder.build_float_mul(x_hi, cos_hi, "rope.xh.ch")?;
+        let xl_sh = self.builder.build_float_mul(x_lo, sin_hi, "rope.xl.sh")?;
+        let out_hi = self.builder.build_float_add(xh_ch, xl_sh, "rope.out.hi")?;
+        self.tag_fast(xl_cl);
+        self.tag_fast(xh_sl);
+        self.tag_fast(out_lo);
+        self.tag_fast(xh_ch);
+        self.tag_fast(xl_sh);
+        self.tag_fast(out_hi);
+
+        self.build_store(
+            &dst.clone().set_offset(off_lo),
+            out_lo.as_basic_value_enum(),
+        )?;
+        self.build_store(
+            &dst.clone().set_offset(off_hi),
+            out_hi.as_basic_value_enum(),
+        )?;
+        self.builder.build_unconditional_branch(j_latch)?;
+
+        self.finalize_counted_loop(
+            j_phi,
+            s_hdr,
+            i64_ty.const_int(half as u64, false),
+            j_hdr,
+            s_latch,
+            j_latch,
+        )?;
+        self.finalize_counted_loop(
+            s_phi,
+            outer_hdr,
+            i64_ty.const_int(seq_len as u64, false),
+            s_hdr,
+            outer_latch,
+            s_latch,
+        )?;
+        self.finalize_counted_loop(
+            outer_phi,
+            entry,
+            i64_ty.const_int(outer as u64, false),
+            outer_hdr,
+            exit,
+            outer_latch,
+        )?;
+
+        self.builder.position_at_end(exit);
+        Ok(exit)
+    }
+
     pub fn build_gather(
         &self,
         dst: TensorPtr<'ctx>,

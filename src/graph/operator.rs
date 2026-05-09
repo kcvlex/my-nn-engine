@@ -140,6 +140,24 @@ pub enum Operator {
     //   cache[b,h,offset+t,:] = round(new[b,h,t,:] / s).clamp(-128, 127)
     //   scale[b,h,offset+t]   = s
     QuantizingKVCacheUpdate,
+    // Rotary Position Embedding with per-token position offset.
+    //
+    //   inputs:  x         [..., S, D]      activation to rotate (D = head_dim)
+    //            cos       [max_seq, D]     full cos table (initializer)
+    //            sin       [max_seq, D]     full sin table (initializer)
+    //            position  [S]  i64         per-token row index into cos/sin
+    //   output:  rotated   same shape as x
+    //
+    // Each token i takes cos[position[i]], sin[position[i]] and applies the
+    // half-split rotation:
+    //     low  = x[..., :D/2]  high = x[..., D/2:]
+    //     rot  = concat(-high, low, axis=-1)
+    //     out  = x * cos + rot * sin
+    //
+    // `position` is a runtime tensor: streaming layouts can pass per-row
+    // recency ranks instead of absolute positions to recompute RoPE on a
+    // sliding K cache without rewriting the cache contents.
+    Rope(Rope),
     Transfer(TransferKind),
     NHWC2NCHW,
     ReduceMatrix(ReduceOp),
@@ -391,6 +409,11 @@ pub struct Clip {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeakyReLU {
     pub alpha: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rope {
+    pub head_dim: usize,
 }
 
 // TODO: storage_order
@@ -896,6 +919,7 @@ impl Operator {
             Operator::Reinterpret(_) |
             Operator::Resize(_) |
             Operator::RMSNormalization(_) |
+            Operator::Rope(_) |
             Operator::Shape(_) |
             Operator::Slice |
             Operator::Softmax(_) |
@@ -983,6 +1007,11 @@ pub mod args {
 
     pub const RMS_NORM_DATA: usize = 0;
     pub const RMS_NORM_SCALE: usize = 1;
+
+    pub const ROPE_X: usize = 0;
+    pub const ROPE_COS: usize = 1;
+    pub const ROPE_SIN: usize = 2;
+    pub const ROPE_POSITION: usize = 3;
 
     pub const RELU_DATA: usize = 0;
 

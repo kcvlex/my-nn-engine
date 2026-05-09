@@ -334,6 +334,62 @@ fn rope_table_with_gather_and_rope() {
     assert!(got.eq_with_epsilon(&expected, 1e-6, CompPolicy::Either));
 }
 
+fn rope_fused_vs_decomposed(target: Target) {
+    // [1, 1, 2, 4] activation, three-row RoPE table, per-token row pick.
+    let head_dim = 4;
+    let x = make_f32(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    let cos_table = make_f32(
+        &[3, 4],
+        vec![
+            1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.25, 0.25, 0.25, 0.25,
+        ],
+    );
+    let sin_table = make_f32(
+        &[3, 4],
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    );
+
+    let mut rb = Builder::new("rope_ref");
+    let x_in = input_for(&mut rb, "x", &x);
+    let cos_in = input_for(&mut rb, "cos_table", &cos_table);
+    let sin_in = input_for(&mut rb, "sin_table", &sin_table);
+    let pos_in = i64_init(&mut rb, "pos", vec![1, 2]);
+    let cos_row = rb.gather("cos_g", cos_in, pos_in, 0);
+    let sin_row = rb.gather("sin_g", sin_in, pos_in, 0);
+    let row_4d_shape = rb.i64_initializer("row_4d_shape", vec![1, 1, 2, head_dim as i64]);
+    let cos_4d = rb.reshape("cos_4d", cos_row, row_4d_shape);
+    let sin_4d = rb.reshape("sin_4d", sin_row, row_4d_shape);
+    let ref_out = rb.rope("rope_ref", x_in, cos_4d, sin_4d, head_dim);
+    rb.output(ref_out);
+    let ref_result = run_builder_with_target(
+        rb.graph,
+        &[x.clone(), cos_table.clone(), sin_table.clone()],
+        target,
+    );
+
+    let mut fb = Builder::new("rope_fused");
+    let x_in = input_for(&mut fb, "x", &x);
+    let cos_in = input_for(&mut fb, "cos_table", &cos_table);
+    let sin_in = input_for(&mut fb, "sin_table", &sin_table);
+    let pos_in = i64_init(&mut fb, "pos", vec![1, 2]);
+    let fused_out = fb.rope_fused("rope_fused", x_in, cos_in, sin_in, pos_in, head_dim);
+    fb.output(fused_out);
+    let fused_result = run_builder_with_target(fb.graph, &[x, cos_table, sin_table], target);
+
+    assert!(fused_result.eq_with_epsilon(&ref_result, 1e-6, CompPolicy::Either));
+}
+
+#[test]
+fn rope_fused_cpu() {
+    rope_fused_vs_decomposed(Target::CPU);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn rope_fused_cuda() {
+    rope_fused_vs_decomposed(Target::CUDA);
+}
+
 #[test]
 fn matmul_basic() {
     // A: [4, 3] @ B: [3, 2] -> C: [4, 2]

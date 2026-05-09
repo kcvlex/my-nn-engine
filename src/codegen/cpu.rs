@@ -29,6 +29,7 @@ use crate::codegen::cpu::omp::*;
 use crate::codegen::cpu::op::*;
 use crate::codegen::cpu::translator::*;
 use crate::codegen::*;
+use crate::graph::operator;
 use crate::graph::operator::args;
 use crate::graph::operator::Contiguous;
 use crate::graph::operator::Layout;
@@ -1000,6 +1001,15 @@ impl<'ll> CodeGen<'ll, '_> {
                     ptrs[1 + args::RMS_NORM_SCALE].clone(),
                     entry,
                     rn,
+                ),
+                Operator::Rope(operator::Rope { head_dim }) => translator.build_rope(
+                    ptrs[0].clone(),
+                    ptrs[1 + args::ROPE_X].clone(),
+                    ptrs[1 + args::ROPE_COS].clone(),
+                    ptrs[1 + args::ROPE_SIN].clone(),
+                    ptrs[1 + args::ROPE_POSITION].clone(),
+                    *head_dim,
+                    entry,
                 ),
                 Operator::Split(ref split) => translator.build_split(
                     &ptrs[..ptrs.len() - 1],

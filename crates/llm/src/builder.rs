@@ -369,6 +369,32 @@ impl Builder {
         self.add(name, x_cos, r_sin)
     }
 
+    /// Apply rotary position embedding as a single fused op. `cos`/`sin` are
+    /// the full RoPE tables of shape `[max_seq, head_dim]` (typically created
+    /// via [`Self::rope_table`]). `position` is an `i64` tensor of shape
+    /// `[seq]` that selects a row per token; the tail of `x`'s shape must be
+    /// `[..., seq, head_dim]`. Pass per-token absolute positions for the
+    /// standard RoPE; pass per-token recency ranks to recompute RoPE on a
+    /// sliding K cache.
+    pub fn rope_fused(
+        &mut self,
+        name: &str,
+        x: ValueId,
+        cos: ValueId,
+        sin: ValueId,
+        position: ValueId,
+        head_dim: usize,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        self.graph.nodes.alloc(Node::create_node(
+            vec![Some(x), Some(cos), Some(sin), Some(position)],
+            vec![out],
+            name.to_string(),
+            Operator::Rope(Rope { head_dim }),
+        ));
+        out
+    }
+
     pub fn attention(
         &mut self,
         name: &str,
