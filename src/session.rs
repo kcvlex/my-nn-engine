@@ -1,6 +1,7 @@
 mod cpu;
 mod cuda;
 mod device_buffer;
+mod hybrid;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -26,6 +27,7 @@ use crate::schedule::create_schedule_passes;
 use crate::schedule::Schedule;
 use crate::session::cpu::SessionCPU;
 use crate::session::cuda::SessionCUDA;
+use crate::session::hybrid::SessionHybrid;
 use crate::tensor::data::TensorData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
@@ -257,6 +259,7 @@ unsafe impl Send for SessionError {}
 pub enum SessionInner {
     CPU(SessionCPU),
     CUDA(SessionCUDA),
+    Hybrid(SessionHybrid),
 }
 
 pub struct Session {
@@ -503,36 +506,53 @@ impl Session {
             info!("Build directory saved at {:?}", path);
         }
 
-        let inner = match options.target {
-            Target::CPU => {
-                if config.initializer_buffers.is_some() {
-                    return Err(SessionError::OtherError(
-                        "InitializerBuffers is not supported on CPU target".to_string(),
-                    ));
-                }
-                SessionCPU::new(
-                    inputs_ty,
-                    outputs_ty,
-                    initializer,
-                    session_state_buffers,
-                    schedule,
-                    options,
-                    &build_dir,
-                )
-                .map(SessionInner::CPU)?
-            }
-            Target::CUDA => SessionCUDA::new(
+        let use_hybrid_runtime = matches!(
+            options.placement_strategy,
+            Some(crate::schedule::scheduler::PlacementStrategy::StructuralKvTouch)
+        );
+        let inner = if use_hybrid_runtime {
+            SessionHybrid::new(
                 inputs_ty,
                 outputs_ty,
                 initializer,
-                initializer_names,
-                config.initializer_buffers.clone(),
                 session_state_buffers,
                 schedule,
                 options,
                 &build_dir,
             )
-            .map(SessionInner::CUDA)?,
+            .map(SessionInner::Hybrid)?
+        } else {
+            match options.target {
+                Target::CPU => {
+                    if config.initializer_buffers.is_some() {
+                        return Err(SessionError::OtherError(
+                            "InitializerBuffers is not supported on CPU target".to_string(),
+                        ));
+                    }
+                    SessionCPU::new(
+                        inputs_ty,
+                        outputs_ty,
+                        initializer,
+                        session_state_buffers,
+                        schedule,
+                        options,
+                        &build_dir,
+                    )
+                    .map(SessionInner::CPU)?
+                }
+                Target::CUDA => SessionCUDA::new(
+                    inputs_ty,
+                    outputs_ty,
+                    initializer,
+                    initializer_names,
+                    config.initializer_buffers.clone(),
+                    session_state_buffers,
+                    schedule,
+                    options,
+                    &build_dir,
+                )
+                .map(SessionInner::CUDA)?,
+            }
         };
         Ok(Session {
             inner,
@@ -546,6 +566,7 @@ impl Session {
         match &mut self.inner {
             SessionInner::CPU(session) => session.run(inputs),
             SessionInner::CUDA(session) => session.run(inputs),
+            SessionInner::Hybrid(session) => session.run(inputs),
         }
     }
 

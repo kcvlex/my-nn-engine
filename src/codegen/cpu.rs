@@ -366,7 +366,7 @@ impl CodeGenContext {
 }
 
 // TODO
-fn get_kernel_name_or(kernel: &Kernel, kernel_id: KernelId) -> String {
+pub fn get_kernel_name_or(kernel: &Kernel, kernel_id: KernelId) -> String {
     if kernel.name.is_empty() {
         format!("kernel.{}", kernel_id.index())
     } else {

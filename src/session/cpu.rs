@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
-use inkwell::support::load_library_permanently;
 use inkwell::OptimizationLevel;
 use itertools::zip_eq;
 use log::info;
@@ -34,15 +33,6 @@ struct JitState {
 // is safe to call from any thread (it's just a function pointer into mmap'd memory).
 unsafe impl Send for JitState {}
 unsafe impl Sync for JitState {}
-
-impl blas::Backend {
-    fn shared_library_name(&self) -> &'static str {
-        match self {
-            Self::OpenBLAS => "libopenblas.so",
-            Self::MKL => "libmkl_rt.so",
-        }
-    }
-}
 
 pub struct SessionCPU {
     #[allow(dead_code)]
@@ -75,28 +65,8 @@ impl SessionCPU {
             .collect::<Result<Vec<_>, _>>()
             .map_err(SessionError::ModelLoadError)?;
         info!("Load external libraries");
-        let blas_backend = (|| {
-            for b in [blas::Backend::MKL, blas::Backend::OpenBLAS] {
-                if load_library_permanently(Path::new(b.shared_library_name())).is_ok() {
-                    info!("Using BLAS: {:?}", b);
-                    return Ok(b);
-                }
-            }
-            Err(SessionError::OtherError(
-                "Failed to load any BLAS library".to_string(),
-            ))
-        })()?;
-
-        // MKL uses libiomp5 internally; load the same runtime to share the thread pool
-        // and avoid contention between two separate OpenMP runtimes.
-        let omp_lib = if blas_backend == blas::Backend::MKL {
-            "libiomp5.so"
-        } else {
-            "libomp.so"
-        };
-        load_library_permanently(Path::new(omp_lib)).map_err(|e| {
-            SessionError::OtherError(format!("Failed to load {}: {:?}", omp_lib, e))
-        })?;
+        let blas_backend = blas::load_jit_runtime().map_err(SessionError::OtherError)?;
+        info!("Using BLAS: {:?}", blas_backend);
 
         let codegen_ctx =
             CodeGenContext::new(schedule, blas_backend).map_err(SessionError::CodeGenError)?;
