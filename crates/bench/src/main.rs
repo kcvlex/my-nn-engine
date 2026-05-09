@@ -101,7 +101,7 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
         RunSpec {
             label: "mynn-llama2-int8".into(),
             runtime: Runtime::Mynn {
-                model_dir: models.join("llama2-7b-sft"),
+                model_dir: models.join("llama2-7b-hf"),
                 dtype: "int8",
                 max_seq_len: 640,
                 prefill_len: 512,
@@ -119,7 +119,7 @@ fn build_runs(repo_root: &Path) -> Vec<RunSpec> {
         RunSpec {
             label: "llamacpp-llama2-q8_0".into(),
             runtime: Runtime::LlamaCpp {
-                gguf: gguf_dir.join("llama2-7b-sft-q8_0.gguf"),
+                gguf: gguf_dir.join("llama2-7b-hf-q8_0.gguf"),
                 prefill_n: 512,
                 gen_n: 64,
             },
@@ -415,12 +415,12 @@ fn label_to_runtime_model_dtype(label: &str) -> (&'static str, &'static str, &'s
     match label {
         "mynn-tinyllama-bf16" => ("my-nn-engine", "TinyLlama-1.1B", "BF16"),
         "mynn-tinyllama-int8" => ("my-nn-engine", "TinyLlama-1.1B", "INT8 (W8A16)"),
-        "mynn-llama2-int8" => ("my-nn-engine", "Llama2-7B-sft", "INT8 (W8A16)"),
+        "mynn-llama2-int8" => ("my-nn-engine", "Llama2-7B-hf", "INT8 (W8A16)"),
         "llamacpp-tinyllama-q8_0" => ("llama.cpp", "TinyLlama-1.1B", "Q8_0"),
-        "llamacpp-llama2-q8_0" => ("llama.cpp", "Llama2-7B-sft", "Q8_0"),
+        "llamacpp-llama2-q8_0" => ("llama.cpp", "Llama2-7B-hf", "Q8_0"),
         "ortgenai-tinyllama-fp16" => ("ORT-GenAI", "TinyLlama-1.1B", "FP16"),
         "ortgenai-tinyllama-int4" => ("ORT-GenAI", "TinyLlama-1.1B", "INT4"),
-        "ortgenai-llama2-7b-int4" => ("ORT-GenAI", "Llama2-7B-sft", "INT4"),
+        "ortgenai-llama2-7b-int4" => ("ORT-GenAI", "Llama2-7B-hf", "INT4"),
         _ => ("?", "?", "?"),
     }
 }

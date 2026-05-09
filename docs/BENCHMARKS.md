@@ -1,32 +1,35 @@
 # LLM Inference Benchmarks
 
-Single-request decode/prefill on TinyLlama-1.1B and Llama2-7B-sft.
-Median over 3 measured iterations after 1 warmup. Prompt
-`"The capital of France is"`, `n_generate = 64`, greedy decode.
-`max_seq_len = 256` for TinyLlama, `128` for Llama2-7B.
+Single-request decode/prefill on TinyLlama-1.1B and Llama2-7B-hf.
+Median over 3 measured iterations after 1 warmup. Prompt is a ~200-word
+Lorem Ipsum passage (about 256 tokens for the Llama tokenizer),
+`n_generate = 64`, greedy decode. `max_seq_len = 640` for all rows
+(prefill 512 + generate 64 + margin).
 
-Measured at commit `4f27d8c` (branch `bench-llm`).
+Measured at commit `81221f1`.
 
 | runtime | model | dtype | decode tok/s | prefill tok/s | TTFT (ms) | peak VRAM (MiB) | peak RAM (MiB) |
-|---|---|---|---:|---:|---:|---:|---:|
-| my-nn-engine | TinyLlama-1.1B | BF16          | 70.0  | 3834.5 | 18.46 | 2569 | 721.1 |
-| my-nn-engine | TinyLlama-1.1B | INT8 (W8A16)  | 68.3  | 128.1 | 139.56 | 1815 | 508.6 |
-| llama.cpp    | TinyLlama-1.1B | Q8_0          | 127.7 | 1994.8 | 10.34 | 1503 | 1466.2 |
-| ORT-GenAI    | TinyLlama-1.1B | FP16          | 68.8  | 5617.6 | 15.42 | 3529 | 49.9 |
-| ORT-GenAI    | TinyLlama-1.1B | INT4          | 201.9 | 440.1 | 16.31 | 1485 | 50.1 |
-| my-nn-engine | Llama2-7B-sft  | INT8 (W8A16)  | 15.0  | 21.2 | 820.86 | 7533 | 496.1 |
-| llama.cpp    | Llama2-7B-sft  | Q8_0          | 22.2  | 297.0 | 61.93 | 7277 | 7180.2 |
-| ORT-GenAI    | Llama2-7B-sft  | INT4          | 37.3  | 32.4 | 181.00 | 5633 | 49.9 |
+|-|-|-|-:|-:|-:|-:|-:|
+| my-nn-engine | TinyLlama-1.1B | BF16 | 54.4 | 2836.8 | 198.87 | 2392 | 814.6 |
+| my-nn-engine | TinyLlama-1.1B | INT8 (W8A16) | 50.8 | 1419.5 | 380.38 | 1634 | 620.4 |
+| my-nn-engine | Llama2-7B-hf | INT8 (W8A16) | 14.3 | 255.3 | 2075.18 | 7682 | 623.2 |
+| llama.cpp | TinyLlama-1.1B | Q8_0 | 128.6 | 5900.4 | 51.16 | 1360 | 1466.9 |
+| llama.cpp | Llama2-7B-hf | Q8_0 | 22.4 | 1308.9 | 240.31 | 7282 | 7181.1 |
+| ORT-GenAI | TinyLlama-1.1B | FP16 | 66.9 | 8881.4 | 43.77 | 3462 | 49.6 |
+| ORT-GenAI | TinyLlama-1.1B | INT4 | 189.3 | 5241.9 | 54.12 | 1457 | 49.7 |
+| ORT-GenAI | Llama2-7B-hf | INT4 | 36.3 | 716.8 | 384.69 | 5955 | 49.7 |
 
-Prefill columns measure different things between runtimes: my-nn-engine and
-llama.cpp run a 16-token padded prefill chunk; ORT-GenAI consumes the 5-token
-prompt directly with no padding. So per-token numbers within a row are
-honest but cross-row prefill comparisons should be read with that in mind.
+Prefill columns: my-nn-engine and llama.cpp run a 512-token padded prefill
+chunk; ORT-GenAI consumes the prompt directly (about 256 tokens, no
+padding). Per-token numbers within a row are honest but cross-row prefill
+comparisons should be read with that in mind. The dtype column also varies
+across runtimes (mynn INT8 vs llama.cpp Q8_0 vs ORT-GenAI INT4 / FP16),
+so dtype-mismatched rows are reference points rather than apples-to-apples.
 
 ## Hardware
 
 | component | spec |
-|---|---|
+|-|-|
 | GPU | NVIDIA RTX 2000 Ada Generation Laptop GPU (sm_89), 8188 MiB VRAM |
 | GPU driver / CUDA | 595.71.05 / toolkit 13.2 |
 | CPU | 13th Gen Intel Core i9-13900H (20 logical cores) |
