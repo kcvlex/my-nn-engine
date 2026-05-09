@@ -9,4 +9,7 @@ RUN apt-get update && \
 
 RUN pip3 install --no-cache-dir onnxruntime-genai-cuda==0.11.4
 
+# For onnxruntime_genai.models.builder (export/quantization)
+RUN pip3 install --no-cache-dir onnx-ir transformers torch onnx
+
 WORKDIR /workspace
