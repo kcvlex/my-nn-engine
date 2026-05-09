@@ -146,6 +146,17 @@ impl Tensor {
         self.data.raw_vec()
     }
 
+    pub fn to_ndarray(&self) -> ndarray::ArrayD<f64> {
+        let dims: Vec<usize> = self.dims.iter().copied().collect();
+        let v: Vec<f64> = match &self.data {
+            TensorData::Bool(v) => v.iter().map(|&b| b as u8 as f64).collect(),
+            TensorData::Float(_, v) => v.clone(),
+            TensorData::SInt(_, v) => v.iter().map(|&x| x as f64).collect(),
+            TensorData::UInt(_, v) => v.iter().map(|&x| x as f64).collect(),
+        };
+        ndarray::ArrayD::from_shape_vec(dims, v).unwrap()
+    }
+
     // pub fn from_bytes(ty: ResolvedTensorType, raw: &[u8]) -> Result<Self, TypeError> {
     //     let data = TensorData::from_bytes(ty.elem_type, raw);
     //     Self::new(ty.dims, data)
