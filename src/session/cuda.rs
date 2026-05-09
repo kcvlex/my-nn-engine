@@ -74,7 +74,33 @@ impl SessionCUDA {
         opt: &Options,
         build_dir: &Path,
     ) -> Result<Self, SessionError> {
-        let mut hostcode_gen = HostCodeGenerator::new(&schedule);
+        let cuda_arch = Command::new("nvidia-smi")
+            .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+            .output()
+            .map(|o| {
+                let arch = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("75")
+                    .replace('.', "");
+                format!("sm_{}", arch)
+            })
+            .map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    SessionError::OtherError(
+                        "nvidia-smi not found in PATH. Install the NVIDIA driver and ensure nvidia-smi is on PATH."
+                            .to_string(),
+                    )
+                } else {
+                    SessionError::OtherError(format!("nvidia-smi invocation failed: {e}"))
+                }
+            })?;
+        let cuda_arch_num: u32 = cuda_arch
+            .strip_prefix("sm_")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(75);
+
+        let mut hostcode_gen = HostCodeGenerator::new(&schedule, cuda_arch_num);
         let hostcode = hostcode_gen
             .generate(opt)
             .map_err(CodeGenError::CudaBuildError)
@@ -99,28 +125,6 @@ impl SessionCUDA {
         info!("Generated");
 
         let shared_lib = build_dir.join("libmodel.so");
-
-        let cuda_arch = Command::new("nvidia-smi")
-            .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
-            .output()
-            .map(|o| {
-                let arch = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("75")
-                    .replace('.', "");
-                format!("sm_{}", arch)
-            })
-            .map_err(|e| {
-                if e.kind() == ErrorKind::NotFound {
-                    SessionError::OtherError(
-                        "nvidia-smi not found in PATH. Install the NVIDIA driver and ensure nvidia-smi is on PATH."
-                            .to_string(),
-                    )
-                } else {
-                    SessionError::OtherError(format!("nvidia-smi invocation failed: {e}"))
-                }
-            })?;
 
         info!("Compiling");
 

@@ -192,6 +192,7 @@ struct KernelStreamView {
 
 pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
+    cuda_arch: u32,
 
     stmts: Vec<Statement>,
     init_stmts: Vec<Statement>,
@@ -422,7 +423,7 @@ fn ceil_pow2(mut x: usize) -> usize {
 }
 
 impl<'sched> HostCodeGenerator<'sched> {
-    pub fn new(schedule: &'sched Schedule) -> Self {
+    pub fn new(schedule: &'sched Schedule, cuda_arch: u32) -> Self {
         let plan = schedule
             .execution_plan
             .as_ref()
@@ -465,6 +466,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
         HostCodeGenerator {
             schedule,
+            cuda_arch,
             stmts: Vec::new(),
             init_stmts: Vec::new(),
             destroy_stmts: Vec::new(),
@@ -1359,7 +1361,8 @@ impl<'sched> HostCodeGenerator<'sched> {
 
                     let dtype_ok = matches!(lhs_ty.elem_type, DataType::Float(FloatType::BF16)) &&
                         matches!(scale_ty.elem_type, DataType::Float(FloatType::BF16));
-                    let wmma_tile = if !dtype_ok || m < 16 {
+                    // BF16 WMMA fragments require sm_80+ (Ampere); fall back on older arches.
+                    let wmma_tile = if !dtype_ok || m < 16 || self.cuda_arch < 80 {
                         None
                     } else if 64 <= m && 64 <= n {
                         Some((64usize, 64usize))
