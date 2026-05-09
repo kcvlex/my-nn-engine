@@ -1,4 +1,5 @@
 use std::io::BufWriter;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -28,6 +29,17 @@ static CUDA_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn cuda_lock() -> MutexGuard<'static, ()> {
     CUDA_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn nvcc_invocation_error(e: std::io::Error) -> SessionError {
+    if e.kind() == ErrorKind::NotFound {
+        SessionError::OtherError(
+            "nvcc not found in PATH. Install the CUDA Toolkit and ensure nvcc is on PATH."
+                .to_string(),
+        )
+    } else {
+        SessionError::OtherError(format!("nvcc invocation failed: {e}"))
+    }
 }
 
 type InitType =
@@ -99,7 +111,16 @@ impl SessionCUDA {
                     .replace('.', "");
                 format!("sm_{}", arch)
             })
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+            .map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    SessionError::OtherError(
+                        "nvidia-smi not found in PATH. Install the NVIDIA driver and ensure nvidia-smi is on PATH."
+                            .to_string(),
+                    )
+                } else {
+                    SessionError::OtherError(format!("nvidia-smi invocation failed: {e}"))
+                }
+            })?;
 
         info!("Compiling");
 
@@ -124,7 +145,7 @@ impl SessionCUDA {
                         "--diag-suppress=177", // unused variable
                     ])
                     .status()
-                    .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+                    .map_err(nvcc_invocation_error)?;
                 Ok::<PathBuf, SessionError>(obj.to_path_buf())
             })
             .collect::<Result<Vec<_>, SessionError>>()?;
@@ -144,7 +165,7 @@ impl SessionCUDA {
             ])
             .args(objs.iter().map(|p| p.to_str().unwrap()))
             .status()
-            .map_err(|e| SessionError::OtherError(format!("{:?}", e)))?;
+            .map_err(nvcc_invocation_error)?;
 
         info!("Compiled");
 
