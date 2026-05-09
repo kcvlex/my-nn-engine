@@ -112,6 +112,22 @@ pub struct Kernel {
     pub name: String,
 }
 
+impl Kernel {
+    /// Maps each `inputs` slot to its index in the flattened argument list
+    /// (outputs followed by `Some` inputs). Returns `None` for `None` inputs.
+    pub fn input_ptr_map(&self) -> Vec<Option<usize>> {
+        let mut map = vec![None; self.inputs.len()];
+        let mut ptr_idx = self.outputs.len();
+        for (i, inp) in self.inputs.iter().enumerate() {
+            if inp.is_some() {
+                map[i] = Some(ptr_idx);
+                ptr_idx += 1;
+            }
+        }
+        map
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum KernelBody {
     Opaque(Opaque),

@@ -939,14 +939,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     gather,
                 ),
                 Operator::Gemm(ref gemm) => {
-                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
-                    let mut ptr_idx = 1;
-                    for (i, inp) in kernel.inputs.iter().enumerate() {
-                        if inp.is_some() {
-                            input_ptrs[i] = Some(ptr_idx);
-                            ptr_idx += 1;
-                        }
-                    }
+                    let input_ptrs = kernel.input_ptr_map();
                     let a = &ptrs[input_ptrs[args::GEMM_A].unwrap()];
                     let b = &ptrs[input_ptrs[args::GEMM_B].unwrap()];
                     let c = input_ptrs
@@ -1015,16 +1008,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     split,
                 ),
                 Operator::Conv(ref conv) => {
-                    // ptrs[0] = output, ptrs[1..] = flatten(inputs) with None skipped
-                    // Map kernel.inputs indices to ptrs indices
-                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
-                    let mut ptr_idx = 1; // skip output
-                    for (i, inp) in kernel.inputs.iter().enumerate() {
-                        if inp.is_some() {
-                            input_ptrs[i] = Some(ptr_idx);
-                            ptr_idx += 1;
-                        }
-                    }
+                    let input_ptrs = kernel.input_ptr_map();
                     let data = &ptrs[input_ptrs[args::CONV_DATA].unwrap()];
                     let weight = &ptrs[input_ptrs[args::CONV_WEIGHT].unwrap()];
                     let bias = input_ptrs
@@ -1051,14 +1035,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     translator.build_slice(&ptrs[0], &ptrs[1], &slices, entry)
                 }
                 Operator::Attention(ref attn) => {
-                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
-                    let mut ptr_idx = 1;
-                    for (i, inp) in kernel.inputs.iter().enumerate() {
-                        if inp.is_some() {
-                            input_ptrs[i] = Some(ptr_idx);
-                            ptr_idx += 1;
-                        }
-                    }
+                    let input_ptrs = kernel.input_ptr_map();
                     let q = &ptrs[input_ptrs[args::ATTENTION_Q].unwrap()];
                     let kk = &ptrs[input_ptrs[args::ATTENTION_K].unwrap()];
                     let vv = &ptrs[input_ptrs[args::ATTENTION_V].unwrap()];
@@ -1083,14 +1060,7 @@ impl<'ll> CodeGen<'ll, '_> {
                     )
                 }
                 Operator::BatchedGemm(ref gemm) => {
-                    let mut input_ptrs: Vec<Option<usize>> = vec![None; kernel.inputs.len()];
-                    let mut ptr_idx = 1;
-                    for (i, inp) in kernel.inputs.iter().enumerate() {
-                        if inp.is_some() {
-                            input_ptrs[i] = Some(ptr_idx);
-                            ptr_idx += 1;
-                        }
-                    }
+                    let input_ptrs = kernel.input_ptr_map();
                     let a = &ptrs[input_ptrs[0].unwrap()];
                     let b = &ptrs[input_ptrs[1].unwrap()];
                     let workspace = input_ptrs
