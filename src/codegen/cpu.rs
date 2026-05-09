@@ -58,6 +58,7 @@ pub struct CodeGenContext {
     blas_backend: blas::Backend,
     value2place: HashMap<ValueId, AllocPlace>,
     kernel_bindings: HashMap<KernelId, Vec<ValueBinding>>,
+    kernel_device: HashMap<KernelId, crate::schedule::ir::Device>,
 }
 
 pub struct CodeGen<'ll, 'gen> {
@@ -106,9 +107,11 @@ impl CodeGenContext {
 
         let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
         let mut kernel_bindings: HashMap<KernelId, Vec<ValueBinding>> = HashMap::new();
+        let mut kernel_device: HashMap<KernelId, crate::schedule::ir::Device> = HashMap::new();
         for step in &plan.steps {
             if let Step::Kernel(k) = step {
                 kernel_bindings.insert(k.kernel, k.bindings.clone());
+                kernel_device.insert(k.kernel, k.context.device);
                 for b in &k.bindings {
                     value2place.insert(b.value, b.place);
                 }
@@ -120,10 +123,14 @@ impl CodeGenContext {
             blas_backend,
             value2place,
             kernel_bindings,
+            kernel_device,
         })
     }
 
     fn need_to_generate(&self, kernel_id: KernelId) -> bool {
+        if self.kernel_device.get(&kernel_id) != Some(&crate::schedule::ir::Device::CPU) {
+            return false;
+        }
         let kernel = &self.schedule.kernels[kernel_id];
         if matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
             let chunk_in = self.value2place.get(&kernel.inputs[0].unwrap());
@@ -528,6 +535,9 @@ impl<'ll> CodeGen<'ll, '_> {
             if arena.size == 0 {
                 continue;
             }
+            if arena.tier != crate::schedule::ir::MemoryTier::HostArena {
+                continue;
+            }
             let base = builder.build_array_malloc(
                 i8_ty,
                 i64_ty.const_int(arena.size as u64, false),
@@ -536,9 +546,9 @@ impl<'ll> CodeGen<'ll, '_> {
             arena2ptr.insert(arena.id, base);
         }
         for chunk in &plan.chunks {
-            let base = *arena2ptr
-                .get(&chunk.arena)
-                .expect("chunk references unknown arena");
+            let Some(&base) = arena2ptr.get(&chunk.arena) else {
+                continue;
+            };
             let ptr = if chunk.offset == 0 {
                 base
             } else {
@@ -564,7 +574,9 @@ impl<'ll> CodeGen<'ll, '_> {
             .steps
             .iter()
             .filter_map(|s| match s {
-                Step::Kernel(k) => Some(k.kernel),
+                Step::Kernel(k) if k.context.device == crate::schedule::ir::Device::CPU => {
+                    Some(k.kernel)
+                }
                 _ => None,
             })
             .collect();
