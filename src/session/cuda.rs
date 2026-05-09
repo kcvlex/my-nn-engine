@@ -238,10 +238,8 @@ impl SessionCUDA {
     }
 }
 
+// SAFETY: FFI state is owned exclusively; transfer between threads is fine, but the raw pointer prevents shared access (no Sync).
 unsafe impl Send for SessionCUDA {}
-// TODO: Sync is unsound — concurrent run() calls would race on state.
-// Either protect with Mutex on the caller side, or remove Sync and use Mutex<Session> in my-nn-engine-ui.
-unsafe impl Sync for SessionCUDA {}
 
 impl Drop for SessionCUDA {
     fn drop(&mut self) {
