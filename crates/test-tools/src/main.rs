@@ -7,6 +7,10 @@ use clap::Parser;
 
 const IMAGE_NAME: &str = "my-nn-engine-test-tools";
 
+/// Path inside the container; must match the COPY destination in
+/// crates/test-tools/Dockerfile.
+const BINARY_SEARCH_PY: &str = "/usr/local/bin/binary_search.py";
+
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -136,7 +140,8 @@ fn run_extraction(config: Extract) -> Result<(), Box<dyn std::error::Error>> {
             IMAGE_NAME,
         ])
         .args(&container_args)
-        .status()?;
+        .status()
+        .map_err(podman_io_error)?;
 
     if !status.success() {
         return Err("Extraction failed".into());
@@ -171,7 +176,8 @@ fn container_output(
             script,
         ])
         .args(args)
-        .output()?;
+        .output()
+        .map_err(podman_io_error)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -198,11 +204,7 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             "--model".to_string(),
             config.model_path.to_string_lossy().to_string(),
         ];
-        let out = container_output(
-            &config.project_root,
-            "/usr/local/bin/binary_search.py",
-            &args,
-        )?;
+        let out = container_output(&config.project_root, BINARY_SEARCH_PY, &args)?;
         out.parse::<usize>()
             .map_err(|e| format!("Failed to parse node count '{}': {}", out, e))?
     };
@@ -251,26 +253,23 @@ fn run_binary_search(config: BinarySearch) -> Result<(), Box<dyn std::error::Err
             total_nodes - 1,
         );
 
-        let node_info = match container_output(
-            &config.project_root,
-            "/usr/local/bin/binary_search.py",
-            &extract_args,
-        ) {
-            Ok(info) => {
-                eprintln!("[step {}] mid={} node: {}", step, mid, info);
-                info
-            }
-            Err(e) => {
-                eprintln!("[step {}] mid={} extraction failed: {}", step, mid, e);
-                // Treat extraction failure as a test failure
-                first_fail = Some((mid, format!("node_{} (extraction failed)", mid)));
-                let Some(new_right) = mid.checked_sub(1) else {
-                    break;
-                };
-                right = new_right;
-                continue;
-            }
-        };
+        let node_info =
+            match container_output(&config.project_root, BINARY_SEARCH_PY, &extract_args) {
+                Ok(info) => {
+                    eprintln!("[step {}] mid={} node: {}", step, mid, info);
+                    info
+                }
+                Err(e) => {
+                    eprintln!("[step {}] mid={} extraction failed: {}", step, mid, e);
+                    // Treat extraction failure as a test failure
+                    first_fail = Some((mid, format!("node_{} (extraction failed)", mid)));
+                    let Some(new_right) = mid.checked_sub(1) else {
+                        break;
+                    };
+                    right = new_right;
+                    continue;
+                }
+            };
 
         eprintln!("[step {}] mid={} running test...", step, mid);
 
@@ -342,7 +341,8 @@ fn image_exists() -> Result<bool, Box<dyn std::error::Error>> {
         .args(["image", "inspect", IMAGE_NAME])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()?;
+        .status()
+        .map_err(podman_io_error)?;
 
     Ok(status.success())
 }
@@ -353,7 +353,8 @@ fn build_image(dockerfile_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
     let status = Command::new("podman")
         .args(["build", "-t", IMAGE_NAME])
         .arg(dockerfile_dir)
-        .status()?;
+        .status()
+        .map_err(podman_io_error)?;
 
     if !status.success() {
         return Err("Failed to build Podman image".into());
@@ -361,6 +362,14 @@ fn build_image(dockerfile_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
 
     info("Podman image built successfully");
     Ok(())
+}
+
+fn podman_io_error(e: std::io::Error) -> Box<dyn std::error::Error> {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        "podman not found in PATH. Install podman (https://podman.io) and re-run.".into()
+    } else {
+        format!("podman invocation failed: {e}").into()
+    }
 }
 
 fn info(msg: &str) {
