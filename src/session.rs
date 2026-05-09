@@ -508,6 +508,8 @@ impl Session {
                 inputs_ty,
                 outputs_ty,
                 initializer,
+                initializer_names,
+                config.initializer_buffers.clone(),
                 session_state_buffers,
                 schedule,
                 options,
