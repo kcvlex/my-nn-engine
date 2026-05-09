@@ -2,6 +2,13 @@
 resolver = "2"
 members = [".", "crates/bench", "crates/llm", "crates/test-tools", "crates/ui"]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "CC0-1.0"
+repository = "https://github.com/kcvlex/my-onnx-runtime"
+authors = ["kcvlex <krkr9893@gmail.com>"]
+
 [workspace.dependencies]
 itertools = "0.14.0"
 libloading = "0.9"
@@ -12,8 +19,11 @@ tempfile = "3.15.0"
 
 [package]
 name = "my-nn-engine"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [features]
 default = ["cuda", "local"]
