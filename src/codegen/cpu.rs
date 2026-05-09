@@ -725,7 +725,6 @@ impl<'ll> CodeGen<'ll, '_> {
 
     fn compile_kernel(&self, kernel_id: KernelId) -> Result<(), BuilderError> {
         let kernel = &self.gen_ctx.schedule.kernels[kernel_id];
-        // dbg!(&node);
         let args = kernel
             .outputs
             .iter()

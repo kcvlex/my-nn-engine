@@ -95,13 +95,7 @@ impl TensorData {
                             };
                             (x, y, res)
                         })
-                        .enumerate()
-                        .inspect(|(i, (x, y, res))| {
-                            if !res {
-                                println!("{}: {} != {}", i, x, y);
-                            }
-                        })
-                        .all(|(_, (_, _, res))| res)
+                        .all(|(_, _, res)| res)
             }
             _ => false,
         }

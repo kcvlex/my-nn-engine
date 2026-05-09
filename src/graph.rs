@@ -152,7 +152,6 @@ impl Graph {
                     return Err(TypeError::InconsistentInput);
                 }
 
-                // dbg!(&self.values[value_id]);
                 let ty = ty.clone();
 
                 // E.g., Outputs of yolov4
