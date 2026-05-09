@@ -172,7 +172,8 @@ impl KernelsBuilder {
         &self,
         graph: &mut Graph,
         graph_op: &mut impl GraphOp,
-        target: crate::options::Target,
+        _target: crate::options::Target,
+        include_cpu_workspaces: bool,
     ) -> Kernels {
         let mut uf = UnionFind::new(self.elementwise_nodes.ordered.len());
         for node_id in self.elementwise_nodes.ordered.iter().rev() {
@@ -232,7 +233,7 @@ impl KernelsBuilder {
                         };
                         (body, node.name.clone())
                     };
-                    if matches!(target, crate::options::Target::CPU) {
+                    if include_cpu_workspaces {
                         let n = &graph.nodes[node_id];
                         let bf16_workspace = match &n.op {
                             Operator::Gemm(_) => {
@@ -400,6 +401,7 @@ pub fn build_kernels(
     graph: &mut Graph,
     graph_op: &mut impl GraphOp,
     target: crate::options::Target,
+    include_cpu_workspaces: bool,
 ) -> Kernels {
-    KernelsBuilder::new(graph).run(graph, graph_op, target)
+    KernelsBuilder::new(graph).run(graph, graph_op, target, include_cpu_workspaces)
 }
