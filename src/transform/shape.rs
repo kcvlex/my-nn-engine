@@ -28,7 +28,6 @@ use crate::transform::shape::opset_adaptation::OpsetAdaptation;
 use crate::transform::shape::verify::ShapeVerification;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
-use crate::transform::Target;
 
 fn reshape(
     a: &ResolvedTensorType,
@@ -92,12 +91,10 @@ fn transpose(
     Ok(ty)
 }
 
-// TODO: Remove _target.
 pub fn infer_node_output(
     graph: &mut Graph,
     node_id: NodeId,
     mode: UnifyMode,
-    _target: Target,
 ) -> Result<Vec<ResolvedTensorType>, TypeError> {
     let node = graph.nodes[node_id].clone();
 

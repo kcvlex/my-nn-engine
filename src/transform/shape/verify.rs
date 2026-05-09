@@ -62,7 +62,6 @@ impl ShapeVerification {
                         } else {
                             UnifyMode::IgnoreStrides
                         },
-                        self.target,
                     )
                     .map_err(VerifyShapeError::TypeError)?;
                     for (value_id, inferred) in zip_eq(node_outputs.iter(), resolved.into_iter()) {

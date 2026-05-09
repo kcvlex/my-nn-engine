@@ -26,22 +26,20 @@ impl<T: GraphOp> Pass<T> for AssignStrides {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        let mut impl_ = AssignStridesImpl::new(self.target);
+        let mut impl_ = AssignStridesImpl::new();
         impl_.run(graph, modifier).unwrap();
     }
 }
 
 struct AssignStridesImpl {
-    target: Target,
     computed_values: HashSet<ValueId>,
     visited: HashSet<NodeId>,
     queue: VecDeque<NodeId>,
 }
 
 impl AssignStridesImpl {
-    fn new(target: Target) -> Self {
+    fn new() -> Self {
         Self {
-            target,
             computed_values: HashSet::new(),
             visited: HashSet::new(),
             queue: VecDeque::new(),
@@ -213,7 +211,7 @@ impl AssignStridesImpl {
             _ => node_id,
         };
 
-        let resolved = infer_node_output(graph, new_node_id, UnifyMode::CheckStrides, self.target)
+        let resolved = infer_node_output(graph, new_node_id, UnifyMode::CheckStrides)
             .expect("Invalid strides");
         Some((new_node_id, resolved))
     }
