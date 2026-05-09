@@ -372,11 +372,10 @@ impl GraphLoader {
     }
 }
 
-fn make_external_ref(
+fn parse_external_data(
     tensor: &TensorProto,
     base_dir: Option<&Path>,
-) -> LoadResult<ExternalTensorRef> {
-    let elem_type = DataType::try_from(tensor.data_type)?;
+) -> LoadResult<(std::path::PathBuf, u64, Option<u64>)> {
     let ed: HashMap<&str, &str> = tensor
         .external_data
         .iter()
@@ -392,10 +391,19 @@ fn make_external_ref(
     let length = ed.get("length").and_then(|s| s.parse::<u64>().ok());
     let base = base_dir
         .ok_or_else(|| ModelLoadError::Unexpected("external_data requires base_dir".to_string()))?;
+    Ok((base.join(location), offset, length))
+}
+
+fn make_external_ref(
+    tensor: &TensorProto,
+    base_dir: Option<&Path>,
+) -> LoadResult<ExternalTensorRef> {
+    let elem_type = DataType::try_from(tensor.data_type)?;
+    let (path, offset, length) = parse_external_data(tensor, base_dir)?;
     let dims =
         ResolvedTensorDims::new(&tensor.dims.iter().map(|&x| x as usize).collect::<Vec<_>>());
     Ok(ExternalTensorRef {
-        path: base.join(location),
+        path,
         offset,
         length,
         elem_type,
@@ -410,24 +418,8 @@ fn load_tensor(tensor: TensorProto, base_dir: Option<&Path>) -> LoadResult<Tenso
 
     let elem_type = DataType::try_from(tensor.data_type)?;
     let data = if !tensor.external_data.is_empty() {
-        let ed: HashMap<&str, &str> = tensor
-            .external_data
-            .iter()
-            .map(|kv| (kv.key.as_str(), kv.value.as_str()))
-            .collect();
-        let location = ed.get("location").ok_or_else(|| {
-            ModelLoadError::Unexpected("external_data missing location".to_string())
-        })?;
-        let offset = ed
-            .get("offset")
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        let length = ed.get("length").and_then(|s| s.parse::<u64>().ok());
-        let base = base_dir.ok_or_else(|| {
-            ModelLoadError::Unexpected("external_data requires base_dir".to_string())
-        })?;
-        let mut file =
-            std::fs::File::open(base.join(location)).map_err(ModelLoadError::FileRead)?;
+        let (path, offset, length) = parse_external_data(&tensor, base_dir)?;
+        let mut file = std::fs::File::open(&path).map_err(ModelLoadError::FileRead)?;
         file.seek(SeekFrom::Start(offset))
             .map_err(ModelLoadError::FileRead)?;
         let raw = if let Some(len) = length {
