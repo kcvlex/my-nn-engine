@@ -23,6 +23,12 @@ pub enum HfWeightsError {
     NotFound(String),
     #[error("malformed safetensors index: {0}")]
     MalformedIndex(&'static str),
+    #[error(
+        "no safetensors found in {}; only HuggingFace .safetensors layouts are supported. \
+         Convert via `transformers.PreTrainedModel.save_pretrained(safe_serialization=True)`.",
+        .0.display()
+    )]
+    MissingSafetensors(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -61,7 +67,12 @@ impl HfWeights {
         if index.exists() {
             Self::from_index(index)
         } else {
-            Self::from_safetensors(dir.join("model.safetensors"))
+            let single = dir.join("model.safetensors");
+            if single.exists() {
+                Self::from_safetensors(single)
+            } else {
+                Err(HfWeightsError::MissingSafetensors(dir.to_path_buf()))
+            }
         }
     }
 
