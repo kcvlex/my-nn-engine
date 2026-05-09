@@ -1,6 +1,5 @@
 # Rust / Cargo
 /target
-Cargo.lock
 
 # ONNX models and generated files
 *.png
@@ -13,7 +12,6 @@ models/hf/*
 models/hf/tiny-llama-random/.cache/
 models/hf/tiny-llama-random/model.onnx
 models/hf/tiny-llama-random/model.onnx_data
-download
 
 # Python
 venv/
@@ -26,8 +24,7 @@ __pycache__/
 **/src/generated/
 
 # Build outputs
-crates/my-onnx-ui/dist/
-crates/my-onnx-ui/frontend/dist/
+crates/ui/dist/
 
 # Node.js / Frontend
 node_modules/
@@ -36,10 +33,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-store/
-
-# Runtime directories
-cache/
-uploads/
 
 # IDE / Editor
 .vscode/
@@ -55,7 +48,8 @@ Thumbs.db
 .env.local
 .env.*.local
 
-design.md
+# Local notes
+local/
 
 # Claude Code
 .claude/
