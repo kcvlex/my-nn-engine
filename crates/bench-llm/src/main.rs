@@ -277,7 +277,19 @@ fn run_with_monitors(mut cmd: Command, log_path: &Path) -> std::io::Result<()> {
 
     cmd.stdout(Stdio::from(log_file));
     cmd.stderr(Stdio::from(log_dup));
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            let prog = cmd.get_program().to_string_lossy().into_owned();
+            let hint = if prog == "podman" {
+                " (install podman from https://podman.io and re-run)"
+            } else {
+                ""
+            };
+            std::io::Error::new(e.kind(), format!("`{prog}` not found in PATH{hint}"))
+        } else {
+            e
+        }
+    })?;
     let pid = child.id();
     let rss_handle = poll_rss(pid, stop.clone());
 
