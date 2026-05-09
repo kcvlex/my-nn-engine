@@ -5,6 +5,8 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::llama::build_llama_prefill;
+use my_nn_engine_llm::llama::build_llama_with_options;
+use my_nn_engine_llm::llama::LlamaOptions;
 use my_nn_engine_llm::quantize::cast_safetensors_bf16_dir;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
@@ -140,6 +142,51 @@ fn cpu_bf16() {
 #[test]
 fn cuda() {
     run(Target::CUDA);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_streaming_runs_past_window() {
+    let dir = model_dir();
+    let config = HfConfig::from_path(dir.join("config.json")).unwrap();
+    let hf = HfWeights::from_dir(&dir).unwrap();
+    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+
+    let max_seq_len = 32;
+    let sink = 4;
+    let window = 16;
+    let max_active = sink + window;
+
+    let llama_opts = LlamaOptions {
+        quant_kv_cache: false,
+        streaming_kv: true,
+    };
+    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+    assert!(r.streaming.is_some());
+
+    let opts = Options::builder().target(Target::CUDA).build();
+    let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
+    let mut llm = LlmSession::for_llama_streaming(
+        r.graph,
+        r.kv_cache_names,
+        tokenizer,
+        &opts,
+        max_seq_len,
+        config.eos_token_id,
+        sink,
+        window,
+    )
+    .unwrap();
+
+    let want = max_active + 10;
+    let new_ids = llm.generate_ids(PROMPT, want).unwrap();
+    assert_eq!(new_ids.len(), want);
+    assert!(
+        max_active < llm.past_len(),
+        "past_len {} must exceed sink+window {} to exercise the ring",
+        llm.past_len(),
+        max_active,
+    );
 }
 
 #[cfg(feature = "cuda")]
