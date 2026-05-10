@@ -40,6 +40,30 @@ macro_rules! cast {
     };
 }
 
+/// Streaming KV layout (sink + ring) parameters for attention/KV-update
+/// kernels. `None` selects the legacy contiguous layout (the kernel sees
+/// `ring_sink == ring_window == ring_start == 0`, which the device-side
+/// `ring_phys_index` collapses to identity, so emission stays bit-identical).
+#[derive(Clone)]
+pub struct RingArgs {
+    pub sink: Expr,
+    pub window: Expr,
+    pub start: Expr,
+}
+
+impl RingArgs {
+    fn args(opt: &Option<RingArgs>) -> [String; 3] {
+        match opt {
+            Some(r) => [
+                r.sink.to_string(),
+                r.window.to_string(),
+                r.start.to_string(),
+            ],
+            None => ["0".to_string(), "0".to_string(), "0".to_string()],
+        }
+    }
+}
+
 pub struct AttentionKernel {
     pub data_ty: DataType,
     pub br: usize,
@@ -64,6 +88,8 @@ pub struct AttentionKernel {
     /// When `Some`, K/V are stored as INT8 with per-(head, token) scale of dtype
     /// `data_ty`, and the `attention_int8` kernel is emitted instead.
     pub kv_quant: Option<KvQuantArgs>,
+
+    pub ring: Option<RingArgs>,
 
     pub attn: Attention,
 }
@@ -103,6 +129,7 @@ impl AttentionKernel {
             "attention<{}, {}, {}, {}, {}, {}>",
             self.data_ty, kv_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
         );
+        let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
@@ -121,6 +148,9 @@ impl AttentionKernel {
             self.q_pos_offset.to_string(),
             self.num_q_heads.to_string(),
             self.num_kv_heads.to_string(),
+            ring_sink,
+            ring_window,
+            ring_start,
         ];
         (id, args)
     }
@@ -141,6 +171,7 @@ pub struct AttentionDecodeKernel {
     pub num_kv_heads: usize,
 
     pub kv_quant: Option<KvQuantArgs>,
+    pub ring: Option<RingArgs>,
     pub attn: Attention,
 }
 
@@ -169,6 +200,7 @@ impl AttentionDecodeKernel {
             "attention_decode<{}, {}, {}, {}>",
             self.data_ty, kv_ty, self.head_dim, self.block_size,
         );
+        let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
@@ -181,6 +213,9 @@ impl AttentionDecodeKernel {
             self.active_seq_kv.to_string(),
             self.num_q_heads.to_string(),
             self.num_kv_heads.to_string(),
+            ring_sink,
+            ring_window,
+            ring_start,
         ];
         (id, args)
     }
@@ -200,17 +235,22 @@ pub struct KVCacheUpdateKernel {
     pub cache: Expr,
     pub new_kv: Expr,
     pub offset: Expr,
+    pub ring: Option<RingArgs>,
 }
 
 impl KVCacheUpdateKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
         let id = format!("kvcache_update<{}, {}>", self.data_ty, self.head_dim);
+        let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
         let args = vec![
             cast!(self.data_ty, self.cache),
             cast!(self.data_ty, self.new_kv),
             self.cache_seq_len.to_string(),
             self.new_seq_len.to_string(),
             self.offset.to_string(),
+            ring_sink,
+            ring_window,
+            ring_start,
         ];
         (id, args)
     }
@@ -228,6 +268,7 @@ pub struct QuantizingKVCacheUpdateKernel {
     pub scale: Expr,
     pub new_kv: Expr,
     pub offset: Expr,
+    pub ring: Option<RingArgs>,
 }
 
 impl QuantizingKVCacheUpdateKernel {
@@ -236,6 +277,7 @@ impl QuantizingKVCacheUpdateKernel {
             "quantizing_kvcache_update<{}, {}, {}, {}>",
             self.new_ty, self.scale_ty, self.head_dim, self.block_size
         );
+        let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
         let args = vec![
             format!("(signed char *)({})", self.cache),
             cast!(self.scale_ty, self.scale),
@@ -243,6 +285,9 @@ impl QuantizingKVCacheUpdateKernel {
             self.max_seq_len.to_string(),
             self.new_seq_len.to_string(),
             self.offset.to_string(),
+            ring_sink,
+            ring_window,
+            ring_start,
         ];
         (id, args)
     }
