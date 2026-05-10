@@ -28,7 +28,7 @@ type LifecycleStatus =
  * tab), then reused for subsequent messages. Calling `reset()` destroys the
  * server-side session and clears history. Switching `modelDir` auto-resets.
  */
-export function useChatSession(modelDir: Ref<string>, backend: Backend) {
+export function useChatSession(modelDir: Ref<string>, backend: Ref<Backend>) {
   const status = shallowRef<LifecycleStatus>({ state: 'idle' });
   const sessionId = shallowRef<string | null>(null);
   const messages = shallowRef<ChatMessage[]>([]);
@@ -44,7 +44,7 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
     try {
       const resp = await grpcClient.createChatSession({
         modelDir: modelDir.value,
-        backend,
+        backend: backend.value,
       });
       sessionId.value = resp.sessionId;
       status.value = { state: 'ready', buildMs: resp.buildTimeMs };
@@ -125,8 +125,8 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
     }
   }
 
-  // Switching models invalidates the cached session.
-  watch(modelDir, () => {
+  // Switching model or backend invalidates the cached session.
+  watch([modelDir, backend], () => {
     void reset();
   });
 
