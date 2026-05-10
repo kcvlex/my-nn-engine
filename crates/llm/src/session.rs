@@ -85,6 +85,11 @@ enum DecodeKind {
     /// `[input_ids: i64[1,1], position_id: i64[1], past_len: i64[], active_seq_kv: i64[]]`
     /// + SessionState K/V caches - produced by [`crate::build_llama`].
     Llama,
+    /// Llama plus the streaming-KV inputs `[ring_sink, ring_window, ring_start, kv_position]`
+    /// appended at the end. Produced by [`crate::build_llama_with_options`] when
+    /// `LlamaOptions::streaming_kv` is set. `past_len` here is the unbounded
+    /// stream position; the kernels remap it through the sink+ring layout.
+    LlamaStreaming { sink: usize, window: usize },
 }
 
 pub struct LlmSession {
@@ -165,6 +170,45 @@ impl LlmSession {
             },
             past_len: 0,
             kind: DecodeKind::Llama,
+        })
+    }
+
+    /// StreamingLLM-style decode session. The graph must have been built with
+    /// `LlamaOptions { streaming_kv: true }` (and `quant_kv_cache: false`).
+    /// `sink + window <= max_seq_len`. No prefill graph: the prompt is fed
+    /// token-by-token, so this is intended for tests / long-context smoke runs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_llama_streaming(
+        graph: Graph,
+        kv_cache_names: Vec<KVCache>,
+        tokenizer: Tokenizer,
+        opts: &Options,
+        max_seq_len: usize,
+        eos_token_id: u32,
+        sink: usize,
+        window: usize,
+    ) -> Result<Self, LlmError> {
+        assert!(sink + window <= max_seq_len);
+        assert!(0 < window);
+        let session_config = SessionConfig {
+            session_states: kv_cache_names
+                .into_iter()
+                .flat_map(|kv| kv_cache_specs(opts.target, kv))
+                .collect(),
+            ..SessionConfig::default()
+        };
+        let session = Session::from_graph(graph, opts, &session_config)?;
+        Ok(Self {
+            session,
+            prefill: None,
+            tokenizer,
+            config: LlmConfig {
+                max_seq_len,
+                eos_token_id,
+                session_states: vec![],
+            },
+            past_len: 0,
+            kind: DecodeKind::LlamaStreaming { sink, window },
         })
     }
 
@@ -274,13 +318,14 @@ impl LlmSession {
 
         let prefill_runs = self.prefill.is_some();
 
+        let streaming = matches!(self.kind, DecodeKind::LlamaStreaming { .. });
         let needed = if prefill_runs {
             let prefill_len = self.prefill.as_ref().unwrap().prefill_len;
             self.past_len + prompt_ids.len().div_ceil(prefill_len) * prefill_len
         } else {
             self.past_len + prompt_ids.len()
         };
-        if self.config.max_seq_len < needed {
+        if !streaming && self.config.max_seq_len < needed {
             return Err(LlmError::PromptTooLong {
                 needed,
                 max_seq_len: self.config.max_seq_len,
@@ -289,7 +334,7 @@ impl LlmSession {
         }
 
         for i in 0..opts.max_new_tokens {
-            if self.config.max_seq_len < self.past_len + 1 {
+            if !streaming && self.config.max_seq_len < self.past_len + 1 {
                 break;
             }
 
@@ -434,6 +479,9 @@ impl LlmSession {
                 make_i64(&[], vec![self.past_len as i64]),
                 make_i64(&[], vec![self.past_len as i64 + 1]),
             ],
+            DecodeKind::LlamaStreaming { sink, window } => {
+                self.streaming_decode_inputs(token, sink, window)
+            }
         };
         let outputs = self.session.run(&inputs)?;
         let logits = outputs
@@ -449,6 +497,71 @@ impl LlmSession {
         self.past_len += 1;
         Ok(next)
     }
+
+    fn streaming_decode_inputs(&self, token: u32, sink: usize, window: usize) -> Vec<Tensor> {
+        let max_active = sink + window;
+        let stream_pos = self.past_len;
+        // active K/V count after writing this step's token
+        let active_after = (stream_pos + 1).min(max_active) as i64;
+        // Q rotates against the recency rank of the token we are now writing,
+        // clamped to the last position the table covers.
+        let q_position = stream_pos.min(max_active - 1) as i64;
+        // ring_start moves only after the ring becomes saturated.
+        let ring_start = if stream_pos < max_active {
+            0
+        } else {
+            ((stream_pos - sink) % window) as i64
+        };
+        let kv_position = streaming_kv_position(sink, window, stream_pos, self.config.max_seq_len);
+        vec![
+            make_i64(&[1, 1], vec![token as i64]),
+            make_i64(&[1], vec![q_position]),
+            make_i64(&[], vec![stream_pos as i64]),
+            make_i64(&[], vec![active_after]),
+            make_i64(&[], vec![sink as i64]),
+            make_i64(&[], vec![window as i64]),
+            make_i64(&[], vec![ring_start]),
+            make_i64(&[self.config.max_seq_len], kv_position),
+        ]
+    }
+}
+
+/// Build the per-slot recency-rank table used by the K-cache RoPE recompute.
+/// Slots inside the sink keep their absolute position. Ring slots are walked
+/// in age order starting from `ring_start`; entries that haven't been written
+/// yet (when the ring isn't yet saturated) get their physical slot position
+/// as a placeholder — the kernel doesn't read those K rows in attention.
+fn streaming_kv_position(
+    sink: usize,
+    window: usize,
+    stream_pos: usize,
+    max_seq_len: usize,
+) -> Vec<i64> {
+    let max_active = sink + window;
+    let ring_start = if stream_pos < max_active {
+        0
+    } else {
+        (stream_pos - sink) % window
+    };
+    let active_in_ring = (stream_pos.saturating_sub(sink)).min(window);
+
+    let mut out = vec![0i64; max_seq_len];
+    for slot in 0..max_seq_len {
+        out[slot] = if slot < sink {
+            slot as i64
+        } else if slot < max_active {
+            let rel_slot = slot - sink;
+            let rel_age = (rel_slot + window - ring_start) % window;
+            if rel_age < active_in_ring {
+                (sink + rel_age) as i64
+            } else {
+                slot as i64
+            }
+        } else {
+            slot as i64
+        };
+    }
+    out
 }
 
 fn alloc_kv_buffer(target: Target, bytes: usize) -> DeviceBuffer {
