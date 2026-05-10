@@ -5871,13 +5871,13 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
     ) -> Result<BasicBlock<'ctx>, BuilderError> {
         assert!(x.ty.is_contiguous() && dst.ty.is_contiguous());
         assert_eq!(x.ty.elem_type, dst.ty.elem_type);
+        assert!(head_dim.is_multiple_of(2));
         let ndim = x.ty.dims.ndim();
         assert!(2 <= ndim);
         assert_eq!(x.ty.dims[ndim - 1], head_dim);
         let seq_len = x.ty.dims[ndim - 2];
         let outer = x.ty.dims.size() / (seq_len * head_dim);
         let half = head_dim / 2;
-        assert_eq!(2 * half, head_dim);
 
         match x.ty.elem_type {
             DataType::Float(_) => {}
@@ -5965,12 +5965,9 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let xh_ch = self.builder.build_float_mul(x_hi, cos_hi, "rope.xh.ch")?;
         let xl_sh = self.builder.build_float_mul(x_lo, sin_hi, "rope.xl.sh")?;
         let out_hi = self.builder.build_float_add(xh_ch, xl_sh, "rope.out.hi")?;
-        self.tag_fast(xl_cl);
-        self.tag_fast(xh_sl);
-        self.tag_fast(out_lo);
-        self.tag_fast(xh_ch);
-        self.tag_fast(xl_sh);
-        self.tag_fast(out_hi);
+        for v in [&xl_cl, &xh_sl, &out_lo, &xh_ch, &xl_sh, &out_hi] {
+            self.tag_fast(*v);
+        }
 
         self.build_store(
             &dst.clone().set_offset(off_lo),
