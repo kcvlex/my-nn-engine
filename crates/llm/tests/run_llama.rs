@@ -87,9 +87,12 @@ fn run_llama2_int8(target: Target) -> String {
 
     let max_seq_len = 2048;
     let prefill_len = 16;
+    // CPU codegen does not yet implement the rope+dequant fuse in attention,
+    // so streaming-KV + INT8 only works on CUDA.
+    let streaming_kv = matches!(target, Target::CUDA);
     let llama_opts = LlamaOptions {
         quant_kv_cache: true,
-        streaming_kv: true,
+        streaming_kv,
     };
     let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
     let p =
@@ -97,16 +100,30 @@ fn run_llama2_int8(target: Target) -> String {
 
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
-    let mut llm = streaming_session(
-        r.graph,
-        p.graph,
-        prefill_len,
-        r.kv_cache_names,
-        tokenizer,
-        &opts,
-        max_seq_len,
-        config.eos_token_id,
-    );
+    let mut llm = if streaming_kv {
+        streaming_session(
+            r.graph,
+            p.graph,
+            prefill_len,
+            r.kv_cache_names,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+        )
+    } else {
+        LlmSession::for_llama_with_prefill(
+            r.graph,
+            p.graph,
+            r.kv_cache_names,
+            prefill_len,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+        )
+        .unwrap()
+    };
 
     llm.generate(PROMPT, N_GENERATE).unwrap()
 }
