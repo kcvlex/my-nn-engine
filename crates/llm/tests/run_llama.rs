@@ -61,6 +61,7 @@ fn run_llama2_int8(target: Target) -> String {
     let prefill_len = 16;
     let llama_opts = LlamaOptions {
         quant_kv_cache: true,
+        streaming_kv: false,
     };
     let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
     let p =
