@@ -144,8 +144,18 @@ function onKeydown(event: KeyboardEvent) {
         <span class="role"
           >{{ msg.role === 'user' ? '>' : '<' }} {{ msg.role }}</span
         >
-        <pre class="content">{{ msg.content }}</pre>
-        <div v-if="msg.role === 'assistant'" class="msg-meta">
+        <pre class="content">{{ msg.content }}<span
+          v-if="
+            generating &&
+            msg.role === 'assistant' &&
+            i === messages.length - 1
+          "
+          class="generating-cursor"
+        >&#x258c;</span></pre>
+        <div
+          v-if="msg.role === 'assistant' && msg.tokens !== undefined"
+          class="msg-meta"
+        >
           {{ msg.tokens }} tokens
           <span v-if="msg.generationMs">
             :: {{ msg.generationMs.toFixed(0) }} ms</span
@@ -154,11 +164,6 @@ function onKeydown(event: KeyboardEvent) {
             :: truncated (max_tokens)</span
           >
         </div>
-      </div>
-
-      <div v-if="generating" class="msg assistant generating">
-        <span class="role">&lt; assistant</span>
-        <span class="generating-cursor">▌</span>
       </div>
 
       <div v-if="lastError" class="error-banner">{{ lastError }}</div>
