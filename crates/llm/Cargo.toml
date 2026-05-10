@@ -15,7 +15,7 @@ local = ["my-nn-engine/local"]
 my-nn-engine = { path = "../..", default-features = false }
 log = { workspace = true }
 thiserror = "2"
-tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 serde = { workspace = true }
 serde_json = "1.0.149"
 safetensors = "0.7.0"

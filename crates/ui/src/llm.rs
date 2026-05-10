@@ -342,20 +342,22 @@ impl ChatRegistry {
             .max()
             .unwrap_or(0);
 
-        let mut accumulated_ids: Vec<u32> = Vec::new();
+        let mut accumulated_text = String::new();
         let mut emitted_len: usize = 0;
         let new_ids = {
-            let tokenizer = &session.tokenizer;
+            let mut decode_stream = session.tokenizer.decode_stream(true);
             session
                 .llm
                 .generate_ids_with_callback(&delta, &opts, &mut |tok| {
-                    accumulated_ids.push(tok);
-                    let Ok(full) = tokenizer.decode(&accumulated_ids, true) else {
-                        return;
-                    };
-                    let safe_end = floor_char_boundary(&full, full.len().saturating_sub(lookahead));
+                    if let Ok(Some(new_text)) = decode_stream.step(tok) {
+                        accumulated_text.push_str(&new_text);
+                    }
+                    let safe_end = floor_char_boundary(
+                        &accumulated_text,
+                        accumulated_text.len().saturating_sub(lookahead),
+                    );
                     if emitted_len < safe_end {
-                        let chunk = full[emitted_len..safe_end].to_string();
+                        let chunk = accumulated_text[emitted_len..safe_end].to_string();
                         emitted_len = safe_end;
                         on_event(ChatStreamEvent::Chunk { delta: chunk });
                     }
@@ -372,9 +374,12 @@ impl ChatRegistry {
             .map_err(|e| ChatError::LoadTokenizer(format!("decode: {e}")))?;
 
         // Flush whatever's left after the lookahead window (and after any
-        // truncate_at_stop rollback inside the LLM session).
-        if emitted_len < assistant_text.len() {
-            let tail = assistant_text[emitted_len..].to_string();
+        // truncate_at_stop rollback inside the LLM session). Snap emitted_len
+        // to a boundary in the post-truncation text since post-processing
+        // can shift bytes between the in-loop `full` and `assistant_text`.
+        let start = floor_char_boundary(&assistant_text, emitted_len.min(assistant_text.len()));
+        if start < assistant_text.len() {
+            let tail = assistant_text[start..].to_string();
             on_event(ChatStreamEvent::Chunk { delta: tail });
         }
 
