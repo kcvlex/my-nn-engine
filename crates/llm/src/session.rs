@@ -252,6 +252,20 @@ impl LlmSession {
         prompt: &str,
         opts: &GenerateOptions,
     ) -> Result<Vec<u32>, LlmError> {
+        self.generate_ids_with_callback(prompt, opts, &mut |_| {})
+    }
+
+    /// Same as [`Self::generate_ids_with`], but invokes `on_token` for every
+    /// newly produced token id (including any EOS / stop-triggering token).
+    /// The returned `Vec<u32>` is the post-truncation id list, so callers
+    /// doing incremental detokenization should re-decode it after the call
+    /// returns to flush text held back during streaming.
+    pub fn generate_ids_with_callback(
+        &mut self,
+        prompt: &str,
+        opts: &GenerateOptions,
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<Vec<u32>, LlmError> {
         let encoded = self
             .tokenizer
             .encode(prompt, false)
@@ -299,6 +313,7 @@ impl LlmSession {
                 self.decode_step(*new_ids.last().unwrap())?
             };
             new_ids.push(token);
+            on_token(token);
             if token == self.config.eos_token_id || self.hit_stop(&new_ids, opts)? {
                 self.truncate_at_stop(&mut new_ids, opts)?;
                 break;
