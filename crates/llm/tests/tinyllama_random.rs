@@ -3,8 +3,6 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::build_llama;
-use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::llama::build_llama_prefill_with_options;
 use my_nn_engine_llm::llama::build_llama_with_options;
 use my_nn_engine_llm::llama::LlamaOptions;
@@ -25,22 +23,35 @@ fn model_dir() -> PathBuf {
 const PROMPT: &str = "Hello";
 const EXPECTED_NEW_IDS: &[u32] = &[3038, 25190, 6074, 6566, 21376, 8002, 12090, 28535];
 
+// Streaming defaults sized so the smoke prompts (PROMPT + ~8 new tokens) stay
+// inside `sink + window` and don't trigger the ring rotation, so streaming-on
+// runs should produce the same IDs as the non-streaming reference.
+const STREAM_SINK: usize = 4;
+const STREAM_WINDOW: usize = 28;
+
 fn run_with_dir(dir: &Path, target: Target) {
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(dir).unwrap();
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
-    let max_seq_len = 32;
-    let r = build_llama(&config, &weights, max_seq_len);
+    let max_seq_len = STREAM_SINK + STREAM_WINDOW;
+    let llama_opts = LlamaOptions {
+        quant_kv_cache: false,
+        streaming_kv: true,
+    };
+    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
-    let mut llm = LlmSession::for_llama(
+    let mut llm = LlmSession::for_llama_streaming(
         r.graph,
+        None,
         r.kv_cache_names,
         tokenizer,
         &opts,
         max_seq_len,
         config.eos_token_id,
+        STREAM_SINK,
+        STREAM_WINDOW,
     )
     .unwrap();
 
@@ -84,36 +95,34 @@ fn cpu_multi_turn_prefill_matches_decode_only() {
         let hf = HfWeights::from_dir(dir).unwrap();
         let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
-        let max_seq_len = 32;
-        let r = build_llama(&config, &weights, max_seq_len);
+        let max_seq_len = STREAM_SINK + STREAM_WINDOW;
+        let llama_opts = LlamaOptions {
+            quant_kv_cache: false,
+            streaming_kv: true,
+        };
+        let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
         let opts = Options::builder().target(Target::CPU).build();
         let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
 
-        match prefill_len {
-            Some(prefill_len) => {
-                let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
-                LlmSession::for_llama_with_prefill(
-                    r.graph,
-                    p.graph,
-                    r.kv_cache_names,
-                    prefill_len,
-                    tokenizer,
-                    &opts,
-                    max_seq_len,
-                    config.eos_token_id,
-                )
-                .unwrap()
-            }
-            None => LlmSession::for_llama(
-                r.graph,
-                r.kv_cache_names,
-                tokenizer,
-                &opts,
-                max_seq_len,
-                config.eos_token_id,
+        let prefill = prefill_len.map(|len| {
+            (
+                build_llama_prefill_with_options(&config, &weights, max_seq_len, len, &llama_opts)
+                    .graph,
+                len,
             )
-            .unwrap(),
-        }
+        });
+        LlmSession::for_llama_streaming(
+            r.graph,
+            prefill,
+            r.kv_cache_names,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+            STREAM_SINK,
+            STREAM_WINDOW,
+        )
+        .unwrap()
     }
 
     let dir = model_dir();
