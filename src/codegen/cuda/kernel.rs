@@ -29,6 +29,7 @@ pub enum CUDAKernel {
     LayerNormKernel(LayerNormKernel),
     ReduceMatrixKernel(ReduceMatrixKernel),
     RMSNormKernel(RMSNormKernel),
+    RopeKernel(RopeKernel),
     SliceKernel(SliceKernel),
     SoftmaxKernel(SoftmaxKernel),
 }
@@ -319,6 +320,33 @@ impl RMSNormKernel {
     }
 }
 
+pub struct RopeKernel {
+    pub data_ty: DataType,
+    pub head_dim: usize,
+
+    pub out: Expr,
+    pub x: Expr,
+    pub cos_table: Expr,
+    pub sin_table: Expr,
+    pub position: Expr,
+    pub seq_len: usize,
+}
+
+impl RopeKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!("rope<{}, {}>", self.data_ty, self.head_dim);
+        let args = vec![
+            cast!(self.data_ty, self.out),
+            cast!(self.data_ty, self.x),
+            cast!(self.data_ty, self.cos_table),
+            cast!(self.data_ty, self.sin_table),
+            cast!("long long", self.position),
+            self.seq_len.to_string(),
+        ];
+        (id, args)
+    }
+}
+
 pub struct SoftmaxKernel {
     pub data_ty: DataType,
     pub block_size: usize,
@@ -370,6 +398,7 @@ impl LaunchKernel {
             CUDAKernel::LayerNormKernel(l) => l,
             CUDAKernel::ReduceMatrixKernel(r) => r,
             CUDAKernel::RMSNormKernel(r) => r,
+            CUDAKernel::RopeKernel(r) => r,
             CUDAKernel::SliceKernel(s) => s,
             CUDAKernel::SoftmaxKernel(s) => s,
         } {

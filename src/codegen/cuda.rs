@@ -1881,6 +1881,45 @@ impl<'sched> HostCodeGenerator<'sched> {
                     );
                 }
 
+                Operator::Rope(operator::Rope { head_dim }) => {
+                    self.includes.insert(Include::Local("rope.cuh"));
+                    let head_dim = *head_dim;
+                    let x_id = kernel.inputs[args::ROPE_X].unwrap();
+                    let cos_id = kernel.inputs[args::ROPE_COS].unwrap();
+                    let sin_id = kernel.inputs[args::ROPE_SIN].unwrap();
+                    let pos_id = kernel.inputs[args::ROPE_POSITION].unwrap();
+                    let x_ty = self.get_resolved_tensor_type(x_id)?.clone();
+                    let pos_ty = self.get_resolved_tensor_type(pos_id)?.clone();
+                    assert!(x_ty.is_contiguous());
+                    let ndim = x_ty.dims.ndim();
+                    assert!(2 <= ndim);
+                    assert_eq!(x_ty.dims[ndim - 1], head_dim);
+                    let seq_len = x_ty.dims[ndim - 2];
+                    assert_eq!(pos_ty.dims.size(), seq_len);
+                    let outer = x_ty.dims.size() / (seq_len * head_dim);
+                    let half = head_dim / 2;
+                    let cuda_kernel = kernel::CUDAKernel::RopeKernel(kernel::RopeKernel {
+                        data_ty: x_ty.elem_type,
+                        head_dim,
+                        out: self.device_identifier(kernel.outputs[0])?,
+                        x: self.device_identifier(x_id)?,
+                        cos_table: self.device_identifier(cos_id)?,
+                        sin_table: self.device_identifier(sin_id)?,
+                        position: self.device_identifier(pos_id)?,
+                        seq_len,
+                    });
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: (outer * seq_len).to_literal(),
+                            block_size: half.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::AveragePool(_) | Operator::MaxPool(_) => {
                     let size = self
                         .get_resolved_tensor_type(kernel.outputs[0])?
