@@ -263,7 +263,7 @@ impl LlmSession {
             return Ok(new_ids);
         }
 
-        let prefill_runs = self.prefill.is_some() && self.past_len == 0;
+        let prefill_runs = self.prefill.is_some();
 
         let needed = if prefill_runs {
             let prefill_len = self.prefill.as_ref().unwrap().prefill_len;
