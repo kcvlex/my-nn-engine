@@ -349,9 +349,6 @@ impl ChatRegistry {
             session
                 .llm
                 .generate_ids_with_callback(&delta, &opts, &mut |tok| {
-                    // decode_stream buffers incomplete byte-fallback sequences
-                    // internally and only yields complete UTF-8 once the bytes
-                    // form valid chars, so emitted text is always byte-safe.
                     if let Ok(Some(new_text)) = decode_stream.step(tok) {
                         accumulated_text.push_str(&new_text);
                     }
