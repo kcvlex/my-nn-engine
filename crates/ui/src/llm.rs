@@ -342,25 +342,25 @@ impl ChatRegistry {
             .max()
             .unwrap_or(0);
 
-        let mut accumulated_ids: Vec<u32> = Vec::new();
+        let mut accumulated_text = String::new();
         let mut emitted_len: usize = 0;
         let new_ids = {
-            let tokenizer = &session.tokenizer;
+            let mut decode_stream = session.tokenizer.decode_stream(true);
             session
                 .llm
                 .generate_ids_with_callback(&delta, &opts, &mut |tok| {
-                    accumulated_ids.push(tok);
-                    let Ok(full) = tokenizer.decode(&accumulated_ids, true) else {
-                        return;
-                    };
-                    let safe_end = floor_char_boundary(&full, full.len().saturating_sub(lookahead));
-                    // emitted_len was a char boundary in some earlier `full`,
-                    // but tokenizer post-processing (e.g. clean_up_tokenization_spaces)
-                    // can rewrite earlier bytes when later tokens arrive, so re-snap
-                    // against the current text before slicing.
-                    let start = floor_char_boundary(&full, emitted_len.min(full.len()));
-                    if start < safe_end {
-                        let chunk = full[start..safe_end].to_string();
+                    // decode_stream buffers incomplete byte-fallback sequences
+                    // internally and only yields complete UTF-8 once the bytes
+                    // form valid chars, so emitted text is always byte-safe.
+                    if let Ok(Some(new_text)) = decode_stream.step(tok) {
+                        accumulated_text.push_str(&new_text);
+                    }
+                    let safe_end = floor_char_boundary(
+                        &accumulated_text,
+                        accumulated_text.len().saturating_sub(lookahead),
+                    );
+                    if emitted_len < safe_end {
+                        let chunk = accumulated_text[emitted_len..safe_end].to_string();
                         emitted_len = safe_end;
                         on_event(ChatStreamEvent::Chunk { delta: chunk });
                     }
