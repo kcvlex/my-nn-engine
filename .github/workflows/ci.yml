@@ -12,7 +12,7 @@ env:
 
 jobs:
   test:
-    name: Test and Build
+    name: Pre-Merge / Engine Crate / Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -30,7 +30,7 @@ jobs:
         run: cargo test --no-default-features --verbose
 
   fmt:
-    name: Format
+    name: Pre-Merge / Format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -45,7 +45,7 @@ jobs:
         run: cargo +nightly fmt -- --check
 
   ui-test:
-    name: UI Crate Tests
+    name: Pre-Merge / UI Crate / Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -60,7 +60,7 @@ jobs:
         run: cargo test -p my-nn-engine-ui --no-default-features --verbose
 
   llm-test:
-    name: LLM Crate Tests
+    name: Pre-Merge / LLM Crate / Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -75,7 +75,7 @@ jobs:
         run: cargo test -p my-nn-engine-llm --no-default-features --verbose
 
   frontend-lint:
-    name: Frontend Lint & Format
+    name: Pre-Merge / UI Crate / Frontend Lint & Format
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -120,7 +120,7 @@ jobs:
         run: pnpm test
 
   frontend-build:
-    name: Frontend Build
+    name: Pre-Merge / UI Crate /Frontend Build
     runs-on: ubuntu-latest
     defaults:
       run:
