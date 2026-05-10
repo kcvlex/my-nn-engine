@@ -64,6 +64,30 @@ impl RingArgs {
     }
 }
 
+#[derive(Clone)]
+pub struct RopeAttnArgs {
+    pub cos_table: Expr,
+    pub sin_table: Expr,
+    pub kv_position: Expr,
+}
+
+impl RopeAttnArgs {
+    fn args(opt: &Option<RopeAttnArgs>, data_ty: DataType) -> [String; 3] {
+        match opt {
+            Some(r) => [
+                cast!(data_ty, r.cos_table),
+                cast!(data_ty, r.sin_table),
+                cast!("long long", r.kv_position),
+            ],
+            None => [
+                "nullptr".to_string(),
+                "nullptr".to_string(),
+                "nullptr".to_string(),
+            ],
+        }
+    }
+}
+
 pub struct AttentionKernel {
     pub data_ty: DataType,
     pub br: usize,
@@ -172,6 +196,7 @@ pub struct AttentionDecodeKernel {
 
     pub kv_quant: Option<KvQuantArgs>,
     pub ring: Option<RingArgs>,
+    pub rope: Option<RopeAttnArgs>,
     pub attn: Attention,
 }
 
@@ -201,6 +226,7 @@ impl AttentionDecodeKernel {
             self.data_ty, kv_ty, self.head_dim, self.block_size,
         );
         let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
+        let [cos_table, sin_table, kv_position] = RopeAttnArgs::args(&self.rope, self.data_ty);
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
@@ -216,6 +242,9 @@ impl AttentionDecodeKernel {
             ring_sink,
             ring_window,
             ring_start,
+            cos_table,
+            sin_table,
+            kv_position,
         ];
         (id, args)
     }

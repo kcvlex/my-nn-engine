@@ -162,6 +162,10 @@ __global__ void attention(
     }
 }
 
+// `cos_table`, `sin_table`, `kv_position` are optional (pass nullptr to skip
+// the on-the-fly RoPE). When non-null, K is dequant + half-split-rotated using
+// the row index `kv_position[row_K]` of the cos/sin tables before the dot
+// product. V is never rotated.
 template <typename T, typename TKV, int HEAD_DIM, int BLOCK_SIZE>
 __global__ void attention_decode(
     T *out,
@@ -177,10 +181,16 @@ __global__ void attention_decode(
     int num_kv_heads,
     int ring_sink,
     int ring_window,
-    int ring_start
+    int ring_start,
+    const T *cos_table,
+    const T *sin_table,
+    const long long *kv_position
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
+    constexpr int HALF = HEAD_DIM / 2;
+    bool rope_on = (kv_position != nullptr);
     __shared__ T s_Q[HEAD_DIM];
+    __shared__ TKV s_K[HEAD_DIM];
     __shared__ float s_O[HEAD_DIM];
     __shared__ float dot_buf[BLOCK_SIZE];
 
@@ -211,13 +221,30 @@ __global__ void attention_decode(
     float row_sum = 0.0f;
     for (int row_K = 0; row_K < active_seq_kv; row_K++) {
         int phys_K = ring_phys_index(row_K, ring_sink, ring_window, ring_start);
+        float k_scale_val = QUANT ? (float)k_scale[phys_K] : 1.0f;
+
+        for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+            s_K[i] = K[phys_K * HEAD_DIM + i];
+        }
+        cg::sync(cta);
+
         float old_max = row_max;
         float dot = 0.0f;
-        for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
-            dot += (float)s_Q[i] * (float)K[phys_K * HEAD_DIM + i];
-        }
-        if constexpr (QUANT) {
-            dot *= (float)k_scale[phys_K];
+        if (rope_on) {
+            int pos = (int)kv_position[row_K];
+            for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+                int i_pair = (i < HALF) ? i + HALF : i - HALF;
+                float sign = (i < HALF) ? -1.0f : 1.0f;
+                float k = (float)s_K[i] * k_scale_val;
+                float kp = (float)s_K[i_pair] * k_scale_val;
+                float c = (float)cos_table[pos * HEAD_DIM + i];
+                float s = (float)sin_table[pos * HEAD_DIM + i];
+                dot += (float)s_Q[i] * (k * c + sign * kp * s);
+            }
+        } else {
+            for (int i = threadIdx.x; i < HEAD_DIM; i += blockDim.x) {
+                dot += (float)s_Q[i] * (float)s_K[i] * k_scale_val;
+            }
         }
 
         for (int s = tile.size() / 2; 0 < s; s /= 2) {

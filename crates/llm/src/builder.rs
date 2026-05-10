@@ -491,6 +491,10 @@ impl Builder {
     /// sink+ring layout descriptors `ring = (sink, window, start)` populating
     /// the trailing slots so the CUDA kernel walks K/V via `ring_phys_index`.
     /// `active_seq_kv` and `ring` are required (no auto-fallback to identity).
+    /// When `rope = Some((cos_table, sin_table, kv_position))` and `seq_q==1`,
+    /// the decode kernel does dequant + half-split rotation per K row from
+    /// the cos/sin tables on-the-fly, so callers can keep K stored unrotated
+    /// (and INT8) in the cache without a separate `rope_fused` step.
     #[allow(clippy::too_many_arguments)]
     pub fn attention_streaming(
         &mut self,
@@ -502,11 +506,13 @@ impl Builder {
         mask: Option<ValueId>,
         active_seq_kv: ValueId,
         ring: (ValueId, ValueId, ValueId),
+        rope: Option<(ValueId, ValueId, ValueId)>,
         is_causal: bool,
         scale: f32,
     ) -> ValueId {
         let out = self.alloc_value(name);
-        let mut inputs: Vec<Option<ValueId>> = vec![None; 10];
+        let slot_count = if rope.is_some() { 13 } else { 10 };
+        let mut inputs: Vec<Option<ValueId>> = vec![None; slot_count];
         inputs[ATTENTION_Q] = Some(q);
         inputs[ATTENTION_K] = Some(k);
         inputs[ATTENTION_V] = Some(v);
@@ -520,6 +526,11 @@ impl Builder {
         inputs[ATTENTION_RING_SINK] = Some(sink);
         inputs[ATTENTION_RING_WINDOW] = Some(window);
         inputs[ATTENTION_RING_START] = Some(start);
+        if let Some((cos, sin, pos)) = rope {
+            inputs[ATTENTION_ROPE_COS] = Some(cos);
+            inputs[ATTENTION_ROPE_SIN] = Some(sin);
+            inputs[ATTENTION_ROPE_KV_POSITION] = Some(pos);
+        }
         self.graph.nodes.alloc(Node::create_node(
             inputs,
             vec![out],
