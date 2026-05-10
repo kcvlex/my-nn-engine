@@ -21,13 +21,16 @@ ASSETS := \
 
 all: $(ASSETS)
 
-$(PUBLIC)/synset.txt:
+$(PUBLIC):
+	mkdir -p $@
+
+$(PUBLIC)/synset.txt: | $(PUBLIC)
 	curl -sL "$(ONNX_CLASSIFICATION)/synset.txt" -o $@
 
-$(PUBLIC)/coco.names:
+$(PUBLIC)/coco.names: | $(PUBLIC)
 	curl -sL "https://raw.githubusercontent.com/hunglc007/tensorflow-yolov4-tflite/master/data/classes/coco.names" -o $@
 
-$(PUBLIC)/bert-vocab.txt:
+$(PUBLIC)/bert-vocab.txt: | $(PUBLIC)
 	curl -sL "https://huggingface.co/google-bert/bert-base-uncased/resolve/main/vocab.txt" -o $@
 
 clean:
