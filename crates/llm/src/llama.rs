@@ -500,8 +500,6 @@ fn build_layer(
     let attn_out = if let Some(s) = ctx.streaming {
         let ring = (s.ring_sink, s.ring_window, s.ring_start);
         if ctx.quant_kv_cache {
-            // INT8 streaming: skip explicit rope_fused; fuse dequant+RoPE into
-            // the decode-attention kernel via the rope inputs.
             b.attention_streaming(
                 &format!("{prefix}_attn"),
                 q,
@@ -516,6 +514,7 @@ fn build_layer(
                 scale,
             )
         } else {
+            // TODO: Fuse the rope recomputation into the attention kernel to save memory and latency.
             let k_recomputed = b.rope_fused(
                 &format!("{prefix}_k_rope_recompute"),
                 k_updated,
