@@ -214,11 +214,6 @@ fn build_llama_inner(
 
     let mut b = Builder::new(if is_prefill { "llama_prefill" } else { "llama" });
 
-    assert!(
-        !(options.streaming_kv && options.quant_kv_cache),
-        "streaming_kv + quant_kv_cache is not supported yet (rope_fused has no INT8 path)",
-    );
-
     let input_ids = b.input("input_ids", i64_ty, &[1, seq_q]);
     let position_id = b.input("position_id", i64_ty, &[seq_q]);
     let past_len = b.input("past_len", i64_ty, &[]);
@@ -422,20 +417,44 @@ fn build_layer(
         let v_scale_name = format!("{prefix}.past_value_scale");
         let k_scale = b.input(&k_scale_name, scale_dtype, &scale_dims);
         let v_scale = b.input(&v_scale_name, scale_dtype, &scale_dims);
-        let k_updated = b.quantizing_kv_cache_update(
-            &format!("{prefix}_k_update"),
-            k_cache,
-            k_scale,
-            k,
-            ctx.past_len,
-        );
-        let v_updated = b.quantizing_kv_cache_update(
-            &format!("{prefix}_v_update"),
-            v_cache,
-            v_scale,
-            v,
-            ctx.past_len,
-        );
+        let (k_updated, v_updated) = if let Some(s) = ctx.streaming {
+            let ring = (s.ring_sink, s.ring_window, s.ring_start);
+            (
+                b.quantizing_kv_cache_update_streaming(
+                    &format!("{prefix}_k_update"),
+                    k_cache,
+                    k_scale,
+                    k,
+                    ctx.past_len,
+                    ring,
+                ),
+                b.quantizing_kv_cache_update_streaming(
+                    &format!("{prefix}_v_update"),
+                    v_cache,
+                    v_scale,
+                    v,
+                    ctx.past_len,
+                    ring,
+                ),
+            )
+        } else {
+            (
+                b.quantizing_kv_cache_update(
+                    &format!("{prefix}_k_update"),
+                    k_cache,
+                    k_scale,
+                    k,
+                    ctx.past_len,
+                ),
+                b.quantizing_kv_cache_update(
+                    &format!("{prefix}_v_update"),
+                    v_cache,
+                    v_scale,
+                    v,
+                    ctx.past_len,
+                ),
+            )
+        };
         let scale_elem_bytes = scale_dtype.bit_width() / 8;
         let bytes_per_scale = ctx.num_kv_heads * ctx.max_seq_len * scale_elem_bytes;
         (
@@ -479,27 +498,46 @@ fn build_layer(
     };
 
     let attn_out = if let Some(s) = ctx.streaming {
-        let k_recomputed = b.rope_fused(
-            &format!("{prefix}_k_rope_recompute"),
-            k_updated,
-            ctx.cos_table,
-            ctx.sin_table,
-            s.kv_position,
-            ctx.head_dim,
-        );
         let ring = (s.ring_sink, s.ring_window, s.ring_start);
-        b.attention_streaming(
-            &format!("{prefix}_attn"),
-            q,
-            k_recomputed,
-            v_updated,
-            kv_scales,
-            None,
-            ctx.active_seq_kv,
-            ring,
-            ctx.is_prefill,
-            scale,
-        )
+        if ctx.quant_kv_cache {
+            // INT8 streaming: skip explicit rope_fused; fuse dequant+RoPE into
+            // the decode-attention kernel via the rope inputs.
+            b.attention_streaming(
+                &format!("{prefix}_attn"),
+                q,
+                k_updated,
+                v_updated,
+                kv_scales,
+                None,
+                ctx.active_seq_kv,
+                ring,
+                Some((ctx.cos_table, ctx.sin_table, s.kv_position)),
+                ctx.is_prefill,
+                scale,
+            )
+        } else {
+            let k_recomputed = b.rope_fused(
+                &format!("{prefix}_k_rope_recompute"),
+                k_updated,
+                ctx.cos_table,
+                ctx.sin_table,
+                s.kv_position,
+                ctx.head_dim,
+            );
+            b.attention_streaming(
+                &format!("{prefix}_attn"),
+                q,
+                k_recomputed,
+                v_updated,
+                kv_scales,
+                None,
+                ctx.active_seq_kv,
+                ring,
+                None,
+                ctx.is_prefill,
+                scale,
+            )
+        }
     } else {
         b.attention_quant(
             &format!("{prefix}_attn"),

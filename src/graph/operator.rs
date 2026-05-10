@@ -982,6 +982,12 @@ pub mod args {
     pub const ATTENTION_RING_SINK: usize = 7;
     pub const ATTENTION_RING_WINDOW: usize = 8;
     pub const ATTENTION_RING_START: usize = 9;
+    // On-the-fly RoPE inputs for the decode-attention kernel (cos/sin tables
+    // shared across layers + per-recency-rank `kv_position`). Optional; when
+    // absent the kernel sees `nullptr` and skips rotation.
+    pub const ATTENTION_ROPE_COS: usize = 10;
+    pub const ATTENTION_ROPE_SIN: usize = 11;
+    pub const ATTENTION_ROPE_KV_POSITION: usize = 12;
 
     pub const EQUAL_A: usize = 0;
     pub const EQUAL_B: usize = 1;

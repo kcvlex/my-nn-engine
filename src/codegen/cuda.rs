@@ -813,6 +813,30 @@ impl<'sched> HostCodeGenerator<'sched> {
         })
     }
 
+    fn rope_attn_args_from_slots(
+        &self,
+        kernel: &Kernel,
+        cos_slot: usize,
+        sin_slot: usize,
+        pos_slot: usize,
+    ) -> Result<Option<kernel::RopeAttnArgs>, BuildError> {
+        let cos_id = match kernel.inputs.get(cos_slot).and_then(|x| *x) {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+        let sin_id = kernel.inputs.get(sin_slot).and_then(|x| *x);
+        let pos_id = kernel.inputs.get(pos_slot).and_then(|x| *x);
+        let (sin_id, pos_id) = match (sin_id, pos_id) {
+            (Some(s), Some(p)) => (s, p),
+            _ => panic!("Attention RoPE: cos+sin+kv_position must all be provided together"),
+        };
+        Ok(Some(kernel::RopeAttnArgs {
+            cos_table: self.device_identifier(cos_id)?,
+            sin_table: self.device_identifier(sin_id)?,
+            kv_position: self.device_identifier(pos_id)?,
+        }))
+    }
+
     fn place_identifier(&self, place: AllocPlace) -> Result<Expr, BuildError> {
         match place {
             AllocPlace::Chunk(c) => self
@@ -1077,6 +1101,12 @@ impl<'sched> HostCodeGenerator<'sched> {
                         args::ATTENTION_RING_WINDOW,
                         args::ATTENTION_RING_START,
                     );
+                    let rope = self.rope_attn_args_from_slots(
+                        kernel,
+                        args::ATTENTION_ROPE_COS,
+                        args::ATTENTION_ROPE_SIN,
+                        args::ATTENTION_ROPE_KV_POSITION,
+                    )?;
 
                     let q_ty = self.get_resolved_tensor_type(q)?;
                     let k_ty = self.get_resolved_tensor_type(k)?;
@@ -1137,6 +1167,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 num_kv_heads,
                                 kv_quant: kv_quant.clone(),
                                 ring: ring.clone(),
+                                rope: rope.clone(),
                                 attn: *attn,
                             },
                         );
@@ -1151,6 +1182,10 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .into(),
                         );
                     } else {
+                        assert!(
+                            rope.is_none(),
+                            "Attention RoPE is only wired into the decode kernel (seq_q==1)",
+                        );
                         let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
                             kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
                         {
