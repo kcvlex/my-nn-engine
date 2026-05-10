@@ -91,7 +91,9 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
         if (evt.case === 'chunk') {
           const cur = messages.value[assistantIdx];
           if (cur) {
-            patchMessage(assistantIdx, { content: cur.content + evt.value.delta });
+            patchMessage(assistantIdx, {
+              content: cur.content + evt.value.delta,
+            });
           }
         } else if (evt.case === 'done') {
           patchMessage(assistantIdx, {
