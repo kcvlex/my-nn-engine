@@ -3,6 +3,11 @@
 #include <cuda.h>
 #include "common.cuh"
 
+// `offset` is the logical recency rank of the first new token (i.e. past_len).
+// With `ring_window == 0` the kernel behaves as a contiguous write to
+// `cache[..., offset:offset+new_seq, :]`. With `ring_window > 0` each new
+// token's destination slot is remapped through the streaming sink+ring
+// layout (see `ring_phys_index`).
 template <typename T, int HEAD_DIM>
 __global__ void kvcache_update(
     T *cache,

@@ -52,6 +52,11 @@ __device__ void divmod(T x, T y, T *q, T *r) {
     *r = x % y;
 }
 
+// Map a logical KV recency rank to its physical slot under the StreamingLLM
+// sink+ring layout. `ring_window == 0` disables the mapping (identity); ranks
+// inside the sink range are also identity. Ranks beyond the sink are placed
+// in the ring half starting at `ring_sink`, oldest entry at offset
+// `ring_start` (modulo `ring_window`).
 __device__ inline int ring_phys_index(int rank, int ring_sink, int ring_window, int ring_start) {
     if (ring_window == 0 || rank < ring_sink) return rank;
     int rel = ring_start + (rank - ring_sink);

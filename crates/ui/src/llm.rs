@@ -114,11 +114,28 @@ impl TokenSpec {
     }
 }
 
-pub struct ChatTurnResult {
-    pub assistant_message: String,
+/// One event in a streaming chat turn. The producer emits zero or more
+/// `Chunk`s as text becomes safe to flush past any pending stop-string match,
+/// then exactly one `Done` carrying terminal stats.
+pub enum ChatStreamEvent {
+    Chunk { delta: String },
+    Done(ChatTurnDone),
+}
+
+pub struct ChatTurnDone {
     pub tokens_generated: u32,
     pub generation_time: Duration,
     pub eos_emitted: bool,
+}
+
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    if s.len() <= idx {
+        return s.len();
+    }
+    while 0 < idx && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
 }
 
 /// Returns true if `name` is a safe single-segment directory name (no `/`, no
@@ -257,12 +274,19 @@ impl ChatRegistry {
         }
     }
 
-    pub fn chat(
+    /// `on_event` fires synchronously
+    /// from the generation loop: zero or more [`ChatStreamEvent::Chunk`]
+    /// events, followed by exactly one [`ChatStreamEvent::Done`] (also
+    /// returned). Chunks hold back the trailing `max(stop_string.len())`
+    /// bytes of decoded text so a stop string can never appear in an emitted
+    /// chunk.
+    pub fn chat_stream(
         &self,
         id: &SessionId,
         user_message: String,
         max_tokens: u32,
-    ) -> Result<ChatTurnResult, ChatError> {
+        on_event: &mut dyn FnMut(ChatStreamEvent),
+    ) -> Result<ChatTurnDone, ChatError> {
         let max_tokens = if max_tokens == 0 {
             DEFAULT_MAX_TOKENS
         } else {
@@ -307,10 +331,37 @@ impl ChatRegistry {
             max_new_tokens: max_tokens as usize,
             stop_strings: session.stop_strings.clone(),
         };
-        let new_ids = session
-            .llm
-            .generate_ids_with(&delta, &opts)
-            .map_err(ChatError::Llm)?;
+
+        // Hold back at least max(stop_string byte length) from the tail of
+        // every chunk. Any in-flight stop match must lie entirely within this
+        // window, so an emitted chunk can never contain a stop string.
+        let lookahead = session
+            .stop_strings
+            .iter()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(0);
+
+        let mut accumulated_ids: Vec<u32> = Vec::new();
+        let mut emitted_len: usize = 0;
+        let new_ids = {
+            let tokenizer = &session.tokenizer;
+            session
+                .llm
+                .generate_ids_with_callback(&delta, &opts, &mut |tok| {
+                    accumulated_ids.push(tok);
+                    let Ok(full) = tokenizer.decode(&accumulated_ids, true) else {
+                        return;
+                    };
+                    let safe_end = floor_char_boundary(&full, full.len().saturating_sub(lookahead));
+                    if emitted_len < safe_end {
+                        let chunk = full[emitted_len..safe_end].to_string();
+                        emitted_len = safe_end;
+                        on_event(ChatStreamEvent::Chunk { delta: chunk });
+                    }
+                })
+        }
+        .map_err(ChatError::Llm)?;
         let elapsed = started.elapsed();
 
         let eos_emitted = (new_ids.len() as u32) < max_tokens ||
@@ -320,19 +371,29 @@ impl ChatRegistry {
             .decode(&new_ids, true)
             .map_err(|e| ChatError::LoadTokenizer(format!("decode: {e}")))?;
 
+        // Flush whatever's left after the lookahead window (and after any
+        // truncate_at_stop rollback inside the LLM session).
+        if emitted_len < assistant_text.len() {
+            let tail = assistant_text[emitted_len..].to_string();
+            on_event(ChatStreamEvent::Chunk { delta: tail });
+        }
+
         let tokens_generated = new_ids.len() as u32;
-        session
-            .history
-            .push(ChatMessage::assistant(assistant_text.clone()));
+        session.history.push(ChatMessage::assistant(assistant_text));
         session.last_used = Instant::now();
         session.last_turn_eos_emitted = eos_emitted;
 
-        Ok(ChatTurnResult {
-            assistant_message: assistant_text,
+        let done = ChatTurnDone {
             tokens_generated,
             generation_time: elapsed,
             eos_emitted,
-        })
+        };
+        on_event(ChatStreamEvent::Done(ChatTurnDone {
+            tokens_generated: done.tokens_generated,
+            generation_time: done.generation_time,
+            eos_emitted: done.eos_emitted,
+        }));
+        Ok(done)
     }
 
     fn evict_idle(&self) {
