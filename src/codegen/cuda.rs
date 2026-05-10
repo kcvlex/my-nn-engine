@@ -1182,10 +1182,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                             .into(),
                         );
                     } else {
-                        assert!(
-                            rope.is_none(),
-                            "Attention RoPE is only wired into the decode kernel (seq_q==1)",
-                        );
                         let (mask_expr, mask_outer_stride, mask_row_stride) = if let Some(mask_id) =
                             kernel.inputs.get(args::ATTENTION_MASK).and_then(|x| *x)
                         {
@@ -1267,6 +1263,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             out: self.device_identifier(kernel.outputs[0])?,
                             kv_quant,
                             ring,
+                            rope,
                             attn: *attn,
                         });
 

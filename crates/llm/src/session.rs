@@ -174,12 +174,14 @@ impl LlmSession {
     }
 
     /// StreamingLLM-style decode session. The graph must have been built with
-    /// `LlamaOptions { streaming_kv: true }` (and `quant_kv_cache: false`).
-    /// `sink + window <= max_seq_len`. No prefill graph: the prompt is fed
-    /// token-by-token, so this is intended for tests / long-context smoke runs.
+    /// `LlamaOptions { streaming_kv: true }`. `sink + window <= max_seq_len`.
+    /// `prefill = Some((graph, prefill_len))` enables chunked prefill of new
+    /// user messages; otherwise the prompt is fed token-by-token through the
+    /// decode graph.
     #[allow(clippy::too_many_arguments)]
     pub fn for_llama_streaming(
-        graph: Graph,
+        decode_graph: Graph,
+        prefill: Option<(Graph, usize)>,
         kv_cache_names: Vec<KVCache>,
         tokenizer: Tokenizer,
         opts: &Options,
@@ -190,17 +192,43 @@ impl LlmSession {
     ) -> Result<Self, LlmError> {
         assert!(sink + window <= max_seq_len);
         assert!(0 < window);
-        let session_config = SessionConfig {
-            session_states: kv_cache_names
-                .into_iter()
-                .flat_map(|kv| kv_cache_specs(opts.target, kv))
-                .collect(),
-            ..SessionConfig::default()
+
+        let shared_specs: Vec<SessionStateSpec> = kv_cache_names
+            .into_iter()
+            .flat_map(|kv| kv_cache_specs(opts.target, kv))
+            .collect();
+        let make_specs = || shared_specs.clone();
+
+        let initializer_buffers = match opts.target {
+            Target::CUDA => Some(Arc::new(InitializerBuffers::new())),
+            Target::CPU => None,
         };
-        let session = Session::from_graph(graph, opts, &session_config)?;
+        let decode_session = Session::from_graph(
+            decode_graph,
+            opts,
+            &SessionConfig {
+                session_states: make_specs(),
+                initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
+            },
+        )?;
+        let prefill_session = match prefill {
+            Some((graph, prefill_len)) => Some(PrefillSession {
+                session: Session::from_graph(
+                    graph,
+                    opts,
+                    &SessionConfig {
+                        session_states: make_specs(),
+                        initializer_buffers,
+                    },
+                )?,
+                prefill_len,
+            }),
+            None => None,
+        };
+
         Ok(Self {
-            session,
-            prefill: None,
+            session: decode_session,
+            prefill: prefill_session,
             tokenizer,
             config: LlmConfig {
                 max_seq_len,
@@ -404,16 +432,23 @@ impl LlmSession {
         for i in 0..chunk_size {
             padded[i] = prompt_ids[i] as i64;
         }
-        let positions = (0..prefill_len as i64)
-            .map(|i| self.past_len as i64 + i)
-            .collect_vec();
-        let active_seq_kv = (self.past_len + prefill_len) as i64;
-        let inputs = vec![
-            make_i64(&[1, prefill_len], padded),
-            make_i64(&[prefill_len], positions),
-            make_i64(&[], vec![self.past_len as i64]),
-            make_i64(&[], vec![active_seq_kv]),
-        ];
+        let inputs = match self.kind {
+            DecodeKind::LlamaStreaming { sink, window } => {
+                self.streaming_prefill_inputs(padded, prefill_len, sink, window)
+            }
+            _ => {
+                let positions = (0..prefill_len as i64)
+                    .map(|i| self.past_len as i64 + i)
+                    .collect_vec();
+                let active_seq_kv = (self.past_len + prefill_len) as i64;
+                vec![
+                    make_i64(&[1, prefill_len], padded),
+                    make_i64(&[prefill_len], positions),
+                    make_i64(&[], vec![self.past_len as i64]),
+                    make_i64(&[], vec![active_seq_kv]),
+                ]
+            }
+        };
         let outputs = self.prefill.as_mut().unwrap().session.run(&inputs)?;
         self.past_len += chunk_size;
 
@@ -496,6 +531,38 @@ impl LlmSession {
         let next = argmax_logits(logits)?;
         self.past_len += 1;
         Ok(next)
+    }
+
+    fn streaming_prefill_inputs(
+        &self,
+        padded: Vec<i64>,
+        prefill_len: usize,
+        sink: usize,
+        window: usize,
+    ) -> Vec<Tensor> {
+        let max_active = sink + window;
+        let stream_pos = self.past_len;
+        let after = stream_pos + prefill_len;
+        let q_positions: Vec<i64> = (0..prefill_len)
+            .map(|i| (stream_pos + i).min(max_active - 1) as i64)
+            .collect();
+        let active_after = after.min(max_active) as i64;
+        let ring_start = if after <= max_active {
+            0
+        } else {
+            ((after - sink) % window) as i64
+        };
+        let kv_position = streaming_kv_position(sink, window, after, self.config.max_seq_len);
+        vec![
+            make_i64(&[1, prefill_len], padded),
+            make_i64(&[prefill_len], q_positions),
+            make_i64(&[], vec![stream_pos as i64]),
+            make_i64(&[], vec![active_after]),
+            make_i64(&[], vec![sink as i64]),
+            make_i64(&[], vec![window as i64]),
+            make_i64(&[], vec![ring_start]),
+            make_i64(&[self.config.max_seq_len], kv_position),
+        ]
     }
 
     fn streaming_decode_inputs(&self, token: u32, sink: usize, window: usize) -> Vec<Tensor> {
