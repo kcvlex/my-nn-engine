@@ -85,14 +85,28 @@ message CreateChatSessionResponse {
 message ChatRequest {
   string session_id = 1;
   string user_message = 2;
-  uint32 max_tokens = 3;  // 0 → use server default
+  uint32 max_tokens = 3;  // 0 -> use server default
 }
 
+// One event in a streamed chat response. Either a `chunk` carrying a piece of
+// assistant text as it's generated, or `done` carrying terminal stats.
 message ChatResponse {
-  string assistant_message = 1;
-  uint32 tokens_generated = 2;
-  double generation_time_ms = 3;
-  bool eos_emitted = 4;   // false if generation stopped at max_tokens
+  oneof event {
+    ChatChunk chunk = 1;
+    ChatDone done = 2;
+  }
+}
+
+message ChatChunk {
+  // Incremental piece of the assistant message. Concatenating the deltas of
+  // every chunk event in order yields the full assistant message.
+  string delta = 1;
+}
+
+message ChatDone {
+  uint32 tokens_generated = 1;
+  double generation_time_ms = 2;
+  bool eos_emitted = 3;   // false if generation stopped at max_tokens
 }
 
 message DestroyChatSessionRequest {
@@ -137,8 +151,10 @@ service OnnxInferenceService {
   rpc CreateChatSession(CreateChatSessionRequest)
       returns (CreateChatSessionResponse);
 
-  // Send one user message to a chat session and receive the model's reply.
-  rpc Chat(ChatRequest) returns (ChatResponse);
+  // Send one user message to a chat session and stream the model's reply.
+  // The server emits zero or more ChatChunk events as tokens are generated,
+  // followed by exactly one ChatDone event with terminal stats.
+  rpc Chat(ChatRequest) returns (stream ChatResponse);
 
   // Free server-side state associated with a chat session.
   rpc DestroyChatSession(DestroyChatSessionRequest)

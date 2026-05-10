@@ -1,14 +1,19 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
 use my_nn_engine::options::Target as MyOnnxTarget;
 use my_nn_engine::tensor::Tensor;
 use prost::Message;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
 use crate::llm::ChatRegistry;
+use crate::llm::ChatStreamEvent;
 use crate::models::ModelId;
 use crate::models::ModelRegistry;
 
@@ -21,8 +26,11 @@ pub mod onnx {
     tonic::include_proto!("onnx");
 }
 
+use onnx_service::chat_response::Event as ChatEvent;
 use onnx_service::onnx_inference_service_server::OnnxInferenceService;
 use onnx_service::Backend as ProtoBackend;
+use onnx_service::ChatChunk;
+use onnx_service::ChatDone;
 use onnx_service::ChatRequest;
 use onnx_service::ChatResponse;
 use onnx_service::CreateChatSessionRequest;
@@ -239,23 +247,47 @@ impl OnnxInferenceService for OnnxInferenceServiceImpl {
         }))
     }
 
-    async fn chat(&self, request: Request<ChatRequest>) -> Result<Response<ChatResponse>, Status> {
+    type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatResponse, Status>> + Send + 'static>>;
+
+    async fn chat(
+        &self,
+        request: Request<ChatRequest>,
+    ) -> Result<Response<Self::ChatStream>, Status> {
         let req = request.into_inner();
-
         let chat_registry = Arc::clone(&self.chat_registry);
-        let result = tokio::task::spawn_blocking(move || {
-            chat_registry.chat(&req.session_id, req.user_message, req.max_tokens)
-        })
-        .await
-        .map_err(|e| Status::internal(format!("join: {e}")))?
-        .map_err(|e| Status::internal(format!("{e}")))?;
 
-        Ok(Response::new(ChatResponse {
-            assistant_message: result.assistant_message,
-            tokens_generated: result.tokens_generated,
-            generation_time_ms: result.generation_time.as_secs_f64() * 1000.0,
-            eos_emitted: result.eos_emitted,
-        }))
+        // Bounded enough to avoid runaway memory if the client is slow but
+        // generous enough that the generator rarely blocks on emit. The
+        // generator runs in spawn_blocking so blocking_send is safe.
+        let (tx, rx) = mpsc::channel::<Result<ChatResponse, Status>>(64);
+
+        tokio::task::spawn_blocking(move || {
+            let result = chat_registry.chat_stream(
+                &req.session_id,
+                req.user_message,
+                req.max_tokens,
+                &mut |event| {
+                    let resp = match event {
+                        ChatStreamEvent::Chunk { delta } => ChatResponse {
+                            event: Some(ChatEvent::Chunk(ChatChunk { delta })),
+                        },
+                        ChatStreamEvent::Done(d) => ChatResponse {
+                            event: Some(ChatEvent::Done(ChatDone {
+                                tokens_generated: d.tokens_generated,
+                                generation_time_ms: d.generation_time.as_secs_f64() * 1000.0,
+                                eos_emitted: d.eos_emitted,
+                            })),
+                        },
+                    };
+                    let _ = tx.blocking_send(Ok(resp));
+                },
+            );
+            if let Err(e) = result {
+                let _ = tx.blocking_send(Err(Status::internal(format!("{e}"))));
+            }
+        });
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
     async fn destroy_chat_session(

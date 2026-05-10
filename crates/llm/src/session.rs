@@ -252,6 +252,15 @@ impl LlmSession {
         prompt: &str,
         opts: &GenerateOptions,
     ) -> Result<Vec<u32>, LlmError> {
+        self.generate_ids_with_callback(prompt, opts, &mut |_| {})
+    }
+
+    pub fn generate_ids_with_callback(
+        &mut self,
+        prompt: &str,
+        opts: &GenerateOptions,
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<Vec<u32>, LlmError> {
         let encoded = self
             .tokenizer
             .encode(prompt, false)
@@ -299,6 +308,7 @@ impl LlmSession {
                 self.decode_step(*new_ids.last().unwrap())?
             };
             new_ids.push(token);
+            on_token(token);
             if token == self.config.eos_token_id || self.hit_stop(&new_ids, opts)? {
                 self.truncate_at_stop(&mut new_ids, opts)?;
                 break;
