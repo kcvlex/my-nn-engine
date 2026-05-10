@@ -795,6 +795,24 @@ impl<'sched> HostCodeGenerator<'sched> {
         }
     }
 
+    fn ring_args_from_slots(
+        &self,
+        kernel: &Kernel,
+        sink_slot: usize,
+        window_slot: usize,
+        start_slot: usize,
+    ) -> Option<kernel::RingArgs> {
+        let sink_id = kernel.inputs.get(sink_slot).and_then(|x| *x)?;
+        let window_id = kernel.inputs.get(window_slot).and_then(|x| *x)?;
+        let start_id = kernel.inputs.get(start_slot).and_then(|x| *x)?;
+        let host_int = |id| Expr::Identifier(format!("(int)(*{})", self.host_name(id)));
+        Some(kernel::RingArgs {
+            sink: host_int(sink_id),
+            window: host_int(window_id),
+            start: host_int(start_id),
+        })
+    }
+
     fn place_identifier(&self, place: AllocPlace) -> Result<Expr, BuildError> {
         match place {
             AllocPlace::Chunk(c) => self
@@ -1053,6 +1071,13 @@ impl<'sched> HostCodeGenerator<'sched> {
                         _ => panic!("Attention: K and V scale must be both present or both absent"),
                     };
 
+                    let ring = self.ring_args_from_slots(
+                        kernel,
+                        args::ATTENTION_RING_SINK,
+                        args::ATTENTION_RING_WINDOW,
+                        args::ATTENTION_RING_START,
+                    );
+
                     let q_ty = self.get_resolved_tensor_type(q)?;
                     let k_ty = self.get_resolved_tensor_type(k)?;
                     let v_ty = self.get_resolved_tensor_type(v)?;
@@ -1111,7 +1136,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                                 num_q_heads,
                                 num_kv_heads,
                                 kv_quant: kv_quant.clone(),
-                                ring: None,
+                                ring: ring.clone(),
                                 attn: *attn,
                             },
                         );
@@ -1206,7 +1231,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                             num_kv_heads,
                             out: self.device_identifier(kernel.outputs[0])?,
                             kv_quant,
-                            ring: None,
+                            ring,
                             attn: *attn,
                         });
 
@@ -1723,7 +1748,12 @@ impl<'sched> HostCodeGenerator<'sched> {
                             scale: self.device_identifier(scale_id)?,
                             new_kv: self.device_identifier(new_id)?,
                             offset: offset_expr,
-                            ring: None,
+                            ring: self.ring_args_from_slots(
+                                kernel,
+                                args::QKVCACHE_UPDATE_RING_SINK,
+                                args::QKVCACHE_UPDATE_RING_WINDOW,
+                                args::QKVCACHE_UPDATE_RING_START,
+                            ),
                         },
                     );
                     let grid = batch * heads * new_seq_len;
@@ -1774,7 +1804,12 @@ impl<'sched> HostCodeGenerator<'sched> {
                             cache: self.device_identifier(kernel.outputs[0])?,
                             new_kv: self.device_identifier(new_id)?,
                             offset: offset_expr,
-                            ring: None,
+                            ring: self.ring_args_from_slots(
+                                kernel,
+                                args::KVCACHE_UPDATE_RING_SINK,
+                                args::KVCACHE_UPDATE_RING_WINDOW,
+                                args::KVCACHE_UPDATE_RING_START,
+                            ),
                         });
                     self.stmts.push(
                         kernel::LaunchKernel {

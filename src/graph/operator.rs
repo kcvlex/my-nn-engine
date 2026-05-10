@@ -976,6 +976,12 @@ pub mod args {
     pub const ATTENTION_ACTIVE_SEQ_KV: usize = 4;
     pub const ATTENTION_K_SCALE: usize = 5;
     pub const ATTENTION_V_SCALE: usize = 6;
+    // Streaming KV layout: per-launch i64 scalars selecting the sink+ring slot
+    // mapping (see common.cuh's `ring_phys_index`). Optional; codegen falls
+    // back to identity (`ring: None`) when these slots are absent.
+    pub const ATTENTION_RING_SINK: usize = 7;
+    pub const ATTENTION_RING_WINDOW: usize = 8;
+    pub const ATTENTION_RING_START: usize = 9;
 
     pub const EQUAL_A: usize = 0;
     pub const EQUAL_B: usize = 1;
@@ -1044,11 +1050,17 @@ pub mod args {
     pub const KVCACHE_UPDATE_CACHE: usize = 0;
     pub const KVCACHE_UPDATE_NEW: usize = 1;
     pub const KVCACHE_UPDATE_OFFSET: usize = 2;
+    pub const KVCACHE_UPDATE_RING_SINK: usize = 3;
+    pub const KVCACHE_UPDATE_RING_WINDOW: usize = 4;
+    pub const KVCACHE_UPDATE_RING_START: usize = 5;
 
     pub const QKVCACHE_UPDATE_CACHE: usize = 0;
     pub const QKVCACHE_UPDATE_SCALE: usize = 1;
     pub const QKVCACHE_UPDATE_NEW: usize = 2;
     pub const QKVCACHE_UPDATE_OFFSET: usize = 3;
+    pub const QKVCACHE_UPDATE_RING_SINK: usize = 4;
+    pub const QKVCACHE_UPDATE_RING_WINDOW: usize = 5;
+    pub const QKVCACHE_UPDATE_RING_START: usize = 6;
 
     pub const BATCHNORM_DATA: usize = 0;
     pub const BATCHNORM_SCALE: usize = 1;

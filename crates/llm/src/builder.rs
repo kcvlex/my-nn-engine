@@ -1,3 +1,4 @@
+use my_nn_engine::graph::operator::args::*;
 use my_nn_engine::graph::operator::*;
 use my_nn_engine::graph::ExternalTensorRef;
 use my_nn_engine::graph::Graph;
@@ -273,6 +274,46 @@ impl Builder {
         out
     }
 
+    pub fn kv_cache_update_streaming(
+        &mut self,
+        name: &str,
+        cache: ValueId,
+        new: ValueId,
+        offset: ValueId,
+        ring: (ValueId, ValueId, ValueId),
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        let (sink, window, start) = ring;
+        self.add_node(
+            name,
+            Operator::KVCacheUpdate,
+            vec![cache, new, offset, sink, window, start],
+            out,
+        );
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn quantizing_kv_cache_update_streaming(
+        &mut self,
+        name: &str,
+        cache: ValueId,
+        scale: ValueId,
+        new: ValueId,
+        offset: ValueId,
+        ring: (ValueId, ValueId, ValueId),
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        let (sink, window, start) = ring;
+        self.add_node(
+            name,
+            Operator::QuantizingKVCacheUpdate,
+            vec![cache, scale, new, offset, sink, window, start],
+            out,
+        );
+        out
+    }
+
     pub fn i64_initializer(&mut self, name: &str, values: Vec<i64>) -> ValueId {
         let len = values.len();
         let t = Tensor::new(
@@ -437,6 +478,48 @@ impl Builder {
             inputs.push(Some(ks));
             inputs.push(Some(vs));
         }
+        self.graph.nodes.alloc(Node::create_node(
+            inputs,
+            vec![out],
+            name.to_string(),
+            Operator::Attention(Attention { is_causal, scale }),
+        ));
+        out
+    }
+
+    /// Streaming-KV attention: same as [`Self::attention_quant`] but with the
+    /// sink+ring layout descriptors `ring = (sink, window, start)` populating
+    /// the trailing slots so the CUDA kernel walks K/V via `ring_phys_index`.
+    /// `active_seq_kv` and `ring` are required (no auto-fallback to identity).
+    #[allow(clippy::too_many_arguments)]
+    pub fn attention_streaming(
+        &mut self,
+        name: &str,
+        q: ValueId,
+        k: ValueId,
+        v: ValueId,
+        kv_scales: Option<(ValueId, ValueId)>,
+        mask: Option<ValueId>,
+        active_seq_kv: ValueId,
+        ring: (ValueId, ValueId, ValueId),
+        is_causal: bool,
+        scale: f32,
+    ) -> ValueId {
+        let out = self.alloc_value(name);
+        let mut inputs: Vec<Option<ValueId>> = vec![None; 10];
+        inputs[ATTENTION_Q] = Some(q);
+        inputs[ATTENTION_K] = Some(k);
+        inputs[ATTENTION_V] = Some(v);
+        inputs[ATTENTION_MASK] = mask;
+        inputs[ATTENTION_ACTIVE_SEQ_KV] = Some(active_seq_kv);
+        if let Some((ks, vs)) = kv_scales {
+            inputs[ATTENTION_K_SCALE] = Some(ks);
+            inputs[ATTENTION_V_SCALE] = Some(vs);
+        }
+        let (sink, window, start) = ring;
+        inputs[ATTENTION_RING_SINK] = Some(sink);
+        inputs[ATTENTION_RING_WINDOW] = Some(window);
+        inputs[ATTENTION_RING_START] = Some(start);
         self.graph.nodes.alloc(Node::create_node(
             inputs,
             vec![out],
