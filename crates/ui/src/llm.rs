@@ -354,8 +354,13 @@ impl ChatRegistry {
                         return;
                     };
                     let safe_end = floor_char_boundary(&full, full.len().saturating_sub(lookahead));
-                    if emitted_len < safe_end {
-                        let chunk = full[emitted_len..safe_end].to_string();
+                    // emitted_len was a char boundary in some earlier `full`,
+                    // but tokenizer post-processing (e.g. clean_up_tokenization_spaces)
+                    // can rewrite earlier bytes when later tokens arrive, so re-snap
+                    // against the current text before slicing.
+                    let start = floor_char_boundary(&full, emitted_len.min(full.len()));
+                    if start < safe_end {
+                        let chunk = full[start..safe_end].to_string();
                         emitted_len = safe_end;
                         on_event(ChatStreamEvent::Chunk { delta: chunk });
                     }
@@ -372,9 +377,12 @@ impl ChatRegistry {
             .map_err(|e| ChatError::LoadTokenizer(format!("decode: {e}")))?;
 
         // Flush whatever's left after the lookahead window (and after any
-        // truncate_at_stop rollback inside the LLM session).
-        if emitted_len < assistant_text.len() {
-            let tail = assistant_text[emitted_len..].to_string();
+        // truncate_at_stop rollback inside the LLM session). Snap emitted_len
+        // to a boundary in the post-truncation text since post-processing
+        // can shift bytes between the in-loop `full` and `assistant_text`.
+        let start = floor_char_boundary(&assistant_text, emitted_len.min(assistant_text.len()));
+        if start < assistant_text.len() {
+            let tail = assistant_text[start..].to_string();
             on_event(ChatStreamEvent::Chunk { delta: tail });
         }
 
