@@ -64,9 +64,6 @@ impl RingArgs {
     }
 }
 
-/// On-the-fly RoPE inputs for `attention_decode`. `None` emits `nullptr`
-/// triples so the kernel skips rotation. `cos_table` / `sin_table` are
-/// `[max_seq, head_dim]` of `data_ty`; `kv_position` is i64 `[active_seq_kv]`.
 #[derive(Clone)]
 pub struct RopeAttnArgs {
     pub cos_table: Expr,
