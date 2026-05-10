@@ -32,10 +32,6 @@ pub struct LlamaGraph {
     pub active_seq_kv: ValueId,
     pub logits: ValueId,
     pub kv_cache_names: Vec<KVCache>,
-    /// Streaming-KV inputs. Populated only when [`LlamaOptions::streaming_kv`]
-    /// is set. Each i64 scalar host input drives `ring_phys_index` in the
-    /// CUDA kernels; `kv_position` is a `[max_seq]` device tensor giving the
-    /// per-slot logical recency rank for the K-cache RoPE recompute.
     pub streaming: Option<StreamingInputs>,
 }
 

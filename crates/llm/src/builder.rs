@@ -274,8 +274,6 @@ impl Builder {
         out
     }
 
-    /// Streaming-KV variant of [`Self::kv_cache_update`]: writes are placed
-    /// according to the sink+ring slot mapping.
     pub fn kv_cache_update_streaming(
         &mut self,
         name: &str,
@@ -295,7 +293,6 @@ impl Builder {
         out
     }
 
-    /// Streaming-KV variant of [`Self::quantizing_kv_cache_update`].
     #[allow(clippy::too_many_arguments)]
     pub fn quantizing_kv_cache_update_streaming(
         &mut self,
