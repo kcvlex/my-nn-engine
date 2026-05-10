@@ -1,5 +1,4 @@
 import { computed, onScopeDispose, shallowRef, watch, type Ref } from 'vue';
-import { useMutation } from '@tanstack/vue-query';
 import { grpcClient } from '../api/grpc_client';
 import { humanizeError } from '../utils/error';
 import { Backend } from '../gen/onnx_service_pb';
@@ -33,6 +32,8 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
   const status = shallowRef<LifecycleStatus>({ state: 'idle' });
   const sessionId = shallowRef<string | null>(null);
   const messages = shallowRef<ChatMessage[]>([]);
+  const generating = shallowRef(false);
+  const lastError = shallowRef<string | null>(null);
 
   async function ensureSession(): Promise<string> {
     if (sessionId.value) return sessionId.value;
@@ -54,40 +55,56 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
     }
   }
 
-  const chatMutation = useMutation({
-    mutationFn: async (input: { userMessage: string; maxTokens: number }) => {
-      const id = await ensureSession();
-      return grpcClient.chat({
-        sessionId: id,
-        userMessage: input.userMessage,
-        maxTokens: input.maxTokens,
-      });
-    },
-  });
-
-  const generating = computed(() => chatMutation.isPending.value);
+  function patchMessage(idx: number, patch: Partial<ChatMessage>): void {
+    const cur = messages.value[idx];
+    if (!cur) return;
+    messages.value = [
+      ...messages.value.slice(0, idx),
+      { ...cur, ...patch },
+      ...messages.value.slice(idx + 1),
+    ];
+  }
 
   async function send(userMessage: string, maxTokens = 256): Promise<void> {
     const trimmed = userMessage.trim();
     if (!trimmed) return;
-    messages.value = [...messages.value, { role: 'user', content: trimmed }];
+    // Append user + an empty assistant placeholder we'll fill from the stream.
+    messages.value = [
+      ...messages.value,
+      { role: 'user', content: trimmed },
+      { role: 'assistant', content: '' },
+    ];
+    const assistantIdx = messages.value.length - 1;
+
+    generating.value = true;
+    lastError.value = null;
     try {
-      const resp = await chatMutation.mutateAsync({
+      const id = await ensureSession();
+      const stream = grpcClient.chat({
+        sessionId: id,
         userMessage: trimmed,
         maxTokens,
       });
-      messages.value = [
-        ...messages.value,
-        {
-          role: 'assistant',
-          content: resp.assistantMessage,
-          tokens: resp.tokensGenerated,
-          generationMs: resp.generationTimeMs,
-          truncated: !resp.eosEmitted,
-        },
-      ];
-    } catch {
-      // Error is exposed via chatMutation.error.value; humanize on demand.
+      for await (const resp of stream) {
+        const evt = resp.event;
+        if (!evt) continue;
+        if (evt.case === 'chunk') {
+          const cur = messages.value[assistantIdx];
+          if (cur) {
+            patchMessage(assistantIdx, { content: cur.content + evt.value.delta });
+          }
+        } else if (evt.case === 'done') {
+          patchMessage(assistantIdx, {
+            tokens: evt.value.tokensGenerated,
+            generationMs: evt.value.generationTimeMs,
+            truncated: !evt.value.eosEmitted,
+          });
+        }
+      }
+    } catch (e) {
+      lastError.value = humanizeError(e);
+    } finally {
+      generating.value = false;
     }
   }
 
@@ -96,7 +113,7 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
     sessionId.value = null;
     messages.value = [];
     status.value = { state: 'idle' };
-    chatMutation.reset();
+    lastError.value = null;
     if (id) {
       try {
         await grpcClient.destroyChatSession({ sessionId: id });
@@ -116,15 +133,14 @@ export function useChatSession(modelDir: Ref<string>, backend: Backend) {
     void reset();
   });
 
-  const lastError = computed(() =>
-    chatMutation.error.value ? humanizeError(chatMutation.error.value) : null,
-  );
+  const generatingComputed = computed(() => generating.value);
+  const lastErrorComputed = computed(() => lastError.value);
 
   return {
     status,
     messages,
-    generating,
-    lastError,
+    generating: generatingComputed,
+    lastError: lastErrorComputed,
     send,
     reset,
   };
