@@ -22,10 +22,6 @@ fn model_dir() -> PathBuf {
 // transformers torch_dtype=bfloat16).
 const PROMPT: &str = "Hello";
 const EXPECTED_NEW_IDS: &[u32] = &[3038, 25190, 6074, 6566, 21376, 8002, 12090, 28535];
-
-// Streaming defaults sized so the smoke prompts (PROMPT + ~8 new tokens) stay
-// inside `sink + window` and don't trigger the ring rotation, so streaming-on
-// runs should produce the same IDs as the non-streaming reference.
 const STREAM_SINK: usize = 4;
 const STREAM_WINDOW: usize = 28;
 

@@ -16,32 +16,7 @@ use serial_test::serial;
 use tokenizers::Tokenizer;
 
 const PROMPT: &str = "The capital of France is";
-
-fn streaming_session(
-    decode_graph: my_nn_engine::graph::Graph,
-    prefill_graph: my_nn_engine::graph::Graph,
-    prefill_len: usize,
-    kv_cache_names: Vec<my_nn_engine_llm::session::KVCache>,
-    tokenizer: Tokenizer,
-    opts: &Options,
-    max_seq_len: usize,
-    eos_token_id: u32,
-) -> LlmSession {
-    let sink = 4;
-    let window = max_seq_len - sink;
-    LlmSession::for_llama_streaming(
-        decode_graph,
-        Some((prefill_graph, prefill_len)),
-        kv_cache_names,
-        tokenizer,
-        opts,
-        max_seq_len,
-        eos_token_id,
-        sink,
-        window,
-    )
-    .unwrap()
-}
+const STREAM_SINK: usize = 4;
 
 fn run_tinyllama(target: Target) -> String {
     const N_GENERATE: usize = 16;
@@ -63,17 +38,18 @@ fn run_tinyllama(target: Target) -> String {
 
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
-    let mut llm = streaming_session(
+    let mut llm = LlmSession::for_llama_streaming(
         r.graph,
-        p.graph,
-        prefill_len,
+        Some((p.graph, prefill_len)),
         r.kv_cache_names,
         tokenizer,
         &opts,
         max_seq_len,
         config.eos_token_id,
-    );
-
+        STREAM_SINK,
+        max_seq_len - STREAM_SINK,
+    )
+    .unwrap();
     llm.generate(PROMPT, N_GENERATE).unwrap()
 }
 
@@ -101,16 +77,18 @@ fn run_llama2_int8(target: Target) -> String {
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = if streaming_kv {
-        streaming_session(
+        LlmSession::for_llama_streaming(
             r.graph,
-            p.graph,
-            prefill_len,
+            Some((p.graph, prefill_len)),
             r.kv_cache_names,
             tokenizer,
             &opts,
             max_seq_len,
             config.eos_token_id,
+            STREAM_SINK,
+            max_seq_len - STREAM_SINK,
         )
+        .unwrap()
     } else {
         LlmSession::for_llama_with_prefill(
             r.graph,

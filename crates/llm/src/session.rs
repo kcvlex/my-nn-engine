@@ -173,11 +173,6 @@ impl LlmSession {
         })
     }
 
-    /// StreamingLLM-style decode session. The graph must have been built with
-    /// `LlamaOptions { streaming_kv: true }`. `sink + window <= max_seq_len`.
-    /// `prefill = Some((graph, prefill_len))` enables chunked prefill of new
-    /// user messages; otherwise the prompt is fed token-by-token through the
-    /// decode graph.
     #[allow(clippy::too_many_arguments)]
     pub fn for_llama_streaming(
         decode_graph: Graph,
@@ -193,11 +188,10 @@ impl LlmSession {
         assert!(sink + window <= max_seq_len);
         assert!(0 < window);
 
-        let shared_specs: Vec<SessionStateSpec> = kv_cache_names
+        let specs: Vec<SessionStateSpec> = kv_cache_names
             .into_iter()
             .flat_map(|kv| kv_cache_specs(opts.target, kv))
             .collect();
-        let make_specs = || shared_specs.clone();
 
         let initializer_buffers = match opts.target {
             Target::CUDA => Some(Arc::new(InitializerBuffers::new())),
@@ -207,7 +201,7 @@ impl LlmSession {
             decode_graph,
             opts,
             &SessionConfig {
-                session_states: make_specs(),
+                session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
             },
         )?;
@@ -217,7 +211,7 @@ impl LlmSession {
                     graph,
                     opts,
                     &SessionConfig {
-                        session_states: make_specs(),
+                        session_states: specs,
                         initializer_buffers,
                     },
                 )?,
@@ -436,7 +430,7 @@ impl LlmSession {
             DecodeKind::LlamaStreaming { sink, window } => {
                 self.streaming_prefill_inputs(padded, prefill_len, sink, window)
             }
-            _ => {
+            DecodeKind::Mock | DecodeKind::Llama => {
                 let positions = (0..prefill_len as i64)
                     .map(|i| self.past_len as i64 + i)
                     .collect_vec();
