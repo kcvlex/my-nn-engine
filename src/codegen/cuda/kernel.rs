@@ -114,6 +114,7 @@ pub struct AttentionKernel {
     pub kv_quant: Option<KvQuantArgs>,
 
     pub ring: Option<RingArgs>,
+    pub rope: Option<RopeAttnArgs>,
 
     pub attn: Attention,
 }
@@ -154,6 +155,7 @@ impl AttentionKernel {
             self.data_ty, kv_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
         );
         let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
+        let [cos_table, sin_table, kv_position] = RopeAttnArgs::args(&self.rope, self.data_ty);
         let args = vec![
             cast!(self.data_ty, self.out),
             cast!(self.data_ty, self.q),
@@ -175,6 +177,9 @@ impl AttentionKernel {
             ring_sink,
             ring_window,
             ring_start,
+            cos_table,
+            sin_table,
+            kv_position,
         ];
         (id, args)
     }

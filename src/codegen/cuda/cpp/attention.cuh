@@ -32,10 +32,15 @@ __global__ void attention(
     int num_kv_heads,
     int ring_sink,
     int ring_window,
-    int ring_start
+    int ring_start,
+    const T *cos_table,
+    const T *sin_table,
+    const long long *kv_position
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
+    constexpr int HALF = HEAD_DIM / 2;
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
+    bool rope_on = (kv_position != nullptr);
     __shared__ T s_Q[Br][HEAD_DIM + 1];
     __shared__ TKV s_K[Bc][HEAD_DIM + 1];
     __shared__ TKV s_V[Bc][HEAD_DIM + 1];
@@ -99,12 +104,27 @@ __global__ void attention(
         float P[Bc];
         float old_max = row_max;
         for (int j = 0; j < num_kv_row; j++) {
+            int rank = i * Bc + j;
             float sum = 0.0f;
-            for (int k = tile.thread_rank(); k < HEAD_DIM; k += THREADS_PER_ROW) {
-                sum += (float)s_Q[local_row][k] * (float)s_K[j][k];
-            }
-            if constexpr (QUANT) {
-                sum *= s_K_scale[j];
+            if (rope_on) {
+                int pos = (int)kv_position[rank];
+                float k_scale_val = QUANT ? s_K_scale[j] : 1.0f;
+                for (int k = tile.thread_rank(); k < HEAD_DIM; k += THREADS_PER_ROW) {
+                    int k_pair = (k < HALF) ? k + HALF : k - HALF;
+                    float sign = (k < HALF) ? -1.0f : 1.0f;
+                    float kk = (float)s_K[j][k] * k_scale_val;
+                    float kp = (float)s_K[j][k_pair] * k_scale_val;
+                    float c = (float)cos_table[pos * HEAD_DIM + k];
+                    float ss = (float)sin_table[pos * HEAD_DIM + k];
+                    sum += (float)s_Q[local_row][k] * (kk * c + sign * kp * ss);
+                }
+            } else {
+                for (int k = tile.thread_rank(); k < HEAD_DIM; k += THREADS_PER_ROW) {
+                    sum += (float)s_Q[local_row][k] * (float)s_K[j][k];
+                }
+                if constexpr (QUANT) {
+                    sum *= s_K_scale[j];
+                }
             }
             int g_row = blockIdx.x * Br + local_row;
             int g_col = i * Bc + j;
