@@ -237,7 +237,7 @@ pub fn cast_safetensors_bf16_dir(
     Ok(())
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct QuantizeStats {
     pub quantized: usize,
     pub passthrough: usize,
