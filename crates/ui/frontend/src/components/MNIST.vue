@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, useTemplateRef } from 'vue';
 import {
   useInference,
   type BaseInferenceResult,
 } from '../composables/useInference';
-import { useImageCanvas } from '../composables/useImageCanvas';
 import { ModelId, Backend } from '../gen/onnx_service_pb';
 import { TensorProto_DataType } from '../gen/onnx.proto3_pb';
-import ImageUpload from './ImageUpload.vue';
+import HandwritingCanvas from './HandwritingCanvas.vue';
 import ResultBox from './ResultBox.vue';
 import ProbabilityBars from './ProbabilityBars.vue';
 import { softmax } from '../utils/math';
@@ -17,27 +16,7 @@ const props = defineProps<{
   backend: Backend;
 }>();
 
-const {
-  canvas: processedCanvas,
-  processImage: onImageLoaded,
-  tensorData,
-} = useImageCanvas(
-  28,
-  28,
-  (pixels) => {
-    // RGB to grayscale using ITU-R BT.601 luma coefficients (Y = 0.299R + 0.587G + 0.114B)
-    const data: number[] = [];
-    for (let i = 0; i < pixels.length; i += 4) {
-      data.push(
-        (pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114) /
-          255.0,
-      );
-    }
-    return data;
-  },
-  // MNIST expects white digits on a black background
-  { fillStyle: 'black' },
-);
+const canvas = useTemplateRef<InstanceType<typeof HandwritingCanvas>>('canvas');
 
 const { loading, result, run } = useInference<
   BaseInferenceResult & {
@@ -47,7 +26,8 @@ const { loading, result, run } = useInference<
 >();
 
 async function runInference(backend?: Backend) {
-  if (tensorData.value.length === 0) return;
+  const data = canvas.value?.tensorData ?? [];
+  if (data.length === 0) return;
 
   await run(async (client) => {
     const response = await client.runInference({
@@ -57,7 +37,7 @@ async function runInference(backend?: Backend) {
           name: 'Input3',
           dims: [1n, 1n, 28n, 28n],
           dataType: TensorProto_DataType.FLOAT,
-          floatData: tensorData.value,
+          floatData: data,
         },
       ],
       backend: backend ?? props.backend,
@@ -84,29 +64,23 @@ const topProbability = computed(() => {
   return r.probabilities?.[r.prediction] ?? 0;
 });
 
+const canRun = computed(() => canvas.value?.hasDrawing ?? false);
+
 defineExpose({ runInference });
 </script>
 
 <template>
   <div class="mnist">
-    <ImageUpload
-      run-label="Classify Digit"
-      :loading="loading"
-      @image-loaded="onImageLoaded"
-      @run="runInference()"
+    <HandwritingCanvas ref="canvas" />
+
+    <button
+      type="button"
+      class="run-btn"
+      :disabled="loading || !canRun"
+      @click="runInference()"
     >
-      <template #canvas>
-        <div class="image-box">
-          <label>28x28 Grayscale</label>
-          <canvas
-            ref="processedCanvas"
-            width="28"
-            height="28"
-            class="processed-canvas"
-          ></canvas>
-        </div>
-      </template>
-    </ImageUpload>
+      {{ loading ? 'Running...' : 'Classify Digit' }}
+    </button>
 
     <ResultBox
       :visible="result != null"
@@ -134,17 +108,10 @@ defineExpose({ runInference });
 </template>
 
 <style scoped>
-:deep(.preview-img) {
-  width: 112px;
-  height: 112px;
-  background: #000;
-  image-rendering: pixelated;
-}
-
-.processed-canvas {
-  width: 112px;
-  height: 112px;
-  image-rendering: pixelated;
+.mnist {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .digit {
