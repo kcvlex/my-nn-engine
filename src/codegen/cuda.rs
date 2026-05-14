@@ -1426,6 +1426,8 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let k_aligned = k % 8 == 0;
                     let wmma_tile = if !dtype_ok || m < 16 || self.cuda_arch < 80 || !k_aligned {
                         None
+                    } else if 128 <= m && 128 <= n {
+                        Some((128usize, 128usize))
                     } else if 64 <= m && 64 <= n {
                         Some((64usize, 64usize))
                     } else if 32 <= m && 32 <= n {
@@ -1439,12 +1441,17 @@ impl<'sched> HostCodeGenerator<'sched> {
                     if let Some((bm, bn)) = wmma_tile {
                         self.includes
                             .insert(Include::Local("dequant_matmul_wmma.cuh"));
-                        let warps = (bm / 16) * (bn / 16);
+                        let warp_tile_m = if 128 <= bm { 32usize } else { 16usize };
+                        let warp_tile_n = if 128 <= bn { 32usize } else { 16usize };
+                        debug_assert!(bm % warp_tile_m == 0 && bn % warp_tile_n == 0);
+                        let warps = (bm / warp_tile_m) * (bn / warp_tile_n);
                         let block_size = warps * 32;
                         let cuda_kernel = kernel::CUDAKernel::DequantMatMulWmmaKernel(
                             kernel::DequantMatMulWmmaKernel {
                                 bm,
                                 bn,
+                                warp_tile_m,
+                                warp_tile_n,
                                 m,
                                 n,
                                 k,

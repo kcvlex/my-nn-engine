@@ -66,7 +66,7 @@ static __device__ __forceinline__ void load_b(
     }
 }
 
-template <int BM, int BN>
+template <int BM, int BN, int WARP_TILE_M, int WARP_TILE_N>
 __global__ void dequant_matmul_wmma(
         __nv_bfloat16 *out,
         const __nv_bfloat16 *act,
@@ -76,14 +76,21 @@ __global__ void dequant_matmul_wmma(
         int N,
         int K
 ) {
+    assert(BM % WARP_TILE_M == 0);
+    assert(BN % WARP_TILE_N == 0);
+    assert(WARP_TILE_M % WMMA_M == 0);
+    assert(WARP_TILE_N % WMMA_N == 0);
+
     int block_row = blockIdx.y * BM;
     int block_col = blockIdx.x * BN;
     int warp_id = threadIdx.x / WARP_SIZE;
-    int block_row_idx = warp_id / (BN / WMMA_N);
-    int block_col_idx = warp_id % (BN / WMMA_N);
+    int block_row_idx = warp_id / (BN / WARP_TILE_N);
+    int block_col_idx = warp_id % (BN / WARP_TILE_N);
     int lane_id = threadIdx.x % WARP_SIZE;
 
-    constexpr int N_WARPS = (BM / WMMA_M) * (BN / WMMA_N);
+    constexpr int N_WARPS = (BM / WARP_TILE_M) * (BN / WARP_TILE_N);
+    constexpr int WM_ITER = WARP_TILE_M / WMMA_M;
+    constexpr int WN_ITER = WARP_TILE_N / WMMA_N;
     __shared__ union {
         struct {
             __nv_bfloat16 a[2][BM][BK + 8];
@@ -91,10 +98,14 @@ __global__ void dequant_matmul_wmma(
         } loads;
         float store[N_WARPS][WMMA_M * WMMA_N];
     } smem;
-    fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag;
-    fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, col_major> b_frag;
-    fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
-    fill_fragment(c_frag, 0.0f);
+    fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag[WM_ITER];
+    fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, col_major> b_frag[WN_ITER];
+    fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag[WM_ITER][WN_ITER];
+    for (int i = 0; i < WM_ITER; i++) {
+        for (int j = 0; j < WN_ITER; j++) {
+            fill_fragment(c_frag[i][j], 0.0f);
+        }
+    }
 
     int buf = 0;
     load_a<BM>(smem.loads.a[buf], act, M, N, K, block_row, 0);
@@ -115,9 +126,18 @@ __global__ void dequant_matmul_wmma(
         __syncthreads();
 
         for (int wk = 0; wk < BK; wk += WMMA_K) {
-            load_matrix_sync(a_frag, &smem.loads.a[buf][block_row_idx * WMMA_M][wk], BK + 8);
-            load_matrix_sync(b_frag, &smem.loads.b[buf][block_col_idx * WMMA_N][wk], BK + 8);
-            mma_sync(c_frag, a_frag, b_frag, c_frag);
+            for (int wm = 0; wm < WM_ITER; wm++) {
+                load_matrix_sync(a_frag[wm], &smem.loads.a[buf][block_row_idx * WARP_TILE_M + wm * WMMA_M][wk], BK + 8);
+            }
+            for (int wn = 0; wn < WN_ITER; wn++) {
+                load_matrix_sync(b_frag[wn], &smem.loads.b[buf][block_col_idx * WARP_TILE_N + wn * WMMA_N][wk], BK + 8);
+            }
+
+            for (int wm = 0; wm < WM_ITER; wm++) {
+                for (int wn = 0; wn < WN_ITER; wn++) {
+                    mma_sync(c_frag[wm][wn], a_frag[wm], b_frag[wn], c_frag[wm][wn]);
+                }
+            }
         }
         __syncthreads();
         buf = next;
@@ -126,17 +146,21 @@ __global__ void dequant_matmul_wmma(
     __syncthreads();
 
     float* my_scratch = smem.store[warp_id];
-    store_matrix_sync(my_scratch, c_frag, WMMA_N, mem_row_major);
 
-    int row_base = block_row + block_row_idx * WMMA_M;
-    int col_base = block_col + block_col_idx * WMMA_N;
-    for (int i = lane_id; i < WMMA_M * WMMA_N; i += WARP_SIZE) {
-        int r = i / WMMA_N;
-        int c = i % WMMA_N;
-        int gr = row_base + r;
-        int gc = col_base + c;
-        if (gr < M && gc < N) {
-            out[gr * N + gc] = __float2bfloat16(my_scratch[r * WMMA_N + c]);
+    for (int wm = 0; wm < WM_ITER; wm++) {
+        for (int wn = 0; wn < WN_ITER; wn++) {
+            store_matrix_sync(my_scratch, c_frag[wm][wn], WMMA_N, mem_row_major);
+            int row_base = block_row + block_row_idx * WARP_TILE_M + wm * WMMA_M;
+            int col_base = block_col + block_col_idx * WARP_TILE_N + wn * WMMA_N;
+            for (int i = lane_id; i < WMMA_M * WMMA_N; i += WARP_SIZE) {
+                int r = i / WMMA_N;
+                int c = i % WMMA_N;
+                int gr = row_base + r;
+                int gc = col_base + c;
+                if (gr < M && gc < N) {
+                    out[gr * N + gc] = __float2bfloat16(my_scratch[r * WMMA_N + c]);
+                }
+            }
         }
     }
 }

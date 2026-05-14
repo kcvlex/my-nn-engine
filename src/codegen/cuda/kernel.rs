@@ -1520,6 +1520,8 @@ impl DequantMatMulKernel {
 pub struct DequantMatMulWmmaKernel {
     pub bm: usize,
     pub bn: usize,
+    pub warp_tile_m: usize,
+    pub warp_tile_n: usize,
     pub m: usize,
     pub n: usize,
     pub k: usize,
@@ -1532,7 +1534,10 @@ pub struct DequantMatMulWmmaKernel {
 
 impl DequantMatMulWmmaKernel {
     pub fn fragment(&self) -> (String, Vec<String>) {
-        let id = format!("dequant_matmul_wmma<{}, {}>", self.bm, self.bn);
+        let id = format!(
+            "dequant_matmul_wmma<{}, {}, {}, {}>",
+            self.bm, self.bn, self.warp_tile_m, self.warp_tile_n,
+        );
         let args = vec![
             format!("(__nv_bfloat16 *)({})", self.out),
             format!("(const __nv_bfloat16 *)({})", self.act),
