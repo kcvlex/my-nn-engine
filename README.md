@@ -4,7 +4,13 @@ Hobby ONNX compiler and inference engine in Rust. Lowers an ONNX graph
 to LLVM IR for CPU and to generated CUDA C++ for GPU, then runs it as
 one compiled artifact.
 
-## Demo (LLM)
+## Demo
+
+### MNIST
+
+![mnist demo](docs/mnist-demo.gif)
+
+### LLM
 
 ![streaming chat demo](docs/llm-demo.gif)
 
