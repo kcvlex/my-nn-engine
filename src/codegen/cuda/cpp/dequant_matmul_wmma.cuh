@@ -84,24 +84,28 @@ __global__ void dequant_matmul_wmma(
     int lane_id = threadIdx.x % WARP_SIZE;
 
     constexpr int N_WARPS = (BM / WMMA_M) * (BN / WMMA_N);
-    __shared__ __nv_bfloat16 a_shared[2][BM][BK + 8];
-    __shared__ __nv_bfloat16 b_shared[2][BN][BK + 8];
-    __shared__ float c_scratch[N_WARPS][WMMA_M * WMMA_N];
+    __shared__ union {
+        struct {
+            __nv_bfloat16 a[2][BM][BK + 8];
+            __nv_bfloat16 b[2][BN][BK + 8];
+        } loads;
+        float store[N_WARPS][WMMA_M * WMMA_N];
+    } smem;
     fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag;
     fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, col_major> b_frag;
     fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
     fill_fragment(c_frag, 0.0f);
 
     int buf = 0;
-    load_a<BM>(a_shared[buf], act, M, N, K, block_row, 0);
-    load_b<BN>(b_shared[buf], wq, scale, M, N, K, block_col, 0);
+    load_a<BM>(smem.loads.a[buf], act, M, N, K, block_row, 0);
+    load_b<BN>(smem.loads.b[buf], wq, scale, M, N, K, block_col, 0);
     __pipeline_commit();
 
     for (int k = 0; k < K; k += BK) {
         int next  = 1 - buf;
         if (k + BK < K) {
-            load_a<BM>(a_shared[next], act, M, N, K, block_row, k + BK);
-            load_b<BN>(b_shared[next], wq, scale, M, N, K, block_col, k + BK);
+            load_a<BM>(smem.loads.a[next], act, M, N, K, block_row, k + BK);
+            load_b<BN>(smem.loads.b[next], wq, scale, M, N, K, block_col, k + BK);
             __pipeline_commit();
             __pipeline_wait_prior(1);
         } else {
@@ -111,15 +115,17 @@ __global__ void dequant_matmul_wmma(
         __syncthreads();
 
         for (int wk = 0; wk < BK; wk += WMMA_K) {
-            load_matrix_sync(a_frag, &a_shared[buf][block_row_idx * WMMA_M][wk], BK + 8);
-            load_matrix_sync(b_frag, &b_shared[buf][block_col_idx * WMMA_N][wk], BK + 8);
+            load_matrix_sync(a_frag, &smem.loads.a[buf][block_row_idx * WMMA_M][wk], BK + 8);
+            load_matrix_sync(b_frag, &smem.loads.b[buf][block_col_idx * WMMA_N][wk], BK + 8);
             mma_sync(c_frag, a_frag, b_frag, c_frag);
         }
         __syncthreads();
         buf = next;
     }
 
-    float* my_scratch = c_scratch[warp_id];
+    __syncthreads();
+
+    float* my_scratch = smem.store[warp_id];
     store_matrix_sync(my_scratch, c_frag, WMMA_N, mem_row_major);
 
     int row_base = block_row + block_row_idx * WMMA_M;
