@@ -86,7 +86,7 @@ enum DecodeKind {
     /// + SessionState K/V caches - produced by [`crate::build_llama`].
     Llama,
     /// Llama plus the streaming-KV inputs `[ring_sink, ring_window, ring_start, kv_position]`
-    /// appended at the end. Produced by [`crate::build_llama_with_options`] when
+    /// appended at the end. Produced by [`crate::build_llama`] when
     /// `LlamaOptions::streaming_kv` is set. `past_len` here is the unbounded
     /// stream position; the kernels remap it through the sink+ring layout.
     LlamaStreaming { sink: usize, window: usize },
@@ -244,12 +244,10 @@ impl LlmSession {
         max_seq_len: usize,
         eos_token_id: u32,
     ) -> Result<Self, LlmError> {
-        let shared_specs: Vec<SessionStateSpec> = kv_cache_names
+        let specs: Vec<SessionStateSpec> = kv_cache_names
             .into_iter()
             .flat_map(|kv| kv_cache_specs(opts.target, kv))
             .collect();
-
-        let make_specs = || shared_specs.clone();
 
         // CPU sessions allocate initializers per-graph (no shared device buffer pool yet),
         // so the cache only applies on CUDA.
@@ -261,7 +259,7 @@ impl LlmSession {
             decode_graph,
             opts,
             &SessionConfig {
-                session_states: make_specs(),
+                session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
             },
         )?;
@@ -269,7 +267,7 @@ impl LlmSession {
             prefill_graph,
             opts,
             &SessionConfig {
-                session_states: make_specs(),
+                session_states: specs,
                 initializer_buffers,
             },
         )?;
@@ -472,7 +470,7 @@ impl LlmSession {
 
     fn run_prefill(&mut self, prompt_ids: &[u32]) -> Result<u32, LlmError> {
         let logits = self.run_prefill_rec(prompt_ids)?;
-        argmax_logits(&logits)
+        Ok(argmax_logits(&logits))
     }
 
     pub fn generate(&mut self, prompt: &str, max_new_tokens: usize) -> Result<String, LlmError> {
@@ -522,7 +520,7 @@ impl LlmSession {
         if logits.is_empty() {
             return Err(LlmError::InvalidOutput("empty logits"));
         }
-        let next = argmax_logits(logits)?;
+        let next = argmax_logits(logits);
         self.past_len += 1;
         Ok(next)
     }
@@ -679,11 +677,11 @@ fn make_i64(dims: &[usize], values: Vec<i64>) -> Tensor {
     .unwrap()
 }
 
-fn argmax_logits(logits: &[f64]) -> Result<u32, LlmError> {
+fn argmax_logits(logits: &[f64]) -> u32 {
     let (idx, _) = logits
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
-    Ok(idx as u32)
+    idx as u32
 }
