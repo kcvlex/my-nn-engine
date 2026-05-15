@@ -20,10 +20,10 @@ use std::time::Instant;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
-use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
+use my_nn_engine_llm::LlamaOptions;
 use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
 use tokenizers::Tokenizer;
@@ -107,13 +107,18 @@ fn main() {
         load_t0.elapsed().as_secs_f64() * 1e3
     );
 
-    let r = build_llama(&config, &weights, max_seq_len);
+    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
 
     let compile_t0 = Instant::now();
     let mut llm = if prefill_len > 0 {
-        let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
+        let p = build_llama(
+            &config,
+            &weights,
+            max_seq_len,
+            &LlamaOptions::builder().prefill_len(prefill_len).build(),
+        );
         LlmSession::for_llama_with_prefill(
             r.graph,
             p.graph,

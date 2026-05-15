@@ -12,7 +12,6 @@ pub use chat_template::ChatTemplateError;
 pub use hf_config::HfConfig;
 pub use hf_weights::HfWeights;
 pub use llama::build_llama;
-pub use llama::build_llama_with_options;
 pub use llama::LlamaGraph;
 pub use llama::LlamaOptions;
 pub use llama::LlamaWeights;

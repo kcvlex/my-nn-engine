@@ -18,11 +18,11 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::apply_chat_template;
 use my_nn_engine_llm::build_llama;
-use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::ChatMessage;
 use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
+use my_nn_engine_llm::LlamaOptions;
 use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
 use serde::Deserialize;
@@ -48,8 +48,13 @@ fn main() {
     let max_seq_len = 512;
     let prefill_len = 64;
 
-    let r = build_llama(&config, &weights, max_seq_len);
-    let p = build_llama_prefill(&config, &weights, max_seq_len, prefill_len);
+    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
+    let p = build_llama(
+        &config,
+        &weights,
+        max_seq_len,
+        &LlamaOptions::builder().prefill_len(prefill_len).build(),
+    );
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
     let eos_str = tokenizer

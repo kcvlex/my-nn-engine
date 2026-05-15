@@ -4,6 +4,7 @@ use my_nn_engine::graph::ValueId;
 use my_nn_engine::tensor::types::DataType;
 use my_nn_engine::tensor::types::FloatType;
 use my_nn_engine::tensor::types::SIntType;
+use typed_builder::TypedBuilder;
 
 use crate::builder::Builder;
 use crate::hf_config::HfConfig;
@@ -13,8 +14,18 @@ use crate::hf_weights::WeightRef;
 use crate::session::KVCache;
 use crate::session::KVScale;
 
-#[derive(Debug, Clone, Default)]
+fn load_weight_t(b: &mut Builder, name: &str, w: &WeightRef) -> ValueId {
+    let id = b.load_weight(name, w.weight.clone(), w.scale.clone());
+    b.transpose(&format!("{name}_t"), id, vec![1, 0])
+}
+
+#[derive(Debug, Clone, Default, TypedBuilder)]
+#[builder(field_defaults(default))]
 pub struct LlamaOptions {
+    /// Prefill chunk length. `None` = decode (single-token graph). `Some(n)`
+    /// = prefill graph that consumes `n` tokens per step.
+    #[builder(setter(strip_option))]
+    pub prefill_len: Option<usize>,
     /// If true, KV cache is stored as INT8 with per-token BF16 scale.
     /// Halves KV cache footprint at small accuracy cost.
     pub quant_kv_cache: bool,
@@ -129,54 +140,17 @@ struct LayerCtx {
     streaming: Option<StreamingInputs>,
 }
 
-pub fn build_llama(config: &HfConfig, weights: &LlamaWeights, max_seq_len: usize) -> LlamaGraph {
-    build_llama_inner(
-        config,
-        weights,
-        max_seq_len,
-        Mode::Decode,
-        &LlamaOptions::default(),
-    )
-}
-
-pub fn build_llama_with_options(
+pub fn build_llama(
     config: &HfConfig,
     weights: &LlamaWeights,
     max_seq_len: usize,
     options: &LlamaOptions,
 ) -> LlamaGraph {
-    build_llama_inner(config, weights, max_seq_len, Mode::Decode, options)
-}
-
-pub fn build_llama_prefill(
-    config: &HfConfig,
-    weights: &LlamaWeights,
-    max_seq_len: usize,
-    prefill_len: usize,
-) -> LlamaGraph {
-    build_llama_inner(
-        config,
-        weights,
-        max_seq_len,
-        Mode::Prefill { len: prefill_len },
-        &LlamaOptions::default(),
-    )
-}
-
-pub fn build_llama_prefill_with_options(
-    config: &HfConfig,
-    weights: &LlamaWeights,
-    max_seq_len: usize,
-    prefill_len: usize,
-    options: &LlamaOptions,
-) -> LlamaGraph {
-    build_llama_inner(
-        config,
-        weights,
-        max_seq_len,
-        Mode::Prefill { len: prefill_len },
-        options,
-    )
+    let mode = match options.prefill_len {
+        Some(len) => Mode::Prefill { len },
+        None => Mode::Decode,
+    };
+    build_llama_inner(config, weights, max_seq_len, mode, options)
 }
 
 fn build_llama_inner(
@@ -282,12 +256,7 @@ fn build_llama_inner(
     let final_norm_w = b.external_initializer("model.norm.weight", weights.final_norm.clone());
     let final_norm = b.rms_norm("final_norm", x, final_norm_w, -1, ctx.eps);
 
-    let lm_head_w = b.load_weight(
-        "lm_head.weight",
-        weights.lm_head.weight.clone(),
-        weights.lm_head.scale.clone(),
-    );
-    let lm_head_w = b.transpose("lm_head_t", lm_head_w, vec![1, 0]);
+    let lm_head_w = load_weight_t(&mut b, "lm_head.weight", &weights.lm_head);
     let logits = b.matmul("lm_head", final_norm, lm_head_w);
     b.output(logits);
 
@@ -310,6 +279,20 @@ fn build_layer(
     x_in: ValueId,
     lw: &LlamaLayerWeights,
 ) -> (ValueId, KVCache) {
+    let (attn_out, kv_cache) = build_attention(b, ctx, prefix, x_in, lw);
+    let attn_residual = b.add(&format!("{prefix}_attn_resid"), x_in, attn_out);
+    let mlp_out = build_mlp(b, ctx, prefix, attn_residual, lw);
+    let final_out = b.add(&format!("{prefix}_mlp_resid"), attn_residual, mlp_out);
+    (final_out, kv_cache)
+}
+
+fn build_attention(
+    b: &mut Builder,
+    ctx: &LayerCtx,
+    prefix: &str,
+    x_in: ValueId,
+    lw: &LlamaLayerWeights,
+) -> (ValueId, KVCache) {
     // Pre-attention RMSNorm
     let in_norm_w = b.external_initializer(
         &format!("{prefix}.input_layernorm.weight"),
@@ -323,25 +306,9 @@ fn build_layer(
         ctx.eps,
     );
 
-    // Q/K/V projection
-    let q_w = b.load_weight(
-        &format!("{prefix}.self_attn.q_proj.weight"),
-        lw.q_proj.weight.clone(),
-        lw.q_proj.scale.clone(),
-    );
-    let k_w = b.load_weight(
-        &format!("{prefix}.self_attn.k_proj.weight"),
-        lw.k_proj.weight.clone(),
-        lw.k_proj.scale.clone(),
-    );
-    let v_w = b.load_weight(
-        &format!("{prefix}.self_attn.v_proj.weight"),
-        lw.v_proj.weight.clone(),
-        lw.v_proj.scale.clone(),
-    );
-    let q_w = b.transpose(&format!("{prefix}_q_w_t"), q_w, vec![1, 0]);
-    let k_w = b.transpose(&format!("{prefix}_k_w_t"), k_w, vec![1, 0]);
-    let v_w = b.transpose(&format!("{prefix}_v_w_t"), v_w, vec![1, 0]);
+    let q_w = load_weight_t(b, &format!("{prefix}.self_attn.q_proj.weight"), &lw.q_proj);
+    let k_w = load_weight_t(b, &format!("{prefix}.self_attn.k_proj.weight"), &lw.k_proj);
+    let v_w = load_weight_t(b, &format!("{prefix}.self_attn.v_proj.weight"), &lw.v_proj);
     let q = b.matmul(&format!("{prefix}_q_proj"), n1, q_w);
     let k = b.matmul(&format!("{prefix}_k_proj"), n1, k_w);
     let v = b.matmul(&format!("{prefix}_v_proj"), n1, v_w);
@@ -395,7 +362,80 @@ fn build_layer(
         k
     };
 
-    // K/V cache (graph inputs; SessionConfig converts to SessionState)
+    let (k_updated, v_updated, kv_scales, kv_cache) = apply_kv_cache(b, ctx, prefix, k, v);
+
+    let scale = (ctx.head_dim as f32).sqrt().recip();
+    let attn_out = match (ctx.streaming, ctx.quant_kv_cache) {
+        (Some(s), true) => b.attention_streaming(
+            &format!("{prefix}_attn"),
+            q,
+            k_updated,
+            v_updated,
+            kv_scales,
+            None,
+            ctx.active_seq_kv,
+            (s.ring_sink, s.ring_window, s.ring_start),
+            Some((ctx.cos_table, ctx.sin_table, s.kv_position)),
+            ctx.is_prefill,
+            scale,
+        ),
+        (Some(s), false) => {
+            // TODO: Fuse the rope recomputation into the attention kernel to save memory and latency.
+            let k_recomputed = b.rope_fused(
+                &format!("{prefix}_k_rope_recompute"),
+                k_updated,
+                ctx.cos_table,
+                ctx.sin_table,
+                s.kv_position,
+                ctx.head_dim,
+            );
+            b.attention_streaming(
+                &format!("{prefix}_attn"),
+                q,
+                k_recomputed,
+                v_updated,
+                kv_scales,
+                None,
+                ctx.active_seq_kv,
+                (s.ring_sink, s.ring_window, s.ring_start),
+                None,
+                ctx.is_prefill,
+                scale,
+            )
+        }
+        (None, _) => b.attention_quant(
+            &format!("{prefix}_attn"),
+            q,
+            k_updated,
+            v_updated,
+            kv_scales,
+            None,
+            Some(ctx.active_seq_kv),
+            ctx.is_prefill,
+            scale,
+        ),
+    };
+
+    let attn_out = b.transpose(&format!("{prefix}_attn_tr"), attn_out, vec![0, 2, 1, 3]);
+    let attn_back_shape = b.i64_initializer(
+        &format!("{prefix}_attn_shape"),
+        vec![1, ctx.seq_q as i64, ctx.hidden as i64],
+    );
+    let attn_out = b.reshape(&format!("{prefix}_attn_rs"), attn_out, attn_back_shape);
+
+    let o_w = load_weight_t(b, &format!("{prefix}.self_attn.o_proj.weight"), &lw.o_proj);
+    let o = b.matmul(&format!("{prefix}_o_proj"), attn_out, o_w);
+
+    (o, kv_cache)
+}
+
+fn apply_kv_cache(
+    b: &mut Builder,
+    ctx: &LayerCtx,
+    prefix: &str,
+    k: ValueId,
+    v: ValueId,
+) -> (ValueId, ValueId, Option<(ValueId, ValueId)>, KVCache) {
     let k_cache_name = format!("{prefix}.past_key");
     let v_cache_name = format!("{prefix}.past_value");
     let cache_dims = [1, ctx.num_kv_heads, ctx.max_seq_len, ctx.head_dim];
@@ -409,7 +449,6 @@ fn build_layer(
     let cache_elem_bytes = cache_dtype.bit_width() / 8;
     let bytes_per_buffer = ctx.num_kv_heads * ctx.max_seq_len * ctx.head_dim * cache_elem_bytes;
 
-    let scale = (1.0_f64 / (ctx.head_dim as f64).sqrt()) as f32;
     let (k_updated, v_updated, kv_scales, kv_cache_scale) = if ctx.quant_kv_cache {
         let scale_dtype = DataType::Float(ctx.scale_ty);
         let scale_dims = [1, ctx.num_kv_heads, ctx.max_seq_len];
@@ -491,124 +530,37 @@ fn build_layer(
     };
 
     let kv_cache = KVCache {
-        k_name: k_cache_name.clone(),
-        v_name: v_cache_name.clone(),
+        k_name: k_cache_name,
+        v_name: v_cache_name,
         bytes_per_buffer,
         scale: kv_cache_scale,
     };
 
-    let attn_out = if let Some(s) = ctx.streaming {
-        let ring = (s.ring_sink, s.ring_window, s.ring_start);
-        if ctx.quant_kv_cache {
-            b.attention_streaming(
-                &format!("{prefix}_attn"),
-                q,
-                k_updated,
-                v_updated,
-                kv_scales,
-                None,
-                ctx.active_seq_kv,
-                ring,
-                Some((ctx.cos_table, ctx.sin_table, s.kv_position)),
-                ctx.is_prefill,
-                scale,
-            )
-        } else {
-            // TODO: Fuse the rope recomputation into the attention kernel to save memory and latency.
-            let k_recomputed = b.rope_fused(
-                &format!("{prefix}_k_rope_recompute"),
-                k_updated,
-                ctx.cos_table,
-                ctx.sin_table,
-                s.kv_position,
-                ctx.head_dim,
-            );
-            b.attention_streaming(
-                &format!("{prefix}_attn"),
-                q,
-                k_recomputed,
-                v_updated,
-                kv_scales,
-                None,
-                ctx.active_seq_kv,
-                ring,
-                None,
-                ctx.is_prefill,
-                scale,
-            )
-        }
-    } else {
-        b.attention_quant(
-            &format!("{prefix}_attn"),
-            q,
-            k_updated,
-            v_updated,
-            kv_scales,
-            None,
-            Some(ctx.active_seq_kv),
-            ctx.is_prefill,
-            scale,
-        )
-    };
+    (k_updated, v_updated, kv_scales, kv_cache)
+}
 
-    let attn_out = b.transpose(&format!("{prefix}_attn_tr"), attn_out, vec![0, 2, 1, 3]);
-    let attn_back_shape = b.i64_initializer(
-        &format!("{prefix}_attn_shape"),
-        vec![1, ctx.seq_q as i64, ctx.hidden as i64],
-    );
-    let attn_out = b.reshape(&format!("{prefix}_attn_rs"), attn_out, attn_back_shape);
-
-    let o_w = b.load_weight(
-        &format!("{prefix}.self_attn.o_proj.weight"),
-        lw.o_proj.weight.clone(),
-        lw.o_proj.scale.clone(),
-    );
-    let o_w = b.transpose(&format!("{prefix}_o_w_t"), o_w, vec![1, 0]);
-    let o = b.matmul(&format!("{prefix}_o_proj"), attn_out, o_w);
-
-    let attn_residual = b.add(&format!("{prefix}_attn_resid"), x_in, o);
-
+fn build_mlp(
+    b: &mut Builder,
+    ctx: &LayerCtx,
+    prefix: &str,
+    x: ValueId,
+    lw: &LlamaLayerWeights,
+) -> ValueId {
     // Pre-MLP RMSNorm
     let post_norm_w = b.external_initializer(
         &format!("{prefix}.post_attention_layernorm.weight"),
         lw.post_norm.clone(),
     );
-    let n2 = b.rms_norm(
-        &format!("{prefix}_post_norm"),
-        attn_residual,
-        post_norm_w,
-        -1,
-        ctx.eps,
-    );
+    let n2 = b.rms_norm(&format!("{prefix}_post_norm"), x, post_norm_w, -1, ctx.eps);
 
-    // MLP (SwiGLU)
-    let gate_w = b.load_weight(
-        &format!("{prefix}.mlp.gate_proj.weight"),
-        lw.gate_proj.weight.clone(),
-        lw.gate_proj.scale.clone(),
-    );
-    let up_w = b.load_weight(
-        &format!("{prefix}.mlp.up_proj.weight"),
-        lw.up_proj.weight.clone(),
-        lw.up_proj.scale.clone(),
-    );
-    let down_w = b.load_weight(
-        &format!("{prefix}.mlp.down_proj.weight"),
-        lw.down_proj.weight.clone(),
-        lw.down_proj.scale.clone(),
-    );
-    let gate_w = b.transpose(&format!("{prefix}_gate_w_t"), gate_w, vec![1, 0]);
-    let up_w = b.transpose(&format!("{prefix}_up_w_t"), up_w, vec![1, 0]);
-    let down_w = b.transpose(&format!("{prefix}_down_w_t"), down_w, vec![1, 0]);
+    // SwiGLU MLP: down(silu(gate(x)) * up(x))
+    let gate_w = load_weight_t(b, &format!("{prefix}.mlp.gate_proj.weight"), &lw.gate_proj);
+    let up_w = load_weight_t(b, &format!("{prefix}.mlp.up_proj.weight"), &lw.up_proj);
+    let down_w = load_weight_t(b, &format!("{prefix}.mlp.down_proj.weight"), &lw.down_proj);
 
     let gate = b.matmul(&format!("{prefix}_gate_proj"), n2, gate_w);
     let gate = b.silu(&format!("{prefix}_silu"), gate);
     let up = b.matmul(&format!("{prefix}_up_proj"), n2, up_w);
     let mlp_in = b.mul(&format!("{prefix}_swiglu"), gate, up);
-    let mlp_out = b.matmul(&format!("{prefix}_down_proj"), mlp_in, down_w);
-
-    (
-        b.add(&format!("{prefix}_mlp_resid"), attn_residual, mlp_out),
-        kv_cache,
-    )
+    b.matmul(&format!("{prefix}_down_proj"), mlp_in, down_w)
 }

@@ -4,8 +4,7 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::build_llama_with_options;
-use my_nn_engine_llm::llama::build_llama_prefill_with_options;
+use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
 use my_nn_engine_llm::LlamaOptions;
@@ -28,13 +27,17 @@ fn run_tinyllama(target: Target) -> String {
 
     let max_seq_len = 256;
     let prefill_len = 16;
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: false,
-        streaming_kv: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
-    let p =
-        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let p = build_llama(
+        &config,
+        &weights,
+        max_seq_len,
+        &LlamaOptions {
+            prefill_len: Some(prefill_len),
+            ..llama_opts.clone()
+        },
+    );
 
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
@@ -66,13 +69,20 @@ fn run_llama2_int8(target: Target) -> String {
     // CPU codegen does not yet implement the rope+dequant fuse in attention,
     // so streaming-KV + INT8 only works on CUDA.
     let streaming_kv = matches!(target, Target::CUDA);
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: true,
-        streaming_kv,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
-    let p =
-        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder()
+        .quant_kv_cache(true)
+        .streaming_kv(streaming_kv)
+        .build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let p = build_llama(
+        &config,
+        &weights,
+        max_seq_len,
+        &LlamaOptions {
+            prefill_len: Some(prefill_len),
+            ..llama_opts.clone()
+        },
+    );
 
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();

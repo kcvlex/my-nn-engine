@@ -9,12 +9,12 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::apply_chat_template;
 use my_nn_engine_llm::build_llama;
-use my_nn_engine_llm::llama::build_llama_prefill;
 use my_nn_engine_llm::ChatMessage;
 use my_nn_engine_llm::ChatTemplateError;
 use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
+use my_nn_engine_llm::LlamaOptions;
 use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmError;
 use my_nn_engine_llm::LlmSession;
@@ -212,7 +212,7 @@ impl ChatRegistry {
 
         let (chat_template, eos_token_str, bos_token_str) = load_chat_meta(&path)?;
 
-        let r = build_llama(&config, &weights, MAX_SEQ_LEN);
+        let r = build_llama(&config, &weights, MAX_SEQ_LEN, &LlamaOptions::default());
 
         let opts = Options::builder().target(target).build();
         let tokenizer = Tokenizer::from_file(path.join("tokenizer.json"))
@@ -222,7 +222,12 @@ impl ChatRegistry {
         log::info!("Stop strings for {model_dir}: {stop_strings:?}");
 
         let llm = if dir_uses_prefill(model_dir) {
-            let p = build_llama_prefill(&config, &weights, MAX_SEQ_LEN, PREFILL_LEN);
+            let p = build_llama(
+                &config,
+                &weights,
+                MAX_SEQ_LEN,
+                &LlamaOptions::builder().prefill_len(PREFILL_LEN).build(),
+            );
             LlmSession::for_llama_with_prefill(
                 r.graph,
                 p.graph,

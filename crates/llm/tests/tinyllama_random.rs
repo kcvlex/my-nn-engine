@@ -3,8 +3,7 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::llama::build_llama_prefill_with_options;
-use my_nn_engine_llm::llama::build_llama_with_options;
+use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::llama::LlamaOptions;
 use my_nn_engine_llm::quantize::cast_safetensors_bf16_dir;
 use my_nn_engine_llm::HfConfig;
@@ -31,11 +30,8 @@ fn run_with_dir(dir: &Path, target: Target) {
     let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
     let max_seq_len = STREAM_SINK + STREAM_WINDOW;
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: false,
-        streaming_kv: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_streaming(
@@ -92,18 +88,23 @@ fn cpu_multi_turn_prefill_matches_decode_only() {
         let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
 
         let max_seq_len = STREAM_SINK + STREAM_WINDOW;
-        let llama_opts = LlamaOptions {
-            quant_kv_cache: false,
-            streaming_kv: true,
-        };
-        let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+        let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
+        let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
         let opts = Options::builder().target(Target::CPU).build();
         let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
 
         let prefill = prefill_len.map(|len| {
             (
-                build_llama_prefill_with_options(&config, &weights, max_seq_len, len, &llama_opts)
-                    .graph,
+                build_llama(
+                    &config,
+                    &weights,
+                    max_seq_len,
+                    &LlamaOptions {
+                        prefill_len: Some(len),
+                        ..llama_opts.clone()
+                    },
+                )
+                .graph,
                 len,
             )
         });
@@ -163,11 +164,8 @@ fn cuda_streaming_runs_past_window() {
     let window = 16;
     let max_active = sink + window;
 
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: false,
-        streaming_kv: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
     let opts = Options::builder().target(Target::CUDA).build();
@@ -209,11 +207,11 @@ fn cuda_streaming_quant_runs_past_window() {
     let window = 16;
     let max_active = sink + window;
 
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: true,
-        streaming_kv: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder()
+        .quant_kv_cache(true)
+        .streaming_kv(true)
+        .build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
     let opts = Options::builder().target(Target::CUDA).build();
@@ -255,13 +253,20 @@ fn run_streaming_prefill_smoke(quant_kv_cache: bool) {
     let max_active = sink + window;
     let prefill_len = 4;
 
-    let llama_opts = LlamaOptions {
-        quant_kv_cache,
-        streaming_kv: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
-    let p =
-        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder()
+        .quant_kv_cache(quant_kv_cache)
+        .streaming_kv(true)
+        .build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let p = build_llama(
+        &config,
+        &weights,
+        max_seq_len,
+        &LlamaOptions {
+            prefill_len: Some(prefill_len),
+            ..llama_opts.clone()
+        },
+    );
     assert!(r.streaming.is_some());
     assert!(p.streaming.is_some());
 

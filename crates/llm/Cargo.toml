@@ -24,6 +24,7 @@ libloading = { workspace = true }
 itertools = { workspace = true }
 minijinja = { version = "2.19.0", default-features = false, features = ["builtins", "serde"] }
 minijinja-contrib = { version = "2.19.0", default-features = false, features = ["pycompat"] }
+typed-builder = "0.21.0"
 
 [dev-dependencies]
 tempfile = { workspace = true }

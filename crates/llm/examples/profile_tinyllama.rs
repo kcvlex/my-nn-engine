@@ -20,6 +20,7 @@ use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_llama;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
+use my_nn_engine_llm::LlamaOptions;
 use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
 use tokenizers::Tokenizer;
@@ -57,7 +58,7 @@ fn main() {
     let n_warmup = 4;
     let n_measure = 32;
 
-    let r = build_llama(&config, &weights, max_seq_len);
+    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama(
