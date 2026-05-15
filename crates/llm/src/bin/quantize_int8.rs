@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use my_nn_engine_llm::quantize::quantize_safetensors_int8;
 use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
-use my_nn_engine_llm::quantize::quantize_safetensors_int8_to_dir;
+use my_nn_engine_llm::quantize::quantize_safetensors_int8_streaming;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -23,7 +23,7 @@ fn main() {
         .unwrap_or(false);
 
     let stats = if in_path.is_dir() && !single_file_out {
-        quantize_safetensors_int8_to_dir(&in_path, &out_path)
+        quantize_safetensors_int8_streaming(&in_path, &out_path)
     } else if in_path.is_dir() {
         quantize_safetensors_int8_dir(&in_path, &out_path)
     } else {

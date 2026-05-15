@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use itertools::Itertools;
 use my_nn_engine::graph::ExternalTensorRef;
 use my_nn_engine::tensor::types::DataType;
 use my_nn_engine::tensor::types::FloatType;
 use my_nn_engine::tensor::types::ResolvedTensorDims;
+use my_nn_engine::tensor::types::SIntType;
 use safetensors::Dtype;
 use safetensors::SafeTensors;
 
@@ -40,12 +42,12 @@ struct WeightEntry {
     elem_type: DataType,
 }
 
+#[derive(Default)]
 pub struct HfWeights {
     entries: HashMap<String, WeightEntry>,
 }
 
 fn safetensors_dtype(d: Dtype) -> Result<DataType, HfWeightsError> {
-    use my_nn_engine::tensor::types::SIntType;
     match d {
         Dtype::F32 => Ok(FloatType::F32.into()),
         Dtype::BF16 => Ok(FloatType::BF16.into()),
@@ -60,18 +62,22 @@ pub struct WeightRef {
     pub scale: Option<ExternalTensorRef>,
 }
 
+pub const QUANTIZED_SAFETENSORS: &str = "model.int8.safetensors";
+pub const SAFETENSORS_INDEX: &str = "model.safetensors.index.json";
+pub const SINGLE_SAFETENSORS: &str = "model.safetensors";
+
 impl HfWeights {
     pub fn from_dir(model_dir: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
         let dir = model_dir.as_ref();
-        let int8 = dir.join("model.int8.safetensors");
+        let int8 = dir.join(QUANTIZED_SAFETENSORS);
         if int8.exists() {
             return Self::from_safetensors(int8);
         }
-        let index = dir.join("model.safetensors.index.json");
+        let index = dir.join(SAFETENSORS_INDEX);
         if index.exists() {
             return Self::from_index(index);
         }
-        let single = dir.join("model.safetensors");
+        let single = dir.join(SINGLE_SAFETENSORS);
         if single.exists() {
             return Self::from_safetensors(single);
         }
@@ -79,9 +85,9 @@ impl HfWeights {
     }
 
     pub fn from_safetensors(path: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
-        let mut entries = HashMap::new();
-        Self::add_shard(&mut entries, path.as_ref())?;
-        Ok(Self { entries })
+        let mut res = Self::default();
+        res.add_shard(path.as_ref())?;
+        Ok(res)
     }
 
     pub fn from_index(index_path: impl AsRef<Path>) -> Result<Self, HfWeightsError> {
@@ -94,19 +100,19 @@ impl HfWeights {
             .get("weight_map")
             .and_then(|v| v.as_object())
             .ok_or(HfWeightsError::MalformedIndex("missing weight_map"))?;
-        let shards: std::collections::BTreeSet<&str> =
-            weight_map.values().filter_map(|v| v.as_str()).collect();
-        let mut entries = HashMap::new();
-        for shard in shards {
-            Self::add_shard(&mut entries, &dir.join(shard))?;
+        let mut res = Self::default();
+        for shard in weight_map
+            .values()
+            .filter_map(|v| v.as_str())
+            .unique()
+            .map(|s| dir.join(s))
+        {
+            res.add_shard(&shard)?;
         }
-        Ok(Self { entries })
+        Ok(res)
     }
 
-    fn add_shard(
-        entries: &mut HashMap<String, WeightEntry>,
-        path: &Path,
-    ) -> Result<(), HfWeightsError> {
+    fn add_shard(&mut self, path: &Path) -> Result<(), HfWeightsError> {
         let path = path.to_path_buf();
         let file = std::fs::File::open(&path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
@@ -114,7 +120,7 @@ impl HfWeights {
         let data_start = (8 + header_bytes) as u64;
         for (name, info) in metadata.tensors() {
             let (start, end) = info.data_offsets;
-            entries.insert(
+            self.entries.insert(
                 name.to_string(),
                 WeightEntry {
                     path: path.clone(),

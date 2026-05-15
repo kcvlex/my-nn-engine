@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use my_nn_engine_llm::quantize::quantize_safetensors_int8;
-use my_nn_engine_llm::quantize::quantize_safetensors_int8_to_dir;
+use my_nn_engine_llm::quantize::quantize_safetensors_int8_streaming;
 use my_nn_engine_llm::quantize::QuantizeStats;
 use safetensors::Dtype;
 use safetensors::SafeTensors;
@@ -219,7 +219,7 @@ fn quantize_int8_to_dir_writes_per_shard_with_index() {
     )
     .unwrap();
 
-    let stats = quantize_safetensors_int8_to_dir(&src_dir, &dst_dir).unwrap();
+    let stats = quantize_safetensors_int8_streaming(&src_dir, &dst_dir).unwrap();
     assert_eq!(
         stats,
         QuantizeStats {

@@ -1,10 +1,13 @@
 use std::borrow::Cow;
 use std::path::Path;
+use std::path::PathBuf;
 
 use safetensors::tensor::TensorView;
 use safetensors::Dtype;
 use safetensors::SafeTensors;
 use safetensors::View;
+
+use crate::hf_weights;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QuantizeError {
@@ -199,7 +202,7 @@ fn cast_to_bf16(view: &TensorView<'_>) -> Result<OwnedTensor, QuantizeError> {
 }
 
 fn list_shards(dir: &Path) -> Result<Vec<std::path::PathBuf>, QuantizeError> {
-    let index = dir.join("model.safetensors.index.json");
+    let index = dir.join(hf_weights::SAFETENSORS_INDEX);
     if index.exists() {
         let json: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index)?)?;
         let map = json
@@ -210,7 +213,7 @@ fn list_shards(dir: &Path) -> Result<Vec<std::path::PathBuf>, QuantizeError> {
             map.values().filter_map(|v| v.as_str()).collect();
         Ok(shards.into_iter().map(|s| dir.join(s)).collect())
     } else {
-        Ok(vec![dir.join("model.safetensors")])
+        Ok(vec![dir.join(hf_weights::SINGLE_SAFETENSORS)])
     }
 }
 
@@ -258,8 +261,7 @@ pub fn quantize_safetensors_int8_dir(
     quantize_safetensors_int8_files(&files, dst)
 }
 
-// Streaming quantization.
-pub fn quantize_safetensors_int8_to_dir(
+pub fn quantize_safetensors_int8_streaming(
     src_dir: impl AsRef<Path>,
     dst_dir: impl AsRef<Path>,
 ) -> Result<QuantizeStats, QuantizeError> {
@@ -267,7 +269,7 @@ pub fn quantize_safetensors_int8_to_dir(
     let dst_dir = dst_dir.as_ref();
     std::fs::create_dir_all(dst_dir)?;
 
-    let index_path = src_dir.join("model.safetensors.index.json");
+    let index_path = src_dir.join(hf_weights::SAFETENSORS_INDEX);
     let shard_names: Vec<String> = list_shards(src_dir)?
         .into_iter()
         .map(|p| {
@@ -318,7 +320,7 @@ pub fn quantize_safetensors_int8_to_dir(
             "weight_map": serde_json::Value::Object(weight_map),
         });
         std::fs::write(
-            dst_dir.join("model.safetensors.index.json"),
+            dst_dir.join(hf_weights::SAFETENSORS_INDEX),
             serde_json::to_string_pretty(&index_out)?,
         )?;
     }
@@ -327,7 +329,7 @@ pub fn quantize_safetensors_int8_to_dir(
 }
 
 fn quantize_safetensors_int8_files(
-    src_files: &[std::path::PathBuf],
+    src_files: &[PathBuf],
     dst: impl AsRef<Path>,
 ) -> Result<QuantizeStats, QuantizeError> {
     let mut output: Vec<(String, OwnedTensor)> = Vec::new();
