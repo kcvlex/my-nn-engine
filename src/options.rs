@@ -1,5 +1,7 @@
 use typed_builder::TypedBuilder;
 
+use crate::schedule::scheduler::PlacementStrategy;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     CPU,
@@ -34,4 +36,7 @@ pub struct Options {
 
     #[builder(default = std::env::var("MY_ONNX_SAVE_BUILD_DIR").is_ok())]
     pub save_transformed_model: bool,
+
+    #[builder(default)]
+    pub placement_strategy: Option<PlacementStrategy>,
 }

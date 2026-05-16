@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use crate::graph::operator::args;
 use crate::graph::operator::Operator;
 use crate::graph::ValueId;
+use crate::schedule::placement::Placement;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
@@ -18,6 +19,13 @@ fn align_up(size: usize) -> usize {
 
 pub struct MemoryAwareSchedulePass {
     pub num_streams: usize,
+    pub placement_strategy: PlacementStrategy,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PlacementStrategy {
+    Uniform(Device),
+    StructuralKvTouch,
 }
 
 impl SchedulePass for MemoryAwareSchedulePass {
@@ -26,7 +34,11 @@ impl SchedulePass for MemoryAwareSchedulePass {
     }
 
     fn run(&self, schedule: &mut Schedule) {
-        let plan = build(schedule, self.num_streams);
+        let placement = match self.placement_strategy {
+            PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
+            PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
+        };
+        let plan = build(schedule, self.num_streams, placement);
         schedule.execution_plan = Some(plan);
     }
 }
@@ -235,7 +247,7 @@ struct Scheduler<'s> {
     initializers: HashSet<ValueId>,
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
-    device: Device,
+    placement: Placement,
 
     // TODO: Per arena
     num_streams: usize,
@@ -254,13 +266,11 @@ struct Scheduler<'s> {
 }
 
 impl<'s> Scheduler<'s> {
-    fn new(schedule: &'s Schedule, num_streams: usize) -> Self {
+    fn new(schedule: &'s Schedule, num_streams: usize, placement: Placement) -> Self {
         let deps = Deps::new(schedule);
         let output_alias = compute_output_aliases(schedule);
-        let num_streams = match schedule.options.target {
-            Target::CUDA => num_streams.max(1),
-            Target::CPU => 1,
-        };
+        let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
+        let num_streams = if needs_cuda { num_streams.max(1) } else { 1 };
 
         let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
         let session_states: HashSet<ValueId> = schedule.session_states.iter().copied().collect();
@@ -278,11 +288,6 @@ impl<'s> Scheduler<'s> {
         }
 
         let value_remaining_uses = deps.value_uses_count.clone();
-
-        let device = match schedule.options.target {
-            Target::CUDA => Device::CUDA,
-            Target::CPU => Device::CPU,
-        };
 
         let kernel_pending: BTreeMap<KernelId, usize> = deps
             .kernel_preds
@@ -302,7 +307,7 @@ impl<'s> Scheduler<'s> {
             initializers,
             session_states,
             inputs_set,
-            device,
+            placement,
             num_streams,
             allocator: ChunkAllocator::default(),
             value_on_tier: HashMap::new(),
@@ -368,12 +373,14 @@ impl<'s> Scheduler<'s> {
             if matches!(place, AllocPlace::Output(_)) {
                 continue;
             }
-            let stream = self
-                .deps
-                .value2producer
-                .get(&v)
-                .map(|kid| self.kernel_info[kid].stream)
-                .unwrap_or(StreamId(0));
+            let producer = self.deps.value2producer.get(&v).copied();
+            let (stream, device) = match producer {
+                Some(kid) => {
+                    let info = &self.kernel_info[&kid];
+                    (info.stream, info.device)
+                }
+                None => (StreamId(0), Device::CPU),
+            };
             let event = self.fresh_event();
             self.steps.push(Step::Transfer(TransferStep {
                 src: ValueBinding {
@@ -388,10 +395,7 @@ impl<'s> Scheduler<'s> {
                     place: AllocPlace::Output(v),
                     is_first_use: false,
                 },
-                context: ExecutionContext {
-                    device: self.device,
-                    stream,
-                },
+                context: ExecutionContext { device, stream },
                 records_event: Some(event),
             }));
         }
@@ -444,8 +448,8 @@ impl<'s> Scheduler<'s> {
         }
     }
 
-    fn pick_device(&self, _kid: KernelId) -> Device {
-        self.device
+    fn pick_device(&self, kid: KernelId) -> Device {
+        self.placement.device_of(kid)
     }
 
     fn fresh_event(&mut self) -> EventId {
@@ -831,6 +835,6 @@ impl<'s> Scheduler<'s> {
     }
 }
 
-fn build(schedule: &Schedule, num_streams: usize) -> ExecutionPlan {
-    Scheduler::new(schedule, num_streams).run()
+fn build(schedule: &Schedule, num_streams: usize, placement: Placement) -> ExecutionPlan {
+    Scheduler::new(schedule, num_streams, placement).run()
 }
