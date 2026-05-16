@@ -161,6 +161,12 @@ fn build_llama_inner(
     options: &LlamaOptions,
 ) -> LlamaGraph {
     assert!(max_seq_len <= config.max_position_embeddings);
+    if let Mode::Prefill { len } = mode {
+        assert!(
+            len <= max_seq_len,
+            "prefill_len ({len}) must be <= max_seq_len ({max_seq_len})"
+        );
+    }
     assert_eq!(config.hidden_act, "silu");
     assert_eq!(
         config.hidden_size,

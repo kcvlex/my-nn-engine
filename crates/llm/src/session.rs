@@ -187,6 +187,12 @@ impl LlmSession {
     ) -> Result<Self, LlmError> {
         assert!(sink + window <= max_seq_len);
         assert!(0 < window);
+        if let Some((_, prefill_len)) = &prefill {
+            assert!(
+                *prefill_len <= window,
+                "prefill_len ({prefill_len}) must be <= window ({window}) in streaming KV mode",
+            );
+        }
 
         let specs: Vec<SessionStateSpec> = kv_cache_names
             .into_iter()
