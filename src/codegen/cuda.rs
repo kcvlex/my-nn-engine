@@ -2300,9 +2300,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     pub fn generate(&mut self, opt: &Options) -> Result<HostCode, BuildError> {
         let decl_values = self.gen_decl_values()?;
-        let ComputeGen {
-            per_step: per_step_stmts,
-        } = self.gen_computes()?;
+        let per_step_stmts = self.gen_computes()?.per_step;
         self.emit_used_initializers();
         let finalize = self.gen_finalize()?;
 
@@ -2429,18 +2427,14 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
             )?;
         }
 
-        for stmt in self.decl_values.iter() {
-            writeln!(writer, "  {stmt}")?;
-        }
-        for stmt in self.decl_cuda_objs.iter() {
-            writeln!(writer, "  {stmt}")?;
-        }
-        for (_, stmts) in self.per_step_stmts.iter() {
-            for stmt in stmts.iter() {
-                writeln!(writer, "  {stmt}")?;
-            }
-        }
-        for stmt in self.finalize.iter() {
+        for stmt in chain!(
+            self.decl_values.iter(),
+            self.decl_cuda_objs.iter(),
+            self.per_step_stmts
+                .iter()
+                .flat_map(|(_, stmts)| stmts.iter()),
+            self.finalize.iter(),
+        ) {
             writeln!(writer, "  {stmt}")?;
         }
 
@@ -2466,13 +2460,11 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
                 "\nextern \"C\" void {fn_name}(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) {{
   auto *state = static_cast<ModelState*>(state_ptr);"
             )?;
-            for stmt in self.decl_values.iter() {
-                writeln!(writer, "  {stmt}")?;
-            }
-            for stmt in self.decl_cuda_objs.iter() {
-                writeln!(writer, "  {stmt}")?;
-            }
-            for stmt in stmts.iter() {
+            for stmt in chain!(
+                self.decl_values.iter(),
+                self.decl_cuda_objs.iter(),
+                stmts.iter()
+            ) {
                 writeln!(writer, "  {stmt}")?;
             }
             writeln!(writer, "}}")?;
