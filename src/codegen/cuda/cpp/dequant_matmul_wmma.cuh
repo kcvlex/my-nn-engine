@@ -1,7 +1,10 @@
 #ifndef INCLUDE_DEQUANT_MATMUL_WMMA_CUH_
 #define INCLUDE_DEQUANT_MATMUL_WMMA_CUH_
 
+// Assumes K % 8 == 0 (enforced by cuda.rs WMMA-tile selection).
+
 #include <cuda.h>
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <mma.h>
 #include <cuda_pipeline.h>
@@ -45,24 +48,39 @@ template <int BN>
 static __device__ __forceinline__ void load_b(
     __nv_bfloat16 b_smem[][BK + 8],
     const int8_t *bq,
-    const __nv_bfloat16 *scale,
-    int M,
+    const __nv_bfloat16 *scale_smem,
     int N,
     int K,
     int block_col,
     int k
 ) {
-    for (int i = threadIdx.x; i < BN * BK; i += blockDim.x) {
+    constexpr int VEC = 8;
+    static_assert(BK % VEC == 0, "BK must be a multiple of VEC=8");
+    for (int i = threadIdx.x * VEC; i < BN * BK; i += blockDim.x * VEC) {
         int r = i / BK;
         int c = i % BK;
         int gr = block_col + r;
         int gc = k + c;
+
+        __nv_bfloat162 packed[4];
         if (gr < N && gc < K) {
-            int8_t b = bq[gr * K + gc];
-            b_smem[r][c] = __float2bfloat16((float)b * (float)scale[gr]);
+            int2 raw = *reinterpret_cast<const int2 *>(&bq[gr * K + gc]);
+            const int8_t *bytes = reinterpret_cast<const int8_t *>(&raw);
+            float s = (float)scale_smem[r];
+            #pragma unroll
+            for (int j = 0; j < 4; j++) {
+                packed[j] = __floats2bfloat162_rn(
+                    (float)bytes[j * 2 + 0] * s,
+                    (float)bytes[j * 2 + 1] * s
+                );
+            }
         } else {
-            b_smem[r][c] = __float2bfloat16(0.0f);
+            for (int j = 0; j < 4; j++) {
+                packed[j] = __floats2bfloat162_rn(0.0f, 0.0f);
+            }
         }
+        *reinterpret_cast<int4 *>(&b_smem[r][c]) =
+            *reinterpret_cast<const int4 *>(&packed[0]);
     }
 }
 
@@ -98,6 +116,14 @@ __global__ void dequant_matmul_wmma(
         } loads;
         float store[N_WARPS][WMMA_M * WMMA_N];
     } smem;
+    __shared__ __nv_bfloat16 scale_smem[BN];
+
+    for (int i = threadIdx.x; i < BN; i += blockDim.x) {
+        int gn = block_col + i;
+        scale_smem[i] = (gn < N) ? scale[gn] : __float2bfloat16(0.0f);
+    }
+    __syncthreads();
+
     fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag[WM_ITER];
     fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, col_major> b_frag[WN_ITER];
     fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag[WM_ITER][WN_ITER];
@@ -109,14 +135,14 @@ __global__ void dequant_matmul_wmma(
 
     int buf = 0;
     load_a<BM>(smem.loads.a[buf], act, M, N, K, block_row, 0);
-    load_b<BN>(smem.loads.b[buf], wq, scale, M, N, K, block_col, 0);
+    load_b<BN>(smem.loads.b[buf], wq, scale_smem, N, K, block_col, 0);
     __pipeline_commit();
 
     for (int k = 0; k < K; k += BK) {
         int next  = 1 - buf;
         if (k + BK < K) {
             load_a<BM>(smem.loads.a[next], act, M, N, K, block_row, k + BK);
-            load_b<BN>(smem.loads.b[next], wq, scale, M, N, K, block_col, k + BK);
+            load_b<BN>(smem.loads.b[next], wq, scale_smem, N, K, block_col, k + BK);
             __pipeline_commit();
             __pipeline_wait_prior(1);
         } else {
