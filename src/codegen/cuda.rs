@@ -229,7 +229,7 @@ pub struct HostCodeGenerator<'sched> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StepKey {
+enum StepKey {
     Kernel(KernelId),
     Transfer(usize),
 }
