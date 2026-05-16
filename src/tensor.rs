@@ -289,6 +289,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn test_slice1() {
         let (t, orig) = make_range_tensor!(i64, 3, 4, 5);
         let s = t.slices(&[-2, 0, 1], &[3, 4, -1]);
