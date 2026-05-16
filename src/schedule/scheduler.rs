@@ -36,7 +36,7 @@ impl SchedulePass for MemoryAwareSchedulePass {
     fn run(&self, schedule: &mut Schedule) {
         let placement = match self.placement_strategy {
             PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
-            PlacementStrategy::StructuralKvTouch => placement::structural_kv_touch(schedule),
+            PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
         };
         let plan = build(schedule, self.num_streams, placement);
         schedule.execution_plan = Some(plan);

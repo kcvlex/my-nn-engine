@@ -1,5 +1,7 @@
 use typed_builder::TypedBuilder;
 
+use crate::schedule::scheduler::PlacementStrategy;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     CPU,
@@ -36,5 +38,5 @@ pub struct Options {
     pub save_transformed_model: bool,
 
     #[builder(default)]
-    pub placement_strategy: Option<crate::schedule::scheduler::PlacementStrategy>,
+    pub placement_strategy: Option<PlacementStrategy>,
 }

@@ -172,7 +172,6 @@ impl KernelsBuilder {
         &self,
         graph: &mut Graph,
         graph_op: &mut impl GraphOp,
-        _target: crate::options::Target,
         include_cpu_workspaces: bool,
     ) -> Kernels {
         let mut uf = UnionFind::new(self.elementwise_nodes.ordered.len());
@@ -400,8 +399,7 @@ impl KernelsBuilder {
 pub fn build_kernels(
     graph: &mut Graph,
     graph_op: &mut impl GraphOp,
-    target: crate::options::Target,
     include_cpu_workspaces: bool,
 ) -> Kernels {
-    KernelsBuilder::new(graph).run(graph, graph_op, target, include_cpu_workspaces)
+    KernelsBuilder::new(graph).run(graph, graph_op, include_cpu_workspaces)
 }
