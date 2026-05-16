@@ -228,13 +228,23 @@ pub struct HostCodeGenerator<'sched> {
     includes: BTreeSet<Include>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum StepKey {
+    Kernel(KernelId),
+    Transfer(usize),
+}
+
+struct ComputeGen {
+    per_step: Vec<(StepKey, Vec<Statement>)>,
+}
+
 pub struct HostCode {
     state_fields: Vec<String>,
     init_body: Vec<Statement>,
     destroy_body: Vec<Statement>,
     decl_values: Vec<Statement>,
     decl_cuda_objs: Vec<Statement>,
-    computes: Vec<Statement>,
+    per_step_stmts: Vec<(StepKey, Vec<Statement>)>,
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
 
@@ -634,7 +644,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             .ok_or(BuildError::UnresolvedType(value_id))
     }
 
-    fn gen_computes(&mut self) -> Result<Vec<Statement>, BuildError> {
+    fn gen_computes(&mut self) -> Result<ComputeGen, BuildError> {
         let plan = self
             .schedule
             .execution_plan
@@ -656,13 +666,20 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Step::Kernel(_) | Step::SyncWait(_) => None,
             })
             .collect_vec();
+        let mut per_step: Vec<(StepKey, Vec<Statement>)> = Vec::new();
         for op in ops {
             match op {
-                Op::Kernel(kid) => self.call_kernel(kid)?,
-                Op::Transfer(idx) => self.emit_transfer(idx)?,
+                Op::Kernel(kid) => {
+                    self.call_kernel(kid)?;
+                    per_step.push((StepKey::Kernel(kid), self.move_statements()));
+                }
+                Op::Transfer(idx) => {
+                    self.emit_transfer(idx)?;
+                    per_step.push((StepKey::Transfer(idx), self.move_statements()));
+                }
             }
         }
-        Ok(self.move_statements())
+        Ok(ComputeGen { per_step })
     }
 
     fn gen_decl_cuda_objs(&mut self) -> Result<Vec<Statement>, BuildError> {
@@ -2283,7 +2300,7 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     pub fn generate(&mut self, opt: &Options) -> Result<HostCode, BuildError> {
         let decl_values = self.gen_decl_values()?;
-        let computes = self.gen_computes()?;
+        let per_step_stmts = self.gen_computes()?.per_step;
         self.emit_used_initializers();
         let finalize = self.gen_finalize()?;
 
@@ -2323,7 +2340,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             destroy_body,
             decl_values,
             decl_cuda_objs,
-            computes,
+            per_step_stmts,
             finalize,
             kernel_codes,
             includes: self.includes.clone(),
@@ -2410,15 +2427,15 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
             )?;
         }
 
-        for stmts in &[
-            self.decl_values.as_slice(),
-            self.decl_cuda_objs.as_slice(),
-            self.computes.as_slice(),
-            self.finalize.as_slice(),
-        ] {
-            for stmt in stmts.iter() {
-                writeln!(writer, "  {stmt}")?;
-            }
+        for stmt in chain!(
+            self.decl_values.iter(),
+            self.decl_cuda_objs.iter(),
+            self.per_step_stmts
+                .iter()
+                .flat_map(|(_, stmts)| stmts.iter()),
+            self.finalize.iter(),
+        ) {
+            writeln!(writer, "  {stmt}")?;
         }
 
         if self.profile {
@@ -2428,6 +2445,30 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
     std::cout << \"Elapsed time: \" << elapsed_ms.count() << \" ms\" << std::endl;")?;
         }
         writeln!(writer, "}}")?;
+
+        // Per-step wrappers: each step gets its own extern "C" function so
+        // HybridSession can dispatch CUDA work step-by-step. The prologue
+        // (decl_values + decl_cuda_objs) is duplicated in every wrapper for
+        // simplicity; nvcc inlines the address arithmetic.
+        for (key, stmts) in self.per_step_stmts.iter() {
+            let fn_name = match key {
+                StepKey::Kernel(kid) => format!("model_step_kernel_{}", kid.index()),
+                StepKey::Transfer(idx) => format!("model_step_transfer_{}", idx),
+            };
+            writeln!(
+                writer,
+                "\nextern \"C\" void {fn_name}(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) {{
+  auto *state = static_cast<ModelState*>(state_ptr);"
+            )?;
+            for stmt in chain!(
+                self.decl_values.iter(),
+                self.decl_cuda_objs.iter(),
+                stmts.iter()
+            ) {
+                writeln!(writer, "  {stmt}")?;
+            }
+            writeln!(writer, "}}")?;
+        }
         Ok(())
     }
 }
