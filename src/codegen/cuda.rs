@@ -1487,6 +1487,30 @@ impl<'sched> HostCodeGenerator<'sched> {
                             }
                             .into(),
                         );
+                    } else if m == 1 && dtype_ok && k % 16 == 0 {
+                        // M=1 (decode): use specialized GEMV kernel.
+                        self.includes.insert(Include::Local("dequant_gemv.cuh"));
+                        let cuda_kernel =
+                            kernel::CUDAKernel::DequantGemvKernel(kernel::DequantGemvKernel {
+                                act_ty: lhs_ty.elem_type,
+                                out_ty: scale_ty.elem_type,
+                                n,
+                                k,
+                                out,
+                                act,
+                                wq,
+                                scale,
+                            });
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: Expr::Identifier(format!("dim3({}, 1, 1)", n)),
+                                block_size: 32.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
                     } else {
                         self.includes.insert(Include::Local("dequant_matmul.cuh"));
                         let block_size = DEFAULT_BLOCK_SIZE;
