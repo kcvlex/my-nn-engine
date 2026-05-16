@@ -206,7 +206,7 @@ impl Schedule {
             .collect::<Vec<_>>();
         let initializers = graph.initializer_ids();
         let include_cpu_workspaces =
-            options.target == crate::options::Target::CPU || options.placement_strategy.is_some();
+            options.target == Target::CPU || options.placement_strategy.is_some();
         let kernels = kernel::build_kernels(&mut graph, &mut graph_op, include_cpu_workspaces);
         Self {
             inputs,
