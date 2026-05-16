@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 use my_nn_engine::onnx::load::*;
@@ -10,13 +11,13 @@ use my_nn_engine::tensor::Tensor;
 
 type Result = std::result::Result<(), SessionError>;
 
-fn count_pb_files(dir: &PathBuf, prefix: &str) -> usize {
+fn count_pb_files(dir: &Path, prefix: &str) -> usize {
     (0..)
         .take_while(|i| dir.join(format!("{}_{}.pb", prefix, i)).exists())
         .count()
 }
 
-fn run_test(root_dir: &PathBuf, epsilon: f64, target: Target) -> Result {
+fn run_test(root_dir: &Path, epsilon: f64, target: Target) -> Result {
     let model_path = root_dir.join("model.onnx");
 
     let num_inputs = count_pb_files(root_dir, "input");

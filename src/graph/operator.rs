@@ -343,6 +343,7 @@ impl Conv {
             pad,
             dilations: &self.dilations,
         });
+        #[allow(clippy::needless_range_loop)]
         for i in 0..ndim {
             let stride = self.strides[i];
             let dim = if let Some(ref conv_shape) = &conv_shape {

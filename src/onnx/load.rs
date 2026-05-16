@@ -33,21 +33,37 @@ use crate::tensor::types::UnresolvedTensorDims;
 use crate::tensor::types::UnresolvedTensorType;
 use crate::tensor::Tensor;
 
-include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
+#[allow(clippy::doc_overindented_list_items)]
+mod proto {
+    include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
+}
+pub use proto::*;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ModelLoadError {
-    FileRead(std::io::Error),
-    Decode(DecodeError),
+    #[error("file read error: {0}")]
+    FileRead(#[from] std::io::Error),
+    #[error("decode error: {0}")]
+    Decode(#[from] DecodeError),
+    #[error("element type unspecified")]
     ElemTypeUnspecified,
+    #[error("no graph")]
     NoGraph,
+    #[error("unsupported element type: {0:?}")]
     UnsupportedElemType(tensor_proto::DataType),
+    #[error("unsupported value type: {0:?}")]
     UnsupportedValueType(type_proto::Value),
+    #[error("unsupported attribute type: {0:?}")]
     UnsupportedAttributeType(attribute_proto::AttributeType),
+    #[error("unsupported op: {0}")]
     UnsupportedOp(String),
+    #[error("negative dimension: {0}")]
     NegativeDimension(i64),
-    TypeError(TypeError),
+    #[error("type error: {0}")]
+    TypeError(#[from] TypeError),
+    #[error("required: {0}")]
     Required(String),
+    #[error("unexpected: {0}")]
     Unexpected(String),
 }
 
@@ -367,7 +383,7 @@ impl GraphLoader {
                 .into_iter()
                 .map(|x| if x.is_empty() { None } else { Some(resolve(x)) })
                 .collect();
-            let outputs: Vec<ValueId> = node.output.into_iter().map(|x| resolve(x)).collect();
+            let outputs: Vec<ValueId> = node.output.into_iter().map(&mut resolve).collect();
             let attributes = load_attributes(node.attribute, base_dir)?;
             let op = load_op(&node.op_type, &attributes)?;
             res.alloc(Node {

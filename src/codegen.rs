@@ -1,11 +1,16 @@
 pub mod cpu;
 pub mod cuda;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CodeGenError {
-    BuilderError(inkwell::builder::BuilderError),
+    #[error("builder error: {0:?}")]
+    BuilderError(#[from] inkwell::builder::BuilderError),
+    #[error("LLVM error: {0}")]
     LLVMError(inkwell::support::LLVMString),
+    #[error("target machine error: {0}")]
     TargetMachineError(String),
+    #[error("intrinsic not found: {0}")]
     IntrinsicNotFound(String),
-    CudaBuildError(cuda::BuildError),
+    #[error("cuda build error: {0}")]
+    CudaBuildError(#[from] cuda::BuildError),
 }

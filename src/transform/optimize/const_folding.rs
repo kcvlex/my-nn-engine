@@ -438,7 +438,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                 .and_then(|x| *x);
 
             let depth = depth_id
-                .and_then(|id| graph.get_initializer(id).map(|t| t.clone()))
+                .and_then(|id| graph.get_initializer(id))
                 .map(|tensor| {
                     let tensor = tensor
                         .data
@@ -453,7 +453,7 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                 });
 
             let values = values_id
-                .and_then(|id| graph.get_initializer(id).map(|t| t.clone()))
+                .and_then(|id| graph.get_initializer(id))
                 .map(|values| {
                     let [off_value, on_value] = values.data.to_scalars()[..] else {
                         panic!("OneHot 'values' input must contain exactly two scalar values.");
@@ -551,10 +551,10 @@ pub fn prop_constant<T: GraphOp>(graph: &mut Graph, node_id: NodeId, modifier: &
                 .get(args::RESIZE_SIZES)
                 .and_then(|x| *x);
             let scales = scales_id
-                .and_then(|id| graph.get_initializer(id).map(|t| t.clone()))
+                .and_then(|id| graph.get_initializer(id))
                 .and_then(|tensor| tensor.to_1d_floats());
             let sizes = sizes_id
-                .and_then(|id| graph.get_initializer(id).map(|t| t.clone()))
+                .and_then(|id| graph.get_initializer(id))
                 .and_then(|tensor| tensor.to_1d_sints());
 
             let scale = match (scales, sizes) {

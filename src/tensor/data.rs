@@ -273,7 +273,7 @@ impl TryInto<ScalarData> for TensorData {
             TensorData::Float(ty, v) if v.len() == 1 => Ok(ScalarData::Float(ty, v[0])),
             _ => Err(TypeError::InvalidShape(
                 self.size(),
-                ResolvedTensorDims::new(&[1]),
+                Box::new(ResolvedTensorDims::new(&[1])),
             )),
         }
     }

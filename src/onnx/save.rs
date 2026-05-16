@@ -440,7 +440,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
         Operator::Swish(s) => {
             let mut attrs = vec![];
             if s.alpha != 1.0 {
-                attrs.push(attr_float("alpha", s.alpha as f32));
+                attrs.push(attr_float("alpha", s.alpha));
             }
             attrs
         }

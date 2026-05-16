@@ -43,17 +43,27 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::UIntType;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+    #[error("unresolved type for value {0:?}")]
     UnresolvedType(ValueId),
+    #[error("unresolved allocate info for kernel {0:?}")]
     UnresolvedAllocateInfo(KernelId),
+    #[error("unexpected memory allocation for value {0:?}")]
     UnexpectedMemAlloc(ValueId),
+    #[error("chunk not found for value {0:?}")]
     ChunkNotFound(ValueId),
+    #[error("no host variable for value {0:?}")]
     NoHostVariable(ValueId),
+    #[error("no device variable for chunk {0:?}")]
     NoDeviceVariable(ChunkId),
+    #[error("event not found for value {0:?}")]
     EventNotFound(ValueId),
+    #[error("activation not found for kernel {0:?}")]
     ActivationNotFound(KernelId),
+    #[error("unsupported tensor dim for value {0:?}: {1}")]
     UnsupportedTensorDim(ValueId, usize),
+    #[error("non-contiguous tensor for value {0:?}")]
     NonContiguousTensor(ValueId),
 }
 
@@ -157,6 +167,7 @@ impl<T: ToString> ToLiteral for T {
 }
 
 #[derive(From)]
+#[allow(clippy::large_enum_variant)]
 enum Statement {
     LaunchKernel(kernel::LaunchKernel),
     CudaRuntimeApi(CudaRuntimeApi),
@@ -2187,10 +2198,9 @@ impl<'sched> HostCodeGenerator<'sched> {
                         }
                         start_per_axis[slice.axis] = slice.start;
                     }
-                    let mut base_offset: isize = 0;
-                    for i in 0..ndim {
-                        base_offset += start_per_axis[i] * input_ty.stride(i) as isize;
-                    }
+                    let base_offset: isize = (0..ndim)
+                        .map(|i| start_per_axis[i] * input_ty.stride(i) as isize)
+                        .sum();
                     let size = output_ty.dims.size();
                     let output_dims: Vec<usize> = output_ty.dims.iter().copied().collect();
                     let input_strides: Vec<usize> = (0..ndim).map(|i| input_ty.stride(i)).collect();

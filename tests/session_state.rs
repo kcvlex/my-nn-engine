@@ -121,7 +121,7 @@ fn kv_cache_state_persistence() -> TestResult {
 
 fn ref_attention(q: &[f64], k: &[f64], v: &[f64], active: usize) -> Vec<f64> {
     let scale = 1.0 / (D as f64).sqrt();
-    let mut out = vec![0.0f64; B * H * 1 * D];
+    let mut out = vec![0.0f64; (B * H) * D];
     for b in 0..B {
         for h in 0..H {
             let mut logits = vec![0.0f64; active];

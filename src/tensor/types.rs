@@ -83,7 +83,10 @@ fn broadcast_shape_body(
         if *v == 1 {
             *v = *r;
         } else if *r != 1 {
-            return Err(TypeError::BroadcastError(lhs.clone(), rhs.clone()));
+            return Err(TypeError::BroadcastError(Box::new((
+                lhs.clone(),
+                rhs.clone(),
+            ))));
         }
     }
     Ok(res)
@@ -152,8 +155,8 @@ impl ResolvedTensorDims {
 
     pub fn transpose(&self, perms: &[usize]) -> Self {
         let mut res = self.clone();
-        for i in 0..perms.len() {
-            res.0[i] = self.0[perms[i]];
+        for (i, &p) in perms.iter().enumerate() {
+            res.0[i] = self.0[p];
         }
         res
     }
@@ -332,14 +335,21 @@ impl From<FloatType> for DataType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TypeError {
-    InvalidShape(usize, ResolvedTensorDims),
-    BroadcastError(ResolvedTensorDims, ResolvedTensorDims),
-    ReshapeError(ResolvedTensorDims, ResolvedTensorDims),
+    #[error("invalid shape: ndim={0} dims={1:?}")]
+    InvalidShape(usize, Box<ResolvedTensorDims>),
+    #[error("broadcast error: {:?} vs {:?}", .0.0, .0.1)]
+    BroadcastError(Box<(ResolvedTensorDims, ResolvedTensorDims)>),
+    #[error("reshape error: {:?} -> {:?}", .0.0, .0.1)]
+    ReshapeError(Box<(ResolvedTensorDims, ResolvedTensorDims)>),
+    #[error("infer error: {0}")]
     InferError(String),
+    #[error("inconsistent input")]
     InconsistentInput,
+    #[error("element type error")]
     ElementTypeError,
+    #[error("unresolved input")]
     UnresolvedInput,
 }
 

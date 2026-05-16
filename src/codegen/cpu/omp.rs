@@ -6,7 +6,7 @@ use inkwell::types::*;
 use inkwell::values::*;
 use inkwell::AddressSpace;
 
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct OMP<'ctx> {
     i32_type: IntType<'ctx>,

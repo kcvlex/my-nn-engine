@@ -17,13 +17,19 @@ pub struct ShapeVerification {
     pub target: Target,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum VerifyShapeError {
-    OutputContiguous(ValueId, ResolvedTensorType),
-    InconsistentShape(ValueId, ResolvedTensorDims, ResolvedTensorDims),
-    InconsistentStrides(ValueId, ResolvedTensorType, ResolvedTensorType),
+    #[error("output not contiguous: value {0:?} type {1:?}")]
+    OutputContiguous(ValueId, Box<ResolvedTensorType>),
+    #[error("inconsistent shape: value {:?} expected {:?} got {:?}", .0, .1.0, .1.1)]
+    InconsistentShape(ValueId, Box<(ResolvedTensorDims, ResolvedTensorDims)>),
+    #[error("inconsistent strides: value {:?} expected {:?} got {:?}", .0, .1.0, .1.1)]
+    InconsistentStrides(ValueId, Box<(ResolvedTensorType, ResolvedTensorType)>),
+    #[error("unresolved shape for value {0:?}")]
     UnresolvedShape(ValueId),
-    TypeError(TypeError),
+    #[error("type error: {0}")]
+    TypeError(#[from] TypeError),
+    #[error("{0}")]
     Other(String),
 }
 
@@ -50,7 +56,10 @@ impl ShapeVerification {
                         .get_resolved_tensor_type(value)
                         .ok_or(VerifyShapeError::UnresolvedShape(value))?;
                     if !resolved.is_contiguous() {
-                        return Err(VerifyShapeError::OutputContiguous(value, resolved.clone()));
+                        return Err(VerifyShapeError::OutputContiguous(
+                            value,
+                            Box::new(resolved.clone()),
+                        ));
                     }
                 }
                 _ => {
@@ -71,15 +80,13 @@ impl ShapeVerification {
                         if cur.dims != inferred.dims {
                             return Err(VerifyShapeError::InconsistentShape(
                                 *value_id,
-                                cur.dims.clone(),
-                                inferred.dims.clone(),
+                                Box::new((cur.dims.clone(), inferred.dims.clone())),
                             ));
                         }
                         if self.check_strides && cur.strides() != inferred.strides() {
                             return Err(VerifyShapeError::InconsistentStrides(
                                 *value_id,
-                                cur.clone(),
-                                inferred.clone(),
+                                Box::new((cur.clone(), inferred.clone())),
                             ));
                         }
                     }

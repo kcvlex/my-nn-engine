@@ -62,10 +62,13 @@ pub fn simple_topological_order(graph: &Graph) -> Vec<NodeId> {
     res
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InequalityError {
+    #[error("left-only IO: {0}")]
     LeftOnlyIO(String),
+    #[error("right-only IO: {0}")]
     RightOnlyIO(String),
+    #[error("different computations: left={0:?} right={1:?}")]
     DifferentComputations(Vec<String>, Vec<String>),
 }
 

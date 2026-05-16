@@ -249,7 +249,6 @@ impl NHWC2NCHWSinkAndFold {
                             |id, _| id == node_id,
                         );
                     } else {
-                        let v = v;
                         let nchw_ty = graph.get_resolved_tensor_type(v).unwrap();
                         let nhwc_ty = nchw_ty.transpose(&[0, 2, 3, 1]);
                         let reinterp_out = modifier.register_new_value(

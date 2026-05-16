@@ -164,7 +164,12 @@ impl SessionCPU {
         for module in kernel_modules.iter() {
             // SAFETY: corresponding context is stored in _contexts and outlives _engine
             engine
-                .add_module(unsafe { std::mem::transmute(module) })
+                .add_module(unsafe {
+                    std::mem::transmute::<
+                        &inkwell::module::Module<'_>,
+                        &inkwell::module::Module<'_>,
+                    >(module)
+                })
                 .map_err(|()| {
                     SessionError::OtherError("Failed to add module to JIT engine".to_string())
                 })?;

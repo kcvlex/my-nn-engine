@@ -128,7 +128,7 @@ macro_rules! apply_ndarray_ops {
 impl Tensor {
     pub fn new(dims: ResolvedTensorDims, data: TensorData) -> Result<Self, TypeError> {
         if dims.size().max(1) != data.size().max(1) {
-            return Err(TypeError::InvalidShape(data.size(), dims));
+            return Err(TypeError::InvalidShape(data.size(), Box::new(dims)));
         }
         Ok(Self { data, dims })
     }
@@ -149,7 +149,7 @@ impl Tensor {
     pub fn to_ndarray(&self) -> ndarray::ArrayD<f64> {
         let dims: Vec<usize> = self.dims.iter().copied().collect();
         let v: Vec<f64> = match &self.data {
-            TensorData::Bool(v) => v.iter().map(|&b| b as u8 as f64).collect(),
+            TensorData::Bool(v) => v.iter().map(|&b| b as f64).collect(),
             TensorData::Float(_, v) => v.clone(),
             TensorData::SInt(_, v) => v.iter().map(|&x| x as f64).collect(),
             TensorData::UInt(_, v) => v.iter().map(|&x| x as f64).collect(),

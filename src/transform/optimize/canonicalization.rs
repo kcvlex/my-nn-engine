@@ -369,7 +369,7 @@ fn strip_scalar_mul<T: GraphOp>(
         return (value, None);
     }
     // Single-consumer: pulling the scale out shouldn't affect other users.
-    if modifier.used_node(value).map_or(true, |u| u.len() != 1) {
+    if modifier.used_node(value).is_none_or(|u| u.len() != 1) {
         return (value, None);
     }
     let a = graph.nodes[def_node].inputs[0].unwrap();

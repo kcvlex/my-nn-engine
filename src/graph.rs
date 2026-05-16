@@ -27,9 +27,11 @@ use crate::tensor::types::TypeError;
 use crate::tensor::types::UnresolvedTensorType;
 use crate::tensor::Tensor;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum GraphError {
-    FileRead(std::io::Error),
+    #[error("file read error: {0}")]
+    FileRead(#[from] std::io::Error),
+    #[error("unexpected: {0}")]
     Unexpected(String),
 }
 

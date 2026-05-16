@@ -706,8 +706,8 @@ impl<'ll> CodeGen<'ll, '_> {
         }
         starts
             .into_iter()
-            .zip(ends.into_iter())
-            .zip(axes.into_iter())
+            .zip(ends)
+            .zip(axes)
             .map(|((start, end), axis)| {
                 let axis = axis.index(dims.ndim());
                 let start = start.index(dims[axis]) as isize;

@@ -63,6 +63,7 @@ pub struct SessionCUDA {
 }
 
 impl SessionCUDA {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         input_ty: Vec<ResolvedTensorType>,
         output_ty: Vec<ResolvedTensorType>,

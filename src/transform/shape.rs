@@ -176,7 +176,7 @@ pub fn infer_node_output(
             let kv_num_heads = k.dims[1];
 
             assert!(
-                q_num_heads % kv_num_heads == 0,
+                q_num_heads.is_multiple_of(kv_num_heads),
                 "Q heads ({}) must be a multiple of K/V heads ({})",
                 q_num_heads,
                 kv_num_heads,
@@ -558,8 +558,8 @@ pub fn infer_node_output(
             let mut strides = Vec::with_capacity(expanded_rank);
             let mut input_iter = input_dims.iter().copied();
             let mut stride_iter = input.strides().iter().copied();
-            for i in 0..expanded_rank {
-                if insert[i] {
+            for &insert_here in insert.iter().take(expanded_rank) {
+                if insert_here {
                     dims.push(1);
                     strides.push(0);
                 } else {

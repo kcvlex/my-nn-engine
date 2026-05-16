@@ -69,6 +69,7 @@ impl StrictTensor {
         }
     }
 
+    #[allow(clippy::unnecessary_cast)]
     fn as_ptr(&self) -> *const u8 {
         match self {
             StrictTensor::U8(v) => v.as_ptr() as *const u8,
@@ -82,6 +83,7 @@ impl StrictTensor {
         }
     }
 
+    #[allow(clippy::unnecessary_cast)]
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match self {
             StrictTensor::U8(v) => v.as_mut_ptr() as *mut u8,
@@ -237,16 +239,21 @@ impl StrictTensor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    CodeGenError(CodeGenError),
-    ModelLoadError(ModelLoadError),
-    TypeError(TypeError),
+    #[error("codegen error: {0}")]
+    CodeGenError(#[from] CodeGenError),
+    #[error("model load error: {0}")]
+    ModelLoadError(#[from] ModelLoadError),
+    #[error("type error: {0}")]
+    TypeError(#[from] TypeError),
+    #[error("{0}")]
     OtherError(String),
 }
 
 unsafe impl Send for SessionError {}
 
+#[allow(clippy::large_enum_variant)]
 pub enum SessionInner {
     CPU(SessionCPU),
     CUDA(SessionCUDA),

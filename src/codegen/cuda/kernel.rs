@@ -14,6 +14,7 @@ use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
 
 #[derive(From)]
+#[allow(clippy::enum_variant_names, clippy::upper_case_acronyms)]
 pub enum CUDAKernel {
     AttentionKernel(AttentionKernel),
     AttentionDecodeKernel(AttentionDecodeKernel),

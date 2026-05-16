@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::builder::BuilderError;
@@ -198,9 +200,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
             false,
             "bf16.high",
         )?;
-        Ok(self
-            .builder
-            .build_int_truncate(high, i16_ty, "bf16.trunc")?)
+        self.builder.build_int_truncate(high, i16_ty, "bf16.trunc")
     }
 
     pub fn build_dequantize_linear(
@@ -1017,7 +1017,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
 
     fn build_operation(&self, op: &Operation<'ctx>) -> Result<(), BuilderError> {
         let ty = op.result_type();
-        let input_ty = op.src_operands().get(0).map(|op| op.ty.elem_type);
+        let input_ty = op.src_operands().first().map(|op| op.ty.elem_type);
         let res = match op.opcode {
             Opcode::Single(opcode) => {
                 let operands = op
@@ -4295,7 +4295,7 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         let hkv = k.ty.dims[1];
         let seq_k = k.ty.dims[2];
         assert!(
-            hq % hkv == 0,
+            hq.is_multiple_of(hkv),
             "Q head count ({}) must be a multiple of KV head count ({})",
             hq,
             hkv,

@@ -58,6 +58,7 @@ struct Routines<'ctx> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Backend {
     OpenBLAS,
     MKL,
@@ -306,7 +307,7 @@ impl<'ctx> Routines<'ctx> {
     }
 }
 
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub struct BLAS<'ctx> {
     backend: Backend,
     s_routines: Routines<'ctx>,
