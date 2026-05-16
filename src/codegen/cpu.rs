@@ -37,6 +37,7 @@ use crate::graph::operator::Operator;
 use crate::graph::operator::Slice;
 use crate::graph::ValueId;
 use crate::options::Options;
+use crate::schedule::ir::Device;
 use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::ResolvedTensorDims;
@@ -58,7 +59,7 @@ pub struct CodeGenContext {
     blas_backend: blas::Backend,
     value2place: HashMap<ValueId, AllocPlace>,
     kernel_bindings: HashMap<KernelId, Vec<ValueBinding>>,
-    kernel_device: HashMap<KernelId, crate::schedule::ir::Device>,
+    kernel_device: HashMap<KernelId, Device>,
 }
 
 pub struct CodeGen<'ll, 'gen> {
@@ -107,7 +108,7 @@ impl CodeGenContext {
 
         let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
         let mut kernel_bindings: HashMap<KernelId, Vec<ValueBinding>> = HashMap::new();
-        let mut kernel_device: HashMap<KernelId, crate::schedule::ir::Device> = HashMap::new();
+        let mut kernel_device = HashMap::new();
         for step in &plan.steps {
             if let Step::Kernel(k) = step {
                 kernel_bindings.insert(k.kernel, k.bindings.clone());
@@ -574,9 +575,7 @@ impl<'ll> CodeGen<'ll, '_> {
             .steps
             .iter()
             .filter_map(|s| match s {
-                Step::Kernel(k) if k.context.device == crate::schedule::ir::Device::CPU => {
-                    Some(k.kernel)
-                }
+                Step::Kernel(k) if k.context.device == Device::CPU => Some(k.kernel),
                 _ => None,
             })
             .collect();

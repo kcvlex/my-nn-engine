@@ -35,6 +35,7 @@ use crate::graph::operator;
 use crate::graph::operator::*;
 use crate::graph::ValueId;
 use crate::options::Options;
+use crate::schedule::Device;
 use crate::schedule::EventId;
 use crate::schedule::StreamId;
 use crate::schedule::*;
@@ -567,27 +568,25 @@ impl<'sched> HostCodeGenerator<'sched> {
             self.chunk_names.insert(chunk.id, name);
         }
 
-        let mut emitted_arenas: HashSet<crate::schedule::ir::ArenaId> = HashSet::new();
-        for arena in &plan.arenas {
-            if arena.size == 0 {
-                continue;
-            }
-            if arena.tier != MemoryTier::GpuArena {
-                continue;
-            }
-            let field = format!("d_arena_{}", arena.id);
-            self.state_fields.push(format!("void *{field} = nullptr;"));
-            self.init_stmts.push(
-                Malloc {
-                    dst: Expr::Identifier(format!("state->{field}")),
-                    mem_size: MemSize::Raw(Expr::Identifier(format!("{}", arena.size))),
-                }
-                .into(),
-            );
-            self.destroy_stmts
-                .push(Free(Expr::Identifier(format!("state->{field}"))).into());
-            emitted_arenas.insert(arena.id);
-        }
+        let emitted_arenas: HashSet<_> = plan
+            .arenas
+            .iter()
+            .filter(|arena| 0 < arena.size && arena.tier == MemoryTier::GpuArena)
+            .inspect(|arena| {
+                let field = format!("d_arena_{}", arena.id);
+                self.state_fields.push(format!("void *{field} = nullptr;"));
+                self.init_stmts.push(
+                    Malloc {
+                        dst: Expr::Identifier(format!("state->{field}")),
+                        mem_size: MemSize::Raw(Expr::Identifier(format!("{}", arena.size))),
+                    }
+                    .into(),
+                );
+                self.destroy_stmts
+                    .push(Free(Expr::Identifier(format!("state->{field}"))).into());
+            })
+            .map(|arena| arena.id)
+            .collect();
         for chunk in &plan.chunks {
             if !emitted_arenas.contains(&chunk.arena) {
                 continue;
@@ -647,7 +646,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             Kernel(KernelId),
             Transfer(usize),
         }
-        let ops: Vec<Op> = plan
+        let ops = plan
             .steps
             .iter()
             .enumerate()
@@ -656,7 +655,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Step::Transfer(_) => Some(Op::Transfer(idx)),
                 Step::Kernel(_) | Step::SyncWait(_) => None,
             })
-            .collect();
+            .collect_vec();
         for op in ops {
             match op {
                 Op::Kernel(kid) => self.call_kernel(kid)?,
