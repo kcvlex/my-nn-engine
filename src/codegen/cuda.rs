@@ -203,6 +203,104 @@ struct KernelStreamView {
     to_wait: Vec<EventId>,
 }
 
+struct ValueBindingResolver<'sched> {
+    schedule: &'sched Schedule,
+    value2place: HashMap<ValueId, AllocPlace>,
+
+    // value2place is populated globally with last-write-wins, which is wrong when the same value gets rebound by a later cross-tier Transfer (e.g. SessionState produced by a CUDA kernel and consumed by a CPU kernel via a Transfer to a HostArena chunk). Rebind the value2place to this kernel's own bindings for the duration of emission so device_identifier resolves per-kernel.
+    rollback: Option<Vec<(ValueId, Option<AllocPlace>)>>,
+}
+
+impl<'sched> ValueBindingResolver<'sched> {
+    fn new(schedule: &'sched Schedule) -> Self {
+        let mut value2place = HashMap::new();
+        let plan = schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        for v in &schedule.inputs {
+            value2place.insert(*v, AllocPlace::Input(*v));
+        }
+        for v in &schedule.outputs {
+            value2place.insert(*v, AllocPlace::Output(*v));
+        }
+        for v in &schedule.initializers {
+            value2place.insert(*v, AllocPlace::Initializer(*v));
+        }
+        for v in &schedule.session_states {
+            value2place.insert(*v, AllocPlace::SessionState(*v));
+        }
+        for step in &plan.steps {
+            match step {
+                Step::Kernel(k) => {
+                    for b in &k.bindings {
+                        value2place.insert(b.value, b.place);
+                    }
+                }
+                Step::Transfer(_) | Step::SyncWait(_) => {}
+            }
+        }
+
+        Self {
+            schedule,
+            value2place,
+            rollback: None,
+        }
+    }
+
+    fn get(&self, value_id: ValueId) -> Option<&AllocPlace> {
+        self.value2place.get(&value_id)
+    }
+
+    fn is_same_device_buffer(&self, a: ValueId, b: ValueId) -> bool {
+        match (self.get(a), self.get(b)) {
+            (Some(pa), Some(pb)) => pa == pb,
+            _ => false,
+        }
+    }
+
+    fn enter_kernel(&mut self, kernel_id: KernelId) {
+        if self.rollback.is_some() {
+            panic!("Already in a kernel");
+        }
+        let plan = self
+            .schedule
+            .execution_plan
+            .as_ref()
+            .expect("ExecutionPlan must be built before codegen");
+        let step_bindings: Vec<ValueBinding> = plan
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::Kernel(k) if k.kernel == kernel_id => Some(k.bindings.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.rollback = Some(
+            step_bindings
+                .iter()
+                .map(|b| (b.value, self.value2place.insert(b.value, b.place)))
+                .collect(),
+        )
+    }
+
+    fn exit_kernel(&mut self) {
+        let Some(saved_places) = self.rollback.take() else {
+            panic!("Not in a kernel");
+        };
+        for (v, prior) in saved_places {
+            match prior {
+                Some(p) => {
+                    self.value2place.insert(v, p);
+                }
+                None => {
+                    self.value2place.remove(&v);
+                }
+            }
+        }
+    }
+}
+
 pub struct HostCodeGenerator<'sched> {
     schedule: &'sched Schedule,
     cuda_arch: u32,
@@ -216,7 +314,7 @@ pub struct HostCodeGenerator<'sched> {
     transfer_streams: HashMap<usize, KernelStreamView>,
     to_record_events: BTreeSet<EventId>,
 
-    value2place: HashMap<ValueId, AllocPlace>,
+    binding_resolver: ValueBindingResolver<'sched>,
     chunk_names: HashMap<ChunkId, String>,
     initializer_arg_idx: HashMap<ValueId, usize>,
     used_device_initializers: std::cell::RefCell<BTreeSet<ValueId>>,
@@ -245,16 +343,10 @@ pub struct HostCode {
     decl_values: Vec<Statement>,
     decl_cuda_objs: Vec<Statement>,
     per_step_stmts: Vec<(StepKey, Vec<Statement>)>,
-    /// Local declaration strings for GPU chunks: `void *d_chunk_X = (char*)state->d_arena_Y + offset;`.
-    /// Used to construct model_chunks() body without dragging in input/output
-    /// references from decl_values.
-    gpu_chunk_decls: Vec<String>,
-    /// Chunk ids exposed via model_chunks (parallel to gpu_chunk_decls order
-    /// is not required since we emit `out[cid] = d_chunk_<cid>;` per id).
-    gpu_chunk_ids: Vec<ChunkId>,
     finalize: Vec<Statement>,
     pub kernel_codes: Vec<SeparatedCode>,
 
+    gpu_chunks: Vec<ChunkInfo>,
     includes: BTreeSet<Include>,
     profile: bool,
 }
@@ -504,7 +596,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             streams,
             transfer_streams,
             to_record_events,
-            value2place: HashMap::new(),
+            binding_resolver: ValueBindingResolver::new(schedule),
             chunk_names: HashMap::new(),
             initializer_arg_idx: HashMap::new(),
             used_device_initializers: std::cell::RefCell::new(BTreeSet::new()),
@@ -557,28 +649,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             .execution_plan
             .as_ref()
             .expect("ExecutionPlan must be built before codegen");
-        for v in &self.schedule.inputs {
-            self.value2place.insert(*v, AllocPlace::Input(*v));
-        }
-        for v in &self.schedule.outputs {
-            self.value2place.insert(*v, AllocPlace::Output(*v));
-        }
-        for v in &self.schedule.initializers {
-            self.value2place.insert(*v, AllocPlace::Initializer(*v));
-        }
-        for v in &self.schedule.session_states {
-            self.value2place.insert(*v, AllocPlace::SessionState(*v));
-        }
-        for step in &plan.steps {
-            match step {
-                Step::Kernel(k) => {
-                    for b in &k.bindings {
-                        self.value2place.insert(b.value, b.place);
-                    }
-                }
-                Step::Transfer(_) | Step::SyncWait(_) => {}
-            }
-        }
 
         for chunk in &plan.chunks {
             let name = format!("d_chunk_{}", chunk.id);
@@ -794,8 +864,8 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn device_identifier(&self, value_id: ValueId) -> Result<Expr, BuildError> {
         let place = self
-            .value2place
-            .get(&value_id)
+            .binding_resolver
+            .get(value_id)
             .copied()
             .ok_or(BuildError::ChunkNotFound(value_id))?;
         match place {
@@ -820,8 +890,8 @@ impl<'sched> HostCodeGenerator<'sched> {
 
     fn host_name(&self, value_id: ValueId) -> String {
         let place = self
-            .value2place
-            .get(&value_id)
+            .binding_resolver
+            .get(value_id)
             .copied()
             .unwrap_or_else(|| panic!("host_name: no place for {value_id:?}"));
         match place {
@@ -890,13 +960,6 @@ impl<'sched> HostCodeGenerator<'sched> {
             ))),
             AllocPlace::Input(src) => Ok(Expr::Identifier(format!("h_input_{}", src.index()))),
             AllocPlace::Output(src) => Ok(Expr::Identifier(format!("h_output_{}", src.index()))),
-        }
-    }
-
-    fn same_device_buffer(&self, a: ValueId, b: ValueId) -> bool {
-        match (self.value2place.get(&a), self.value2place.get(&b)) {
-            (Some(pa), Some(pb)) => pa == pb,
-            _ => false,
         }
     }
 
@@ -1038,30 +1101,7 @@ impl<'sched> HostCodeGenerator<'sched> {
     }
 
     fn call_kernel(&mut self, kernel_id: KernelId) -> Result<(), BuildError> {
-        // value2place is populated globally with last-write-wins, which is
-        // wrong when the same value gets rebound by a later cross-tier
-        // Transfer (e.g. SessionState produced by a CUDA kernel and consumed
-        // by a CPU kernel via a Transfer to a HostArena chunk). Rebind the
-        // value2place to this kernel's own bindings for the duration of
-        // emission so device_identifier resolves per-kernel.
-        let plan = self
-            .schedule
-            .execution_plan
-            .as_ref()
-            .expect("ExecutionPlan must be built before codegen");
-        let step_bindings: Vec<ValueBinding> = plan
-            .steps
-            .iter()
-            .find_map(|s| match s {
-                Step::Kernel(k) if k.kernel == kernel_id => Some(k.bindings.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let saved_places: Vec<(ValueId, Option<AllocPlace>)> = step_bindings
-            .iter()
-            .map(|b| (b.value, self.value2place.insert(b.value, b.place)))
-            .collect();
-
+        self.binding_resolver.enter_kernel(kernel_id);
         let kernel = &self.schedule.kernels[kernel_id];
         let KernelStreamView {
             stream_id,
@@ -1103,7 +1143,7 @@ impl<'sched> HostCodeGenerator<'sched> {
                 Operator::Identity | Operator::Reinterpret(_) => {
                     let in_v = kernel.inputs[0].unwrap();
                     let out_v = kernel.outputs[0];
-                    if !self.same_device_buffer(in_v, out_v) {
+                    if !self.binding_resolver.is_same_device_buffer(in_v, out_v) {
                         let output_size = self
                             .get_resolved_tensor_type(kernel.outputs[0])?
                             .dims
@@ -2333,17 +2373,7 @@ impl<'sched> HostCodeGenerator<'sched> {
             );
         }
 
-        for (v, prior) in saved_places {
-            match prior {
-                Some(p) => {
-                    self.value2place.insert(v, p);
-                }
-                None => {
-                    self.value2place.remove(&v);
-                }
-            }
-        }
-
+        self.binding_resolver.exit_kernel();
         Ok(())
     }
 
@@ -2355,23 +2385,13 @@ impl<'sched> HostCodeGenerator<'sched> {
             .execution_plan
             .as_ref()
             .expect("execution_plan");
-        let gpu_chunk_ids: Vec<ChunkId> = plan
+        let gpu_chunks = plan
             .chunks
             .iter()
             .filter(|c| plan.arenas[c.arena].tier == MemoryTier::GpuArena)
-            .map(|c| c.id)
-            .collect();
-        let gpu_chunk_decls: Vec<String> = plan
-            .chunks
-            .iter()
-            .filter(|c| plan.arenas[c.arena].tier == MemoryTier::GpuArena)
-            .map(|c| {
-                format!(
-                    "void *d_chunk_{} = (char*)state->d_arena_{} + {};",
-                    c.id, c.arena, c.offset
-                )
-            })
-            .collect();
+            .copied()
+            .collect_vec();
+
         self.emit_used_initializers();
         let finalize = self.gen_finalize()?;
 
@@ -2412,10 +2432,9 @@ impl<'sched> HostCodeGenerator<'sched> {
             decl_values,
             decl_cuda_objs,
             per_step_stmts,
-            gpu_chunk_decls,
-            gpu_chunk_ids,
             finalize,
             kernel_codes,
+            gpu_chunks,
             includes: self.includes.clone(),
             profile: opt.profile,
         })
@@ -2527,17 +2546,23 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
             writer,
             "\nextern \"C\" int model_memcpy(void *dst, const void *src, size_t n, int kind) {{ return (int)cudaMemcpy(dst, src, n, (cudaMemcpyKind)kind); }}"
         )?;
-        // model_chunks: write all GPU chunk ptrs into out[].
+
         writeln!(
             writer,
-            "\nextern \"C\" void model_chunks(void *state_ptr, void **out) {{
+            "
+extern \"C\" void model_chunks(void *state_ptr, void **out) {{
   auto *state = static_cast<ModelState*>(state_ptr);"
         )?;
-        for decl in self.gpu_chunk_decls.iter() {
-            writeln!(writer, "  {decl}")?;
+        for chunk in self.gpu_chunks.iter() {
+            writeln!(
+                writer,
+                "  void *d_chunk_{} = (char*)state->d_arena_{} + {};",
+                chunk.id, chunk.arena, chunk.offset
+            )?;
         }
-        for cid in self.gpu_chunk_ids.iter().copied() {
-            writeln!(writer, "  out[{cid}] = d_chunk_{cid};")?;
+
+        for chunk in self.gpu_chunks.iter() {
+            writeln!(writer, "  out[{}] = d_chunk_{};", chunk.id, chunk.id)?;
         }
         writeln!(writer, "}}")?;
 
