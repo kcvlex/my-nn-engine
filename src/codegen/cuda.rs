@@ -207,7 +207,11 @@ struct ValueBindingResolver<'sched> {
     schedule: &'sched Schedule,
     value2place: HashMap<ValueId, AllocPlace>,
 
-    // value2place is populated globally with last-write-wins, which is wrong when the same value gets rebound by a later cross-tier Transfer (e.g. SessionState produced by a CUDA kernel and consumed by a CPU kernel via a Transfer to a HostArena chunk). Rebind the value2place to this kernel's own bindings for the duration of emission so device_identifier resolves per-kernel.
+    // value2place is populated globally with last-write-wins, which is wrong when the same value
+    // gets rebound by a later cross-tier Transfer (e.g. SessionState produced by a CUDA kernel and
+    // consumed by a CPU kernel via a Transfer to a HostArena chunk). Rebind the value2place to
+    // this kernel's own bindings for the duration of emission so device_identifier resolves
+    // per-kernel.
     rollback: Option<Vec<(ValueId, Option<AllocPlace>)>>,
 }
 
