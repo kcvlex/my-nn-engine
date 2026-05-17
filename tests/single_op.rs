@@ -1174,6 +1174,30 @@ dyn_quantize_linear_test!(
     "dyn_quantize_linear_asym_per_row"
 );
 
+// QuantizedMatMul (int8 mma, CUDA only).
+#[cfg(feature = "cuda")]
+macro_rules! quantized_matmul_test {
+    ($name:ident, $fixture:literal) => {
+        #[test]
+        fn $name() -> TestResult {
+            with_cuda_session_and_tensors($fixture, (4, 1), |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq_epsilon!(outputs[0], expected[0], 1e-1);
+                Ok(())
+            })
+        }
+    };
+}
+
+#[cfg(feature = "cuda")]
+quantized_matmul_test!(quantized_matmul_64x64x64, "quantized_matmul_64x64x64");
+#[cfg(feature = "cuda")]
+quantized_matmul_test!(quantized_matmul_128x128x128, "quantized_matmul_128x128x128");
+#[cfg(feature = "cuda")]
+quantized_matmul_test!(quantized_matmul_256x128x128, "quantized_matmul_256x128x128");
+#[cfg(feature = "cuda")]
+quantized_matmul_test!(quantized_matmul_128x256x64, "quantized_matmul_128x256x64");
+
 #[test]
 fn dequant_matmul() -> TestResult {
     with_all_sessions_and_tensors("dequant_matmul", (3, 1), |session, (inputs, expected)| {

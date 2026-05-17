@@ -228,6 +228,7 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
 
         Operator::DequantizeLinear(d) => vec![attr_int("axis", d.axis.raw() as i64)],
         Operator::DequantMatMul(d) => vec![attr_int("axis", d.axis.raw() as i64)],
+        Operator::QuantizedMatMul(q) => vec![attr_int("axis", q.axis.raw() as i64)],
         Operator::DynamicQuantizeLinear(d) => {
             let mut attrs = vec![];
             if let Some(axis) = d.axis {
