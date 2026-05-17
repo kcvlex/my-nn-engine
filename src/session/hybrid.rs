@@ -1,8 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use inkwell::context::Context;
@@ -539,7 +537,6 @@ impl SessionHybrid {
             })
         };
 
-        let mut initializers_arena = Vec::new();
         for step in plan.steps.iter() {
             match step {
                 Step::Kernel(k) if k.context.device == Device::CPU => {
@@ -585,7 +582,7 @@ impl SessionHybrid {
                             "Transfer step encountered but CudaState was not built".to_string(),
                         )
                     })?;
-                    let mut resolve_with_tier =
+                    let resolve_with_tier =
                         |place: AllocPlace| -> Result<(*mut u8, MemoryTier), SessionError> {
                             Ok(match place {
                                 AllocPlace::Chunk(cid) => {
