@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use inkwell::context::Context;
@@ -261,12 +263,12 @@ fn build_cuda_state(
         .unwrap_or(0);
     let mut chunk_buf: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); chunk_count];
     unsafe { (chunks_func)(state, chunk_buf.as_mut_ptr()) };
-    let mut gpu_chunks: HashMap<ChunkId, *mut std::ffi::c_void> = HashMap::new();
-    for chunk in &plan.chunks {
-        if plan.arenas[chunk.arena].tier == MemoryTier::GpuArena {
-            gpu_chunks.insert(chunk.id, chunk_buf[chunk.id]);
-        }
-    }
+    let gpu_chunks: HashMap<_, _> = plan
+        .chunks
+        .iter()
+        .filter(|c| plan.arenas[c.arena].tier == MemoryTier::GpuArena)
+        .map(|c| (c.id, chunk_buf[c.id]))
+        .collect();
 
     Ok(CudaState {
         lib,
@@ -482,10 +484,11 @@ impl SessionHybrid {
             .collect_vec();
         let output_ptrs = output_bufs.iter_mut().map(|t| t.as_mut_ptr()).collect_vec();
 
-        let mut chunk_tiers: HashMap<ChunkId, MemoryTier> = HashMap::new();
-        for chunk in &plan.chunks {
-            chunk_tiers.insert(chunk.id, plan.arenas[chunk.arena].tier);
-        }
+        let chunk_tiers: HashMap<_, _> = plan
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.id, plan.arenas[chunk.arena].tier))
+            .collect();
 
         let resolve = |place: AllocPlace| -> Result<*mut u8, SessionError> {
             Ok(match place {
@@ -536,6 +539,7 @@ impl SessionHybrid {
             })
         };
 
+        let mut initializers_arena = Vec::new();
         for step in plan.steps.iter() {
             match step {
                 Step::Kernel(k) if k.context.device == Device::CPU => {
@@ -581,7 +585,7 @@ impl SessionHybrid {
                             "Transfer step encountered but CudaState was not built".to_string(),
                         )
                     })?;
-                    let resolve_with_tier =
+                    let mut resolve_with_tier =
                         |place: AllocPlace| -> Result<(*mut u8, MemoryTier), SessionError> {
                             Ok(match place {
                                 AllocPlace::Chunk(cid) => {
@@ -647,10 +651,23 @@ impl SessionHybrid {
                                         MemoryTier::GpuArena,
                                     )
                                 }
-                                AllocPlace::Initializer(_) => {
-                                    return Err(SessionError::OtherError(format!(
-                                        "Transfer with {place:?} not yet supported"
-                                    )));
+                                AllocPlace::Initializer(v) => {
+                                    let tensor = self
+                                        .schedule
+                                        .graph()
+                                        .get_inline_initializer(v)
+                                        .ok_or_else(|| {
+                                            SessionError::OtherError(format!(
+                                                "Transfer with external-ref initializer {v:?} not yet supported"
+                                            ))
+                                        })?;
+                                    let tensor = Rc::new(RefCell::new(StrictTensor::from(tensor)));
+                                    initializers_arena.push(tensor.clone());
+                                    (
+                                        initializers_arena.last().unwrap().borrow_mut().as_ptr()
+                                            as *mut u8,
+                                        MemoryTier::HostArena,
+                                    )
                                 }
                             })
                         };
