@@ -2446,6 +2446,11 @@ extern "C" void model(void *state_ptr, void **{ARG_OUTPUT}, void **{ARG_INPUT}) 
         }
         writeln!(writer, "}}")?;
 
+        writeln!(
+            writer,
+            "\nextern \"C\" void model_device_sync() {{ cudaCheckErr(cudaDeviceSynchronize()); }}"
+        )?;
+
         // Per-step wrappers: each step gets its own extern "C" function so
         // HybridSession can dispatch CUDA work step-by-step. The prologue
         // (decl_values + decl_cuda_objs) is duplicated in every wrapper for
