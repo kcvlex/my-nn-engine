@@ -103,6 +103,142 @@ impl Drop for CudaState {
         }
     }
 }
+
+fn build_cuda_state(
+    schedule: &Schedule,
+    initializer_sources: &[InitializerSource],
+    initializer_names: &[String],
+    initializer_cache: Option<&Arc<InitializerBuffers>>,
+    session_state_buffers: &[Arc<DeviceBuffer>],
+    opt: &Options,
+    build_dir: &Path,
+) -> Result<CudaState, SessionError> {
+    info!("Hybrid: compiling CUDA shared lib");
+    let shared_lib = compile_cuda_shared_lib(schedule, opt, build_dir)?;
+
+    // CUDA's model_init takes a pointer array indexed by global initializer
+    // index, but for hybrid placements only initializers actually consumed
+    // by CUDA kernels need device memory. Upload only those; the rest get
+    // a 1-byte placeholder so model_init still receives a valid pointer.
+    let mut gpu_initializer_indices: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    if let Some(plan) = schedule.execution_plan.as_ref() {
+        for step in &plan.steps {
+            if let Step::Kernel(k) = step {
+                if k.context.device != Device::CUDA {
+                    continue;
+                }
+                for b in &k.bindings {
+                    if let AllocPlace::Initializer(v) = b.place {
+                        if let Some(i) = schedule.initializers.iter().position(|x| *x == v) {
+                            gpu_initializer_indices.insert(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _lock = cuda_lock();
+    let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
+        .iter()
+        .zip(initializer_names.iter())
+        .enumerate()
+        .map(
+            |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
+                if !gpu_initializer_indices.contains(&i) {
+                    let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
+                        SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
+                    })?;
+                    return Ok(Arc::new(buf));
+                }
+                let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                    let len = src.byte_len();
+                    let buf =
+                        Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
+                            SessionError::OtherError(format!("cudaMalloc: {:?}", e))
+                        })?);
+                    if len > 0 {
+                        send_initializer_to_device(src, &buf)?;
+                    }
+                    Ok(buf)
+                };
+                match initializer_cache {
+                    Some(cache) => cache.get_or_insert_with(name, upload),
+                    None => upload(),
+                }
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    info!(
+        "Hybrid: uploaded {} / {} initializers to GPU",
+        gpu_initializer_indices.len(),
+        initializer_sources.len(),
+    );
+
+    let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
+        .map_err(|e| SessionError::OtherError(format!("dlopen: {:?}", e)))?;
+
+    let init_func: CudaInitFn = unsafe {
+        *lib.get::<CudaInitFn>(b"model_init")
+            .map_err(|e| SessionError::OtherError(format!("dlsym model_init: {:?}", e)))?
+    };
+    let destroy_func: CudaDestroyFn = unsafe {
+        *lib.get::<CudaDestroyFn>(b"model_destroy")
+            .map_err(|e| SessionError::OtherError(format!("dlsym model_destroy: {:?}", e)))?
+    };
+    let sync_func: CudaSyncFn = unsafe {
+        *lib.get::<CudaSyncFn>(b"model_device_sync")
+            .map_err(|e| SessionError::OtherError(format!("dlsym model_device_sync: {:?}", e)))?
+    };
+
+    let plan = schedule
+        .execution_plan
+        .as_ref()
+        .ok_or_else(|| SessionError::OtherError("execution_plan missing".to_string()))?;
+    let mut kernel_fns: HashMap<KernelId, CudaStepFn> = HashMap::new();
+    let mut transfer_fns: HashMap<usize, CudaStepFn> = HashMap::new();
+    for (idx, step) in plan.steps.iter().enumerate() {
+        match step {
+            Step::Kernel(k) if k.context.device == Device::CUDA => {
+                let name = format!("model_step_kernel_{}\0", k.kernel.index());
+                let f: CudaStepFn = unsafe {
+                    *lib.get::<CudaStepFn>(name.as_bytes())
+                        .map_err(|e| SessionError::OtherError(format!("dlsym {name}: {:?}", e)))?
+                };
+                kernel_fns.insert(k.kernel, f);
+            }
+            Step::Transfer(_) => {
+                let name = format!("model_step_transfer_{idx}\0");
+                let f: CudaStepFn = unsafe {
+                    *lib.get::<CudaStepFn>(name.as_bytes())
+                        .map_err(|e| SessionError::OtherError(format!("dlsym {name}: {:?}", e)))?
+                };
+                transfer_fns.insert(idx, f);
+            }
+            _ => {}
+        }
+    }
+
+    let initializer_ptrs: Vec<*const u8> = initializer_buffers
+        .iter()
+        .map(|b| b.ptr() as *const u8)
+        .collect();
+    let session_state_ptrs: Vec<*mut std::ffi::c_void> =
+        session_state_buffers.iter().map(|b| b.ptr()).collect();
+    let state = unsafe { (init_func)(initializer_ptrs.as_ptr(), session_state_ptrs.as_ptr()) };
+
+    Ok(CudaState {
+        lib,
+        kernel_fns,
+        transfer_fns,
+        destroy_func,
+        sync_func,
+        state,
+        initializer_buffers,
+    })
+}
+
 pub struct SessionHybrid {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
@@ -118,7 +254,7 @@ pub struct SessionHybrid {
     cpu_jit: CpuJitState,
 
     host_arenas: HostArenas,
-    cuda: CudaState,
+    cuda: Option<CudaState>,
 }
 
 struct HostArenas {
@@ -242,123 +378,31 @@ impl SessionHybrid {
             HostArenas::new(plan)
         };
 
-        info!("Hybrid: compiling CUDA shared lib");
-        let shared_lib = compile_cuda_shared_lib(&schedule, opt, build_dir)?;
-
-        // CUDA's model_init takes a pointer array indexed by global initializer
-        // index, but for hybrid placements only initializers actually consumed
-        // by CUDA kernels need device memory. Upload only those; the rest get
-        // a 1-byte placeholder so model_init still receives a valid pointer.
-        let mut gpu_initializer_indices: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        if let Some(plan) = schedule.execution_plan.as_ref() {
-            for step in &plan.steps {
-                if let Step::Kernel(k) = step {
-                    if k.context.device != Device::CUDA {
-                        continue;
-                    }
-                    for b in &k.bindings {
-                        if let AllocPlace::Initializer(v) = b.place {
-                            if let Some(i) = schedule.initializers.iter().position(|x| *x == v) {
-                                gpu_initializer_indices.insert(i);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let _lock = cuda_lock();
-        let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
-            .iter()
-            .zip(initializer_names.iter())
-            .enumerate()
-            .map(
-                |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
-                    if !gpu_initializer_indices.contains(&i) {
-                        let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
-                            SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
-                        })?;
-                        return Ok(Arc::new(buf));
-                    }
-                    let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
-                        let len = src.byte_len();
-                        let buf =
-                            Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
-                                SessionError::OtherError(format!("cudaMalloc: {:?}", e))
-                            })?);
-                        if len > 0 {
-                            send_initializer_to_device(src, &buf)?;
-                        }
-                        Ok(buf)
-                    };
-                    match initializer_cache.as_ref() {
-                        Some(cache) => cache.get_or_insert_with(name, upload),
-                        None => upload(),
-                    }
-                },
-            )
-            .collect::<Result<Vec<_>, _>>()?;
-        info!(
-            "Hybrid: uploaded {} / {} initializers to GPU",
-            gpu_initializer_indices.len(),
-            initializer_sources.len(),
-        );
-
-        let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
-            .map_err(|e| SessionError::OtherError(format!("dlopen: {:?}", e)))?;
-
-        let init_func: CudaInitFn = unsafe {
-            *lib.get::<CudaInitFn>(b"model_init")
-                .map_err(|e| SessionError::OtherError(format!("dlsym model_init: {:?}", e)))?
-        };
-        let destroy_func: CudaDestroyFn = unsafe {
-            *lib.get::<CudaDestroyFn>(b"model_destroy")
-                .map_err(|e| SessionError::OtherError(format!("dlsym model_destroy: {:?}", e)))?
-        };
-        let sync_func: CudaSyncFn = unsafe {
-            *lib.get::<CudaSyncFn>(b"model_device_sync").map_err(|e| {
-                SessionError::OtherError(format!("dlsym model_device_sync: {:?}", e))
-            })?
-        };
-
-        let plan = schedule
+        let needs_cuda = schedule
             .execution_plan
             .as_ref()
-            .ok_or_else(|| SessionError::OtherError("execution_plan missing".to_string()))?;
-        let mut kernel_fns: HashMap<KernelId, CudaStepFn> = HashMap::new();
-        let mut transfer_fns: HashMap<usize, CudaStepFn> = HashMap::new();
-        for (idx, step) in plan.steps.iter().enumerate() {
-            match step {
-                Step::Kernel(k) if k.context.device == Device::CUDA => {
-                    let name = format!("model_step_kernel_{}\0", k.kernel.index());
-                    let f: CudaStepFn = unsafe {
-                        *lib.get::<CudaStepFn>(name.as_bytes()).map_err(|e| {
-                            SessionError::OtherError(format!("dlsym {name}: {:?}", e))
-                        })?
-                    };
-                    kernel_fns.insert(k.kernel, f);
-                }
-                Step::Transfer(_) => {
-                    let name = format!("model_step_transfer_{idx}\0");
-                    let f: CudaStepFn = unsafe {
-                        *lib.get::<CudaStepFn>(name.as_bytes()).map_err(|e| {
-                            SessionError::OtherError(format!("dlsym {name}: {:?}", e))
-                        })?
-                    };
-                    transfer_fns.insert(idx, f);
-                }
-                _ => {}
-            }
-        }
+            .map(|plan| {
+                plan.steps.iter().any(|step| match step {
+                    Step::Kernel(k) => k.context.device == Device::CUDA,
+                    Step::Transfer(_) => true,
+                    _ => false,
+                })
+            })
+            .unwrap_or(false);
 
-        let initializer_ptrs: Vec<*const u8> = initializer_buffers
-            .iter()
-            .map(|b| b.ptr() as *const u8)
-            .collect();
-        let session_state_ptrs: Vec<*mut std::ffi::c_void> =
-            session_state_buffers.iter().map(|b| b.ptr()).collect();
-        let state = unsafe { (init_func)(initializer_ptrs.as_ptr(), session_state_ptrs.as_ptr()) };
+        let cuda = if needs_cuda {
+            Some(build_cuda_state(
+                &schedule,
+                &initializer_sources,
+                &initializer_names,
+                initializer_cache.as_ref(),
+                &session_state_buffers,
+                opt,
+                build_dir,
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             input_ty,
@@ -372,15 +416,7 @@ impl SessionHybrid {
                 _contexts: contexts,
             },
             host_arenas,
-            cuda: CudaState {
-                lib,
-                kernel_fns,
-                transfer_fns,
-                destroy_func,
-                sync_func,
-                state,
-                initializer_buffers,
-            },
+            cuda,
         })
     }
 
@@ -480,34 +516,38 @@ impl SessionHybrid {
                     unsafe { call_kernel(addr, &args) };
                 }
                 Step::Kernel(k) => {
-                    let f = self.cuda.kernel_fns.get(&k.kernel).ok_or_else(|| {
+                    let cuda = self.cuda.as_ref().ok_or_else(|| {
+                        SessionError::OtherError(
+                            "CUDA kernel encountered but CudaState was not built".to_string(),
+                        )
+                    })?;
+                    let f = cuda.kernel_fns.get(&k.kernel).ok_or_else(|| {
                         SessionError::OtherError(format!("CUDA kernel {:?} not loaded", k.kernel))
                     })?;
                     unsafe {
-                        (*f)(
-                            self.cuda.state,
-                            output_ptrs.as_ptr(),
-                            input_ptrs.as_ptr() as _,
-                        );
+                        (*f)(cuda.state, output_ptrs.as_ptr(), input_ptrs.as_ptr() as _);
                     }
                 }
                 Step::Transfer(_) => {
-                    let f = self.cuda.transfer_fns.get(&idx).ok_or_else(|| {
+                    let cuda = self.cuda.as_ref().ok_or_else(|| {
+                        SessionError::OtherError(
+                            "Transfer step encountered but CudaState was not built".to_string(),
+                        )
+                    })?;
+                    let f = cuda.transfer_fns.get(&idx).ok_or_else(|| {
                         SessionError::OtherError(format!("Transfer step {idx} not loaded"))
                     })?;
                     unsafe {
-                        (*f)(
-                            self.cuda.state,
-                            output_ptrs.as_ptr(),
-                            input_ptrs.as_ptr() as _,
-                        );
+                        (*f)(cuda.state, output_ptrs.as_ptr(), input_ptrs.as_ptr() as _);
                     }
                 }
                 Step::SyncWait(_) => {}
             }
         }
 
-        unsafe { (self.cuda.sync_func)() };
+        if let Some(cuda) = self.cuda.as_ref() {
+            unsafe { (cuda.sync_func)() };
+        }
 
         let outputs = output_bufs
             .into_iter()
