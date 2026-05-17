@@ -20,7 +20,7 @@ use crate::graph::Graph;
 use crate::graph::ValueId;
 use crate::graph::ValueInfo;
 use crate::options::*;
-use crate::schedule::placement::PlacementStrategy;
+use crate::schedule::scheduler::PlacementStrategy;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
 
