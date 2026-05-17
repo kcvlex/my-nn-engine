@@ -13,9 +13,6 @@ impl Backend {
     }
 }
 
-/// Try to load a BLAS shared lib (MKL preferred) and the matching OpenMP
-/// runtime into the LLVM JIT global symbol space so kernel modules can resolve
-/// `cblas_*` and `__kmpc_*` symbols. Returns the picked backend.
 pub(super) fn load_jit_runtime() -> Result<Backend, String> {
     let backend = [Backend::MKL, Backend::OpenBLAS]
         .into_iter()
