@@ -164,12 +164,17 @@ fn run_llama3_int8_with(opts: Options) -> String {
 
     let max_seq_len = 512;
     let prefill_len = 16;
-    let llama_opts = LlamaOptions {
-        quant_kv_cache: true,
-    };
-    let r = build_llama_with_options(&config, &weights, max_seq_len, &llama_opts);
-    let p =
-        build_llama_prefill_with_options(&config, &weights, max_seq_len, prefill_len, &llama_opts);
+    let llama_opts = LlamaOptions::builder().quant_kv_cache(true).build();
+    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let p = build_llama(
+        &config,
+        &weights,
+        max_seq_len,
+        &LlamaOptions {
+            prefill_len: Some(prefill_len),
+            ..llama_opts.clone()
+        },
+    );
 
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_with_prefill(
