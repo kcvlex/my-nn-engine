@@ -1,5 +1,7 @@
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
+use my_nn_engine::schedule::ir::Device;
+use my_nn_engine::schedule::scheduler::PlacementStrategy;
 use my_nn_engine::session::SessionError;
 
 use super::common::run_validated_model;
@@ -12,28 +14,31 @@ fn run_test(
     nums: (usize, usize),
     model_filename: Option<&str>,
 ) -> Result {
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CPU)
+        .placement_strategy(Some(PlacementStrategy::Uniform(Device::CPU)))
+        .build();
     run_validated_model(model, epsilon, nums, model_filename, opts)
 }
 
 #[test]
 fn test_mnist12() -> Result {
-    run_test("mnist-12", 1e-2, (1, 1), None)
+    run_test("mnist-12", 1e-3, (1, 1), None)
 }
 
 #[test]
 fn test_resnet18() -> Result {
-    run_test("resnet18-v2-7", 1e-2, (1, 1), None)
+    run_test("resnet18-v2-7", 1e-3, (1, 1), None)
 }
 
 #[test]
 fn test_resnet152() -> Result {
-    run_test("resnet152-v2-7", 1e-1, (1, 1), None)
+    run_test("resnet152-v2-7", 1e-3, (1, 1), None)
 }
 
 #[test]
 fn test_yolov4() -> Result {
-    run_test("yolov4", 1.0, (1, 1), None)
+    run_test("yolov4", 1e-3, (1, 1), None)
 }
 
 #[test]
@@ -48,14 +53,14 @@ fn test_gpt2() -> Result {
 
 #[test]
 fn test_mobilenetv2() -> Result {
-    run_test("mobilenetv2-12", 5e-2, (1, 1), None)
+    run_test("mobilenetv2-12", 1e-3, (1, 1), None)
 }
 
 #[test]
 fn test_efficientnet_lite4_11() -> Result {
     run_test(
         "efficientnet-lite4-11",
-        1e-2,
+        1e-3,
         (1, 1),
         Some("efficientnet-lite4.onnx"),
     )

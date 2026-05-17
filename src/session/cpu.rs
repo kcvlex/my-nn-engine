@@ -23,16 +23,16 @@ type CodeType =
 
 /// SAFETY: After JIT compilation is complete, the engine is only used via a raw function pointer.
 /// The engine and contexts are kept alive solely to prevent LLVM from deallocating the JIT code.
-struct JitState {
+pub(super) struct CpuJitState {
     // engine must be dropped before contexts (field drop order guarantees this)
-    _engine: ExecutionEngine<'static>,
-    _contexts: Vec<Context>,
+    pub(super) _engine: ExecutionEngine<'static>,
+    pub(super) _contexts: Vec<Context>,
 }
 
 // SAFETY: Once JIT compilation is complete, the engine is not mutated and the compiled code
 // is safe to call from any thread (it's just a function pointer into mmap'd memory).
-unsafe impl Send for JitState {}
-unsafe impl Sync for JitState {}
+unsafe impl Send for CpuJitState {}
+unsafe impl Sync for CpuJitState {}
 
 pub struct SessionCPU {
     #[allow(dead_code)]
@@ -45,7 +45,7 @@ pub struct SessionCPU {
     codegen_ctx: CodeGenContext,
 
     #[allow(dead_code)]
-    jit: JitState,
+    jit: CpuJitState,
     func: CodeType,
 }
 
@@ -162,7 +162,7 @@ impl SessionCPU {
             input_ty,
             output_ty,
             codegen_ctx,
-            jit: JitState {
+            jit: CpuJitState {
                 _engine: engine,
                 _contexts: contexts,
             },

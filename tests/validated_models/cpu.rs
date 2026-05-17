@@ -1,3 +1,4 @@
+use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::SessionError;
 
@@ -11,7 +12,8 @@ fn run_test(
     nums: (usize, usize),
     model_filename: Option<&str>,
 ) -> Result {
-    run_validated_model(model, epsilon, nums, model_filename, Target::CPU)
+    let opts = Options::builder().target(Target::CPU).build();
+    run_validated_model(model, epsilon, nums, model_filename, opts)
 }
 
 #[test]

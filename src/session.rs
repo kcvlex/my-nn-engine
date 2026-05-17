@@ -507,10 +507,7 @@ impl Session {
             info!("Build directory saved at {:?}", path);
         }
 
-        let use_hybrid_runtime = matches!(
-            options.placement_strategy,
-            Some(crate::schedule::scheduler::PlacementStrategy::StructuralKvTouch)
-        );
+        let use_hybrid_runtime = options.placement_strategy.is_some();
         let inner = if use_hybrid_runtime {
             SessionHybrid::new(
                 inputs_ty,
@@ -518,8 +515,6 @@ impl Session {
                 initializer,
                 session_state_buffers,
                 schedule,
-                options,
-                &build_dir,
             )
             .map(SessionInner::Hybrid)?
         } else {
