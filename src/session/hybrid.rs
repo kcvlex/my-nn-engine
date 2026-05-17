@@ -652,20 +652,18 @@ impl SessionHybrid {
                                     )
                                 }
                                 AllocPlace::Initializer(v) => {
-                                    let tensor = self
+                                    let i = self
                                         .schedule
-                                        .graph()
-                                        .get_inline_initializer(v)
+                                        .initializers
+                                        .iter()
+                                        .position(|x| *x == v)
                                         .ok_or_else(|| {
                                             SessionError::OtherError(format!(
-                                                "Transfer with external-ref initializer {v:?} not yet supported"
+                                                "initializer {v:?} not found"
                                             ))
                                         })?;
-                                    let tensor = Rc::new(RefCell::new(StrictTensor::from(tensor)));
-                                    initializers_arena.push(tensor.clone());
                                     (
-                                        initializers_arena.last().unwrap().borrow_mut().as_ptr()
-                                            as *mut u8,
+                                        self.initializer[i].as_ptr() as *mut u8,
                                         MemoryTier::HostArena,
                                     )
                                 }
