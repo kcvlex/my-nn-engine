@@ -248,10 +248,6 @@ struct Scheduler<'s> {
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
     placement: Placement,
-    /// Where SessionState buffers physically live. GpuArena when any CUDA
-    /// kernel is in the placement (so CPU consumers need explicit Transfer),
-    /// otherwise HostArena (CPU sessions read the user-provided buffer
-    /// pointer directly).
     session_state_tier: MemoryTier,
 
     // TODO: Per arena
