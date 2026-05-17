@@ -91,6 +91,11 @@ struct HostArenas {
     chunk2ptrs: HashMap<ChunkId, *mut u8>,
 }
 
+// SAFETY: chunk2ptrs is derived from `arenas` owned by Self and is only
+// dereferenced from the thread that holds the SessionHybrid run lock.
+unsafe impl Send for HostArenas {}
+unsafe impl Sync for HostArenas {}
+
 impl HostArenas {
     fn new(plan: &ExecutionPlan) -> Self {
         let arenas = plan
