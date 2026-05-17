@@ -8,7 +8,6 @@ use inkwell::OptimizationLevel;
 use log::info;
 use rayon::prelude::*;
 
-use crate::codegen::cpu::blas;
 use crate::codegen::cpu::get_kernel_name_or;
 use crate::codegen::cpu::CodeGenContext as CpuCodeGenContext;
 use crate::options::Options;
@@ -20,6 +19,7 @@ use crate::schedule::ir::Step;
 use crate::schedule::ChunkId;
 use crate::schedule::KernelId;
 use crate::schedule::Schedule;
+use crate::session::shared_lib::load_jit_runtime;
 use crate::session::DeviceBuffer;
 use crate::session::InitializerSource;
 use crate::session::SessionError;
@@ -70,7 +70,7 @@ impl SessionHybrid {
             .map_err(SessionError::ModelLoadError)?;
 
         info!("Hybrid: loading BLAS + OpenMP");
-        let blas_backend = blas::load_jit_runtime().map_err(SessionError::OtherError)?;
+        let blas_backend = load_jit_runtime().map_err(SessionError::OtherError)?;
 
         let codegen_ctx =
             CpuCodeGenContext::new(schedule, blas_backend).map_err(SessionError::CodeGenError)?;

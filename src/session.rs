@@ -2,6 +2,7 @@ mod cpu;
 mod cuda;
 mod device_buffer;
 mod hybrid;
+mod shared_lib;
 
 use std::collections::HashMap;
 use std::fs::File;

@@ -8,10 +8,10 @@ use itertools::zip_eq;
 use log::info;
 use rayon::prelude::*;
 
-use crate::codegen::cpu::blas;
 use crate::codegen::cpu::CodeGenContext;
 use crate::options::Options;
 use crate::schedule::Schedule;
+use crate::session::shared_lib::load_jit_runtime;
 use crate::session::DeviceBuffer;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
@@ -65,7 +65,7 @@ impl SessionCPU {
             .collect::<Result<Vec<_>, _>>()
             .map_err(SessionError::ModelLoadError)?;
         info!("Load external libraries");
-        let blas_backend = blas::load_jit_runtime().map_err(SessionError::OtherError)?;
+        let blas_backend = load_jit_runtime().map_err(SessionError::OtherError)?;
         info!("Using BLAS: {:?}", blas_backend);
 
         let codegen_ctx =
