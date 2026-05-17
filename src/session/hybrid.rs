@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
 use inkwell::OptimizationLevel;
+use itertools::izip;
 use itertools::Itertools;
 use log::info;
 use rayon::prelude::*;
@@ -120,29 +122,28 @@ fn build_cuda_state(
     // index, but for hybrid placements only initializers actually consumed
     // by CUDA kernels need device memory. Upload only those; the rest get
     // a 1-byte placeholder so model_init still receives a valid pointer.
-    let mut gpu_initializer_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    if let Some(plan) = schedule.execution_plan.as_ref() {
-        for step in &plan.steps {
-            if let Step::Kernel(k) = step {
-                if k.context.device != Device::CUDA {
-                    continue;
+    let gpu_initializer_indices = if let Some(plan) = schedule.execution_plan.as_ref() {
+        plan.steps
+            .iter()
+            .flat_map(|step| match step {
+                Step::Kernel(k) if k.context.device == Device::CUDA => {
+                    k.bindings.iter().map(|b| b.place).collect::<Vec<_>>()
                 }
-                for b in &k.bindings {
-                    if let AllocPlace::Initializer(v) = b.place {
-                        if let Some(i) = schedule.initializers.iter().position(|x| *x == v) {
-                            gpu_initializer_indices.insert(i);
-                        }
-                    }
-                }
-            }
-        }
-    }
+                Step::Transfer(t) => vec![t.src.place, t.dst.place],
+                _ => Vec::new(),
+            })
+            .filter_map(|place| match place {
+                AllocPlace::Initializer(v) => Some(v),
+                _ => None,
+            })
+            .filter_map(|v| schedule.initializers.iter().position(|x| *x == v))
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
 
     let _lock = cuda_lock();
-    let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
-        .iter()
-        .zip(initializer_names.iter())
+    let initializer_buffers = izip!(initializer_sources.iter(), initializer_names.iter())
         .enumerate()
         .map(
             |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
@@ -158,7 +159,7 @@ fn build_cuda_state(
                         Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
                             SessionError::OtherError(format!("cudaMalloc: {:?}", e))
                         })?);
-                    if len > 0 {
+                    if 0 < len {
                         send_initializer_to_device(src, &buf)?;
                     }
                     Ok(buf)

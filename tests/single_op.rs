@@ -18,6 +18,8 @@ enum SessionKind {
     #[cfg(feature = "cuda")]
     Cuda,
     HybridCpu,
+    #[cfg(feature = "cuda")]
+    HybridCuda,
 }
 
 impl SessionKind {
@@ -33,6 +35,11 @@ impl SessionKind {
                 .target(Target::CPU)
                 .omp_elementwise_threshold(10)
                 .placement_strategy(Some(PlacementStrategy::Uniform(Device::CPU)))
+                .build(),
+            #[cfg(feature = "cuda")]
+            SessionKind::HybridCuda => Options::builder()
+                .target(Target::CUDA)
+                .placement_strategy(Some(PlacementStrategy::Uniform(Device::CUDA)))
                 .build(),
         }
     }
@@ -137,7 +144,12 @@ where
     F: Fn(&mut Session) -> TestResult,
 {
     #[cfg(feature = "cuda")]
-    let kinds = &[SessionKind::Cpu, SessionKind::Cuda, SessionKind::HybridCpu];
+    let kinds = &[
+        SessionKind::Cpu,
+        SessionKind::Cuda,
+        SessionKind::HybridCpu,
+        SessionKind::HybridCuda,
+    ];
     #[cfg(not(feature = "cuda"))]
     let kinds = &[SessionKind::Cpu, SessionKind::HybridCpu];
     with_session(p, kinds, f)
@@ -149,7 +161,12 @@ where
     F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
 {
     #[cfg(feature = "cuda")]
-    let kinds = &[SessionKind::Cpu, SessionKind::Cuda, SessionKind::HybridCpu];
+    let kinds = &[
+        SessionKind::Cpu,
+        SessionKind::Cuda,
+        SessionKind::HybridCpu,
+        SessionKind::HybridCuda,
+    ];
     #[cfg(not(feature = "cuda"))]
     let kinds = &[SessionKind::Cpu, SessionKind::HybridCpu];
     with_session_and_tensors(p, kinds, nums, f)

@@ -1,0 +1,67 @@
+use my_nn_engine::options::Options;
+use my_nn_engine::options::Target;
+use my_nn_engine::schedule::ir::Device;
+use my_nn_engine::schedule::scheduler::PlacementStrategy;
+use my_nn_engine::session::SessionError;
+
+use super::common::run_validated_model;
+
+type Result = std::result::Result<(), SessionError>;
+
+fn run_test(
+    model: &str,
+    epsilon: f64,
+    nums: (usize, usize),
+    model_filename: Option<&str>,
+) -> Result {
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .placement_strategy(Some(PlacementStrategy::Uniform(Device::CUDA)))
+        .build();
+    run_validated_model(model, epsilon, nums, model_filename, opts)
+}
+
+#[test]
+fn test_mnist12() -> Result {
+    run_test("mnist-12", 1e-2, (1, 1), None)
+}
+
+#[test]
+fn test_resnet18() -> Result {
+    run_test("resnet18-v2-7", 1e-2, (1, 1), None)
+}
+
+#[test]
+fn test_resnet152() -> Result {
+    run_test("resnet152-v2-7", 1e-1, (1, 1), None)
+}
+
+#[test]
+fn test_yolov4() -> Result {
+    run_test("yolov4", 1.0, (1, 1), None)
+}
+
+#[test]
+fn test_bertsquad12() -> Result {
+    run_test("bertsquad-12", 1e-2, (4, 3), None)
+}
+
+#[test]
+fn test_gpt2() -> Result {
+    run_test("GPT2", 1e-2, (1, 13), Some("model.onnx"))
+}
+
+#[test]
+fn test_mobilenetv2() -> Result {
+    run_test("mobilenetv2-12", 5e-2, (1, 1), None)
+}
+
+#[test]
+fn test_efficientnet_lite4_11() -> Result {
+    run_test(
+        "efficientnet-lite4-11",
+        1e-2,
+        (1, 1),
+        Some("efficientnet-lite4.onnx"),
+    )
+}
