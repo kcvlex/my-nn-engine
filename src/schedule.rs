@@ -20,6 +20,7 @@ use crate::graph::Graph;
 use crate::graph::ValueId;
 use crate::graph::ValueInfo;
 use crate::options::*;
+use crate::schedule::placement::PlacementStrategy;
 use crate::tensor::types::ResolvedTensorType;
 use crate::transform::modify::SimpleGraphOp;
 
@@ -77,7 +78,7 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
     let placement_strategy = match options.placement_strategy {
         Some(s) => s,
-        None => scheduler::PlacementStrategy::Uniform(match options.target {
+        None => PlacementStrategy::Uniform(match options.target {
             Target::CUDA => ir::Device::CUDA,
             Target::CPU => ir::Device::CPU,
         }),
@@ -89,8 +90,7 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let needs_cpu_omp = options.target == Target::CPU ||
         matches!(
             placement_strategy,
-            scheduler::PlacementStrategy::StructuralKvTouch |
-                scheduler::PlacementStrategy::Uniform(ir::Device::CPU)
+            PlacementStrategy::StructuralKvTouch | PlacementStrategy::Uniform(ir::Device::CPU)
         );
     if needs_cpu_omp {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
