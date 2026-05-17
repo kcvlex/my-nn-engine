@@ -149,6 +149,14 @@ impl ChunkAllocator {
         id
     }
 
+    /// Release a chunk whose value will never be read again (e.g. an unused
+    /// multi-output of a kernel).
+    fn release_if_dead(&mut self, id: ChunkId, stream: StreamId) {
+        if self.all_chunks[id].live_uses == 0 {
+            self.free(id, stream);
+        }
+    }
+
     fn add_uses(&mut self, id: ChunkId, uses: usize) {
         self.all_chunks[id].live_uses += uses;
     }
@@ -792,6 +800,15 @@ impl<'s> Scheduler<'s> {
                 place,
                 is_first_use,
             });
+
+            // After all use-tracking for this output has been registered
+            // (the alloc, the optional post-transfer add_uses, and any
+            // session-state aliasing above), if no kernel actually reads
+            // it, return the chunk to the free list so subsequent allocs
+            // on the same stream can reuse the slot.
+            if let AllocPlace::Chunk(cid) = place {
+                self.allocator.release_if_dead(cid, stream);
+            }
         }
 
         (bindings, post_transfers)
@@ -845,4 +862,89 @@ impl<'s> Scheduler<'s> {
 
 fn build(schedule: &Schedule, num_streams: usize, placement: Placement) -> ExecutionPlan {
     Scheduler::new(schedule, num_streams, placement).run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_allocator() -> (ChunkAllocator, ArenaId, StreamId) {
+        let mut a = ChunkAllocator::default();
+        let arena = a.new_arena(MemoryTier::GpuArena, 1);
+        (a, arena, StreamId(0))
+    }
+
+    #[test]
+    fn alloc_with_positive_uses_is_not_released_immediately() {
+        let (mut a, arena, stream) = fresh_allocator();
+
+        let cid = a.alloc(1024, arena, stream, 1);
+        // Still live: release_if_dead must be a no-op.
+        a.release_if_dead(cid, stream);
+
+        // A second alloc should NOT reuse cid because cid still has live_uses=1.
+        let cid2 = a.alloc(1024, arena, stream, 1);
+        assert_ne!(cid, cid2);
+
+        // Consuming cid once drops live_uses to 0 and frees it.
+        a.consume(cid, stream);
+        let cid3 = a.alloc(1024, arena, stream, 1);
+        assert_eq!(cid3, cid, "freed chunk should be reused");
+    }
+
+    #[test]
+    fn alloc_with_zero_uses_is_reusable_after_release_if_dead() {
+        let (mut a, arena, stream) = fresh_allocator();
+
+        // Multi-output kernel emits an output no later kernel reads.
+        let dead = a.alloc(512, arena, stream, 0);
+        a.release_if_dead(dead, stream);
+
+        // The slot must come back via the free list.
+        let next = a.alloc(2048, arena, stream, 1);
+        assert_eq!(next, dead, "dead-on-arrival chunk should be reused");
+        // The chunk grows to fit the larger request and stays at that size.
+        assert_eq!(a.all_chunks[next].size, 2048);
+    }
+
+    #[test]
+    fn release_if_dead_is_noop_when_post_transfer_added_uses() {
+        // Simulates the graph-output path: alloc(uses=0), then add_uses(1) for
+        // the post-transfer that copies the chunk to host. The chunk must NOT
+        // be returned to the free list because the post-transfer will read it.
+        let (mut a, arena, stream) = fresh_allocator();
+
+        let cid = a.alloc(1024, arena, stream, 0);
+        a.add_uses(cid, 1);
+        a.release_if_dead(cid, stream);
+
+        let cid2 = a.alloc(1024, arena, stream, 1);
+        assert_ne!(cid, cid2, "chunk pending a post-transfer must not be reused");
+    }
+
+    #[test]
+    fn unused_output_does_not_steal_chunks_intended_for_reuse() {
+        // Mirrors the planner bug surfaced by DynamicQuantizeLinear's unused
+        // zero-point output: a previously freed chunk on the free list is
+        // popped to back the dead-on-arrival output, then never returned, so
+        // the next legitimate alloc has to create a new chunk and the arena
+        // grows. With release_if_dead, the chunk goes straight back into the
+        // free list so the next legitimate alloc reuses it.
+        let (mut a, arena, stream) = fresh_allocator();
+
+        // 1. A real output is allocated and consumed, returning to free list.
+        let big = a.alloc(11_272_192, arena, stream, 1);
+        a.consume(big, stream);
+
+        // 2. Some later kernel's unused multi-output picks up the same slot...
+        let dead = a.alloc(512, arena, stream, 0);
+        assert_eq!(dead, big, "free-list pop should reuse the slot");
+        a.release_if_dead(dead, stream);
+
+        // 3. ...then the next legitimate alloc reuses the same slot again,
+        //    keeping the total chunk count at 1.
+        let next = a.alloc(11_272_192, arena, stream, 1);
+        assert_eq!(next, big, "slot must still be reusable after a dead claim");
+        assert_eq!(a.all_chunks.len(), 1, "only one chunk should exist");
+    }
 }
