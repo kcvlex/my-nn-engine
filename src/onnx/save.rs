@@ -228,6 +228,16 @@ fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
 
         Operator::DequantizeLinear(d) => vec![attr_int("axis", d.axis.raw() as i64)],
         Operator::DequantMatMul(d) => vec![attr_int("axis", d.axis.raw() as i64)],
+        Operator::DynamicQuantizeLinear(d) => {
+            let mut attrs = vec![];
+            if let Some(axis) = d.axis {
+                attrs.push(attr_int("axis", axis.raw() as i64));
+            }
+            if d.symmetric {
+                attrs.push(attr_int("symmetric", 1));
+            }
+            attrs
+        }
 
         Operator::Constant(c) => vec![attr_tensor("value", tensor_to_proto(&c.value))],
 

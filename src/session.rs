@@ -113,13 +113,24 @@ impl StrictTensor {
         }
     }
 
-    fn into_tensor(self, dims: ResolvedTensorDims) -> Tensor {
+    fn into_tensor(self, dims: ResolvedTensorDims, elem_type: DataType) -> Tensor {
         match self {
-            StrictTensor::U8(v) => Tensor::new(
-                dims,
-                TensorData::Bool(v.iter().map(|&b| if b != 0 { 1u8 } else { 0u8 }).collect()),
-            )
-            .unwrap(),
+            StrictTensor::U8(v) => match elem_type {
+                DataType::Bool => Tensor::new(
+                    dims,
+                    TensorData::Bool(v.iter().map(|&b| if b != 0 { 1u8 } else { 0u8 }).collect()),
+                )
+                .unwrap(),
+                DataType::UInt(UIntType::U8) => Tensor::new(
+                    dims,
+                    TensorData::UInt(UIntType::U8, v.into_iter().map(u64::from).collect()),
+                )
+                .unwrap(),
+                _ => panic!(
+                    "StrictTensor::U8 -> Tensor: unsupported dtype {:?}",
+                    elem_type
+                ),
+            },
             StrictTensor::I8(v) => {
                 Tensor::new(dims, TensorData::SInt(SIntType::I8, cast_vec!(v, i64))).unwrap()
             }

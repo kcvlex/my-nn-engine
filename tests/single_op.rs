@@ -172,6 +172,15 @@ where
     with_session_and_tensors(p, kinds, nums, f)
 }
 
+#[cfg(feature = "cuda")]
+pub fn with_cuda_session_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
+where
+    P: AsRef<std::path::Path>,
+    F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
+{
+    with_session_and_tensors(p, &[SessionKind::Cuda], nums, f)
+}
+
 #[test]
 fn add() -> TestResult {
     with_all_sessions_and_tensors("add", (2, 1), |session, (inputs, expected)| {
@@ -1126,6 +1135,47 @@ fn dequantize_linear() -> TestResult {
         },
     )
 }
+
+// CPU codegen for DynamicQuantizeLinear is a follow-up PR; these tests run on
+// CUDA only for now. Tolerances on int8/uint8 outputs are zero because the
+// kernel reproduces the integer values exactly; scale is bf16 and matches.
+#[cfg(feature = "cuda")]
+macro_rules! dyn_quantize_linear_test {
+    ($name:ident, $fixture:literal) => {
+        #[test]
+        fn $name() -> TestResult {
+            with_cuda_session_and_tensors($fixture, (1, 3), |session, (inputs, expected)| {
+                let outputs = session.run(inputs)?;
+                assert_eq!(outputs.len(), 3);
+                assert_eq!(outputs[0], expected[0], "y mismatch");
+                assert_eq_epsilon!(outputs[1], expected[1], 1e-3);
+                assert_eq!(outputs[2], expected[2], "zero_point mismatch");
+                Ok(())
+            })
+        }
+    };
+}
+
+#[cfg(feature = "cuda")]
+dyn_quantize_linear_test!(
+    dyn_quantize_linear_sym_per_tensor,
+    "dyn_quantize_linear_sym_per_tensor"
+);
+#[cfg(feature = "cuda")]
+dyn_quantize_linear_test!(
+    dyn_quantize_linear_sym_per_row,
+    "dyn_quantize_linear_sym_per_row"
+);
+#[cfg(feature = "cuda")]
+dyn_quantize_linear_test!(
+    dyn_quantize_linear_asym_per_tensor,
+    "dyn_quantize_linear_asym_per_tensor"
+);
+#[cfg(feature = "cuda")]
+dyn_quantize_linear_test!(
+    dyn_quantize_linear_asym_per_row,
+    "dyn_quantize_linear_asym_per_row"
+);
 
 #[test]
 fn dequant_matmul() -> TestResult {
