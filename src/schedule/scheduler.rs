@@ -173,7 +173,7 @@ impl ChunkAllocator {
     }
 }
 
-fn value_byte_size(schedule: &Schedule, v: ValueId) -> usize {
+pub fn value_byte_size(schedule: &Schedule, v: ValueId) -> usize {
     let rty = schedule
         .get_resolved_tensor_type(v)
         .unwrap_or_else(|| panic!("unresolved tensor type for {v:?}"));
@@ -248,6 +248,7 @@ struct Scheduler<'s> {
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
     placement: Placement,
+    session_state_tier: MemoryTier,
 
     // TODO: Per arena
     num_streams: usize,
@@ -271,6 +272,11 @@ impl<'s> Scheduler<'s> {
         let output_alias = compute_output_aliases(schedule);
         let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
         let num_streams = if needs_cuda { num_streams.max(1) } else { 1 };
+        let session_state_tier = if needs_cuda {
+            MemoryTier::GpuArena
+        } else {
+            MemoryTier::HostArena
+        };
 
         let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
         let session_states: HashSet<ValueId> = schedule.session_states.iter().copied().collect();
@@ -308,6 +314,7 @@ impl<'s> Scheduler<'s> {
             session_states,
             inputs_set,
             placement,
+            session_state_tier,
             num_streams,
             allocator: ChunkAllocator::default(),
             value_on_tier: HashMap::new(),
@@ -468,7 +475,8 @@ impl<'s> Scheduler<'s> {
         let needs_transfer = match original {
             AllocPlace::Chunk(cid) => self.allocator.chunk_tier(cid) != dst_tier,
             AllocPlace::Input(_) | AllocPlace::Output(_) => dst_tier != MemoryTier::HostArena,
-            AllocPlace::SessionState(_) | AllocPlace::Initializer(_) => false,
+            AllocPlace::SessionState(_) => self.session_state_tier != dst_tier,
+            AllocPlace::Initializer(_) => false,
         };
         if !needs_transfer {
             return original;
