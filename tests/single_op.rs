@@ -4,11 +4,39 @@ use itertools::izip;
 use my_nn_engine::onnx::load::*;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
+use my_nn_engine::schedule::ir::Device;
+use my_nn_engine::schedule::scheduler::PlacementStrategy;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
 use my_nn_engine::session::SessionError;
 use my_nn_engine::tensor::data::CompPolicy;
 use my_nn_engine::tensor::Tensor;
+
+#[derive(Clone, Copy)]
+enum SessionKind {
+    Cpu,
+    #[cfg(feature = "cuda")]
+    Cuda,
+    HybridCpu,
+}
+
+impl SessionKind {
+    fn build_options(self) -> Options {
+        match self {
+            SessionKind::Cpu => Options::builder()
+                .target(Target::CPU)
+                .omp_elementwise_threshold(10)
+                .build(),
+            #[cfg(feature = "cuda")]
+            SessionKind::Cuda => Options::builder().target(Target::CUDA).build(),
+            SessionKind::HybridCpu => Options::builder()
+                .target(Target::CPU)
+                .omp_elementwise_threshold(10)
+                .placement_strategy(Some(PlacementStrategy::Uniform(Device::CPU)))
+                .build(),
+        }
+    }
+}
 
 pub type TestResult = Result<(), SessionError>;
 
@@ -35,7 +63,7 @@ macro_rules! assert_eq_epsilon {
     }};
 }
 
-fn with_session<P, F>(p: P, targets: &[Target], f: F) -> TestResult
+fn with_session<P, F>(p: P, kinds: &[SessionKind], f: F) -> TestResult
 where
     P: AsRef<std::path::Path>,
     F: Fn(&mut Session) -> TestResult,
@@ -44,14 +72,8 @@ where
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/test/single_op")
         .join(p);
-    for target in targets.iter().copied() {
-        let opt = match target {
-            Target::CPU => Options::builder()
-                .target(target)
-                .omp_elementwise_threshold(10)
-                .build(),
-            Target::CUDA => Options::builder().target(target).build(),
-        };
+    for kind in kinds.iter().copied() {
+        let opt = kind.build_options();
         let mut session = Session::new(&path, None, &opt, &SessionConfig::default())?;
         f(&mut session)?;
     }
@@ -60,7 +82,7 @@ where
 
 fn with_session_and_tensors<P, F>(
     dir: P,
-    targets: &[Target],
+    kinds: &[SessionKind],
     nums: (usize, usize),
     f: F,
 ) -> TestResult
@@ -88,14 +110,8 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    for target in targets.iter().copied() {
-        let opt = match target {
-            Target::CPU => Options::builder()
-                .target(target)
-                .omp_elementwise_threshold(10)
-                .build(),
-            Target::CUDA => Options::builder().target(target).build(),
-        };
+    for kind in kinds.iter().copied() {
+        let opt = kind.build_options();
         let mut session = Session::new(
             dir.join("model.onnx"),
             None,
@@ -112,7 +128,7 @@ where
     P: AsRef<std::path::Path>,
     F: Fn(&mut Session) -> TestResult,
 {
-    with_session(p, &[Target::CPU], f)
+    with_session(p, &[SessionKind::Cpu, SessionKind::HybridCpu], f)
 }
 
 fn with_all_sessions<P, F>(p: P, f: F) -> TestResult
@@ -121,10 +137,10 @@ where
     F: Fn(&mut Session) -> TestResult,
 {
     #[cfg(feature = "cuda")]
-    let targets = &[Target::CPU, Target::CUDA];
+    let kinds = &[SessionKind::Cpu, SessionKind::Cuda, SessionKind::HybridCpu];
     #[cfg(not(feature = "cuda"))]
-    let targets = &[Target::CPU];
-    with_session(p, targets, f)
+    let kinds = &[SessionKind::Cpu, SessionKind::HybridCpu];
+    with_session(p, kinds, f)
 }
 
 pub fn with_all_sessions_and_tensors<P, F>(p: P, nums: (usize, usize), f: F) -> TestResult
@@ -133,10 +149,10 @@ where
     F: Fn(&mut Session, (&[Tensor], &[Tensor])) -> TestResult,
 {
     #[cfg(feature = "cuda")]
-    let targets = &[Target::CPU, Target::CUDA];
+    let kinds = &[SessionKind::Cpu, SessionKind::Cuda, SessionKind::HybridCpu];
     #[cfg(not(feature = "cuda"))]
-    let targets = &[Target::CPU];
-    with_session_and_tensors(p, targets, nums, f)
+    let kinds = &[SessionKind::Cpu, SessionKind::HybridCpu];
+    with_session_and_tensors(p, kinds, nums, f)
 }
 
 #[test]
@@ -528,7 +544,7 @@ fn resize_upsample_sizes_nearest_ceil_half_pixel() -> TestResult {
 fn slice_large_end() -> TestResult {
     with_session_and_tensors(
         "slice_large_end",
-        &[Target::CPU],
+        &[SessionKind::Cpu, SessionKind::HybridCpu],
         (0, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;
@@ -807,7 +823,7 @@ fn gather_dim1() -> TestResult {
     // CPU-only test (CUDA has separate i32 type handling issues)
     with_session_and_tensors(
         "gather_dim1",
-        &[Target::CPU],
+        &[SessionKind::Cpu, SessionKind::HybridCpu],
         (2, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;
@@ -823,7 +839,7 @@ fn gather_negative_indices() -> TestResult {
     // In ONNX/NumPy, negative indices mean "from end": -1 is last, -2 is second-to-last
     with_session_and_tensors(
         "gather_negative_indices",
-        &[Target::CPU],
+        &[SessionKind::Cpu, SessionKind::HybridCpu],
         (2, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;
@@ -999,7 +1015,7 @@ fn neg() -> TestResult {
 fn range() -> TestResult {
     with_session_and_tensors(
         "range",
-        &[Target::CPU],
+        &[SessionKind::Cpu, SessionKind::HybridCpu],
         (0, 1),
         |session, (inputs, expected)| {
             let outputs = session.run(inputs)?;

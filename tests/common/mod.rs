@@ -55,7 +55,7 @@ pub fn run_validated_model(
     epsilon: f64,
     nums: (usize, usize),
     model_filename: Option<&str>,
-    target: Target,
+    options: Options,
 ) -> std::result::Result<(), SessionError> {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/validated")
@@ -86,7 +86,7 @@ pub fn run_validated_model(
     let mut session = Session::new(
         &model_path,
         Some(&input_types),
-        &Options::builder().target(target).build(),
+        &options,
         &SessionConfig::default(),
     )?;
 
