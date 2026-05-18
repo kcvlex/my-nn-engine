@@ -1136,9 +1136,6 @@ fn dequantize_linear() -> TestResult {
     )
 }
 
-// CPU codegen for DynamicQuantizeLinear is a follow-up PR; these tests run on
-// CUDA only for now. Tolerances on int8/uint8 outputs are zero because the
-// kernel reproduces the integer values exactly; scale is bf16 and matches.
 #[cfg(feature = "cuda")]
 macro_rules! dyn_quantize_linear_test {
     ($name:ident, $fixture:literal) => {

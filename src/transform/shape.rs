@@ -268,7 +268,6 @@ pub fn infer_node_output(
             res.push(ResolvedTensorType::new(scale.elem_type, x.dims.clone()));
         }
         Operator::DynamicQuantizeLinear(DynamicQuantizeLinear { axis, symmetric }) => {
-            // 3 outputs: y (int8/uint8), y_scale (float), y_zero_point (int8/uint8).
             let x = &inputs[args::DYNAMIC_QUANTIZE_LINEAR_X];
             let y_dtype = if *symmetric {
                 DataType::SInt(SIntType::I8)

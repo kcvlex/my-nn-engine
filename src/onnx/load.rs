@@ -780,10 +780,6 @@ impl DequantizeLinear {
 
 impl DynamicQuantizeLinear {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
-        // Standard ONNX `DynamicQuantizeLinear` has no attributes (per-tensor
-        // asymmetric uint8). my-onnx adds two optional extensions:
-        //   `axis` (int): per-channel quantization along this axis.
-        //   `symmetric` (int, 0|1): if 1, output is symmetric int8 with zp=0.
         let axis = attributes.get("axis").map(|a| a.index()).transpose()?;
         let symmetric = attributes
             .get("symmetric")
