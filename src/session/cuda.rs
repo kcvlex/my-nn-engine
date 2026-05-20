@@ -269,7 +269,7 @@ impl SessionCUDA {
         let input_ptrs = input_bufs.iter().map(|t| t.as_ptr()).collect::<Vec<_>>();
         unsafe { (self.run_func)(self.state, output_ptrs.as_ptr(), input_ptrs.as_ptr()) };
         let outputs = zip_eq(self.output_ty.iter(), output_bufs)
-            .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
+            .map(|(ty, buf)| buf.into_tensor(ty.dims.clone(), ty.elem_type))
             .collect::<Vec<_>>();
         Ok(outputs)
     }

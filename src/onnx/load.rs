@@ -649,6 +649,7 @@ impl TryFrom<i32> for DataType {
             tensor_proto::DataType::Int8 => Ok(SIntType::I8.into()),
             tensor_proto::DataType::Int32 => Ok(SIntType::I32.into()),
             tensor_proto::DataType::Int64 => Ok(SIntType::I64.into()),
+            tensor_proto::DataType::Uint8 => Ok(UIntType::U8.into()),
             tensor_proto::DataType::Uint64 => Ok(UIntType::U64.into()),
             tensor_proto::DataType::Undefined => Err(ModelLoadError::ElemTypeUnspecified),
             x => Err(ModelLoadError::UnsupportedElemType(x)),
@@ -774,6 +775,19 @@ impl DequantizeLinear {
             .transpose()?
             .unwrap_or(TensorIndex::new(1));
         Ok(DequantizeLinear { axis })
+    }
+}
+
+impl DynamicQuantizeLinear {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes.get("axis").map(|a| a.index()).transpose()?;
+        let symmetric = attributes
+            .get("symmetric")
+            .map(|a| a.i())
+            .transpose()?
+            .map(|v| v != 0)
+            .unwrap_or(false);
+        Ok(DynamicQuantizeLinear { axis, symmetric })
     }
 }
 
@@ -1231,6 +1245,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
             attributes,
         )?)),
         "DequantMatMul" => Ok(Operator::DequantMatMul(DequantMatMul::load(attributes)?)),
+        "DynamicQuantizeLinear" => Ok(Operator::DynamicQuantizeLinear(
+            DynamicQuantizeLinear::load(attributes)?,
+        )),
         "Div" => Ok(Operator::Div),
         "Equal" => Ok(Operator::Equal),
         "Expand" => Ok(Operator::Expand),

@@ -203,7 +203,7 @@ impl SessionCPU {
             )
         };
         let outputs = zip_eq(self.output_ty.iter(), output_bufs)
-            .map(|(ty, buf)| buf.into_tensor(ty.dims.clone()))
+            .map(|(ty, buf)| buf.into_tensor(ty.dims.clone(), ty.elem_type))
             .collect::<Vec<_>>();
         Ok(outputs)
     }

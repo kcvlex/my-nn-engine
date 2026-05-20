@@ -23,6 +23,7 @@ pub enum CUDAKernel {
     DequantGemvKernel(DequantGemvKernel),
     DequantMatMulKernel(DequantMatMulKernel),
     DequantMatMulWmmaKernel(DequantMatMulWmmaKernel),
+    DynamicQuantizeLinearKernel(DynamicQuantizeLinearKernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -472,6 +473,7 @@ impl LaunchKernel {
             CUDAKernel::DequantGemvKernel(d) => d,
             CUDAKernel::DequantMatMulKernel(d) => d,
             CUDAKernel::DequantMatMulWmmaKernel(d) => d,
+            CUDAKernel::DynamicQuantizeLinearKernel(d) => d,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1482,6 +1484,39 @@ impl DequantizeLinearKernel {
             self.axis_dim.to_string(),
             self.inner_size.to_string(),
             self.total.to_string(),
+        ];
+        (id, args)
+    }
+}
+
+pub struct DynamicQuantizeLinearKernel {
+    pub float_ty: DataType,
+    pub q_ty: DataType,
+    pub symmetric: bool,
+    pub axis_dim: usize,
+    pub inner_size: usize,
+
+    pub y: Expr,
+    pub y_scale: Expr,
+    pub y_zero_point: Expr,
+    pub x: Expr,
+}
+
+impl DynamicQuantizeLinearKernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "dynamic_quantize_linear_kernel<{}, {}, 256, {}>",
+            self.float_ty,
+            self.q_ty,
+            if self.symmetric { "true" } else { "false" },
+        );
+        let args = vec![
+            cast!(self.q_ty, self.y),
+            cast!(self.float_ty, self.y_scale),
+            cast!(self.q_ty, self.y_zero_point),
+            cast!(self.float_ty, self.x),
+            self.axis_dim.to_string(),
+            self.inner_size.to_string(),
         ];
         (id, args)
     }

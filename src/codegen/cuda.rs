@@ -1640,6 +1640,65 @@ impl<'sched> HostCodeGenerator<'sched> {
                     }
                 }
 
+                Operator::DynamicQuantizeLinear(DynamicQuantizeLinear { axis, symmetric }) => {
+                    self.includes
+                        .insert(Include::Local("dynamic_quantize_linear.cuh"));
+                    let x_ty = self
+                        .get_resolved_tensor_type(
+                            kernel.inputs[args::DYNAMIC_QUANTIZE_LINEAR_X].unwrap(),
+                        )?
+                        .clone();
+                    let (axis_dim, inner_size) = match axis {
+                        Some(a) => {
+                            let a = a.index(x_ty.dims.ndim());
+                            assert_eq!(
+                                a, 0,
+                                "DynamicQuantizeLinear CUDA codegen only supports \
+                                 axis=0 or axis=None; got axis={}",
+                                a
+                            );
+                            let axis_dim = x_ty.dims[a];
+                            let inner_size: usize = x_ty.dims[a + 1..].iter().product();
+                            (axis_dim, inner_size)
+                        }
+                        None => (1usize, x_ty.dims.size()),
+                    };
+                    let y = self.device_identifier(kernel.outputs[0])?;
+                    let y_scale = self.device_identifier(kernel.outputs[1])?;
+                    let y_zp = self.device_identifier(kernel.outputs[2])?;
+                    let x = self.device_identifier(
+                        kernel.inputs[args::DYNAMIC_QUANTIZE_LINEAR_X].unwrap(),
+                    )?;
+                    let q_ty = if *symmetric {
+                        DataType::SInt(SIntType::I8)
+                    } else {
+                        DataType::UInt(UIntType::U8)
+                    };
+                    let cuda_kernel = kernel::CUDAKernel::DynamicQuantizeLinearKernel(
+                        kernel::DynamicQuantizeLinearKernel {
+                            float_ty: x_ty.elem_type,
+                            q_ty,
+                            symmetric: *symmetric,
+                            axis_dim,
+                            inner_size,
+                            y,
+                            y_scale,
+                            y_zero_point: y_zp,
+                            x,
+                        },
+                    );
+                    self.stmts.push(
+                        kernel::LaunchKernel {
+                            cuda_kernel,
+                            grid_size: Expr::Identifier(format!("dim3({}, 1, 1)", axis_dim)),
+                            block_size: 256usize.to_literal(),
+                            shared_mem_bytes: None,
+                            stream_id,
+                        }
+                        .into(),
+                    );
+                }
+
                 Operator::DequantizeLinear(DequantizeLinear { axis }) => {
                     self.includes.insert(Include::Local("dequantize.cuh"));
                     let x_ty = self

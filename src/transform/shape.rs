@@ -21,6 +21,7 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::tensor::types::SIntType;
 use crate::tensor::types::TensorType;
 use crate::tensor::types::TypeError;
+use crate::tensor::types::UIntType;
 use crate::transform::modify::SimpleGraphOp;
 use crate::transform::shape::early_broadcast::EarlyBroadcast;
 use crate::transform::shape::infer::ShapeInference;
@@ -265,6 +266,24 @@ pub fn infer_node_output(
                 "scale length must equal x.dims[axis]"
             );
             res.push(ResolvedTensorType::new(scale.elem_type, x.dims.clone()));
+        }
+        Operator::DynamicQuantizeLinear(DynamicQuantizeLinear { axis, symmetric }) => {
+            let x = &inputs[args::DYNAMIC_QUANTIZE_LINEAR_X];
+            let y_dtype = if *symmetric {
+                DataType::SInt(SIntType::I8)
+            } else {
+                DataType::UInt(UIntType::U8)
+            };
+            let scale_dims = match axis {
+                Some(a) => {
+                    let a = a.index(x.dims.ndim());
+                    ResolvedTensorDims::new(&[x.dims[a]])
+                }
+                None => ResolvedTensorDims::new(&[]),
+            };
+            res.push(ResolvedTensorType::new(y_dtype, x.dims.clone()));
+            res.push(ResolvedTensorType::new(x.elem_type, scale_dims.clone()));
+            res.push(ResolvedTensorType::new(y_dtype, scale_dims));
         }
         Operator::DequantMatMul(DequantMatMul { axis }) => {
             let lhs = &inputs[args::DEQUANT_MATMUL_LHS];

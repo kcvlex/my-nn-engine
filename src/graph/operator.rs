@@ -55,6 +55,7 @@ pub enum Operator {
     Cos,
     DequantizeLinear(DequantizeLinear),
     DequantMatMul(DequantMatMul),
+    DynamicQuantizeLinear(DynamicQuantizeLinear),
     Div,
     Equal,
     Expand,
@@ -234,6 +235,28 @@ pub struct DequantizeLinear {
 pub struct DequantMatMul {
     /// Per-channel scale axis on the quantized weight (typically 0).
     pub axis: TensorIndex,
+}
+
+/// my-onnx extension of ONNX DynamicQuantizeLinear.
+///
+/// Standard ONNX semantics (`symmetric = false`, `axis = None`):
+///   y_scale      = (max(x) - min(x)) / 255
+///   y_zero_point = round(-min(x) / y_scale)  clipped to [0, 255]
+///   y[i]         = clip(round(x[i] / y_scale) + y_zero_point, 0, 255)   as uint8
+///
+/// Symmetric extension (`symmetric = true`):
+///   y_scale      = max(|x|) / 127
+///   y_zero_point = 0
+///   y[i]         = clip(round(x[i] / y_scale), -127, 127)               as int8
+///
+/// Per-axis extension (`axis = Some(a)`):
+///   The above is computed independently along axis `a` -- y_scale and
+///   y_zero_point are 1D tensors of length `x.dims[a]`. With `axis = None`,
+///   they are scalars (per-tensor).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DynamicQuantizeLinear {
+    pub axis: Option<TensorIndex>,
+    pub symmetric: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -902,6 +925,7 @@ impl Operator {
             Operator::Conv(_) |
             Operator::DequantizeLinear(_) |
             Operator::DequantMatMul(_) |
+            Operator::DynamicQuantizeLinear(_) |
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
@@ -1047,6 +1071,8 @@ pub mod args {
 
     pub const DEQUANTIZE_X: usize = 0;
     pub const DEQUANTIZE_SCALE: usize = 1;
+
+    pub const DYNAMIC_QUANTIZE_LINEAR_X: usize = 0;
 
     pub const DEQUANT_MATMUL_LHS: usize = 0;
     pub const DEQUANT_MATMUL_RHS: usize = 1;

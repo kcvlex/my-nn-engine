@@ -703,7 +703,7 @@ impl SessionHybrid {
         let outputs = output_bufs
             .into_iter()
             .zip(self.output_ty.iter())
-            .map(|(buf, ty)| buf.into_tensor(ty.dims.clone()))
+            .map(|(buf, ty)| buf.into_tensor(ty.dims.clone(), ty.elem_type))
             .collect();
         Ok(outputs)
     }
