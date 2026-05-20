@@ -93,7 +93,7 @@ __global__ void dynamic_quantize_linear_kernel(
             }
         }
     } else {
-        for (int s = tile32.size() / 2; s > 0; s >>= 1) {
+        for (int s = tile32.size() / 2; 0 < s; s >>= 1) {
             local_min = fminf(local_min, tile32.shfl_down(local_min, s));
             local_max = fmaxf(local_max, tile32.shfl_down(local_max, s));
         }
