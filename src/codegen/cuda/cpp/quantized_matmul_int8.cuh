@@ -59,7 +59,7 @@ static __device__ __forceinline__ void qmm_mma_m16n8k32(
 
 template <int BM>
 static __device__ __forceinline__ void qmm_load_a(
-    int8_t *a_smem,
+    int8_t (*a_smem)[QMM_BK],
     const int8_t *a,
     int M, int K, int block_row, int k
 ) {
@@ -71,7 +71,7 @@ static __device__ __forceinline__ void qmm_load_a(
         int gc = k + c;
         size_t valid = (gr < M && gc < K) ? min(K - gc, VEC) : 0;
         __pipeline_memcpy_async(
-            &a_smem[r * QMM_BK + c],
+            &a_smem[r][c],
             &a[gr * K + gc],
             16,
             16 - valid
@@ -81,7 +81,7 @@ static __device__ __forceinline__ void qmm_load_a(
 
 template <int BN>
 static __device__ __forceinline__ void qmm_load_b(
-    int8_t *b_smem,
+    int8_t (*b_smem)[QMM_BK],
     const int8_t *b,
     int N, int K, int block_col, int k
 ) {
@@ -93,13 +93,21 @@ static __device__ __forceinline__ void qmm_load_b(
         int gc = k + c;
         size_t valid = (gr < N && gc < K) ? min(K - gc, VEC) : 0;
         __pipeline_memcpy_async(
-            &b_smem[r * QMM_BK + c],
+            &b_smem[r][c],
             &b[gr * K + gc],
             16,
             16 - valid
         );
     }
 }
+
+template <int BM, int BN, int STAGES>
+struct alignas(16) QmmSmem {
+    int8_t a[STAGES][BM][QMM_BK];
+    int8_t b[STAGES][BN][QMM_BK];
+    __nv_bfloat16 lhs_scale[BM];
+    __nv_bfloat16 rhs_scale[BN];
+};
 
 template <int BM, int BN, int WARP_M, int WARP_N, int STAGES>
 __global__ void quantized_matmul_int8(
@@ -120,8 +128,6 @@ __global__ void quantized_matmul_int8(
     constexpr int WM_ITER = WARP_M / 16;
     constexpr int WN_ITER = WARP_N / 8;
     constexpr int N_WARPS_N = BN / WARP_N;
-    constexpr int A_STAGE_BYTES = BM * QMM_BK;
-    constexpr int B_STAGE_BYTES = BN * QMM_BK;
 
     int block_row = blockIdx.y * BM;
     int block_col = blockIdx.x * BN;
@@ -131,23 +137,16 @@ __global__ void quantized_matmul_int8(
     int warp_col = warp_id % N_WARPS_N;
 
     extern __shared__ __align__(16) char dyn_smem[];
-    int8_t *a_smem_base = reinterpret_cast<int8_t *>(dyn_smem);
-    int8_t *b_smem_base = reinterpret_cast<int8_t *>(
-        dyn_smem + STAGES * A_STAGE_BYTES
-    );
-    __nv_bfloat16 *lhs_scale_smem = reinterpret_cast<__nv_bfloat16 *>(
-        dyn_smem + STAGES * (A_STAGE_BYTES + B_STAGE_BYTES)
-    );
-    __nv_bfloat16 *rhs_scale_smem = lhs_scale_smem + BM;
+    auto &smem = *reinterpret_cast<QmmSmem<BM, BN, STAGES> *>(dyn_smem);
 
     // Preload scales
     for (int i = threadIdx.x; i < BM; i += blockDim.x) {
         int gm = block_row + i;
-        lhs_scale_smem[i] = (gm < M) ? lhs_scale[gm] : __float2bfloat16(0.0f);
+        smem.lhs_scale[i] = (gm < M) ? lhs_scale[gm] : __float2bfloat16(0.0f);
     }
     for (int i = threadIdx.x; i < BN; i += blockDim.x) {
         int gn = block_col + i;
-        rhs_scale_smem[i] = (gn < N) ? rhs_scale[gn] : __float2bfloat16(0.0f);
+        smem.rhs_scale[i] = (gn < N) ? rhs_scale[gn] : __float2bfloat16(0.0f);
     }
     __syncthreads();
 
@@ -162,16 +161,14 @@ __global__ void quantized_matmul_int8(
     }
 
     int n_iters = (K + QMM_BK - 1) / QMM_BK;
-    auto a_tile = [&](int s) { return a_smem_base + s * A_STAGE_BYTES; };
-    auto b_tile = [&](int s) { return b_smem_base + s * B_STAGE_BYTES; };
 
     // Prologue
     #pragma unroll
     for (int s = 0; s < STAGES - 1; s++) {
         if (s < n_iters) {
             int kk = s * QMM_BK;
-            qmm_load_a<BM>(a_tile(s), lhs, M, K, block_row, kk);
-            qmm_load_b<BN>(b_tile(s), rhs, N, K, block_col, kk);
+            qmm_load_a<BM>(smem.a[s], lhs, M, K, block_row, kk);
+            qmm_load_b<BN>(smem.b[s], rhs, N, K, block_col, kk);
         }
         __pipeline_commit();
     }
@@ -183,15 +180,15 @@ __global__ void quantized_matmul_int8(
         int next_it = it + STAGES - 1;
         if (next_it < n_iters) {
             int kk = next_it * QMM_BK;
-            qmm_load_a<BM>(a_tile(write_stage), lhs, M, K, block_row, kk);
-            qmm_load_b<BN>(b_tile(write_stage), rhs, N, K, block_col, kk);
+            qmm_load_a<BM>(smem.a[write_stage], lhs, M, K, block_row, kk);
+            qmm_load_b<BN>(smem.b[write_stage], rhs, N, K, block_col, kk);
         }
         __pipeline_commit();
         __pipeline_wait_prior(STAGES - 1);
         __syncthreads();
 
-        int8_t *a_cur = a_tile(read_stage);
-        int8_t *b_cur = b_tile(read_stage);
+        int8_t (*a_cur)[QMM_BK] = smem.a[read_stage];
+        int8_t (*b_cur)[QMM_BK] = smem.b[read_stage];
 
         #pragma unroll
         for (int wk = 0; wk < QMM_BK; wk += 32) {
@@ -208,7 +205,7 @@ __global__ void quantized_matmul_int8(
                 int smem_r = row_base + r_off + frag_row;
                 int smem_c = wk + c_off;
                 uint32_t addr = __cvta_generic_to_shared(
-                    &a_cur[smem_r * QMM_BK + smem_c]
+                    &a_cur[smem_r][smem_c]
                 );
                 qmm_ldmatrix_x4(a_frag[wm], addr);
             }
@@ -221,7 +218,7 @@ __global__ void quantized_matmul_int8(
                 int smem_n = col_base + frag_row;
                 int smem_k = wk + frag_id * 16;
                 uint32_t addr = __cvta_generic_to_shared(
-                    &b_cur[smem_n * QMM_BK + smem_k]
+                    &b_cur[smem_n][smem_k]
                 );
                 qmm_ldmatrix_x2(b_frag[wn], addr);
             }
@@ -260,10 +257,10 @@ __global__ void quantized_matmul_int8(
             int lc0 = warp_col * WARP_N + wn * 8 + t_col;
             int lc1 = lc0 + 1;
 
-            float as0 = (float)lhs_scale_smem[lr0];
-            float as1 = (float)lhs_scale_smem[lr1];
-            float ws0 = (float)rhs_scale_smem[lc0];
-            float ws1 = (float)rhs_scale_smem[lc1];
+            float as0 = (float)smem.lhs_scale[lr0];
+            float as1 = (float)smem.lhs_scale[lr1];
+            float ws0 = (float)smem.rhs_scale[lc0];
+            float ws1 = (float)smem.rhs_scale[lc1];
 
             float v00 = (float)c[wm][wn][0] * as0 * ws0;
             float v01 = (float)c[wm][wn][1] * as0 * ws1;
