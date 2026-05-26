@@ -150,15 +150,7 @@ __global__ void quantized_matmul_int8(
     }
     __syncthreads();
 
-    int32_t c[WM_ITER][WN_ITER][4];
-    #pragma unroll
-    for (int wm = 0; wm < WM_ITER; wm++) {
-        #pragma unroll
-        for (int wn = 0; wn < WN_ITER; wn++) {
-            #pragma unroll
-            for (int i = 0; i < 4; i++) c[wm][wn][i] = 0;
-        }
-    }
+    int32_t c[WM_ITER][WN_ITER][4] = {};
 
     int n_iters = (K + QMM_BK - 1) / QMM_BK;
 
