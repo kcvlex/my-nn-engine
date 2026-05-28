@@ -285,6 +285,43 @@ pub fn infer_node_output(
             res.push(ResolvedTensorType::new(x.elem_type, scale_dims.clone()));
             res.push(ResolvedTensorType::new(y_dtype, scale_dims));
         }
+        Operator::QuantizedMatMul(QuantizedMatMul { axis }) => {
+            let lhs = &inputs[args::QUANTIZED_MATMUL_LHS];
+            let lhs_scale = &inputs[args::QUANTIZED_MATMUL_LHS_SCALE];
+            let rhs = &inputs[args::QUANTIZED_MATMUL_RHS];
+            let rhs_scale = &inputs[args::QUANTIZED_MATMUL_RHS_SCALE];
+            assert!(2 <= lhs.dims.ndim());
+            assert_eq!(rhs.dims.ndim(), 2, "rhs must be 2D");
+            assert!(matches!(lhs.elem_type, DataType::SInt(SIntType::I8)));
+            assert!(matches!(rhs.elem_type, DataType::SInt(SIntType::I8)));
+            assert!(matches!(lhs_scale.elem_type, DataType::Float(_)));
+            assert_eq!(lhs_scale.elem_type, rhs_scale.elem_type);
+            let axis_idx = axis.index(rhs.dims.ndim());
+            assert_eq!(
+                rhs_scale.dims[0], rhs.dims[axis_idx],
+                "rhs_scale length must equal rhs.dims[axis]"
+            );
+            let n = rhs.dims[axis_idx];
+            let k = rhs.dims[1 - axis_idx];
+            assert_eq!(lhs.dims[lhs.dims.ndim() - 1], k, "matmul K dim mismatch");
+            let m = lhs.dims[lhs.dims.ndim() - 2];
+            // lhs_scale must be either scalar (per-tensor) or 1D of length M
+            // (per-row across the M dim of the activation).
+            if lhs_scale.dims.ndim() == 1 {
+                assert_eq!(lhs_scale.dims[0], m, "lhs_scale length must equal M");
+            } else {
+                assert!(
+                    lhs_scale.dims.is_scalar(),
+                    "lhs_scale must be 1D [M] or scalar"
+                );
+            }
+            let mut out_dims: Vec<usize> = lhs.dims.iter().copied().collect();
+            *out_dims.last_mut().unwrap() = n;
+            res.push(ResolvedTensorType::new(
+                lhs_scale.elem_type,
+                ResolvedTensorDims::new(&out_dims),
+            ));
+        }
         Operator::DequantMatMul(DequantMatMul { axis }) => {
             let lhs = &inputs[args::DEQUANT_MATMUL_LHS];
             let rhs = &inputs[args::DEQUANT_MATMUL_RHS];

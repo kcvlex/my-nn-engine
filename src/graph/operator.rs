@@ -56,6 +56,7 @@ pub enum Operator {
     DequantizeLinear(DequantizeLinear),
     DequantMatMul(DequantMatMul),
     DynamicQuantizeLinear(DynamicQuantizeLinear),
+    QuantizedMatMul(QuantizedMatMul),
     Div,
     Equal,
     Expand,
@@ -234,6 +235,25 @@ pub struct DequantizeLinear {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DequantMatMul {
     /// Per-channel scale axis on the quantized weight (typically 0).
+    pub axis: TensorIndex,
+}
+
+/// Symmetric INT8 matmul: A_int8 * B_int8 -> bf16/f32 out, dequantized
+/// elementwise by the (per-row act_scale, per-channel weight_scale) pair.
+///
+/// Inputs:
+///   0: lhs    (int8, shape [..., M, K])  -- typically an activation
+///   1: lhs_scale  (float, shape [M] per-row, or scalar per-tensor)
+///   2: rhs    (int8, shape [N, K])       -- typically a weight
+///   3: rhs_scale  (float, shape [N] per-channel)
+/// Output:
+///   0: out    (float, shape [..., M, N]) -- dtype matches lhs_scale
+///
+/// Zero points are not supported (symmetric only); if asymmetric quantization
+/// is needed later, add it as a sibling op or extend with optional zp inputs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantizedMatMul {
+    /// Per-channel scale axis on the RHS weight (typically 0).
     pub axis: TensorIndex,
 }
 
@@ -926,6 +946,7 @@ impl Operator {
             Operator::DequantizeLinear(_) |
             Operator::DequantMatMul(_) |
             Operator::DynamicQuantizeLinear(_) |
+            Operator::QuantizedMatMul(_) |
             Operator::Gather(_) |
             Operator::Gemm(_) |
             Operator::GlobalAveragePool |
@@ -1073,6 +1094,11 @@ pub mod args {
     pub const DEQUANTIZE_SCALE: usize = 1;
 
     pub const DYNAMIC_QUANTIZE_LINEAR_X: usize = 0;
+
+    pub const QUANTIZED_MATMUL_LHS: usize = 0;
+    pub const QUANTIZED_MATMUL_LHS_SCALE: usize = 1;
+    pub const QUANTIZED_MATMUL_RHS: usize = 2;
+    pub const QUANTIZED_MATMUL_RHS_SCALE: usize = 3;
 
     pub const DEQUANT_MATMUL_LHS: usize = 0;
     pub const DEQUANT_MATMUL_RHS: usize = 1;

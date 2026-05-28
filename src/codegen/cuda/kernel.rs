@@ -24,6 +24,7 @@ pub enum CUDAKernel {
     DequantMatMulKernel(DequantMatMulKernel),
     DequantMatMulWmmaKernel(DequantMatMulWmmaKernel),
     DynamicQuantizeLinearKernel(DynamicQuantizeLinearKernel),
+    QuantizedMatMulInt8Kernel(QuantizedMatMulInt8Kernel),
     ExpandKernel(ExpandKernel),
     GatherKernel(GatherKernel),
     GeneratedKernel(GeneratedKernel),
@@ -474,6 +475,7 @@ impl LaunchKernel {
             CUDAKernel::DequantMatMulKernel(d) => d,
             CUDAKernel::DequantMatMulWmmaKernel(d) => d,
             CUDAKernel::DynamicQuantizeLinearKernel(d) => d,
+            CUDAKernel::QuantizedMatMulInt8Kernel(q) => q,
             CUDAKernel::ExpandKernel(e) => e,
             CUDAKernel::GatherKernel(g) => g,
             CUDAKernel::GeneratedKernel(g) => g,
@@ -1517,6 +1519,43 @@ impl DynamicQuantizeLinearKernel {
             cast!(self.float_ty, self.x),
             self.axis_dim.to_string(),
             self.inner_size.to_string(),
+        ];
+        (id, args)
+    }
+}
+
+pub struct QuantizedMatMulInt8Kernel {
+    pub bm: usize,
+    pub bn: usize,
+    pub warp_tile_m: usize,
+    pub warp_tile_n: usize,
+    pub stages: usize,
+    pub m: usize,
+    pub n: usize,
+    pub k: usize,
+
+    pub out: Expr,
+    pub lhs: Expr,
+    pub lhs_scale: Expr,
+    pub rhs: Expr,
+    pub rhs_scale: Expr,
+}
+
+impl QuantizedMatMulInt8Kernel {
+    pub fn fragment(&self) -> (String, Vec<String>) {
+        let id = format!(
+            "quantized_matmul_int8<{}, {}, {}, {}, {}>",
+            self.bm, self.bn, self.warp_tile_m, self.warp_tile_n, self.stages,
+        );
+        let args = vec![
+            format!("(__nv_bfloat16 *)({})", self.out),
+            format!("(const int8_t *)({})", self.lhs),
+            format!("(const __nv_bfloat16 *)({})", self.lhs_scale),
+            format!("(const int8_t *)({})", self.rhs),
+            format!("(const __nv_bfloat16 *)({})", self.rhs_scale),
+            self.m.to_string(),
+            self.n.to_string(),
+            self.k.to_string(),
         ];
         (id, args)
     }

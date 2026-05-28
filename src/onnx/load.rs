@@ -778,6 +778,17 @@ impl DequantizeLinear {
     }
 }
 
+impl QuantizedMatMul {
+    fn load(attributes: &Attributes) -> LoadResult<Self> {
+        let axis = attributes
+            .get("axis")
+            .map(|a| a.index())
+            .transpose()?
+            .unwrap_or(TensorIndex::new(0));
+        Ok(QuantizedMatMul { axis })
+    }
+}
+
 impl DynamicQuantizeLinear {
     fn load(attributes: &Attributes) -> LoadResult<Self> {
         let axis = attributes.get("axis").map(|a| a.index()).transpose()?;
@@ -1248,6 +1259,9 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "DynamicQuantizeLinear" => Ok(Operator::DynamicQuantizeLinear(
             DynamicQuantizeLinear::load(attributes)?,
         )),
+        "QuantizedMatMul" => Ok(Operator::QuantizedMatMul(QuantizedMatMul::load(
+            attributes,
+        )?)),
         "Div" => Ok(Operator::Div),
         "Equal" => Ok(Operator::Equal),
         "Expand" => Ok(Operator::Expand),
