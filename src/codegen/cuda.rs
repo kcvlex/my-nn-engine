@@ -1653,6 +1653,34 @@ impl<'sched> HostCodeGenerator<'sched> {
                             kernel.inputs[args::QUANTIZED_MATMUL_RHS].unwrap(),
                         )?
                         .clone();
+                    let lhs_scale_ty = self.get_resolved_tensor_type(
+                        kernel.inputs[args::QUANTIZED_MATMUL_LHS_SCALE].unwrap(),
+                    )?;
+                    let rhs_scale_ty = self.get_resolved_tensor_type(
+                        kernel.inputs[args::QUANTIZED_MATMUL_RHS_SCALE].unwrap(),
+                    )?;
+                    assert_eq!(
+                        lhs_scale_ty.dims.ndim(),
+                        1,
+                        "QuantizedMatMul CUDA kernel requires lhs_scale to be 1D (got ndim={})",
+                        lhs_scale_ty.dims.ndim(),
+                    );
+                    assert_eq!(
+                        rhs_scale_ty.dims.ndim(),
+                        1,
+                        "QuantizedMatMul CUDA kernel requires rhs_scale to be 1D (got ndim={})",
+                        rhs_scale_ty.dims.ndim(),
+                    );
+                    assert!(
+                        matches!(lhs_scale_ty.elem_type, DataType::Float(FloatType::BF16)),
+                        "QuantizedMatMul CUDA kernel requires lhs_scale to be bf16 (got {:?})",
+                        lhs_scale_ty.elem_type,
+                    );
+                    assert!(
+                        matches!(rhs_scale_ty.elem_type, DataType::Float(FloatType::BF16)),
+                        "QuantizedMatMul CUDA kernel requires rhs_scale to be bf16 (got {:?})",
+                        rhs_scale_ty.elem_type,
+                    );
                     let axis_idx = axis.index(rhs_ty.dims.ndim());
                     assert_eq!(axis_idx, 0, "QuantizedMatMul expects rhs scale axis=0");
                     let n = rhs_ty.dims[0];
