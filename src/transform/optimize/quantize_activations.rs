@@ -6,7 +6,6 @@ use crate::graph::Node;
 use crate::graph::NodeId;
 use crate::graph::NodeMeta;
 use crate::graph::ValueId;
-use crate::tensor::data::TensorData;
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
 use crate::tensor::types::ResolvedTensorDims;
@@ -33,12 +32,6 @@ impl<T: GraphOp> Pass<T> for QuantizeActivations {
     }
 
     fn run(&self, graph: &mut Graph, modifier: &mut T) {
-        // Step 1: CSE Reshape nodes by (input value, target shape) so that
-        // QKV/up+gate projections that feed the same RMSNorm output also
-        // share their pre-matmul Reshape, which in turn lets the cache below
-        // emit a single DynamicQuantizeLinear instead of one per matmul.
-        cse_reshapes(graph, modifier);
-
         let candidates: Vec<NodeId> = graph
             .nodes
             .iter()
@@ -57,48 +50,6 @@ impl<T: GraphOp> Pass<T> for QuantizeActivations {
                 None => continue,
             };
             apply(graph, modifier, plan, &mut act_quant_cache);
-        }
-    }
-}
-
-/// Merge Reshape nodes that have the same input value and the same target
-/// shape (read from their shape-initializer second input). Subsequent passes
-/// (or the rewrite below) can then observe one canonical Reshape output
-/// instead of N independent ones.
-fn cse_reshapes<T: GraphOp>(graph: &mut Graph, modifier: &mut T) {
-    let reshape_ids: Vec<NodeId> = graph
-        .nodes
-        .iter()
-        .filter_map(|(id, n)| match n.op {
-            Operator::Reshape => Some(id),
-            _ => None,
-        })
-        .collect();
-
-    let mut seen: HashMap<(ValueId, Vec<i64>), ValueId> = HashMap::new();
-    for id in reshape_ids {
-        let node = &graph.nodes[id];
-        let Some(input) = node.inputs.first().and_then(|x| *x) else {
-            continue;
-        };
-        let Some(shape_input) = node.inputs.get(1).and_then(|x| *x) else {
-            continue;
-        };
-        let Some(shape_tensor) = graph.get_initializer(shape_input) else {
-            continue;
-        };
-        let TensorData::SInt(_, ref shape_vals) = shape_tensor.data else {
-            continue;
-        };
-        let key = (input, shape_vals.clone());
-        let output = node.outputs[0];
-        match seen.get(&key) {
-            Some(&canonical) if canonical != output => {
-                modifier.replace_input_value(graph, output, canonical);
-            }
-            _ => {
-                seen.insert(key, output);
-            }
         }
     }
 }
