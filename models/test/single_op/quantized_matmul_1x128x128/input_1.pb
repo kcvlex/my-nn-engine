@@ -1,0 +1,1 @@
+BLhsScaleJ7=

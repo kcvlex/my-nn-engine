@@ -1197,6 +1197,9 @@ quantized_matmul_test!(quantized_matmul_128x128x128, "quantized_matmul_128x128x1
 quantized_matmul_test!(quantized_matmul_256x128x128, "quantized_matmul_256x128x128");
 #[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_128x256x64, "quantized_matmul_128x256x64");
+// M=1 exercises the dp4a GEMV decode path (quantized_gemv_int8).
+#[cfg(feature = "cuda")]
+quantized_matmul_test!(quantized_matmul_1x128x128, "quantized_matmul_1x128x128");
 
 #[test]
 fn dequant_matmul() -> TestResult {

@@ -1691,40 +1691,6 @@ impl<'sched> HostCodeGenerator<'sched> {
                         "QuantizedMatMul CUDA kernel requires K % 32 == 0 (got K={})",
                         k,
                     );
-                    let bm = 128usize;
-                    let bn = 128usize;
-                    let warp_tile_m = 64usize;
-                    let warp_tile_n = 64usize;
-                    let stages = 3usize;
-                    let bk = 64usize;
-                    let warps = (bm / warp_tile_m) * (bn / warp_tile_n);
-                    let block_size = warps * 32;
-                    let smem_bytes = stages * (bm * bk + bn * bk) + bm * 2 + bn * 2;
-                    assert!(
-                        smem_bytes <= 99_000,
-                        "QuantizedMatMul smem {} bytes exceeds Ada per-block cap",
-                        smem_bytes,
-                    );
-                    let func_id = format!(
-                        "(const void *)quantized_matmul_int8<{}, {}, {}, {}, {}>",
-                        bm, bn, warp_tile_m, warp_tile_n, stages,
-                    );
-                    let carveout_stmt = format!(
-                        "cudaFuncSetAttribute({}, cudaFuncAttributePreferredSharedMemoryCarveout, cudaSharedmemCarveoutMaxShared);",
-                        func_id,
-                    );
-                    let dynsmem_stmt = format!(
-                        "cudaFuncSetAttribute({}, cudaFuncAttributeMaxDynamicSharedMemorySize, {});",
-                        func_id, smem_bytes,
-                    );
-                    for stmt in [carveout_stmt, dynsmem_stmt] {
-                        if !self.init_stmts.iter().any(|s| match s {
-                            Statement::Raw(text) => text == &stmt,
-                            _ => false,
-                        }) {
-                            self.init_stmts.push(Statement::Raw(stmt));
-                        }
-                    }
 
                     let out = self.device_identifier(kernel.outputs[0])?;
                     let lhs =
@@ -1737,37 +1703,101 @@ impl<'sched> HostCodeGenerator<'sched> {
                     let rhs_scale = self.device_identifier(
                         kernel.inputs[args::QUANTIZED_MATMUL_RHS_SCALE].unwrap(),
                     )?;
-                    let cuda_kernel = kernel::CUDAKernel::QuantizedMatMulInt8Kernel(
-                        kernel::QuantizedMatMulInt8Kernel {
-                            bm,
-                            bn,
-                            warp_tile_m,
-                            warp_tile_n,
-                            stages,
-                            m,
-                            n,
-                            k,
-                            out,
-                            lhs,
-                            lhs_scale,
-                            rhs,
-                            rhs_scale,
-                        },
-                    );
-                    let grid_x = n.div_ceil(bn);
-                    let grid_y = m.div_ceil(bm);
-                    self.stmts.push(
-                        kernel::LaunchKernel {
-                            cuda_kernel,
-                            grid_size: Expr::Identifier(
-                                format!("dim3({}, {}, 1)", grid_x, grid_y,),
-                            ),
-                            block_size: block_size.to_literal(),
-                            shared_mem_bytes: Some(smem_bytes.to_string()),
-                            stream_id,
+
+                    if m == 1 {
+                        // Decode (M=1): memory-bound, use dp4a GEMV.
+                        self.includes
+                            .insert(Include::Local("quantized_gemv_int8.cuh"));
+                        let cuda_kernel = kernel::CUDAKernel::QuantizedGemvInt8Kernel(
+                            kernel::QuantizedGemvInt8Kernel {
+                                n,
+                                k,
+                                out,
+                                lhs,
+                                lhs_scale,
+                                rhs,
+                                rhs_scale,
+                            },
+                        );
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: Expr::Identifier(format!("dim3({}, 1, 1)", n)),
+                                block_size: 32usize.to_literal(),
+                                shared_mem_bytes: None,
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        let bm = 128usize;
+                        let bn = 128usize;
+                        let warp_tile_m = 64usize;
+                        let warp_tile_n = 64usize;
+                        let stages = 3usize;
+                        let bk = 64usize;
+                        let warps = (bm / warp_tile_m) * (bn / warp_tile_n);
+                        let block_size = warps * 32;
+                        let smem_bytes = stages * (bm * bk + bn * bk) + bm * 2 + bn * 2;
+                        assert!(
+                            smem_bytes <= 99_000,
+                            "QuantizedMatMul smem {} bytes exceeds Ada per-block cap",
+                            smem_bytes,
+                        );
+                        let func_id = format!(
+                            "(const void *)quantized_matmul_int8<{}, {}, {}, {}, {}>",
+                            bm, bn, warp_tile_m, warp_tile_n, stages,
+                        );
+                        let carveout_stmt = format!(
+                            "cudaFuncSetAttribute({}, cudaFuncAttributePreferredSharedMemoryCarveout, cudaSharedmemCarveoutMaxShared);",
+                            func_id,
+                        );
+                        let dynsmem_stmt = format!(
+                            "cudaFuncSetAttribute({}, cudaFuncAttributeMaxDynamicSharedMemorySize, {});",
+                            func_id, smem_bytes,
+                        );
+                        for stmt in [carveout_stmt, dynsmem_stmt] {
+                            if !self.init_stmts.iter().any(|s| match s {
+                                Statement::Raw(text) => text == &stmt,
+                                _ => false,
+                            }) {
+                                self.init_stmts.push(Statement::Raw(stmt));
+                            }
                         }
-                        .into(),
-                    );
+
+                        let cuda_kernel = kernel::CUDAKernel::QuantizedMatMulInt8Kernel(
+                            kernel::QuantizedMatMulInt8Kernel {
+                                bm,
+                                bn,
+                                warp_tile_m,
+                                warp_tile_n,
+                                stages,
+                                m,
+                                n,
+                                k,
+                                out,
+                                lhs,
+                                lhs_scale,
+                                rhs,
+                                rhs_scale,
+                            },
+                        );
+                        let grid_x = n.div_ceil(bn);
+                        let grid_y = m.div_ceil(bm);
+                        self.stmts.push(
+                            kernel::LaunchKernel {
+                                cuda_kernel,
+                                grid_size: Expr::Identifier(format!(
+                                    "dim3({}, {}, 1)",
+                                    grid_x, grid_y,
+                                )),
+                                block_size: block_size.to_literal(),
+                                shared_mem_bytes: Some(smem_bytes.to_string()),
+                                stream_id,
+                            }
+                            .into(),
+                        );
+                    }
                 }
 
                 Operator::DynamicQuantizeLinear(DynamicQuantizeLinear { axis, symmetric }) => {
