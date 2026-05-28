@@ -154,7 +154,6 @@ __global__ void quantized_matmul_int8(
 
     int n_iters = (K + QMM_BK - 1) / QMM_BK;
 
-    // Prologue
     #pragma unroll
     for (int s = 0; s < STAGES - 1; s++) {
         if (s < n_iters) {
@@ -229,8 +228,6 @@ __global__ void quantized_matmul_int8(
         read_stage = (read_stage + 1) % STAGES;
     }
 
-    // Epilogue: c[..][..] is int32; multiply by lhs_scale[row] * rhs_scale[col]
-    // to recover float, then narrow to bf16.
     int t_row = lane / 4;
     int t_col = (lane % 4) * 2;
     #pragma unroll
