@@ -919,7 +919,10 @@ mod tests {
         a.release_if_dead(cid, stream);
 
         let cid2 = a.alloc(1024, arena, stream, 1);
-        assert_ne!(cid, cid2, "chunk pending a post-transfer must not be reused");
+        assert_ne!(
+            cid, cid2,
+            "chunk pending a post-transfer must not be reused"
+        );
     }
 
     #[test]
