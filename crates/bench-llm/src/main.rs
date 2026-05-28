@@ -167,6 +167,12 @@ fn build_command(spec: &RunSpec, repo_root: &Path, warmup: u32, iters: u32) -> C
                 .env("BENCH_MAX_SEQ_LEN", max_seq_len.to_string())
                 .env("BENCH_PREFILL_LEN", prefill_len.to_string())
                 .env("BENCH_AUTO_QUANT", "1");
+            if std::env::var("BENCH_QUANTIZE_ACTIVATIONS").is_ok() {
+                c.env("BENCH_QUANTIZE_ACTIVATIONS", "1");
+            }
+            if let Ok(v) = std::env::var("BENCH_NUM_CUDA_STREAMS") {
+                c.env("BENCH_NUM_CUDA_STREAMS", v);
+            }
             c
         }
         Runtime::LlamaCpp {

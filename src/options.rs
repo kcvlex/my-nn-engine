@@ -39,4 +39,12 @@ pub struct Options {
 
     #[builder(default)]
     pub placement_strategy: Option<PlacementStrategy>,
+
+    /// If true, rewrite every `DequantMatMul` so its activation input is first
+    /// passed through a `DynamicQuantizeLinear` (symmetric per-row int8) and
+    /// then consumed by a `QuantizedMatMul` instead. Requires K % 32 == 0
+    /// (CUDA INT8 mma kernel constraint); nodes that don't qualify are left
+    /// alone. CUDA only -- on CPU this option has no effect yet.
+    #[builder(default = false)]
+    pub quantize_activations: bool,
 }

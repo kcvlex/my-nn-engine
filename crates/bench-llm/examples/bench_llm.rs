@@ -108,7 +108,16 @@ fn main() {
     );
 
     let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
-    let opts = Options::builder().target(Target::CUDA).build();
+    let quantize_activations = std::env::var("BENCH_QUANTIZE_ACTIVATIONS").is_ok();
+    let num_cuda_streams: usize = std::env::var("BENCH_NUM_CUDA_STREAMS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(16);
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .quantize_activations(quantize_activations)
+        .num_cuda_streams(num_cuda_streams)
+        .build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
 
     let compile_t0 = Instant::now();
