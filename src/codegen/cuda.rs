@@ -1326,11 +1326,18 @@ impl<'sched> HostCodeGenerator<'sched> {
                         let num_q_heads = q_dims[1];
                         let num_kv_heads = k_dims[1];
                         let head_size = q_dims[3];
-                        let threads_per_row = (head_size / 8).clamp(1, 32);
-                        let br = ceil_pow2(seq_q / threads_per_row).clamp(1, 256 / threads_per_row);
-                        let bc =
-                            ceil_pow2(k_dims[2] / threads_per_row).clamp(1, 256 / threads_per_row);
-                        let block_size = br.max(bc) * threads_per_row;
+                        // bf16 prefill runs the Tensor Core path with fixed
+                        // mma-friendly tiles (one warp = 32 query rows).
+                        let use_tc = matches!(q_ty.elem_type, DataType::Float(FloatType::BF16)) &&
+                            head_size % 16 == 0;
+                        let (threads_per_row, br, bc, block_size) = if use_tc {
+                            (head_size / 8, 32, 32, 32)
+                        } else {
+                            let tpr = (head_size / 8).clamp(1, 32);
+                            let br = ceil_pow2(seq_q / tpr).clamp(1, 256 / tpr);
+                            let bc = ceil_pow2(k_dims[2] / tpr).clamp(1, 256 / tpr);
+                            (tpr, br, bc, br.max(bc) * tpr)
+                        };
                         let grid_size = {
                             let y = batch_size * num_q_heads;
                             let x = seq_q.div_ceil(br);

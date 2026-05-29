@@ -2,11 +2,312 @@
 #define INCLUDE_ATTENTION_CUH_
 
 #include <cuda.h>
+#include <cuda_bf16.h>
 #include <cooperative_groups.h>
 #include <type_traits>
+#include <cstdint>
 #include "common.cuh"
 
 namespace cg = cooperative_groups;
+
+// bf16 Tensor Core helpers (m16n8k16, A=row B=col, fp32 accum).
+static __device__ __forceinline__ void attn_ldmatrix_x4(
+    uint32_t out[4], uint32_t smem_addr
+) {
+    asm volatile(
+        "ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+        : "=r"(out[0]), "=r"(out[1]), "=r"(out[2]), "=r"(out[3])
+        : "r"(smem_addr)
+    );
+}
+
+static __device__ __forceinline__ void attn_mma_m16n8k16(
+    float c[4], const uint32_t a[4], const uint32_t b[2]
+) {
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
+        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+        : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+        : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
+          "r"(b[0]), "r"(b[1])
+    );
+}
+
+// bf16 Tensor Core FlashAttention-2 body (single warp per block, Br==Bc==32).
+// S = Q*K^T and O += P*V both run on mma.m16n8k16. S is written to fp32 smem,
+// the online softmax row reduction runs over those contiguous rows, and P is
+// written back as bf16 for ldmatrix into the P*V mma (the smem round-trip
+// handles the C-fragment -> A-fragment layout change in hardware).
+template <typename T, typename TKV, int Br, int Bc, int HEAD_DIM>
+__device__ __forceinline__ void attention_tc(
+    T *out,
+    T *Q,
+    TKV *K,
+    TKV *V,
+    T *k_scale,
+    T *v_scale,
+    float scale,
+    bool is_causal,
+    T *mask,
+    int mask_outer_stride,
+    int mask_row_stride,
+    int q_seq_len,
+    int kv_active_seq,
+    int q_pos_offset,
+    int ring_sink,
+    int ring_window,
+    int ring_start,
+    const T *cos_table,
+    const T *sin_table,
+    const long long *kv_position,
+    int num_q_row,
+    cg::thread_block cta
+) {
+    constexpr bool QUANT = !std::is_same<T, TKV>::value;
+    constexpr int HALF = HEAD_DIM / 2;
+    constexpr int M_ITER = Br / 16;
+    constexpr int N_ITER = Bc / 8;
+    constexpr int K_ITER = HEAD_DIM / 16;
+    constexpr int D_ITER = HEAD_DIM / 8;
+    static_assert(Br % 16 == 0 && Bc % 16 == 0 && HEAD_DIM % 16 == 0);
+    static_assert(Br == 32, "tc path expects one warp = 32 query rows");
+
+    bool rope_on = (kv_position != nullptr);
+    int lane = threadIdx.x;
+
+    // unpadded (16-byte-aligned rows) bf16 buffers required by ldmatrix
+    __shared__ __nv_bfloat16 s_Q[Br][HEAD_DIM];
+    __shared__ __nv_bfloat16 s_K[Bc][HEAD_DIM];
+    // V is stored transposed [dim][token] so the P*V mma B operand (col-major
+    // [Bc][HEAD_DIM]) can be ldmatrix'd with the same [N][K] recipe as K.
+    __shared__ __nv_bfloat16 s_V[HEAD_DIM][Bc];
+    __shared__ __nv_bfloat16 s_P[Br][Bc];
+    __shared__ float s_S[Br][Bc];
+    __shared__ float m_smem[Br];
+    __shared__ float l_smem[Br];
+    __shared__ float corr_smem[Br];
+
+    // load Q (bf16) into s_Q, zero-pad rows past num_q_row
+    for (int i = lane; i < Br * HEAD_DIM; i += 32) {
+        int r = i / HEAD_DIM;
+        int c = i % HEAD_DIM;
+        s_Q[r][c] = (r < num_q_row) ? Q[r * HEAD_DIM + c] : (T)0;
+    }
+    if (lane < Br) {
+        m_smem[lane] = -INFINITY;
+        l_smem[lane] = 0.0f;
+    }
+    cg::sync(cta);
+
+    // load Q fragments once (reused across all KV blocks)
+    uint32_t q_frag[M_ITER][K_ITER][4];
+    #pragma unroll
+    for (int mi = 0; mi < M_ITER; mi++) {
+        #pragma unroll
+        for (int ki = 0; ki < K_ITER; ki++) {
+            int row = mi * 16 + (lane & 15);
+            int col = ki * 16 + (lane >> 4) * 8;
+            uint32_t addr = __cvta_generic_to_shared(&s_Q[row][col]);
+            attn_ldmatrix_x4(q_frag[mi][ki], addr);
+        }
+    }
+
+    float o_acc[M_ITER][D_ITER][4] = {};
+
+    int n_kv_blocks = (kv_active_seq + Bc - 1) / Bc;
+    for (int blk = 0; blk < n_kv_blocks; blk++) {
+        int num_kv_row = min(Bc, kv_active_seq - blk * Bc);
+
+        // stage K (dequant + rope) and V (dequant) into bf16 smem
+        for (int i = lane; i < Bc * HEAD_DIM; i += 32) {
+            int r = i / HEAD_DIM;
+            int c = i % HEAD_DIM;
+            if (r >= num_kv_row) {
+                s_K[r][c] = (__nv_bfloat16)0;
+                s_V[c][r] = (__nv_bfloat16)0;
+                continue;
+            }
+            int phys = ring_phys_index(blk * Bc + r, ring_sink, ring_window, ring_start);
+            float ks = QUANT ? (float)k_scale[phys] : 1.0f;
+            float vs = QUANT ? (float)v_scale[phys] : 1.0f;
+            float kv = (float)K[phys * HEAD_DIM + c] * ks;
+            if (rope_on) {
+                int pos = (int)kv_position[blk * Bc + r];
+                int c_pair = (c < HALF) ? c + HALF : c - HALF;
+                float sign = (c < HALF) ? -1.0f : 1.0f;
+                float kp = (float)K[phys * HEAD_DIM + c_pair] * ks;
+                float cc = (float)cos_table[pos * HEAD_DIM + c];
+                float sn = (float)sin_table[pos * HEAD_DIM + c];
+                kv = kv * cc + sign * kp * sn;
+            }
+            s_K[r][c] = (__nv_bfloat16)kv;
+            s_V[c][r] = (__nv_bfloat16)((float)V[phys * HEAD_DIM + c] * vs);
+        }
+        cg::sync(cta);
+
+        // S = Q * K^T
+        float s_acc[M_ITER][N_ITER][4] = {};
+        #pragma unroll
+        for (int ki = 0; ki < K_ITER; ki++) {
+            uint32_t k_frag[N_ITER][2];
+            #pragma unroll
+            for (int ni = 0; ni < N_ITER; ni++) {
+                int n = ni * 8 + (lane & 7);
+                int k = ki * 16 + (lane >> 3) * 8;
+                uint32_t addr = __cvta_generic_to_shared(&s_K[n][k]);
+                asm volatile(
+                    "ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0,%1}, [%2];\n"
+                    : "=r"(k_frag[ni][0]), "=r"(k_frag[ni][1])
+                    : "r"(addr)
+                );
+            }
+            #pragma unroll
+            for (int mi = 0; mi < M_ITER; mi++) {
+                #pragma unroll
+                for (int ni = 0; ni < N_ITER; ni++) {
+                    attn_mma_m16n8k16(s_acc[mi][ni], q_frag[mi][ki], k_frag[ni]);
+                }
+            }
+        }
+
+        // write scores (scale + causal + additive mask) to fp32 smem
+        int q_blk_base = blockIdx.x * Br;
+        #pragma unroll
+        for (int mi = 0; mi < M_ITER; mi++) {
+            #pragma unroll
+            for (int ni = 0; ni < N_ITER; ni++) {
+                int r0 = mi * 16 + lane / 4;
+                int r1 = r0 + 8;
+                int c0 = ni * 8 + (lane % 4) * 2;
+                int c1 = c0 + 1;
+                int g_col0 = blk * Bc + c0;
+                int g_col1 = blk * Bc + c1;
+                int g_row0 = q_blk_base + r0;
+                int g_row1 = q_blk_base + r1;
+                float v00 = s_acc[mi][ni][0] * scale;
+                float v01 = s_acc[mi][ni][1] * scale;
+                float v10 = s_acc[mi][ni][2] * scale;
+                float v11 = s_acc[mi][ni][3] * scale;
+                if (mask) {
+                    long base = blockIdx.y * mask_outer_stride;
+                    bool r0_ok = g_row0 < q_seq_len;
+                    bool r1_ok = g_row1 < q_seq_len;
+                    if (r0_ok && c0 < num_kv_row) v00 += (float)mask[base + g_row0 * mask_row_stride + g_col0];
+                    if (r0_ok && c1 < num_kv_row) v01 += (float)mask[base + g_row0 * mask_row_stride + g_col1];
+                    if (r1_ok && c0 < num_kv_row) v10 += (float)mask[base + g_row1 * mask_row_stride + g_col0];
+                    if (r1_ok && c1 < num_kv_row) v11 += (float)mask[base + g_row1 * mask_row_stride + g_col1];
+                }
+                if (is_causal) {
+                    if ((q_pos_offset + g_row0) < g_col0) v00 = -INFINITY;
+                    if ((q_pos_offset + g_row0) < g_col1) v01 = -INFINITY;
+                    if ((q_pos_offset + g_row1) < g_col0) v10 = -INFINITY;
+                    if ((q_pos_offset + g_row1) < g_col1) v11 = -INFINITY;
+                }
+                if (c0 >= num_kv_row) v00 = -INFINITY;
+                if (c1 >= num_kv_row) v01 = -INFINITY;
+                if (c0 >= num_kv_row) v10 = -INFINITY;
+                if (c1 >= num_kv_row) v11 = -INFINITY;
+                s_S[r0][c0] = v00;
+                s_S[r0][c1] = v01;
+                s_S[r1][c0] = v10;
+                s_S[r1][c1] = v11;
+            }
+        }
+        cg::sync(cta);
+
+        // online softmax row reduction (lane r owns query row r)
+        if (lane < Br) {
+            int r = lane;
+            float old_m = m_smem[r];
+            float new_m = old_m;
+            #pragma unroll
+            for (int c = 0; c < Bc; c++) {
+                new_m = max(new_m, s_S[r][c]);
+            }
+            float corr = (new_m == -INFINITY) ? 1.0f : expf(old_m - new_m);
+            float psum = 0.0f;
+            #pragma unroll
+            for (int c = 0; c < Bc; c++) {
+                float p = (s_S[r][c] == -INFINITY) ? 0.0f : expf(s_S[r][c] - new_m);
+                s_P[r][c] = (__nv_bfloat16)p;
+                psum += p;
+            }
+            m_smem[r] = new_m;
+            l_smem[r] = l_smem[r] * corr + psum;
+            corr_smem[r] = corr;
+        }
+        cg::sync(cta);
+
+        // rescale running output by corr for the rows this lane owns
+        #pragma unroll
+        for (int mi = 0; mi < M_ITER; mi++) {
+            float corr0 = corr_smem[mi * 16 + lane / 4];
+            float corr1 = corr_smem[mi * 16 + lane / 4 + 8];
+            #pragma unroll
+            for (int di = 0; di < D_ITER; di++) {
+                o_acc[mi][di][0] *= corr0;
+                o_acc[mi][di][1] *= corr0;
+                o_acc[mi][di][2] *= corr1;
+                o_acc[mi][di][3] *= corr1;
+            }
+        }
+
+        // O += P * V
+        #pragma unroll
+        for (int ki = 0; ki < (Bc / 16); ki++) {
+            uint32_t p_frag[M_ITER][4];
+            #pragma unroll
+            for (int mi = 0; mi < M_ITER; mi++) {
+                int row = mi * 16 + (lane & 15);
+                int col = ki * 16 + (lane >> 4) * 8;
+                uint32_t addr = __cvta_generic_to_shared(&s_P[row][col]);
+                attn_ldmatrix_x4(p_frag[mi], addr);
+            }
+            uint32_t v_frag[D_ITER][2];
+            #pragma unroll
+            for (int di = 0; di < D_ITER; di++) {
+                int n = di * 8 + (lane & 7);
+                int k = ki * 16 + (lane >> 3) * 8;
+                uint32_t addr = __cvta_generic_to_shared(&s_V[n][k]);
+                asm volatile(
+                    "ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0,%1}, [%2];\n"
+                    : "=r"(v_frag[di][0]), "=r"(v_frag[di][1])
+                    : "r"(addr)
+                );
+            }
+            #pragma unroll
+            for (int mi = 0; mi < M_ITER; mi++) {
+                #pragma unroll
+                for (int di = 0; di < D_ITER; di++) {
+                    attn_mma_m16n8k16(o_acc[mi][di], p_frag[mi], v_frag[di]);
+                }
+            }
+        }
+        cg::sync(cta);
+    }
+
+    // write O = o_acc / row_sum
+    #pragma unroll
+    for (int mi = 0; mi < M_ITER; mi++) {
+        int r0 = mi * 16 + lane / 4;
+        int r1 = r0 + 8;
+        float inv0 = (l_smem[r0] > 0.0f) ? 1.0f / l_smem[r0] : 0.0f;
+        float inv1 = (l_smem[r1] > 0.0f) ? 1.0f / l_smem[r1] : 0.0f;
+        #pragma unroll
+        for (int di = 0; di < D_ITER; di++) {
+            int c0 = di * 8 + (lane % 4) * 2;
+            int c1 = c0 + 1;
+            if (r0 < num_q_row) {
+                out[r0 * HEAD_DIM + c0] = (T)(o_acc[mi][di][0] * inv0);
+                out[r0 * HEAD_DIM + c1] = (T)(o_acc[mi][di][1] * inv0);
+            }
+            if (r1 < num_q_row) {
+                out[r1 * HEAD_DIM + c0] = (T)(o_acc[mi][di][2] * inv1);
+                out[r1 * HEAD_DIM + c1] = (T)(o_acc[mi][di][3] * inv1);
+            }
+        }
+    }
+}
 
 // Tiled flash-attention. When `TKV == T` the K/V cache is in the same dtype as Q
 // and scale pointers are unused. When `TKV == signed char` the cache is INT8 and
@@ -38,19 +339,15 @@ __global__ void attention(
     const long long *kv_position
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
+    constexpr bool USE_TC = std::is_same<T, __nv_bfloat16>::value;
     constexpr int HALF = HEAD_DIM / 2;
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
     bool rope_on = (kv_position != nullptr);
     __shared__ T s_Q[Br][HEAD_DIM + 1];
-    __shared__ TKV s_K[Bc][HEAD_DIM + 1];
-    __shared__ TKV s_V[Bc][HEAD_DIM + 1];
-    __shared__ float s_K_scale[QUANT ? Bc : 1];
-    __shared__ float s_V_scale[QUANT ? Bc : 1];
-
-    static_assert(THREADS_PER_ROW <= 32);
-    static_assert((THREADS_PER_ROW & (THREADS_PER_ROW - 1)) == 0, "THREADS_PER_ROW must be a power of 2");
-    assert(Br * THREADS_PER_ROW <= blockDim.x);
-    assert(Bc * THREADS_PER_ROW <= blockDim.x);
+    __shared__ TKV s_K[USE_TC ? 1 : Bc][HEAD_DIM + 1];
+    __shared__ TKV s_V[USE_TC ? 1 : Bc][HEAD_DIM + 1];
+    __shared__ float s_K_scale[(QUANT && !USE_TC) ? Bc : 1];
+    __shared__ float s_V_scale[(QUANT && !USE_TC) ? Bc : 1];
 
     int b = blockIdx.y / num_q_heads;
     int q_head = blockIdx.y % num_q_heads;
@@ -68,7 +365,23 @@ __global__ void attention(
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
     cg::thread_block cta = cg::this_thread_block();
+
+    if constexpr (USE_TC) {
+        attention_tc<T, TKV, Br, Bc, HEAD_DIM>(
+            out, Q, K, V, k_scale, v_scale, scale, is_causal, mask,
+            mask_outer_stride, mask_row_stride, q_seq_len, kv_active_seq,
+            q_pos_offset, ring_sink, ring_window, ring_start,
+            cos_table, sin_table, kv_position, num_q_row, cta
+        );
+        return;
+    }
+
     cg::thread_block_tile<THREADS_PER_ROW> tile = cg::tiled_partition<THREADS_PER_ROW>(cta);
+
+    static_assert(THREADS_PER_ROW <= 32);
+    static_assert((THREADS_PER_ROW & (THREADS_PER_ROW - 1)) == 0, "THREADS_PER_ROW must be a power of 2");
+    assert(Br * THREADS_PER_ROW <= blockDim.x);
+    assert(Bc * THREADS_PER_ROW <= blockDim.x);
 
     for (int i = threadIdx.x; i < num_q_row * HEAD_DIM; i += blockDim.x) {
         int q_row = i / HEAD_DIM;
