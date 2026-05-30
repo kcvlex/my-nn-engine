@@ -122,6 +122,8 @@ pub struct AttentionKernel {
     pub rope: Option<RopeAttnArgs>,
 
     pub attn: Attention,
+
+    pub use_tensor_core: bool,
 }
 
 #[derive(Clone)]
@@ -155,9 +157,14 @@ impl AttentionKernel {
                 cast!(self.data_ty, e)
             }
         };
+        let name = if self.use_tensor_core {
+            "attention_tc"
+        } else {
+            "attention"
+        };
         let id = format!(
-            "attention<{}, {}, {}, {}, {}, {}>",
-            self.data_ty, kv_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
+            "{}<{}, {}, {}, {}, {}, {}>",
+            name, self.data_ty, kv_ty, self.br, self.bc, self.threads_per_row, self.head_dim,
         );
         let [ring_sink, ring_window, ring_start] = RingArgs::args(&self.ring);
         let [cos_table, sin_table, kv_position] = RopeAttnArgs::args(&self.rope, self.data_ty);
