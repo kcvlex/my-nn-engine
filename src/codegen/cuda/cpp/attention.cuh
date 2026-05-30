@@ -75,15 +75,17 @@ __global__ void attention_tc(
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
     constexpr int HALF = HEAD_DIM / 2;
-    constexpr int M_ITER = Br / 16;
+    constexpr int NUM_WARPS = Br / 16;  // split-Q: one warp owns 16 query rows
     constexpr int N_ITER = Bc / 8;
     constexpr int K_ITER = HEAD_DIM / 16;
     constexpr int D_ITER = HEAD_DIM / 8;
     static_assert(Br % 16 == 0 && Bc % 16 == 0 && HEAD_DIM % 16 == 0);
-    static_assert(Br == 32, "tc path expects one warp = 32 query rows");
 
     bool rope_on = (kv_position != nullptr);
-    int lane = threadIdx.x;
+    int tid = threadIdx.x;
+    int warp = tid >> 5;
+    int lane = tid & 31;
+    int warp_row0 = warp * 16;  // first query row this warp owns
 
     __shared__ __nv_bfloat16 s_Q[Br][HEAD_DIM];
     __shared__ __nv_bfloat16 s_K[Bc][HEAD_DIM];
@@ -109,30 +111,28 @@ __global__ void attention_tc(
     Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
-    for (int i = lane; i < Br * HEAD_DIM; i += 32) {
+    for (int i = tid; i < Br * HEAD_DIM; i += blockDim.x) {
         int r = i / HEAD_DIM;
         int c = i % HEAD_DIM;
         s_Q[r][c] = (r < num_q_row) ? Q[r * HEAD_DIM + c] : (T)0;
     }
-    if (lane < Br) {
-        m_smem[lane] = -INFINITY;
-        l_smem[lane] = 0.0f;
+    if (tid < Br) {
+        m_smem[tid] = -INFINITY;
+        l_smem[tid] = 0.0f;
     }
     cg::sync(cta);
 
-    uint32_t q_frag[M_ITER][K_ITER][4];
+    // load this warp's 16 Q rows into fragments once (reused across KV blocks)
+    uint32_t q_frag[K_ITER][4];
     #pragma unroll
-    for (int mi = 0; mi < M_ITER; mi++) {
-        #pragma unroll
-        for (int ki = 0; ki < K_ITER; ki++) {
-            int row = mi * 16 + (lane & 15);
-            int col = ki * 16 + (lane >> 4) * 8;
-            uint32_t addr = __cvta_generic_to_shared(&s_Q[row][col]);
-            attn_ldmatrix_x4(q_frag[mi][ki], addr);
-        }
+    for (int ki = 0; ki < K_ITER; ki++) {
+        int row = warp_row0 + (lane & 15);
+        int col = ki * 16 + (lane >> 4) * 8;
+        uint32_t addr = __cvta_generic_to_shared(&s_Q[row][col]);
+        attn_ldmatrix_x4(q_frag[ki], addr);
     }
 
-    float o_acc[M_ITER][D_ITER][4] = {};
+    float o_acc[D_ITER][4] = {};
 
     int n_kv_blocks = (kv_active_seq + Bc - 1) / Bc;
     // Causal: KV blocks are ascending, so once a block's first column exceeds
@@ -146,8 +146,8 @@ __global__ void attention_tc(
     for (int blk = 0; blk < n_kv_blocks; blk++) {
         int num_kv_row = min(Bc, kv_active_seq - blk * Bc);
 
-        // Stage K (dequant + rope) and V (dequant) into bf16 smem
-        for (int i = lane; i < Bc * HEAD_DIM; i += 32) {
+        // Stage K (dequant + rope) and V (dequant) into bf16 smem (cooperative)
+        for (int i = tid; i < Bc * HEAD_DIM; i += blockDim.x) {
             int r = i / HEAD_DIM;
             int c = i % HEAD_DIM;
             if (num_kv_row <= r) {
@@ -173,8 +173,8 @@ __global__ void attention_tc(
         }
         cg::sync(cta);
 
-        // S = Q * K^T
-        float s_acc[M_ITER][N_ITER][4] = {};
+        // S = Q * K^T for this warp's 16 rows
+        float s_acc[N_ITER][4] = {};
         #pragma unroll
         for (int ki = 0; ki < K_ITER; ki++) {
             uint32_t k_frag[N_ITER][2];
@@ -186,62 +186,56 @@ __global__ void attention_tc(
                 attn_ldmatrix_x2(k_frag[ni], addr);
             }
             #pragma unroll
-            for (int mi = 0; mi < M_ITER; mi++) {
-                #pragma unroll
-                for (int ni = 0; ni < N_ITER; ni++) {
-                    attn_mma_m16n8k16(s_acc[mi][ni], q_frag[mi][ki], k_frag[ni]);
-                }
+            for (int ni = 0; ni < N_ITER; ni++) {
+                attn_mma_m16n8k16(s_acc[ni], q_frag[ki], k_frag[ni]);
             }
         }
 
         // Write scores (scale + causal + additive mask) to fp32 smem
         int q_blk_base = blockIdx.x * Br;
         #pragma unroll
-        for (int mi = 0; mi < M_ITER; mi++) {
-            #pragma unroll
-            for (int ni = 0; ni < N_ITER; ni++) {
-                int r0 = mi * 16 + lane / 4;
-                int r1 = r0 + 8;
-                int c0 = ni * 8 + (lane % 4) * 2;
-                int c1 = c0 + 1;
-                int g_col0 = blk * Bc + c0;
-                int g_col1 = blk * Bc + c1;
-                int g_row0 = q_blk_base + r0;
-                int g_row1 = q_blk_base + r1;
-                float v00 = s_acc[mi][ni][0] * scale;
-                float v01 = s_acc[mi][ni][1] * scale;
-                float v10 = s_acc[mi][ni][2] * scale;
-                float v11 = s_acc[mi][ni][3] * scale;
-                if (mask) {
-                    long base = blockIdx.y * mask_outer_stride;
-                    bool r0_ok = g_row0 < q_seq_len;
-                    bool r1_ok = g_row1 < q_seq_len;
-                    if (r0_ok && c0 < num_kv_row) v00 += (float)mask[base + g_row0 * mask_row_stride + g_col0];
-                    if (r0_ok && c1 < num_kv_row) v01 += (float)mask[base + g_row0 * mask_row_stride + g_col1];
-                    if (r1_ok && c0 < num_kv_row) v10 += (float)mask[base + g_row1 * mask_row_stride + g_col0];
-                    if (r1_ok && c1 < num_kv_row) v11 += (float)mask[base + g_row1 * mask_row_stride + g_col1];
-                }
-                if (is_causal) {
-                    if ((q_pos_offset + g_row0) < g_col0) v00 = -INFINITY;
-                    if ((q_pos_offset + g_row0) < g_col1) v01 = -INFINITY;
-                    if ((q_pos_offset + g_row1) < g_col0) v10 = -INFINITY;
-                    if ((q_pos_offset + g_row1) < g_col1) v11 = -INFINITY;
-                }
-                if (num_kv_row <= c0) v00 = -INFINITY;
-                if (num_kv_row <= c1) v01 = -INFINITY;
-                if (num_kv_row <= c0) v10 = -INFINITY;
-                if (num_kv_row <= c1) v11 = -INFINITY;
-                s_S[r0][c0] = v00;
-                s_S[r0][c1] = v01;
-                s_S[r1][c0] = v10;
-                s_S[r1][c1] = v11;
+        for (int ni = 0; ni < N_ITER; ni++) {
+            int r0 = warp_row0 + lane / 4;
+            int r1 = r0 + 8;
+            int c0 = ni * 8 + (lane % 4) * 2;
+            int c1 = c0 + 1;
+            int g_col0 = blk * Bc + c0;
+            int g_col1 = blk * Bc + c1;
+            int g_row0 = q_blk_base + r0;
+            int g_row1 = q_blk_base + r1;
+            float v00 = s_acc[ni][0] * scale;
+            float v01 = s_acc[ni][1] * scale;
+            float v10 = s_acc[ni][2] * scale;
+            float v11 = s_acc[ni][3] * scale;
+            if (mask) {
+                long base = blockIdx.y * mask_outer_stride;
+                bool r0_ok = g_row0 < q_seq_len;
+                bool r1_ok = g_row1 < q_seq_len;
+                if (r0_ok && c0 < num_kv_row) v00 += (float)mask[base + g_row0 * mask_row_stride + g_col0];
+                if (r0_ok && c1 < num_kv_row) v01 += (float)mask[base + g_row0 * mask_row_stride + g_col1];
+                if (r1_ok && c0 < num_kv_row) v10 += (float)mask[base + g_row1 * mask_row_stride + g_col0];
+                if (r1_ok && c1 < num_kv_row) v11 += (float)mask[base + g_row1 * mask_row_stride + g_col1];
             }
+            if (is_causal) {
+                if ((q_pos_offset + g_row0) < g_col0) v00 = -INFINITY;
+                if ((q_pos_offset + g_row0) < g_col1) v01 = -INFINITY;
+                if ((q_pos_offset + g_row1) < g_col0) v10 = -INFINITY;
+                if ((q_pos_offset + g_row1) < g_col1) v11 = -INFINITY;
+            }
+            if (num_kv_row <= c0) v00 = -INFINITY;
+            if (num_kv_row <= c1) v01 = -INFINITY;
+            if (num_kv_row <= c0) v10 = -INFINITY;
+            if (num_kv_row <= c1) v11 = -INFINITY;
+            s_S[r0][c0] = v00;
+            s_S[r0][c1] = v01;
+            s_S[r1][c0] = v10;
+            s_S[r1][c1] = v11;
         }
-        cg::sync(cta);
+        __syncwarp();
 
-        // Online softmax row reduction (lane r owns query row r)
-        if (lane < Br) {
-            int r = lane;
+        // Online softmax row reduction; lane l (<16) owns this warp's row l
+        if (lane < 16) {
+            int r = warp_row0 + lane;
             float old_m = m_smem[r];
             float new_m = old_m;
             #pragma unroll
@@ -260,32 +254,28 @@ __global__ void attention_tc(
             l_smem[r] = l_smem[r] * corr + psum;
             corr_smem[r] = corr;
         }
-        cg::sync(cta);
+        __syncwarp();
 
         // Rescale running output by corr for the rows this lane owns
+        float corr0 = corr_smem[warp_row0 + lane / 4];
+        float corr1 = corr_smem[warp_row0 + lane / 4 + 8];
         #pragma unroll
-        for (int mi = 0; mi < M_ITER; mi++) {
-            float corr0 = corr_smem[mi * 16 + lane / 4];
-            float corr1 = corr_smem[mi * 16 + lane / 4 + 8];
-            #pragma unroll
-            for (int di = 0; di < D_ITER; di++) {
-                o_acc[mi][di][0] *= corr0;
-                o_acc[mi][di][1] *= corr0;
-                o_acc[mi][di][2] *= corr1;
-                o_acc[mi][di][3] *= corr1;
-            }
+        for (int di = 0; di < D_ITER; di++) {
+            o_acc[di][0] *= corr0;
+            o_acc[di][1] *= corr0;
+            o_acc[di][2] *= corr1;
+            o_acc[di][3] *= corr1;
         }
 
         // O += P * V
         #pragma unroll
         for (int ki = 0; ki < (Bc / 16); ki++) {
-            uint32_t p_frag[M_ITER][4];
-            #pragma unroll
-            for (int mi = 0; mi < M_ITER; mi++) {
-                int row = mi * 16 + (lane & 15);
+            uint32_t p_frag[4];
+            {
+                int row = warp_row0 + (lane & 15);
                 int col = ki * 16 + (lane >> 4) * 8;
                 uint32_t addr = __cvta_generic_to_shared(&s_P[row][col]);
-                attn_ldmatrix_x4(p_frag[mi], addr);
+                attn_ldmatrix_x4(p_frag, addr);
             }
             uint32_t v_frag[D_ITER][2];
             #pragma unroll
@@ -296,35 +286,29 @@ __global__ void attention_tc(
                 attn_ldmatrix_x2(v_frag[di], addr);
             }
             #pragma unroll
-            for (int mi = 0; mi < M_ITER; mi++) {
-                #pragma unroll
-                for (int di = 0; di < D_ITER; di++) {
-                    attn_mma_m16n8k16(o_acc[mi][di], p_frag[mi], v_frag[di]);
-                }
+            for (int di = 0; di < D_ITER; di++) {
+                attn_mma_m16n8k16(o_acc[di], p_frag, v_frag[di]);
             }
         }
         cg::sync(cta);
     }
 
-    // Write O = o_acc / row_sum
+    // Write O = o_acc / row_sum for this warp's 16 rows
+    int r0 = warp_row0 + lane / 4;
+    int r1 = r0 + 8;
+    float inv0 = (0.0f < l_smem[r0]) ? 1.0f / l_smem[r0] : 0.0f;
+    float inv1 = (0.0f < l_smem[r1]) ? 1.0f / l_smem[r1] : 0.0f;
     #pragma unroll
-    for (int mi = 0; mi < M_ITER; mi++) {
-        int r0 = mi * 16 + lane / 4;
-        int r1 = r0 + 8;
-        float inv0 = (0.0f < l_smem[r0]) ? 1.0f / l_smem[r0] : 0.0f;
-        float inv1 = (0.0f < l_smem[r1]) ? 1.0f / l_smem[r1] : 0.0f;
-        #pragma unroll
-        for (int di = 0; di < D_ITER; di++) {
-            int c0 = di * 8 + (lane % 4) * 2;
-            int c1 = c0 + 1;
-            if (r0 < num_q_row) {
-                out[r0 * HEAD_DIM + c0] = (T)(o_acc[mi][di][0] * inv0);
-                out[r0 * HEAD_DIM + c1] = (T)(o_acc[mi][di][1] * inv0);
-            }
-            if (r1 < num_q_row) {
-                out[r1 * HEAD_DIM + c0] = (T)(o_acc[mi][di][2] * inv1);
-                out[r1 * HEAD_DIM + c1] = (T)(o_acc[mi][di][3] * inv1);
-            }
+    for (int di = 0; di < D_ITER; di++) {
+        int c0 = di * 8 + (lane % 4) * 2;
+        int c1 = c0 + 1;
+        if (r0 < num_q_row) {
+            out[r0 * HEAD_DIM + c0] = (T)(o_acc[di][0] * inv0);
+            out[r0 * HEAD_DIM + c1] = (T)(o_acc[di][1] * inv0);
+        }
+        if (r1 < num_q_row) {
+            out[r1 * HEAD_DIM + c0] = (T)(o_acc[di][2] * inv1);
+            out[r1 * HEAD_DIM + c1] = (T)(o_acc[di][3] * inv1);
         }
     }
 }
