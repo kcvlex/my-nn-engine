@@ -38,8 +38,8 @@ static __device__ __forceinline__ void attn_mma_m16n8k16(
 // the online softmax row reduction runs over those contiguous rows, and P is
 // written back as bf16 for ldmatrix into the P*V mma (the smem round-trip
 // handles the C-fragment -> A-fragment layout change in hardware).
-template <typename T, typename TKV, int Br, int Bc, int HEAD_DIM>
-__device__ __forceinline__ void attention_tc(
+template <typename T, typename TKV, int Br, int Bc, int THREADS_PER_ROW, int HEAD_DIM>
+__global__ void attention_tc(
     T *out,
     T *Q,
     TKV *K,
@@ -53,15 +53,16 @@ __device__ __forceinline__ void attention_tc(
     int mask_row_stride,
     int q_seq_len,
     int kv_active_seq,
+    int kv_cache_stride,
     int q_pos_offset,
+    int num_q_heads,
+    int num_kv_heads,
     int ring_sink,
     int ring_window,
     int ring_start,
     const T *cos_table,
     const T *sin_table,
-    const long long *kv_position,
-    int num_q_row,
-    cg::thread_block cta
+    const long long *kv_position
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
     constexpr int HALF = HEAD_DIM / 2;
@@ -86,6 +87,21 @@ __device__ __forceinline__ void attention_tc(
     __shared__ float m_smem[Br];
     __shared__ float l_smem[Br];
     __shared__ float corr_smem[Br];
+
+    cg::thread_block cta = cg::this_thread_block();
+    int b = blockIdx.y / num_q_heads;
+    int q_head = blockIdx.y % num_q_heads;
+    int group_size = num_q_heads / num_kv_heads;
+    int kv_bh = b * num_kv_heads + (q_head / group_size);
+    K += kv_bh * kv_cache_stride * HEAD_DIM;
+    V += kv_bh * kv_cache_stride * HEAD_DIM;
+    if constexpr (QUANT) {
+        k_scale += kv_bh * kv_cache_stride;
+        v_scale += kv_bh * kv_cache_stride;
+    }
+    out += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
+    Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
+    int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
     // load Q (bf16) into s_Q, zero-pad rows past num_q_row
     for (int i = lane; i < Br * HEAD_DIM; i += 32) {
@@ -339,15 +355,14 @@ __global__ void attention(
     const long long *kv_position
 ) {
     constexpr bool QUANT = !std::is_same<T, TKV>::value;
-    constexpr bool USE_TC = std::is_same<T, __nv_bfloat16>::value;
     constexpr int HALF = HEAD_DIM / 2;
     constexpr int ELEMENTS_PER_THREAD = (HEAD_DIM + THREADS_PER_ROW - 1) / THREADS_PER_ROW;
     bool rope_on = (kv_position != nullptr);
     __shared__ T s_Q[Br][HEAD_DIM + 1];
-    __shared__ TKV s_K[USE_TC ? 1 : Bc][HEAD_DIM + 1];
-    __shared__ TKV s_V[USE_TC ? 1 : Bc][HEAD_DIM + 1];
-    __shared__ float s_K_scale[(QUANT && !USE_TC) ? Bc : 1];
-    __shared__ float s_V_scale[(QUANT && !USE_TC) ? Bc : 1];
+    __shared__ TKV s_K[Bc][HEAD_DIM + 1];
+    __shared__ TKV s_V[Bc][HEAD_DIM + 1];
+    __shared__ float s_K_scale[QUANT ? Bc : 1];
+    __shared__ float s_V_scale[QUANT ? Bc : 1];
 
     int b = blockIdx.y / num_q_heads;
     int q_head = blockIdx.y % num_q_heads;
@@ -365,16 +380,6 @@ __global__ void attention(
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
     cg::thread_block cta = cg::this_thread_block();
-
-    if constexpr (USE_TC) {
-        attention_tc<T, TKV, Br, Bc, HEAD_DIM>(
-            out, Q, K, V, k_scale, v_scale, scale, is_causal, mask,
-            mask_outer_stride, mask_row_stride, q_seq_len, kv_active_seq,
-            q_pos_offset, ring_sink, ring_window, ring_start,
-            cos_table, sin_table, kv_position, num_q_row, cta
-        );
-        return;
-    }
 
     cg::thread_block_tile<THREADS_PER_ROW> tile = cg::tiled_partition<THREADS_PER_ROW>(cta);
 
