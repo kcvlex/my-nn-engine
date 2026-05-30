@@ -8,16 +8,16 @@ use std::time::Instant;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::apply_chat_template;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::ChatMessage;
 use my_nn_engine_llm::ChatTemplateError;
 use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmError;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 use uuid::Uuid;
@@ -207,12 +207,12 @@ impl ChatRegistry {
             .map_err(|e| ChatError::LoadConfig(format!("config.json: {e}")))?;
         let hf = HfWeights::from_dir(&path)
             .map_err(|e| ChatError::LoadConfig(format!("hf weights: {e}")))?;
-        let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers)
+        let spec = ModelSpec::from_hf(&config, &hf)
             .map_err(|e| ChatError::LoadConfig(format!("llama weights: {e}")))?;
 
         let (chat_template, eos_token_str, bos_token_str) = load_chat_meta(&path)?;
 
-        let r = build_llama(&config, &weights, MAX_SEQ_LEN, &LlamaOptions::default());
+        let r = build_decoder(&config, &spec, MAX_SEQ_LEN, &BuildOptions::default());
 
         let opts = Options::builder().target(target).build();
         let tokenizer = Tokenizer::from_file(path.join("tokenizer.json"))
@@ -222,11 +222,11 @@ impl ChatRegistry {
         log::info!("Stop strings for {model_dir}: {stop_strings:?}");
 
         let llm = if dir_uses_prefill(model_dir) {
-            let p = build_llama(
+            let p = build_decoder(
                 &config,
-                &weights,
+                &spec,
                 MAX_SEQ_LEN,
-                &LlamaOptions::builder().prefill_len(PREFILL_LEN).build(),
+                &BuildOptions::builder().prefill_len(PREFILL_LEN).build(),
             );
             LlmSession::for_llama_with_prefill(
                 r.graph,

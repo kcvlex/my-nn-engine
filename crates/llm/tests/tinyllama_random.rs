@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::quantize::cast_safetensors_bf16_dir;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 use tokenizers::Tokenizer;
 
 fn model_dir() -> PathBuf {
@@ -27,11 +27,11 @@ const STREAM_WINDOW: usize = 28;
 fn run_with_dir(dir: &Path, target: Target) {
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = STREAM_SINK + STREAM_WINDOW;
-    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let llama_opts = BuildOptions::builder().streaming_kv(true).build();
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_streaming(
@@ -85,21 +85,21 @@ fn cpu_multi_turn_prefill_matches_decode_only() {
     fn build_session(dir: &Path, prefill_len: Option<usize>) -> LlmSession {
         let config = HfConfig::from_path(dir.join("config.json")).unwrap();
         let hf = HfWeights::from_dir(dir).unwrap();
-        let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+        let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
         let max_seq_len = STREAM_SINK + STREAM_WINDOW;
-        let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
-        let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+        let llama_opts = BuildOptions::builder().streaming_kv(true).build();
+        let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
         let opts = Options::builder().target(Target::CPU).build();
         let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
 
         let prefill = prefill_len.map(|len| {
             (
-                build_llama(
+                build_decoder(
                     &config,
-                    &weights,
+                    &spec,
                     max_seq_len,
-                    &LlamaOptions {
+                    &BuildOptions {
                         prefill_len: Some(len),
                         ..llama_opts.clone()
                     },
@@ -157,15 +157,15 @@ fn cuda_streaming_runs_past_window() {
     let dir = model_dir();
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 32;
     let sink = 4;
     let window = 16;
     let max_active = sink + window;
 
-    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let llama_opts = BuildOptions::builder().streaming_kv(true).build();
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
     let opts = Options::builder().target(Target::CUDA).build();
@@ -200,18 +200,18 @@ fn cuda_streaming_quant_runs_past_window() {
     let dir = model_dir();
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 32;
     let sink = 4;
     let window = 16;
     let max_active = sink + window;
 
-    let llama_opts = LlamaOptions::builder()
+    let llama_opts = BuildOptions::builder()
         .quant_kv_cache(true)
         .streaming_kv(true)
         .build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
     let opts = Options::builder().target(Target::CUDA).build();
@@ -245,7 +245,7 @@ fn run_streaming_prefill_smoke(quant_kv_cache: bool) {
     let dir = model_dir();
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 32;
     let sink = 4;
@@ -253,16 +253,16 @@ fn run_streaming_prefill_smoke(quant_kv_cache: bool) {
     let max_active = sink + window;
     let prefill_len = 4;
 
-    let llama_opts = LlamaOptions::builder()
+    let llama_opts = BuildOptions::builder()
         .quant_kv_cache(quant_kv_cache)
         .streaming_kv(true)
         .build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
-    let p = build_llama(
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
+    let p = build_decoder(
         &config,
-        &weights,
+        &spec,
         max_seq_len,
-        &LlamaOptions {
+        &BuildOptions {
             prefill_len: Some(prefill_len),
             ..llama_opts.clone()
         },

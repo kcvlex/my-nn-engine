@@ -1,20 +1,20 @@
 pub mod builder;
 pub mod chat_template;
+pub mod decoder;
 pub mod hf_config;
 pub mod hf_weights;
-pub mod llama;
 pub mod quantize;
 pub mod session;
 
 pub use chat_template::apply_chat_template;
 pub use chat_template::ChatMessage;
 pub use chat_template::ChatTemplateError;
+pub use decoder::build_decoder;
+pub use decoder::BuildOptions;
+pub use decoder::DecoderGraph;
+pub use decoder::ModelSpec;
 pub use hf_config::HfConfig;
 pub use hf_weights::HfWeights;
-pub use llama::build_llama;
-pub use llama::LlamaGraph;
-pub use llama::LlamaOptions;
-pub use llama::LlamaWeights;
 pub use session::GenerateOptions;
 pub use session::LlmConfig;
 pub use session::LlmError;

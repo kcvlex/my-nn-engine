@@ -12,6 +12,8 @@ pub enum ConfigError {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HfConfig {
+    #[serde(default = "default_model_type")]
+    pub model_type: String,
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -30,6 +32,10 @@ pub struct HfConfig {
 
 fn default_rope_theta() -> f32 {
     10000.0
+}
+
+fn default_model_type() -> String {
+    "llama".to_string()
 }
 
 impl HfConfig {

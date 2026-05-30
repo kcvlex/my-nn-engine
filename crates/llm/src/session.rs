@@ -83,11 +83,11 @@ enum DecodeKind {
     /// `[input_ids: i64[1], past_len: i64[]]` - used by simple test fixtures.
     Mock,
     /// `[input_ids: i64[1,1], position_id: i64[1], past_len: i64[], active_seq_kv: i64[]]`
-    /// + SessionState K/V caches - produced by [`crate::build_llama`].
+    /// + SessionState K/V caches - produced by [`crate::build_decoder`].
     Llama,
     /// Llama plus the streaming-KV inputs `[ring_sink, ring_window, ring_start, kv_position]`
-    /// appended at the end. Produced by [`crate::build_llama`] when
-    /// `LlamaOptions::streaming_kv` is set. `past_len` here is the unbounded
+    /// appended at the end. Produced by [`crate::build_decoder`] when
+    /// `BuildOptions::streaming_kv` is set. `past_len` here is the unbounded
     /// stream position; the kernels remap it through the sink+ring layout.
     LlamaStreaming { sink: usize, window: usize },
 }
@@ -140,7 +140,7 @@ impl LlmSession {
         })
     }
 
-    /// Construct a session for a LLaMA-family graph built via [`crate::build_llama`].
+    /// Construct a session for a LLaMA-family graph built via [`crate::build_decoder`].
     /// Wires the K/V cache inputs as zero-initialized `SessionState` buffers and
     /// sets the per-step input convention to `[input_ids, position_id, past_len, active_seq_kv]`.
     pub fn for_llama(

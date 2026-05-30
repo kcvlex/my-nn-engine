@@ -19,13 +19,13 @@ use std::time::Instant;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 use tokenizers::Tokenizer;
 
 fn env_str(k: &str, default: &str) -> String {
@@ -101,13 +101,13 @@ fn main() {
     let config = HfConfig::from_path(model_dir.join("config.json")).unwrap();
     let st_path = resolve_safetensors(&model_dir, &dtype, auto_quant);
     let hf = HfWeights::from_safetensors(&st_path).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
     println!(
         "BENCH_INFO weight_load_ms={:.3}",
         load_t0.elapsed().as_secs_f64() * 1e3
     );
 
-    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
+    let r = build_decoder(&config, &spec, max_seq_len, &BuildOptions::default());
     let quantize_activations = std::env::var("BENCH_QUANTIZE_ACTIVATIONS").is_ok();
     let num_cuda_streams: usize = std::env::var("BENCH_NUM_CUDA_STREAMS")
         .ok()
@@ -122,11 +122,11 @@ fn main() {
 
     let compile_t0 = Instant::now();
     let mut llm = if prefill_len > 0 {
-        let p = build_llama(
+        let p = build_decoder(
             &config,
-            &weights,
+            &spec,
             max_seq_len,
-            &LlamaOptions::builder().prefill_len(prefill_len).build(),
+            &BuildOptions::builder().prefill_len(prefill_len).build(),
         );
         LlmSession::for_llama_with_prefill(
             r.graph,

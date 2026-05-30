@@ -17,14 +17,14 @@ use std::path::PathBuf;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::apply_chat_template;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::ChatMessage;
 use my_nn_engine_llm::GenerateOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
@@ -43,17 +43,17 @@ fn main() {
         .expect("chat_template.jinja required in model dir");
     let config = HfConfig::from_path(model_dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&model_dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 512;
     let prefill_len = 64;
 
-    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
-    let p = build_llama(
+    let r = build_decoder(&config, &spec, max_seq_len, &BuildOptions::default());
+    let p = build_decoder(
         &config,
-        &weights,
+        &spec,
         max_seq_len,
-        &LlamaOptions::builder().prefill_len(prefill_len).build(),
+        &BuildOptions::builder().prefill_len(prefill_len).build(),
     );
     let opts = Options::builder().target(target).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();

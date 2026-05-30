@@ -6,12 +6,12 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 #[cfg(feature = "cuda")]
 use my_nn_engine::schedule::scheduler::PlacementStrategy;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 #[cfg(feature = "cuda")]
 use serial_test::serial;
 use tokenizers::Tokenizer;
@@ -29,17 +29,17 @@ fn run_tinyllama_with(opts: Options) -> String {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/tinyllama");
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_safetensors(dir.join("model.safetensors")).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 256;
     let prefill_len = 16;
-    let llama_opts = LlamaOptions::builder().streaming_kv(true).build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
-    let p = build_llama(
+    let llama_opts = BuildOptions::builder().streaming_kv(true).build();
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
+    let p = build_decoder(
         &config,
-        &weights,
+        &spec,
         max_seq_len,
-        &LlamaOptions {
+        &BuildOptions {
             prefill_len: Some(prefill_len),
             ..llama_opts.clone()
         },
@@ -67,23 +67,23 @@ fn run_llama2_int8(target: Target) -> String {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/llama2-7b-sft");
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_safetensors(dir.join("model.int8.safetensors")).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 2048;
     let prefill_len = 16;
     // CPU codegen does not yet implement the rope+dequant fuse in attention,
     // so streaming-KV + INT8 only works on CUDA.
     let streaming_kv = matches!(target, Target::CUDA);
-    let llama_opts = LlamaOptions::builder()
+    let llama_opts = BuildOptions::builder()
         .quant_kv_cache(true)
         .streaming_kv(streaming_kv)
         .build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
-    let p = build_llama(
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
+    let p = build_decoder(
         &config,
-        &weights,
+        &spec,
         max_seq_len,
-        &LlamaOptions {
+        &BuildOptions {
             prefill_len: Some(prefill_len),
             ..llama_opts.clone()
         },
@@ -160,17 +160,17 @@ fn run_llama3_int8_with(opts: Options) -> String {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/llama3-8b-instruct-int8");
     let config = HfConfig::from_path(dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 512;
     let prefill_len = 16;
-    let llama_opts = LlamaOptions::builder().quant_kv_cache(true).build();
-    let r = build_llama(&config, &weights, max_seq_len, &llama_opts);
-    let p = build_llama(
+    let llama_opts = BuildOptions::builder().quant_kv_cache(true).build();
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
+    let p = build_decoder(
         &config,
-        &weights,
+        &spec,
         max_seq_len,
-        &LlamaOptions {
+        &BuildOptions {
             prefill_len: Some(prefill_len),
             ..llama_opts.clone()
         },

@@ -17,12 +17,12 @@ use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine_llm::build_llama;
+use my_nn_engine_llm::build_decoder;
+use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::HfConfig;
 use my_nn_engine_llm::HfWeights;
-use my_nn_engine_llm::LlamaOptions;
-use my_nn_engine_llm::LlamaWeights;
 use my_nn_engine_llm::LlmSession;
+use my_nn_engine_llm::ModelSpec;
 use tokenizers::Tokenizer;
 
 fn cuda_profiler_start() {
@@ -52,13 +52,13 @@ fn main() {
 
     let config = HfConfig::from_path(model_dir.join("config.json")).unwrap();
     let hf = HfWeights::from_dir(&model_dir).unwrap();
-    let weights = LlamaWeights::from_hf(&hf, config.num_hidden_layers).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
 
     let max_seq_len = 256;
     let n_warmup = 4;
     let n_measure = 32;
 
-    let r = build_llama(&config, &weights, max_seq_len, &LlamaOptions::default());
+    let r = build_decoder(&config, &spec, max_seq_len, &BuildOptions::default());
     let opts = Options::builder().target(Target::CUDA).build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama(
