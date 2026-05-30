@@ -111,7 +111,6 @@ __global__ void attention_tc(
     Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
-    // load Q (bf16) into s_Q, zero-pad rows past num_q_row (cooperative)
     for (int i = tid; i < Br * HEAD_DIM; i += blockDim.x) {
         int r = i / HEAD_DIM;
         int c = i % HEAD_DIM;
@@ -147,7 +146,7 @@ __global__ void attention_tc(
     for (int blk = 0; blk < n_kv_blocks; blk++) {
         int num_kv_row = min(Bc, kv_active_seq - blk * Bc);
 
-        // stage K (dequant + rope) and V (dequant) into bf16 smem (cooperative)
+        // Stage K (dequant + rope) and V (dequant) into bf16 smem (cooperative)
         for (int i = tid; i < Bc * HEAD_DIM; i += blockDim.x) {
             int r = i / HEAD_DIM;
             int c = i % HEAD_DIM;
@@ -223,10 +222,10 @@ __global__ void attention_tc(
                 if ((q_pos_offset + g_row1) < g_col0) v10 = -INFINITY;
                 if ((q_pos_offset + g_row1) < g_col1) v11 = -INFINITY;
             }
-            if (c0 >= num_kv_row) v00 = -INFINITY;
-            if (c1 >= num_kv_row) v01 = -INFINITY;
-            if (c0 >= num_kv_row) v10 = -INFINITY;
-            if (c1 >= num_kv_row) v11 = -INFINITY;
+            if (num_kv_row <= c0) v00 = -INFINITY;
+            if (num_kv_row <= c1) v01 = -INFINITY;
+            if (num_kv_row <= c0) v10 = -INFINITY;
+            if (num_kv_row <= c1) v11 = -INFINITY;
             s_S[r0][c0] = v00;
             s_S[r0][c1] = v01;
             s_S[r1][c0] = v10;
@@ -234,7 +233,7 @@ __global__ void attention_tc(
         }
         __syncwarp();
 
-        // online softmax row reduction; lane l (<16) owns this warp's row l
+        // Online softmax row reduction; lane l (<16) owns this warp's row l
         if (lane < 16) {
             int r = warp_row0 + lane;
             float old_m = m_smem[r];
@@ -257,7 +256,7 @@ __global__ void attention_tc(
         }
         __syncwarp();
 
-        // rescale running output by corr for the rows this lane owns
+        // Rescale running output by corr for the rows this lane owns
         float corr0 = corr_smem[warp_row0 + lane / 4];
         float corr1 = corr_smem[warp_row0 + lane / 4 + 8];
         #pragma unroll
@@ -294,11 +293,11 @@ __global__ void attention_tc(
         cg::sync(cta);
     }
 
-    // write O = o_acc / row_sum for this warp's 16 rows
+    // Write O = o_acc / row_sum for this warp's 16 rows
     int r0 = warp_row0 + lane / 4;
     int r1 = r0 + 8;
-    float inv0 = (l_smem[r0] > 0.0f) ? 1.0f / l_smem[r0] : 0.0f;
-    float inv1 = (l_smem[r1] > 0.0f) ? 1.0f / l_smem[r1] : 0.0f;
+    float inv0 = (0.0f < l_smem[r0]) ? 1.0f / l_smem[r0] : 0.0f;
+    float inv1 = (0.0f < l_smem[r1]) ? 1.0f / l_smem[r1] : 0.0f;
     #pragma unroll
     for (int di = 0; di < D_ITER; di++) {
         int c0 = di * 8 + (lane % 4) * 2;
