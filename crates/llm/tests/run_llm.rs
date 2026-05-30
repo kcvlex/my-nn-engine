@@ -121,6 +121,66 @@ fn run_llama2_int8(target: Target) -> String {
     llm.generate(PROMPT, N_GENERATE).unwrap()
 }
 
+fn run_mistral_int8(target: Target) -> String {
+    const N_GENERATE: usize = 24;
+
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/hf/mistral-7b");
+    let config = HfConfig::from_path(dir.join("config.json")).unwrap();
+    let hf = HfWeights::from_safetensors(dir.join("model.int8.safetensors")).unwrap();
+    let spec = ModelSpec::from_hf(&config, &hf).unwrap();
+
+    let max_seq_len = 2048;
+    let prefill_len = 16;
+    // CPU codegen does not yet implement the rope+dequant fuse in attention,
+    // so streaming-KV + INT8 only works on CUDA.
+    let streaming_kv = matches!(target, Target::CUDA);
+    let llama_opts = BuildOptions::builder()
+        .quant_kv_cache(true)
+        .streaming_kv(streaming_kv)
+        .build();
+    let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
+    let p = build_decoder(
+        &config,
+        &spec,
+        max_seq_len,
+        &BuildOptions {
+            prefill_len: Some(prefill_len),
+            ..llama_opts.clone()
+        },
+    );
+
+    let opts = Options::builder().target(target).build();
+    let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
+    let mut llm = if streaming_kv {
+        LlmSession::for_llama_streaming(
+            r.graph,
+            Some((p.graph, prefill_len)),
+            r.kv_cache_names,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+            STREAM_SINK,
+            max_seq_len - STREAM_SINK,
+        )
+        .unwrap()
+    } else {
+        LlmSession::for_llama_with_prefill(
+            r.graph,
+            p.graph,
+            r.kv_cache_names,
+            prefill_len,
+            tokenizer,
+            &opts,
+            max_seq_len,
+            config.eos_token_id,
+        )
+        .unwrap()
+    };
+
+    llm.generate(PROMPT, N_GENERATE).unwrap()
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 #[serial(gpu)]
@@ -150,6 +210,15 @@ fn tinyllama_cpu() {
 fn llama2_int8_cpu() {
     const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
     let text = run_llama2_int8(Target::CPU);
+    assert_eq!(text, EXPECTED_TEXT);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
+fn mistral_int8() {
+    const EXPECTED_TEXT: &str = "Paris.\n\n## What is the capital of France in 2021?\n\nParis\n\n";
+    let text = run_mistral_int8(Target::CUDA);
     assert_eq!(text, EXPECTED_TEXT);
 }
 
