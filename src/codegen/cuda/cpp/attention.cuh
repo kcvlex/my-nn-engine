@@ -139,10 +139,9 @@ __global__ void attention_tc(
     // the largest query position in this Q-block, all remaining blocks are
     // fully masked -> stop. The diagonal block is still processed (partial mask
     // handled post-mma below).
-if (is_causal) {
-    int q_max_pos = q_pos_offset + (int)blockIdx.x * Br + (num_q_row - 1);
-    n_kv_blocks = min(n_kv_blocks, q_max_pos / Bc + 1);
-}
+    if (is_causal) {
+        int q_max_pos = q_pos_offset + (int)blockIdx.x * Br + (num_q_row - 1);
+        n_kv_blocks = min(n_kv_blocks, q_max_pos / Bc + 1);
     }
     for (int blk = 0; blk < n_kv_blocks; blk++) {
         int num_kv_row = min(Bc, kv_active_seq - blk * Bc);
