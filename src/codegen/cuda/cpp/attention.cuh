@@ -10,13 +10,22 @@
 
 namespace cg = cooperative_groups;
 
-// bf16 Tensor Core helpers (m16n8k16, A=row B=col, fp32 accum).
 static __device__ __forceinline__ void attn_ldmatrix_x4(
     uint32_t out[4], uint32_t smem_addr
 ) {
     asm volatile(
         "ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0,%1,%2,%3}, [%4];\n"
         : "=r"(out[0]), "=r"(out[1]), "=r"(out[2]), "=r"(out[3])
+        : "r"(smem_addr)
+    );
+}
+
+static __device__ __forceinline__ void attn_ldmatrix_x2(
+    uint32_t out[2], uint32_t smem_addr
+) {
+    asm volatile(
+        "ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0,%1}, [%2];\n"
+        : "=r"(out[0]), "=r"(out[1])
         : "r"(smem_addr)
     );
 }
@@ -76,11 +85,8 @@ __global__ void attention_tc(
     bool rope_on = (kv_position != nullptr);
     int lane = threadIdx.x;
 
-    // unpadded (16-byte-aligned rows) bf16 buffers required by ldmatrix
     __shared__ __nv_bfloat16 s_Q[Br][HEAD_DIM];
     __shared__ __nv_bfloat16 s_K[Bc][HEAD_DIM];
-    // V is stored transposed [dim][token] so the P*V mma B operand (col-major
-    // [Bc][HEAD_DIM]) can be ldmatrix'd with the same [N][K] recipe as K.
     __shared__ __nv_bfloat16 s_V[HEAD_DIM][Bc];
     __shared__ __nv_bfloat16 s_P[Br][Bc];
     __shared__ float s_S[Br][Bc];
@@ -89,10 +95,10 @@ __global__ void attention_tc(
     __shared__ float corr_smem[Br];
 
     cg::thread_block cta = cg::this_thread_block();
-    int b = blockIdx.y / num_q_heads;
+    int batch = blockIdx.y / num_q_heads;
     int q_head = blockIdx.y % num_q_heads;
     int group_size = num_q_heads / num_kv_heads;
-    int kv_bh = b * num_kv_heads + (q_head / group_size);
+    int kv_bh = batch * num_kv_heads + (q_head / group_size);
     K += kv_bh * kv_cache_stride * HEAD_DIM;
     V += kv_bh * kv_cache_stride * HEAD_DIM;
     if constexpr (QUANT) {
@@ -103,7 +109,6 @@ __global__ void attention_tc(
     Q += blockIdx.y * q_seq_len * HEAD_DIM + blockIdx.x * Br * HEAD_DIM;
     int num_q_row = min(Br, q_seq_len - blockIdx.x * Br);
 
-    // load Q (bf16) into s_Q, zero-pad rows past num_q_row
     for (int i = lane; i < Br * HEAD_DIM; i += 32) {
         int r = i / HEAD_DIM;
         int c = i % HEAD_DIM;
@@ -115,7 +120,6 @@ __global__ void attention_tc(
     }
     cg::sync(cta);
 
-    // load Q fragments once (reused across all KV blocks)
     uint32_t q_frag[M_ITER][K_ITER][4];
     #pragma unroll
     for (int mi = 0; mi < M_ITER; mi++) {
@@ -134,11 +138,11 @@ __global__ void attention_tc(
     for (int blk = 0; blk < n_kv_blocks; blk++) {
         int num_kv_row = min(Bc, kv_active_seq - blk * Bc);
 
-        // stage K (dequant + rope) and V (dequant) into bf16 smem
+        // Stage K (dequant + rope) and V (dequant) into bf16 smem
         for (int i = lane; i < Bc * HEAD_DIM; i += 32) {
             int r = i / HEAD_DIM;
             int c = i % HEAD_DIM;
-            if (r >= num_kv_row) {
+            if (num_kv_row <= r) {
                 s_K[r][c] = (__nv_bfloat16)0;
                 s_V[c][r] = (__nv_bfloat16)0;
                 continue;
@@ -171,11 +175,7 @@ __global__ void attention_tc(
                 int n = ni * 8 + (lane & 7);
                 int k = ki * 16 + (lane >> 3) * 8;
                 uint32_t addr = __cvta_generic_to_shared(&s_K[n][k]);
-                asm volatile(
-                    "ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0,%1}, [%2];\n"
-                    : "=r"(k_frag[ni][0]), "=r"(k_frag[ni][1])
-                    : "r"(addr)
-                );
+                attn_ldmatrix_x2(k_frag[ni], addr);
             }
             #pragma unroll
             for (int mi = 0; mi < M_ITER; mi++) {
@@ -186,7 +186,7 @@ __global__ void attention_tc(
             }
         }
 
-        // write scores (scale + causal + additive mask) to fp32 smem
+        // Write scores (scale + causal + additive mask) to fp32 smem
         int q_blk_base = blockIdx.x * Br;
         #pragma unroll
         for (int mi = 0; mi < M_ITER; mi++) {
@@ -219,10 +219,10 @@ __global__ void attention_tc(
                     if ((q_pos_offset + g_row1) < g_col0) v10 = -INFINITY;
                     if ((q_pos_offset + g_row1) < g_col1) v11 = -INFINITY;
                 }
-                if (c0 >= num_kv_row) v00 = -INFINITY;
-                if (c1 >= num_kv_row) v01 = -INFINITY;
-                if (c0 >= num_kv_row) v10 = -INFINITY;
-                if (c1 >= num_kv_row) v11 = -INFINITY;
+                if (num_kv_row <= c0) v00 = -INFINITY;
+                if (num_kv_row <= c1) v01 = -INFINITY;
+                if (num_kv_row <= c0) v10 = -INFINITY;
+                if (num_kv_row <= c1) v11 = -INFINITY;
                 s_S[r0][c0] = v00;
                 s_S[r0][c1] = v01;
                 s_S[r1][c0] = v10;
@@ -231,7 +231,7 @@ __global__ void attention_tc(
         }
         cg::sync(cta);
 
-        // online softmax row reduction (lane r owns query row r)
+        // Online softmax row reduction (lane r owns query row r)
         if (lane < Br) {
             int r = lane;
             float old_m = m_smem[r];
@@ -254,7 +254,7 @@ __global__ void attention_tc(
         }
         cg::sync(cta);
 
-        // rescale running output by corr for the rows this lane owns
+        // Rescale running output by corr for the rows this lane owns
         #pragma unroll
         for (int mi = 0; mi < M_ITER; mi++) {
             float corr0 = corr_smem[mi * 16 + lane / 4];
@@ -285,11 +285,7 @@ __global__ void attention_tc(
                 int n = di * 8 + (lane & 7);
                 int k = ki * 16 + (lane >> 3) * 8;
                 uint32_t addr = __cvta_generic_to_shared(&s_V[n][k]);
-                asm volatile(
-                    "ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0,%1}, [%2];\n"
-                    : "=r"(v_frag[di][0]), "=r"(v_frag[di][1])
-                    : "r"(addr)
-                );
+                attn_ldmatrix_x2(v_frag[di], addr);
             }
             #pragma unroll
             for (int mi = 0; mi < M_ITER; mi++) {
@@ -302,13 +298,13 @@ __global__ void attention_tc(
         cg::sync(cta);
     }
 
-    // write O = o_acc / row_sum
+    // Write O = o_acc / row_sum
     #pragma unroll
     for (int mi = 0; mi < M_ITER; mi++) {
         int r0 = mi * 16 + lane / 4;
         int r1 = r0 + 8;
-        float inv0 = (l_smem[r0] > 0.0f) ? 1.0f / l_smem[r0] : 0.0f;
-        float inv1 = (l_smem[r1] > 0.0f) ? 1.0f / l_smem[r1] : 0.0f;
+        float inv0 = (0.0f < l_smem[r0]) ? 1.0f / l_smem[r0] : 0.0f;
+        float inv1 = (0.0f < l_smem[r1]) ? 1.0f / l_smem[r1] : 0.0f;
         #pragma unroll
         for (int di = 0; di < D_ITER; di++) {
             int c0 = di * 8 + (lane % 4) * 2;
