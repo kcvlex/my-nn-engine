@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::BufWriter;
 use std::io::ErrorKind;
 use std::io::Write;
@@ -15,6 +17,8 @@ use rayon::prelude::*;
 use crate::codegen::cuda::*;
 use crate::codegen::*;
 use crate::options::Options;
+use crate::schedule::ir::AllocPlace;
+use crate::schedule::ir::Step;
 use crate::schedule::Schedule;
 use crate::session::send_initializer_to_device;
 use crate::session::DeviceBuffer;
@@ -47,11 +51,42 @@ type InitType =
 type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
+/// Indices (into `schedule.initializers`) of `HostStreamed` initializers: those
+/// the plan brings in via an H2D Transfer (src place = Initializer) instead of
+/// keeping resident in VRAM. Derived from the plan so no extra plumbing is
+/// needed; empty unless a prefetch policy is active.
+fn streamed_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
+    let Some(plan) = schedule.execution_plan.as_ref() else {
+        return HashSet::new();
+    };
+    let streamed_values: HashSet<_> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Transfer(t) => match t.src.place {
+                AllocPlace::Initializer(v) => Some(v),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    schedule
+        .initializers
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| streamed_values.contains(v))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 pub struct SessionCUDA {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
+    /// Host-resident weight data for `HostStreamed` initializers, kept alive for
+    /// the session and used as the H2D source. Keyed by initializer index.
+    streamed_host: HashMap<usize, StrictTensor>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
@@ -187,26 +222,52 @@ impl SessionCUDA {
 
         let _lock = cuda_lock();
 
+        // HostStreamed initializers stay in host memory; everything else is
+        // uploaded to VRAM as before. Derived from the plan (empty without a
+        // prefetch policy, so the resident path is unchanged).
+        let streamed = streamed_initializer_indices(&schedule);
+        let mut streamed_host: HashMap<usize, StrictTensor> = HashMap::new();
+
         let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
             .iter()
             .zip(initializer_names.iter())
-            .map(|(src, name)| -> Result<Arc<DeviceBuffer>, SessionError> {
-                let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
-                    let len = src.byte_len();
-                    let buf =
-                        Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
-                            SessionError::OtherError(format!("cudaMalloc: {:?}", e))
-                        })?);
-                    if len > 0 {
-                        send_initializer_to_device(src, &buf)?;
+            .enumerate()
+            .map(
+                |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
+                    if streamed.contains(&i) {
+                        // Keep the weight in host RAM and stream it to a GPU staging
+                        // chunk on demand. The device buffer is a 1-byte placeholder
+                        // so model_init's pointer-array indexing stays valid; the
+                        // host pointer is substituted in init_state.
+                        //
+                        // P0: pageable host memory (StrictTensor). Pinned staging for
+                        // true async overlap is P1.
+                        let host = src
+                            .load_into_strict()
+                            .map_err(SessionError::ModelLoadError)?;
+                        streamed_host.insert(i, host);
+                        let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
+                            SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
+                        })?;
+                        return Ok(Arc::new(buf));
                     }
-                    Ok(buf)
-                };
-                match initializer_cache.as_ref() {
-                    Some(cache) => cache.get_or_insert_with(name, upload),
-                    None => upload(),
-                }
-            })
+                    let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                        let len = src.byte_len();
+                        let buf =
+                            Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
+                                SessionError::OtherError(format!("cudaMalloc: {:?}", e))
+                            })?);
+                        if len > 0 {
+                            send_initializer_to_device(src, &buf)?;
+                        }
+                        Ok(buf)
+                    };
+                    match initializer_cache.as_ref() {
+                        Some(cache) => cache.get_or_insert_with(name, upload),
+                        None => upload(),
+                    }
+                },
+            )
             .collect::<Result<Vec<_>, _>>()?;
 
         let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
@@ -234,15 +295,22 @@ impl SessionCUDA {
             destroy_func,
             state: std::ptr::null_mut(),
             initializer_buffers,
+            streamed_host,
             session_state_buffers,
         })
     }
 
     fn init_state(&self) -> Result<*mut std::ffi::c_void, SessionError> {
+        // Resident initializers hand model_init a device pointer; streamed ones
+        // hand it the host pointer (the .so memcpys H2D from it per run).
         let initializer_ptrs: Vec<*const u8> = self
             .initializer_buffers
             .iter()
-            .map(|b| b.ptr() as *const u8)
+            .enumerate()
+            .map(|(i, b)| match self.streamed_host.get(&i) {
+                Some(h) => h.as_ptr(),
+                None => b.ptr() as *const u8,
+            })
             .collect();
         let session_state_ptrs: Vec<*mut std::ffi::c_void> =
             self.session_state_buffers.iter().map(|b| b.ptr()).collect();

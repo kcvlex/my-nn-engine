@@ -1069,6 +1069,10 @@ impl<'sched> HostCodeGenerator<'sched> {
         let kind = match (src_place, dst_place) {
             (AllocPlace::Input(_), _) => Some(CudaMemcpyKind::HostToDevice),
             (_, AllocPlace::Output(_)) => Some(CudaMemcpyKind::DeviceToHost),
+            // Weight prefetch: a `HostStreamed` initializer is passed to
+            // model_init as a (pinned) host pointer, so streaming it into its
+            // GPU staging chunk is a plain H2D from `state->d_init_*`.
+            (AllocPlace::Initializer(_), _) => Some(CudaMemcpyKind::HostToDevice),
             // Cross-tier transfers (HostArena <-> GpuArena chunks, SessionState
             // -> HostArena chunk, etc.) cannot be emitted from this wrapper
             // because host-arena buffers are not visible to the .so. Hybrid
