@@ -551,10 +551,16 @@ impl<'s> PrefetchScheduler<'s> {
                 let consumer_event = self.kernel_info[&kid].event;
                 let size = self.schedule.value_byte_size(input);
 
-                // WAR: once the ring is full, evict the oldest slot and make the
-                // reusing copy wait for that weight's consumer to finish reading.
                 let war_event = if STAGING_RING_DEPTH <= self.staging_fifo.len() {
                     let (old_cid, old_consumer) = self.staging_fifo.pop_front().unwrap();
+                    if old_consumer == consumer_event {
+                        panic!(
+                            "STAGING_RING_DEPTH={} is too small: kernel {} needs more than {} host-resident weights",
+                            STAGING_RING_DEPTH,
+                            kid.index(),
+                            STAGING_RING_DEPTH
+                        );
+                    }
                     self.allocator.consume(old_cid, copy_stream);
                     Some(old_consumer)
                 } else {
