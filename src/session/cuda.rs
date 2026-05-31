@@ -114,8 +114,6 @@ pub struct SessionCUDA {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
-    /// Host source for each `HostResident` initializer, kept alive for the
-    /// session. Keyed by initializer index.
     host_resident_weights: HashMap<usize, HostWeight>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
