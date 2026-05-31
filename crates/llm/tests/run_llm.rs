@@ -263,23 +263,14 @@ fn run_llama3_int8_with(opts: Options) -> String {
     llm.generate(PROMPT, N_GENERATE).unwrap()
 }
 
-// llama3-8b-int8 (~8 GB int8) does not fit resident on an 8 GB GPU -- the only
-// other llama3 test uses hybrid CPU/GPU placement. Weight prefetch streams the
-// big weights from host so the model runs GPU-only on a GPU it does not fit on.
 #[cfg(feature = "cuda")]
 #[test]
 #[serial(gpu)]
 #[ignore = "experimental: llama3-8b-int8 weight prefetch (does not fit resident)"]
 fn llama3_int8_prefetch() {
-    // Stability snapshot: llama3-8b-int8 does not fit resident, so there is no
-    // resident baseline to diff against -- this pins the prefetch output.
     const EXPECTED_TEXT: &str = " Paris.\nThe capital of the United States";
     let opts = Options::builder()
         .target(Target::CUDA)
-        // Partial offload with an auto budget: resident = VRAM - KV - reserve.
-        // The reserve covers activations + staging ring + prefill/decode session
-        // overhead + library workspaces (~3.5 GB here); the budget then scales
-        // with the GPU's VRAM instead of being hand-picked.
         .prefetch_policy(Some(PrefetchPolicy::AutoResidentBudget {
             min_bytes: 1 << 20,
             reserve_bytes: 3_500_000_000,
