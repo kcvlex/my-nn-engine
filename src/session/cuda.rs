@@ -349,8 +349,6 @@ impl SessionCUDA {
     }
 
     fn init_state(&self) -> Result<*mut std::ffi::c_void, SessionError> {
-        // Resident initializers hand model_init a device pointer; host-resident ones
-        // hand it the host pointer (the .so memcpys H2D from it per run).
         let initializer_ptrs: Vec<*const u8> = self
             .initializer_buffers
             .iter()
