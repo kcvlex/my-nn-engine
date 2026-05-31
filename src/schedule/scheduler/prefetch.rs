@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
-use itertools::Itertools;
+use log::warn;
 
 use super::common::*;
 use crate::graph::operator::Operator;
@@ -11,6 +12,11 @@ use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 
+/// Number of GPU staging slots for host-resident weights (ring depth K). The copy
+/// stream prefetches up to this many weights ahead of the compute stream; a
+/// larger value hides more transfer latency at the cost of `K * max_slot` VRAM.
+const STAGING_RING_DEPTH: usize = 3;
+
 /// Policy for deciding which initializers are brought in from host on demand
 /// (`HostResident`) vs kept resident in VRAM (`GpuResident`).
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +25,23 @@ pub enum PrefetchPolicy {
     /// least `min_bytes`. A non-trivial threshold (e.g. 1 MiB) naturally
     /// excludes scalar / metadata initializers.
     SizeThreshold { min_bytes: usize },
+    /// Partial offload: among streamable weights (consumed by a GPU kernel, at
+    /// least `min_bytes`), keep the largest resident up to `resident_bytes`,
+    /// stream the rest. Keeping the largest resident both shrinks the staging
+    /// slots (the host-resident max drops) and cuts per-token PCIe traffic.
+    ResidentBudget {
+        min_bytes: usize,
+        resident_bytes: usize,
+    },
+    /// Like `ResidentBudget` but derives the resident budget from the GPU:
+    /// `total VRAM - KV cache - reserve_bytes`. VRAM and KV are computed; the
+    /// reserve covers activations + staging ring + library workspaces (these
+    /// aren't known until the session is built, so they stay a knob). Falls back
+    /// to full-stream if VRAM can't be queried.
+    AutoResidentBudget {
+        min_bytes: usize,
+        reserve_bytes: usize,
+    },
 }
 
 pub struct PrefetchSchedulePass {
@@ -43,23 +66,85 @@ impl SchedulePass for PrefetchSchedulePass {
     }
 }
 
+/// Compute the `HostResident` initializer set from `policy`.
 fn select_host_resident(
     schedule: &Schedule,
     placement: &Placement,
     policy: PrefetchPolicy,
 ) -> HashSet<ValueId> {
-    let initializers: HashSet<_> = schedule.initializers.iter().copied().collect();
-    match policy {
-        PrefetchPolicy::SizeThreshold { min_bytes } => schedule
-            .kernels
-            .iter()
-            .filter(|(kid, _)| placement.device_of(*kid) == Device::CUDA)
-            .flat_map(|(_, kernel)| kernel.inputs.iter().flatten().copied())
-            .filter(|input| {
-                initializers.contains(input) && min_bytes <= schedule.value_byte_size(*input)
-            })
-            .collect(),
+    let min_bytes = match policy {
+        PrefetchPolicy::SizeThreshold { min_bytes } => min_bytes,
+        PrefetchPolicy::ResidentBudget { min_bytes, .. } => min_bytes,
+        PrefetchPolicy::AutoResidentBudget { min_bytes, .. } => min_bytes,
+    };
+
+    // Streamable candidates: weights consumed by a GPU kernel, at least
+    // `min_bytes` (the threshold excludes scalar / metadata initializers).
+    let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
+    let mut candidates: HashMap<ValueId, usize> = HashMap::new();
+    for (kid, kernel) in schedule.kernels.iter() {
+        if placement.device_of(kid) != Device::CUDA {
+            continue;
+        }
+        for input in kernel.inputs.iter().flatten().copied() {
+            if initializers.contains(&input) {
+                let size = schedule.value_byte_size(input);
+                if size >= min_bytes {
+                    candidates.insert(input, size);
+                }
+            }
+        }
     }
+
+    // Resolve the resident budget (bytes of weight kept in VRAM).
+    let resident_bytes = match policy {
+        PrefetchPolicy::SizeThreshold { .. } => return candidates.into_keys().collect(),
+        PrefetchPolicy::ResidentBudget { resident_bytes, .. } => resident_bytes,
+        PrefetchPolicy::AutoResidentBudget { reserve_bytes, .. } => {
+            let kv: usize = schedule
+                .session_states
+                .iter()
+                .map(|&v| schedule.value_byte_size(v))
+                .sum();
+            match query_vram_total_bytes() {
+                Some(vram) => vram.saturating_sub(kv).saturating_sub(reserve_bytes),
+                None => {
+                    warn!("could not query VRAM; streaming all weights (full offload)");
+                    0
+                }
+            }
+        }
+    };
+
+    // Keep the largest candidates resident until the budget is full, stream the
+    // rest. Ties broken by ValueId for determinism.
+    let mut by_size: Vec<(ValueId, usize)> = candidates.into_iter().collect();
+    by_size.sort_by_key(|(v, sz)| (std::cmp::Reverse(*sz), *v));
+    let mut resident = 0usize;
+    let mut host_resident = HashSet::new();
+    for (v, sz) in by_size {
+        if resident + sz <= resident_bytes {
+            resident += sz;
+        } else {
+            host_resident.insert(v);
+        }
+    }
+    host_resident
+}
+
+/// Total VRAM in bytes via nvidia-smi, or `None` if unavailable.
+fn query_vram_total_bytes() -> Option<usize> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    let mib: usize = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(mib * 1024 * 1024)
 }
 
 struct PrefetchScheduler<'s> {
@@ -75,6 +160,9 @@ struct PrefetchScheduler<'s> {
     host_resident: HashSet<ValueId>,
 
     num_streams: usize,
+    compute_streams: usize,
+    copy_stream: Option<StreamId>,
+    staging_fifo: VecDeque<(ChunkId, EventId)>,
 
     allocator: ChunkAllocator,
     value_on_tier: HashMap<(ValueId, MemoryTier), TransferRecord>,
@@ -97,7 +185,20 @@ impl<'s> PrefetchScheduler<'s> {
         let deps = Deps::new(schedule);
         let output_alias = schedule.output_aliases();
         let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
-        let num_streams = if needs_cuda { num_streams.max(1) } else { 1 };
+        let has_streaming = needs_cuda && !host_resident.is_empty();
+        // P1a: when streaming, pin compute to a single stream and add one
+        // dedicated copy stream. A single compute stream removes cross-compute
+        // -stream syncs so the only cross-stream events are copy<->compute
+        // (RAW / WAR). Multi compute-stream overlap is orthogonal, deferred.
+        let compute_streams = if has_streaming {
+            1
+        } else if needs_cuda {
+            num_streams.max(1)
+        } else {
+            1
+        };
+        let copy_stream = has_streaming.then(|| StreamId(compute_streams));
+        let num_streams = compute_streams + if has_streaming { 1 } else { 0 };
         let session_state_tier = if needs_cuda {
             MemoryTier::GpuArena
         } else {
@@ -108,7 +209,7 @@ impl<'s> PrefetchScheduler<'s> {
         let session_states: HashSet<ValueId> = schedule.session_states.iter().copied().collect();
         let inputs_set: HashSet<ValueId> = schedule.inputs.iter().copied().collect();
 
-        let mut value2place = HashMap::new();
+        let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
         for v in &initializers {
             value2place.insert(*v, AllocPlace::Initializer(*v));
         }
@@ -132,6 +233,9 @@ impl<'s> PrefetchScheduler<'s> {
             session_state_tier,
             host_resident,
             num_streams,
+            compute_streams,
+            copy_stream,
+            staging_fifo: VecDeque::new(),
             allocator: ChunkAllocator::default(),
             value_on_tier: HashMap::new(),
             next_event_id: 0,
@@ -162,12 +266,7 @@ impl<'s> PrefetchScheduler<'s> {
     fn run(mut self) -> ExecutionPlan {
         // Kernels are built in topological order (KernelId order), so scheduling
         // them in that order already respects every dependency.
-        let order = self
-            .schedule
-            .kernels
-            .iter()
-            .map(|(kid, _)| kid)
-            .collect_vec();
+        let order: Vec<KernelId> = self.schedule.kernels.iter().map(|(kid, _)| kid).collect();
         for kid in order {
             self.schedule_kernel(kid);
         }
@@ -176,7 +275,7 @@ impl<'s> PrefetchScheduler<'s> {
     }
 
     fn finalize_outputs(&mut self) {
-        let already: HashSet<_> = self
+        let already: HashSet<ValueId> = self
             .steps
             .iter()
             .filter_map(|s| match s {
@@ -227,7 +326,7 @@ impl<'s> PrefetchScheduler<'s> {
     }
 
     fn pick_stream(&self, kid: KernelId) -> StreamId {
-        if self.num_streams == 1 {
+        if self.compute_streams == 1 {
             return StreamId(0);
         }
         let latest = self.deps.kernel_preds[&kid]
@@ -237,8 +336,7 @@ impl<'s> PrefetchScheduler<'s> {
         match latest {
             Some(info) => info.stream,
             None => {
-                let (idx, _) = self
-                    .stream_load
+                let (idx, _) = self.stream_load[..self.compute_streams]
                     .iter()
                     .enumerate()
                     .min_by_key(|(_, l)| **l)
@@ -354,6 +452,16 @@ impl<'s> PrefetchScheduler<'s> {
 
         let context = ExecutionContext { device, stream };
 
+        // bind_kernel emits this kernel's input transfers (activation H2D on the
+        // compute stream, host-resident weight H2D on the copy stream with their WAR
+        // syncs). It must run before the kernel's own waits so the codegen
+        // pending-wait association lands the waits on the kernel, not a transfer.
+        let (bindings, post_transfers, copy_events) = self.bind_kernel(kid, stream);
+
+        // Cross-stream waits this kernel must observe before it runs: predecessor
+        // kernels on other streams, then the copy events of its host-resident weights
+        // (RAW). All emitted after the transfers and immediately before the
+        // kernel step so they attach to the kernel.
         for pred in &self.deps.kernel_preds[&kid] {
             let pred_info = &self.kernel_info[pred];
             if pred_info.stream != stream {
@@ -363,8 +471,12 @@ impl<'s> PrefetchScheduler<'s> {
                 }));
             }
         }
-
-        let (bindings, post_transfers, staging_chunks) = self.bind_kernel(kid, stream);
+        for copy_event in copy_events {
+            self.steps.push(Step::SyncWait(SyncWaitStep {
+                context,
+                event: copy_event,
+            }));
+        }
 
         let is_transfer = matches!(
             &self.schedule.kernels[kid].body,
@@ -396,13 +508,6 @@ impl<'s> PrefetchScheduler<'s> {
             }));
         }
 
-        // Free host-resident weight staging chunks now that the kernel has read them.
-        // The freed slot is returned to the per-stream free list so the next
-        // host-resident weight reuses it (P0 single-slot reuse).
-        for cid in staging_chunks {
-            self.allocator.consume(cid, stream);
-        }
-
         for pt in post_transfers {
             let event = self.fresh_event();
             self.steps.push(Step::Transfer(TransferStep {
@@ -426,32 +531,59 @@ impl<'s> PrefetchScheduler<'s> {
         }
     }
 
-    /// Returns `(bindings, post_transfers, staging_chunks)`. `staging_chunks` are
-    /// GPU chunks holding host-resident weights brought in for this kernel; the caller
-    /// frees them after the kernel step.
+    /// Returns `(bindings, post_transfers, copy_events)`. `copy_events` are the
+    /// H2D events of this kernel's host-resident weights; the caller makes the kernel
+    /// wait on them (RAW) before it runs.
     fn bind_kernel(
         &mut self,
         kid: KernelId,
         stream: StreamId,
-    ) -> (Vec<ValueBinding>, Vec<PostTransfer>, Vec<ChunkId>) {
+    ) -> (Vec<ValueBinding>, Vec<PostTransfer>, Vec<EventId>) {
         let mut bindings = Vec::new();
         let mut post_transfers: Vec<PostTransfer> = Vec::new();
-        let mut staging_chunks: Vec<ChunkId> = Vec::new();
+        let mut copy_events: Vec<EventId> = Vec::new();
         let inputs = self.schedule.kernels[kid].inputs.clone();
         let device = self.kernel_info[&kid].device;
         let tier = device.tier();
 
         for input in inputs.iter().flatten().copied() {
-            // Host-resident weight: bring it from host into a bounded GPU staging
-            // chunk on this kernel's stream, bind the chunk, and queue the chunk
-            // for release once the kernel has read it. Only on a GPU kernel;
-            // a CPU kernel reading the weight would use the host pointer directly.
+            // Host-resident weight: prefetch it from host into a GPU staging slot on
+            // the copy stream, drawn from a bounded ring of STAGING_RING_DEPTH
+            // slots. Reusing a slot waits on its previous consumer kernel (WAR);
+            // the consuming kernel waits on this copy (RAW, via copy_events).
+            // GPU kernels only; a CPU kernel would read the host pointer directly.
             if self.host_resident.contains(&input) && tier == MemoryTier::GpuArena {
+                let copy_stream = self
+                    .copy_stream
+                    .expect("copy stream must exist when a weight is host-resident");
+                let consumer_event = self.kernel_info[&kid].event;
                 let size = self.schedule.value_byte_size(input);
-                let dst_cid = self.alloc_chunk(tier, size, stream, 1);
+
+                // WAR: once the ring is full, evict the oldest slot and make the
+                // reusing copy wait for that weight's consumer to finish reading.
+                let war_event = if self.staging_fifo.len() >= STAGING_RING_DEPTH {
+                    let (old_cid, old_consumer) = self.staging_fifo.pop_front().unwrap();
+                    self.allocator.consume(old_cid, copy_stream);
+                    Some(old_consumer)
+                } else {
+                    None
+                };
+
+                let dst_cid = self.alloc_chunk(tier, size, copy_stream, 1);
                 let dst_place = AllocPlace::Chunk(dst_cid);
-                let event = self.fresh_event();
                 let dst_first_use = self.allocator.mark_as_first_use(dst_cid);
+                let copy_event = self.fresh_event();
+                let copy_ctx = ExecutionContext {
+                    device,
+                    stream: copy_stream,
+                };
+
+                if let Some(e) = war_event {
+                    self.steps.push(Step::SyncWait(SyncWaitStep {
+                        context: copy_ctx,
+                        event: e,
+                    }));
+                }
                 self.steps.push(Step::Transfer(TransferStep {
                     src: ValueBinding {
                         value: input,
@@ -465,16 +597,17 @@ impl<'s> PrefetchScheduler<'s> {
                         place: dst_place,
                         is_first_use: dst_first_use,
                     },
-                    context: ExecutionContext { device, stream },
-                    records_event: Some(event),
+                    context: copy_ctx,
+                    records_event: Some(copy_event),
                 }));
+                self.staging_fifo.push_back((dst_cid, consumer_event));
                 bindings.push(ValueBinding {
                     value: input,
                     role: BindingRole::Input,
                     place: dst_place,
                     is_first_use: false,
                 });
-                staging_chunks.push(dst_cid);
+                copy_events.push(copy_event);
                 continue;
             }
 
@@ -616,7 +749,7 @@ impl<'s> PrefetchScheduler<'s> {
             }
         }
 
-        (bindings, post_transfers, staging_chunks)
+        (bindings, post_transfers, copy_events)
     }
 
     fn into_plan(self) -> ExecutionPlan {

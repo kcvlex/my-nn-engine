@@ -25,6 +25,57 @@ mod ffi {
             count: usize,
             kind: cudaMemcpyKind,
         ) -> cudaError_t;
+        pub fn cudaHostAlloc(ptr: *mut *mut c_void, size: usize, flags: u32) -> cudaError_t;
+        pub fn cudaFreeHost(ptr: *mut c_void) -> cudaError_t;
+    }
+}
+
+/// Page-locked (pinned) host buffer. The GPU can DMA from pinned memory
+/// asynchronously, so `cudaMemcpyAsync` from it does not block the host on an
+/// internal staging copy -- required for the copy stream to overlap compute.
+pub struct PinnedHostBuffer {
+    ptr: *mut c_void,
+    size: usize,
+}
+
+unsafe impl Send for PinnedHostBuffer {}
+unsafe impl Sync for PinnedHostBuffer {}
+
+impl PinnedHostBuffer {
+    #[cfg(feature = "cuda")]
+    pub fn alloc(size: usize) -> Result<Self, CudaError> {
+        let mut ptr: *mut c_void = std::ptr::null_mut();
+        let err = unsafe { ffi::cudaHostAlloc(&mut ptr, size.max(1), 0) };
+        if err != ffi::CUDA_SUCCESS {
+            return Err(CudaError(err));
+        }
+        Ok(Self { ptr, size })
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub fn alloc(_size: usize) -> Result<Self, CudaError> {
+        Err(CudaError(-1))
+    }
+
+    pub fn ptr(&self) -> *const u8 {
+        self.ptr as *const u8
+    }
+
+    /// # Safety
+    /// The buffer must not be aliased while the returned slice is held.
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr as *mut u8, self.size) }
+    }
+}
+
+impl Drop for PinnedHostBuffer {
+    fn drop(&mut self) {
+        #[cfg(feature = "cuda")]
+        if !self.ptr.is_null() {
+            unsafe {
+                ffi::cudaFreeHost(self.ptr);
+            }
+        }
     }
 }
 
