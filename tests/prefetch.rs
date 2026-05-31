@@ -1,6 +1,3 @@
-//! P0 acceptance for weight prefetch: streaming a weight initializer from host
-//! into a GPU staging chunk must produce the same output as keeping it resident.
-
 #![cfg(feature = "cuda")]
 
 use my_nn_engine::onnx::load::LoadProto;

@@ -239,9 +239,6 @@ impl SessionCUDA {
                         // chunk on demand. The device buffer is a 1-byte placeholder
                         // so model_init's pointer-array indexing stays valid; the
                         // host pointer is substituted in init_state.
-                        //
-                        // P0: pageable host memory (StrictTensor). Pinned staging for
-                        // true async overlap is P1.
                         let host = src
                             .load_into_strict()
                             .map_err(SessionError::ModelLoadError)?;
@@ -257,7 +254,7 @@ impl SessionCUDA {
                             Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
                                 SessionError::OtherError(format!("cudaMalloc: {:?}", e))
                             })?);
-                        if len > 0 {
+                        if 0 < len {
                             send_initializer_to_device(src, &buf)?;
                         }
                         Ok(buf)
@@ -301,8 +298,6 @@ impl SessionCUDA {
     }
 
     fn init_state(&self) -> Result<*mut std::ffi::c_void, SessionError> {
-        // Resident initializers hand model_init a device pointer; streamed ones
-        // hand it the host pointer (the .so memcpys H2D from it per run).
         let initializer_ptrs: Vec<*const u8> = self
             .initializer_buffers
             .iter()

@@ -1,17 +1,3 @@
-//! Weight-prefetch scheduler (experimental, P0).
-//!
-//! A fork of [`crate::schedule::scheduler`] that streams selected initializers
-//! (`GpuResident` -> `HostStreamed`) from host memory into bounded GPU staging
-//! chunks just before the consuming kernel, instead of keeping every weight
-//! resident in VRAM. Kept as a separate orchestrator so the proven all-resident
-//! scheduler stays untouched while this path churns through P0..P3.
-//!
-//! P0 scope: correctness only. Streamed weights are brought in on the *consuming
-//! kernel's own stream* (serialized, no overlap) and the staging chunk is freed
-//! immediately after the kernel reads it, so a single slot is reused for every
-//! streamed weight (VRAM stays bounded). Copy-stream overlap + a real staging
-//! pool with WAR-event slot recycling are P1.
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -56,7 +42,6 @@ impl SchedulePass for PrefetchSchedulePass {
     }
 }
 
-/// Compute the `HostStreamed` initializer set from `policy`.
 fn select_streamed(
     schedule: &Schedule,
     placement: &Placement,
