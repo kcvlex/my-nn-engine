@@ -15,6 +15,7 @@ use id_arena::Id;
 pub use ir::*;
 use log::info;
 
+use crate::graph::operator::args;
 use crate::graph::operator::Operator;
 use crate::graph::Graph;
 use crate::graph::ValueId;
@@ -190,6 +191,17 @@ impl IndexMut<KernelId> for Kernels {
     }
 }
 
+macro_rules! matches_opaque {
+    ($kernel:expr, $pat:pat) => {{
+        match &$kernel.body {
+            KernelBody::Opaque(Opaque { op }) => matches!(op, $pat),
+            KernelBody::ElementWises(_) => false,
+        }
+    }};
+}
+
+pub(crate) use matches_opaque;
+
 impl Schedule {
     pub fn new(mut graph: Graph, options: Options) -> Self {
         let mut graph_op = SimpleGraphOp::new(&graph);
@@ -240,15 +252,59 @@ impl Schedule {
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
-}
 
-macro_rules! matches_opaque {
-    ($kernel:expr, $pat:pat) => {{
-        match &$kernel.body {
-            KernelBody::Opaque(Opaque { op }) => matches!(op, $pat),
-            KernelBody::ElementWises(_) => false,
+    pub fn value_byte_size(&self, v: ValueId) -> usize {
+        let rty = self
+            .get_resolved_tensor_type(v)
+            .unwrap_or_else(|| panic!("unresolved tensor type for {v:?}"));
+        rty.storage_num_elements() * (rty.elem_type.bit_width() / 8)
+    }
+
+    /// For a kernel that must write its output in place over an input (the KV
+    /// cache), the index of that in-place input; `None` otherwise.
+    pub(crate) fn must_in_place_input(&self, kid: KernelId) -> Option<usize> {
+        let KernelBody::Opaque(Opaque { op }) = &self.kernels[kid].body else {
+            return None;
+        };
+        match op {
+            Operator::KVCacheUpdate => Some(args::KVCACHE_UPDATE_CACHE),
+            Operator::QuantizingKVCacheUpdate => Some(args::QKVCACHE_UPDATE_CACHE),
+            _ => None,
         }
-    }};
-}
+    }
 
-pub(crate) use matches_opaque;
+    /// Map each value forwarded to a graph output through a chain of
+    /// Identity / Reinterpret kernels to that output, so codegen can alias the
+    /// producer's buffer to the output buffer.
+    pub(crate) fn output_aliases(&self) -> HashMap<ValueId, ValueId> {
+        let mut passthrough_input: HashMap<ValueId, ValueId> = HashMap::new();
+        for (_, kernel) in self.kernels.iter() {
+            if !matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
+                continue;
+            }
+            let Some(out0) = kernel.outputs.first().copied() else {
+                continue;
+            };
+            let Some(in0) = kernel.inputs.first().and_then(|x| *x) else {
+                continue;
+            };
+            passthrough_input.insert(out0, in0);
+        }
+
+        let mut alias: HashMap<ValueId, ValueId> = HashMap::new();
+        let mut queue: Vec<ValueId> = Vec::with_capacity(self.outputs.len());
+        for &out in &self.outputs {
+            alias.insert(out, out);
+            queue.push(out);
+        }
+        while let Some(v) = queue.pop() {
+            let target = alias[&v];
+            if let Some(&pred) = passthrough_input.get(&v) {
+                if alias.insert(pred, target).is_none() {
+                    queue.push(pred);
+                }
+            }
+        }
+        alias
+    }
+}
