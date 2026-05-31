@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
+use itertools::Itertools;
 use log::warn;
 
 use super::common::*;
@@ -44,6 +45,16 @@ pub enum PrefetchPolicy {
     },
 }
 
+impl PrefetchPolicy {
+    fn min_bytes(&self) -> usize {
+        match self {
+            PrefetchPolicy::SizeThreshold { min_bytes } => *min_bytes,
+            PrefetchPolicy::ResidentBudget { min_bytes, .. } => *min_bytes,
+            PrefetchPolicy::AutoResidentBudget { min_bytes, .. } => *min_bytes,
+        }
+    }
+}
+
 pub struct PrefetchSchedulePass {
     pub num_streams: usize,
     pub placement_strategy: PlacementStrategy,
@@ -71,31 +82,18 @@ fn select_host_resident(
     placement: &Placement,
     policy: PrefetchPolicy,
 ) -> HashSet<ValueId> {
-    let min_bytes = match policy {
-        PrefetchPolicy::SizeThreshold { min_bytes } => min_bytes,
-        PrefetchPolicy::ResidentBudget { min_bytes, .. } => min_bytes,
-        PrefetchPolicy::AutoResidentBudget { min_bytes, .. } => min_bytes,
-    };
+    let initializers: HashSet<_> = schedule.initializers.iter().copied().collect();
+    let candidates: HashMap<_, _> = schedule
+        .kernels
+        .iter()
+        .filter(|(kid, _)| placement.device_of(*kid) == Device::CUDA)
+        .flat_map(|(_, kernel)| kernel.inputs.iter().flatten().copied())
+        .filter(|input| {
+            initializers.contains(input) && policy.min_bytes() <= schedule.value_byte_size(*input)
+        })
+        .map(|input| (input, schedule.value_byte_size(input)))
+        .collect();
 
-    // Streamable candidates: weights consumed by a GPU kernel, at least
-    // `min_bytes` (the threshold excludes scalar / metadata initializers).
-    let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
-    let mut candidates: HashMap<ValueId, usize> = HashMap::new();
-    for (kid, kernel) in schedule.kernels.iter() {
-        if placement.device_of(kid) != Device::CUDA {
-            continue;
-        }
-        for input in kernel.inputs.iter().flatten().copied() {
-            if initializers.contains(&input) {
-                let size = schedule.value_byte_size(input);
-                if min_bytes <= size {
-                    candidates.insert(input, size);
-                }
-            }
-        }
-    }
-
-    // Resolve the resident budget (bytes of weight kept in VRAM).
     let resident_bytes = match policy {
         PrefetchPolicy::SizeThreshold { .. } => return candidates.into_keys().collect(),
         PrefetchPolicy::ResidentBudget { resident_bytes, .. } => resident_bytes,
@@ -106,6 +104,7 @@ fn select_host_resident(
                 .map(|&v| schedule.value_byte_size(v))
                 .sum();
             match query_vram_total_bytes() {
+                // VRAM - KV - reserve
                 Some(vram) => vram.saturating_sub(kv).saturating_sub(reserve_bytes),
                 None => {
                     warn!("could not query VRAM; streaming all weights (full offload)");
@@ -115,23 +114,21 @@ fn select_host_resident(
         }
     };
 
-    // Keep the largest candidates resident until the budget is full, stream the
-    // rest. Ties broken by ValueId for determinism.
-    let mut by_size: Vec<(ValueId, usize)> = candidates.into_iter().collect();
-    by_size.sort_by_key(|(v, sz)| (std::cmp::Reverse(*sz), *v));
-    let mut resident = 0usize;
-    let mut host_resident = HashSet::new();
-    for (v, sz) in by_size {
-        if resident + sz <= resident_bytes {
-            resident += sz;
-        } else {
-            host_resident.insert(v);
-        }
-    }
-    host_resident
+    candidates
+        .into_iter()
+        .sorted_by_key(|(v, sz)| (std::cmp::Reverse(*sz), *v))
+        .scan(0usize, |acc, (v, sz)| {
+            if *acc + sz <= resident_bytes {
+                *acc += sz;
+                Some(None)
+            } else {
+                Some(Some(v))
+            }
+        })
+        .flatten()
+        .collect()
 }
 
-/// Total VRAM in bytes via nvidia-smi, or `None` if unavailable.
 fn query_vram_total_bytes() -> Option<usize> {
     let out = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
@@ -184,20 +181,16 @@ impl<'s> PrefetchScheduler<'s> {
         let deps = Deps::new(schedule);
         let output_alias = schedule.output_aliases();
         let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
-        let has_streaming = needs_cuda && !host_resident.is_empty();
-        // P1a: when streaming, pin compute to a single stream and add one
-        // dedicated copy stream. A single compute stream removes cross-compute
-        // -stream syncs so the only cross-stream events are copy<->compute
-        // (RAW / WAR). Multi compute-stream overlap is orthogonal, deferred.
-        let compute_streams = if has_streaming {
+        let has_trans_stream = needs_cuda && !host_resident.is_empty();
+        let compute_streams = if has_trans_stream {
             1
         } else if needs_cuda {
             num_streams.max(1)
         } else {
             1
         };
-        let copy_stream = has_streaming.then(|| StreamId(compute_streams));
-        let num_streams = compute_streams + if has_streaming { 1 } else { 0 };
+        let copy_stream = has_trans_stream.then_some(StreamId(compute_streams));
+        let num_streams = compute_streams + if has_trans_stream { 1 } else { 0 };
         let session_state_tier = if needs_cuda {
             MemoryTier::GpuArena
         } else {
