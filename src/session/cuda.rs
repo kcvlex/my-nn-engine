@@ -51,25 +51,35 @@ type InitType =
 type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
-/// Indices (into `schedule.initializers`) of `HostStreamed` initializers: those
-/// the plan brings in via an H2D Transfer (src place = Initializer) instead of
-/// keeping resident in VRAM. Derived from the plan so no extra plumbing is
-/// needed; empty unless a prefetch policy is active.
 fn streamed_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
+    // Only meaningful for the prefetch scheduler; otherwise initializers are resident in VRAM.
+    if schedule.options.prefetch_policy.is_none() {
+        return HashSet::new();
+    }
+
     let Some(plan) = schedule.execution_plan.as_ref() else {
         return HashSet::new();
     };
+
+    // Only treat an initializer as streamed if the plan copies it into a GPU chunk.
+    // This avoids misclassifying const outputs (Initializer -> Output transfers) as streamed.
     let streamed_values: HashSet<_> = plan
         .steps
         .iter()
         .filter_map(|s| match s {
-            Step::Transfer(t) => match t.src.place {
-                AllocPlace::Initializer(v) => Some(v),
-                _ => None,
-            },
+            Step::Transfer(t)
+                if t.context.device == crate::schedule::ir::Device::CUDA
+                    && matches!(t.dst.place, AllocPlace::Chunk(_)) =>
+            {
+                match t.src.place {
+                    AllocPlace::Initializer(v) => Some(v),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect();
+
     schedule
         .initializers
         .iter()
