@@ -94,8 +94,6 @@ pub struct SessionCUDA {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
-    /// Host-resident weight data for `HostResident` initializers, kept alive for
-    /// the session and used as the H2D source. Keyed by initializer index.
     host_resident_weights: HashMap<usize, StrictTensor>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
@@ -245,10 +243,6 @@ impl SessionCUDA {
             .map(
                 |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
                     if host_resident.contains(&i) {
-                        // Keep the weight in host RAM and stream it to a GPU staging
-                        // chunk on demand. The device buffer is a 1-byte placeholder
-                        // so model_init's pointer-array indexing stays valid; the
-                        // host pointer is substituted in init_state.
                         let host = src
                             .load_into_strict()
                             .map_err(SessionError::ModelLoadError)?;
