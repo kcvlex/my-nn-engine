@@ -68,8 +68,8 @@ fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
         .iter()
         .filter_map(|s| match s {
             Step::Transfer(t)
-                if t.context.device == crate::schedule::ir::Device::CUDA
-                    && matches!(t.dst.place, AllocPlace::Chunk(_)) =>
+                if t.context.device == crate::schedule::ir::Device::CUDA &&
+                    matches!(t.dst.place, AllocPlace::Chunk(_)) =>
             {
                 match t.src.place {
                     AllocPlace::Initializer(v) => Some(v),
