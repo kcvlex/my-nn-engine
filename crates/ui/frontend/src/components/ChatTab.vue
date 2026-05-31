@@ -5,12 +5,8 @@ import { Backend } from '../gen/onnx_service_pb';
 import { grpcClient } from '../api/grpc_client';
 import { useChatSession } from '../composables/useChatSession';
 
-// CUDA-only: the engine rejects SessionState on CPU, which makes KV-cache
-// reuse impossible. Hide the backend selector so the user can't pick a
-// configuration that's guaranteed to fail.
-const BACKEND = Backend.CUDA;
-
 const modelDir = ref<string>('');
+const backend = ref<Backend>(Backend.CUDA);
 
 const modelsQuery = useQuery({
   queryKey: ['llm-models'],
@@ -31,7 +27,7 @@ watch(modelsQuery.data, (list) => {
 
 const { status, messages, generating, lastError, send, reset } = useChatSession(
   modelDir,
-  BACKEND,
+  backend,
 );
 
 const input = ref('');
@@ -110,9 +106,12 @@ function onKeydown(event: KeyboardEvent) {
           </option>
         </select>
       </div>
-      <div class="meta-item">
-        <span class="meta-label">backend</span>
-        <span class="meta-value">cuda</span>
+      <div class="form-group backend-select">
+        <label for="chat-backend">backend</label>
+        <select id="chat-backend" v-model="backend" :disabled="generating">
+          <option :value="Backend.CUDA">cuda</option>
+          <option :value="Backend.CPU">cpu</option>
+        </select>
       </div>
       <div class="form-group max-tokens">
         <label for="chat-max-tokens">max tokens</label>
@@ -207,34 +206,6 @@ function onKeydown(event: KeyboardEvent) {
   border-bottom: 1px dashed var(--border-strong);
 }
 
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  /* Match .form-group label margin-bottom so labels align with siblings. */
-  gap: 6px;
-}
-
-.meta-label {
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--fg-dim);
-}
-
-.meta-label::before {
-  content: '> ';
-  color: var(--accent);
-}
-
-.meta-value {
-  color: var(--fg);
-  font-weight: 500;
-  /* Match input box visual height (8px padding + 1px border, top and bottom)
-   * so the bottom-aligned row keeps every label at the same y. */
-  padding: 9px 0;
-  line-height: 1;
-}
-
 .model-select {
   margin-bottom: 0;
   flex: 0 0 auto;
@@ -242,6 +213,15 @@ function onKeydown(event: KeyboardEvent) {
 
 .model-select select {
   min-width: 220px;
+}
+
+.backend-select {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.backend-select select {
+  min-width: 90px;
 }
 
 .max-tokens {
