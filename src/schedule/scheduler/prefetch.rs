@@ -88,7 +88,7 @@ fn select_host_resident(
         for input in kernel.inputs.iter().flatten().copied() {
             if initializers.contains(&input) {
                 let size = schedule.value_byte_size(input);
-                if size >= min_bytes {
+                if min_bytes <= size {
                     candidates.insert(input, size);
                 }
             }
@@ -560,7 +560,7 @@ impl<'s> PrefetchScheduler<'s> {
 
                 // WAR: once the ring is full, evict the oldest slot and make the
                 // reusing copy wait for that weight's consumer to finish reading.
-                let war_event = if self.staging_fifo.len() >= STAGING_RING_DEPTH {
+                let war_event = if STAGING_RING_DEPTH <= self.staging_fifo.len() {
                     let (old_cid, old_consumer) = self.staging_fifo.pop_front().unwrap();
                     self.allocator.consume(old_cid, copy_stream);
                     Some(old_consumer)
