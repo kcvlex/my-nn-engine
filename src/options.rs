@@ -1,6 +1,7 @@
 use typed_builder::TypedBuilder;
 
 use crate::schedule::scheduler::PlacementStrategy;
+use crate::schedule::scheduler::PrefetchPolicy;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
@@ -39,6 +40,12 @@ pub struct Options {
 
     #[builder(default)]
     pub placement_strategy: Option<PlacementStrategy>,
+
+    /// If set, schedule with the weight-prefetch scheduler: the selected
+    /// initializers are streamed from host into bounded GPU staging chunks on
+    /// demand instead of staying resident in VRAM. Experimental; CUDA only.
+    #[builder(default)]
+    pub prefetch_policy: Option<PrefetchPolicy>,
 
     /// If true, rewrite every `DequantMatMul` so its activation input is first
     /// passed through a `DynamicQuantizeLinear` (symmetric per-row int8) and

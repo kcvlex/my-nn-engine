@@ -1069,6 +1069,7 @@ impl<'sched> HostCodeGenerator<'sched> {
         let kind = match (src_place, dst_place) {
             (AllocPlace::Input(_), _) => Some(CudaMemcpyKind::HostToDevice),
             (_, AllocPlace::Output(_)) => Some(CudaMemcpyKind::DeviceToHost),
+            (AllocPlace::Initializer(_), _) => Some(CudaMemcpyKind::HostToDevice),
             // Cross-tier transfers (HostArena <-> GpuArena chunks, SessionState
             // -> HostArena chunk, etc.) cannot be emitted from this wrapper
             // because host-arena buffers are not visible to the .so. Hybrid

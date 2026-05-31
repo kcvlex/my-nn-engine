@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::BufWriter;
 use std::io::ErrorKind;
 use std::io::Write;
@@ -15,6 +17,8 @@ use rayon::prelude::*;
 use crate::codegen::cuda::*;
 use crate::codegen::*;
 use crate::options::Options;
+use crate::schedule::ir::AllocPlace;
+use crate::schedule::ir::Step;
 use crate::schedule::Schedule;
 use crate::session::send_initializer_to_device;
 use crate::session::DeviceBuffer;
@@ -47,11 +51,50 @@ type InitType =
 type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
+fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
+    // Only meaningful for the prefetch scheduler; otherwise initializers are resident in VRAM.
+    if schedule.options.prefetch_policy.is_none() {
+        return HashSet::new();
+    }
+
+    let Some(plan) = schedule.execution_plan.as_ref() else {
+        return HashSet::new();
+    };
+
+    // Only treat an initializer as streamed if the plan copies it into a GPU chunk.
+    // This avoids misclassifying const outputs (Initializer -> Output transfers) as streamed.
+    let host_resident_values: HashSet<_> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Transfer(t)
+                if t.context.device == crate::schedule::ir::Device::CUDA &&
+                    matches!(t.dst.place, AllocPlace::Chunk(_)) =>
+            {
+                match t.src.place {
+                    AllocPlace::Initializer(v) => Some(v),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+
+    schedule
+        .initializers
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| host_resident_values.contains(v))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 pub struct SessionCUDA {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
+    host_resident_weights: HashMap<usize, StrictTensor>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
@@ -187,26 +230,45 @@ impl SessionCUDA {
 
         let _lock = cuda_lock();
 
+        // HostResident initializers stay in host memory; everything else is
+        // uploaded to VRAM as before. Derived from the plan (empty without a
+        // prefetch policy, so the resident path is unchanged).
+        let host_resident = host_resident_initializer_indices(&schedule);
+        let mut host_resident_weights: HashMap<usize, StrictTensor> = HashMap::new();
+
         let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
             .iter()
             .zip(initializer_names.iter())
-            .map(|(src, name)| -> Result<Arc<DeviceBuffer>, SessionError> {
-                let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
-                    let len = src.byte_len();
-                    let buf =
-                        Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
-                            SessionError::OtherError(format!("cudaMalloc: {:?}", e))
-                        })?);
-                    if len > 0 {
-                        send_initializer_to_device(src, &buf)?;
+            .enumerate()
+            .map(
+                |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
+                    if host_resident.contains(&i) {
+                        let host = src
+                            .load_into_strict()
+                            .map_err(SessionError::ModelLoadError)?;
+                        host_resident_weights.insert(i, host);
+                        let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
+                            SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
+                        })?;
+                        return Ok(Arc::new(buf));
                     }
-                    Ok(buf)
-                };
-                match initializer_cache.as_ref() {
-                    Some(cache) => cache.get_or_insert_with(name, upload),
-                    None => upload(),
-                }
-            })
+                    let upload = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                        let len = src.byte_len();
+                        let buf =
+                            Arc::new(DeviceBuffer::alloc_zeroed(len.max(1)).map_err(|e| {
+                                SessionError::OtherError(format!("cudaMalloc: {:?}", e))
+                            })?);
+                        if 0 < len {
+                            send_initializer_to_device(src, &buf)?;
+                        }
+                        Ok(buf)
+                    };
+                    match initializer_cache.as_ref() {
+                        Some(cache) => cache.get_or_insert_with(name, upload),
+                        None => upload(),
+                    }
+                },
+            )
             .collect::<Result<Vec<_>, _>>()?;
 
         let lib = unsafe { libloading::Library::new(shared_lib.as_os_str()) }
@@ -234,6 +296,7 @@ impl SessionCUDA {
             destroy_func,
             state: std::ptr::null_mut(),
             initializer_buffers,
+            host_resident_weights,
             session_state_buffers,
         })
     }
@@ -242,7 +305,11 @@ impl SessionCUDA {
         let initializer_ptrs: Vec<*const u8> = self
             .initializer_buffers
             .iter()
-            .map(|b| b.ptr() as *const u8)
+            .enumerate()
+            .map(|(i, b)| match self.host_resident_weights.get(&i) {
+                Some(h) => h.as_ptr(),
+                None => b.ptr() as *const u8,
+            })
             .collect();
         let session_state_ptrs: Vec<*mut std::ffi::c_void> =
             self.session_state_buffers.iter().map(|b| b.ptr()).collect();

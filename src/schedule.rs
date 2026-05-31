@@ -84,10 +84,17 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
             Target::CPU => ir::Device::CPU,
         }),
     };
-    manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
-        num_streams: options.num_cuda_streams,
-        placement_strategy,
-    }));
+    match options.prefetch_policy {
+        Some(policy) => manager.add_pass(Box::new(scheduler::prefetch::PrefetchSchedulePass {
+            num_streams: options.num_cuda_streams,
+            placement_strategy,
+            policy,
+        })),
+        None => manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
+            num_streams: options.num_cuda_streams,
+            placement_strategy,
+        })),
+    }
     let needs_cpu_omp = options.target == Target::CPU ||
         matches!(
             placement_strategy,

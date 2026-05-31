@@ -3,6 +3,8 @@
 
 mod common;
 mod memory_aware;
+pub mod prefetch;
 
 pub use common::PlacementStrategy;
 pub use memory_aware::MemoryAwareSchedulePass;
+pub use prefetch::PrefetchPolicy;
