@@ -1,9 +1,12 @@
+//! The default memory-aware list scheduler: every weight stays resident, no
+//! host streaming. Orders the ready set to minimise arena occupancy.
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::graph::operator::args;
+use super::common::*;
 use crate::graph::operator::Operator;
 use crate::graph::ValueId;
 use crate::schedule::placement::Placement;
@@ -11,21 +14,9 @@ use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 
-const ALIGNMENT: usize = 256;
-
-fn align_up(size: usize) -> usize {
-    size.next_multiple_of(ALIGNMENT)
-}
-
 pub struct MemoryAwareSchedulePass {
     pub num_streams: usize,
     pub placement_strategy: PlacementStrategy,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum PlacementStrategy {
-    Uniform(Device),
-    StructuralKvTouch,
 }
 
 impl SchedulePass for MemoryAwareSchedulePass {
@@ -41,211 +32,6 @@ impl SchedulePass for MemoryAwareSchedulePass {
         let plan = build(schedule, self.num_streams, placement);
         schedule.execution_plan = Some(plan);
     }
-}
-
-struct Deps {
-    value2producer: HashMap<ValueId, KernelId>,
-    value_uses_count: HashMap<ValueId, usize>,
-    kernel_preds: HashMap<KernelId, HashSet<KernelId>>,
-    kernel_consumers: HashMap<KernelId, HashSet<KernelId>>,
-}
-
-impl Deps {
-    fn new(schedule: &Schedule) -> Self {
-        let mut value2producer = HashMap::new();
-        for (kid, kernel) in schedule.kernels.iter() {
-            for &out in &kernel.outputs {
-                value2producer.insert(out, kid);
-            }
-        }
-
-        let mut value_uses_count: HashMap<ValueId, usize> = HashMap::new();
-        let mut kernel_preds: HashMap<KernelId, HashSet<KernelId>> = HashMap::new();
-        let mut kernel_consumers: HashMap<KernelId, HashSet<KernelId>> = HashMap::new();
-        for (kid, _) in schedule.kernels.iter() {
-            kernel_preds.insert(kid, HashSet::new());
-            kernel_consumers.insert(kid, HashSet::new());
-        }
-        for (kid, kernel) in schedule.kernels.iter() {
-            for input in kernel.inputs.iter().flatten() {
-                *value_uses_count.entry(*input).or_insert(0) += 1;
-                if let Some(&prod) = value2producer.get(input) {
-                    if prod != kid {
-                        kernel_preds.get_mut(&kid).unwrap().insert(prod);
-                        kernel_consumers.get_mut(&prod).unwrap().insert(kid);
-                    }
-                }
-            }
-        }
-
-        Self {
-            value2producer,
-            value_uses_count,
-            kernel_preds,
-            kernel_consumers,
-        }
-    }
-}
-
-struct ChunkState {
-    arena_id: ArenaId,
-    size: usize,
-    live_uses: usize,
-    first_use: bool,
-}
-
-struct ArenaChunks {
-    tier: MemoryTier,
-    owned: Vec<ChunkId>,
-    free_per_stream: Vec<Vec<ChunkId>>,
-}
-
-impl ArenaChunks {
-    fn new(tier: MemoryTier, num_streams: usize) -> Self {
-        Self {
-            tier,
-            owned: Vec::new(),
-            free_per_stream: vec![Vec::new(); num_streams],
-        }
-    }
-}
-
-#[derive(Default)]
-struct ChunkAllocator {
-    arena2chunks: Vec<ArenaChunks>,
-    all_chunks: Vec<ChunkState>,
-}
-
-impl ChunkAllocator {
-    fn new_arena(&mut self, tier: MemoryTier, num_streams: usize) -> ArenaId {
-        let arena_id = self.arena2chunks.len();
-        self.arena2chunks.push(ArenaChunks::new(tier, num_streams));
-        arena_id
-    }
-
-    fn chunk_tier(&self, id: ChunkId) -> MemoryTier {
-        self.arena2chunks[self.all_chunks[id].arena_id].tier
-    }
-
-    fn alloc(&mut self, size: usize, arena_id: ArenaId, stream: StreamId, uses: usize) -> ChunkId {
-        use std::cmp::max;
-        let id = if let Some(id) = self.arena2chunks[arena_id].free_per_stream[stream.index()].pop()
-        {
-            id
-        } else {
-            let id = self.all_chunks.len();
-            self.arena2chunks[arena_id].owned.push(id);
-            self.all_chunks.push(ChunkState {
-                arena_id,
-                size: 0,
-                live_uses: 0,
-                first_use: false,
-            });
-            id
-        };
-        let entry = &mut self.all_chunks[id];
-        entry.size = max(entry.size, size);
-        entry.live_uses += uses;
-        id
-    }
-
-    /// Release a chunk whose value will never be read again (e.g. an unused
-    /// multi-output of a kernel).
-    fn release_if_dead(&mut self, id: ChunkId, stream: StreamId) {
-        if self.all_chunks[id].live_uses == 0 {
-            self.free(id, stream);
-        }
-    }
-
-    fn add_uses(&mut self, id: ChunkId, uses: usize) {
-        self.all_chunks[id].live_uses += uses;
-    }
-
-    fn mark_as_first_use(&mut self, id: ChunkId) -> bool {
-        let res = !self.all_chunks[id].first_use;
-        self.all_chunks[id].first_use = true;
-        res
-    }
-
-    fn consume(&mut self, id: ChunkId, stream: StreamId) {
-        let entry = &mut self.all_chunks[id];
-        entry.live_uses = entry.live_uses.saturating_sub(1);
-        if entry.live_uses == 0 {
-            self.free(id, stream);
-        }
-    }
-
-    fn free(&mut self, id: ChunkId, stream: StreamId) {
-        let arena_id = self.all_chunks[id].arena_id;
-        self.arena2chunks[arena_id].free_per_stream[stream.index()].push(id);
-    }
-}
-
-pub fn value_byte_size(schedule: &Schedule, v: ValueId) -> usize {
-    let rty = schedule
-        .get_resolved_tensor_type(v)
-        .unwrap_or_else(|| panic!("unresolved tensor type for {v:?}"));
-    rty.storage_num_elements() * (rty.elem_type.bit_width() / 8)
-}
-
-fn must_in_place_input(op: &Operator) -> Option<usize> {
-    match op {
-        Operator::KVCacheUpdate => Some(args::KVCACHE_UPDATE_CACHE),
-        Operator::QuantizingKVCacheUpdate => Some(args::QKVCACHE_UPDATE_CACHE),
-        _ => None,
-    }
-}
-
-fn compute_output_aliases(schedule: &Schedule) -> HashMap<ValueId, ValueId> {
-    let mut passthrough_input: HashMap<ValueId, ValueId> = HashMap::new();
-    for (_, kernel) in schedule.kernels.iter() {
-        if !matches_opaque!(kernel, Operator::Identity | Operator::Reinterpret(_)) {
-            continue;
-        }
-        let Some(out0) = kernel.outputs.first().copied() else {
-            continue;
-        };
-        let Some(in0) = kernel.inputs.first().and_then(|x| *x) else {
-            continue;
-        };
-        passthrough_input.insert(out0, in0);
-    }
-
-    let mut alias: HashMap<ValueId, ValueId> = HashMap::new();
-    let mut queue: Vec<ValueId> = Vec::with_capacity(schedule.outputs.len());
-    for &out in &schedule.outputs {
-        alias.insert(out, out);
-        queue.push(out);
-    }
-    while let Some(v) = queue.pop() {
-        let target = alias[&v];
-        if let Some(&pred) = passthrough_input.get(&v) {
-            if alias.insert(pred, target).is_none() {
-                queue.push(pred);
-            }
-        }
-    }
-    alias
-}
-
-struct KernelInfo {
-    order: usize,
-    stream: StreamId,
-    event: EventId,
-    device: Device,
-}
-
-#[derive(Clone, Copy)]
-struct TransferRecord {
-    place: AllocPlace,
-    event: EventId,
-    stream: StreamId,
-}
-
-#[derive(Clone, Copy)]
-struct PostTransfer {
-    src: ValueBinding,
-    dst: ValueBinding,
 }
 
 struct Scheduler<'s> {
@@ -277,7 +63,7 @@ struct Scheduler<'s> {
 impl<'s> Scheduler<'s> {
     fn new(schedule: &'s Schedule, num_streams: usize, placement: Placement) -> Self {
         let deps = Deps::new(schedule);
-        let output_alias = compute_output_aliases(schedule);
+        let output_alias = schedule.output_aliases();
         let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
         let num_streams = if needs_cuda { num_streams.max(1) } else { 1 };
         let session_state_tier = if needs_cuda {
@@ -426,11 +212,11 @@ impl<'s> Scheduler<'s> {
             let kernel = &self.schedule.kernels[kid];
             let mut delta: i64 = 0;
             for o in &kernel.outputs {
-                delta += value_byte_size(self.schedule, *o) as i64;
+                delta += self.schedule.value_byte_size(*o) as i64;
             }
             for input in kernel.inputs.iter().flatten() {
                 if self.value_remaining_uses.get(input).copied().unwrap_or(0) == 1 {
-                    delta -= value_byte_size(self.schedule, *input) as i64;
+                    delta -= self.schedule.value_byte_size(*input) as i64;
                 }
             }
             delta
@@ -513,7 +299,7 @@ impl<'s> Scheduler<'s> {
             }
             return cached.place;
         }
-        let size = value_byte_size(self.schedule, value);
+        let size = self.schedule.value_byte_size(value);
         let dst_cid = self.alloc_chunk(dst_tier, size, stream, 1);
         let dst_place = AllocPlace::Chunk(dst_cid);
         let event = self.fresh_event();
@@ -679,7 +465,7 @@ impl<'s> Scheduler<'s> {
             };
 
             let place = if is_workspace {
-                let size = value_byte_size(self.schedule, input);
+                let size = self.schedule.value_byte_size(input);
                 let uses = self.value_remaining_uses.get(&input).copied().unwrap_or(0);
                 let cid = self.alloc_chunk(tier, size, stream, uses);
                 self.value2place.insert(input, AllocPlace::Chunk(cid));
@@ -726,17 +512,14 @@ impl<'s> Scheduler<'s> {
             _ => None,
         };
 
-        let must_in_place_place = match &self.schedule.kernels[kid].body {
-            KernelBody::Opaque(Opaque { op }) => must_in_place_input(op).map(|idx| {
-                let input_v = inputs[idx].expect("must_in_place input is None");
-                bindings
-                    .iter()
-                    .find(|b| b.value == input_v)
-                    .expect("must_in_place input not in bindings")
-                    .place
-            }),
-            _ => None,
-        };
+        let must_in_place_place = self.schedule.must_in_place_input(kid).map(|idx| {
+            let input_v = inputs[idx].expect("must_in_place input is None");
+            bindings
+                .iter()
+                .find(|b| b.value == input_v)
+                .expect("must_in_place input not in bindings")
+                .place
+        });
 
         let outputs = self.schedule.kernels[kid].outputs.clone();
         for output in outputs {
@@ -751,12 +534,12 @@ impl<'s> Scheduler<'s> {
                 if tier == MemoryTier::HostArena {
                     (AllocPlace::Output(target), false)
                 } else {
-                    let size = value_byte_size(self.schedule, output);
+                    let size = self.schedule.value_byte_size(output);
                     let cid = self.alloc_chunk(tier, size, stream, uses);
                     (AllocPlace::Chunk(cid), true)
                 }
             } else {
-                let size = value_byte_size(self.schedule, output);
+                let size = self.schedule.value_byte_size(output);
                 let cid = self.alloc_chunk(tier, size, stream, uses);
                 (AllocPlace::Chunk(cid), true)
             };
@@ -862,92 +645,4 @@ impl<'s> Scheduler<'s> {
 
 fn build(schedule: &Schedule, num_streams: usize, placement: Placement) -> ExecutionPlan {
     Scheduler::new(schedule, num_streams, placement).run()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fresh_allocator() -> (ChunkAllocator, ArenaId, StreamId) {
-        let mut a = ChunkAllocator::default();
-        let arena = a.new_arena(MemoryTier::GpuArena, 1);
-        (a, arena, StreamId(0))
-    }
-
-    #[test]
-    fn alloc_with_positive_uses_is_not_released_immediately() {
-        let (mut a, arena, stream) = fresh_allocator();
-
-        let cid = a.alloc(1024, arena, stream, 1);
-        // Still live: release_if_dead must be a no-op.
-        a.release_if_dead(cid, stream);
-
-        // A second alloc should NOT reuse cid because cid still has live_uses=1.
-        let cid2 = a.alloc(1024, arena, stream, 1);
-        assert_ne!(cid, cid2);
-
-        // Consuming cid once drops live_uses to 0 and frees it.
-        a.consume(cid, stream);
-        let cid3 = a.alloc(1024, arena, stream, 1);
-        assert_eq!(cid3, cid, "freed chunk should be reused");
-    }
-
-    #[test]
-    fn alloc_with_zero_uses_is_reusable_after_release_if_dead() {
-        let (mut a, arena, stream) = fresh_allocator();
-
-        // Multi-output kernel emits an output no later kernel reads.
-        let dead = a.alloc(512, arena, stream, 0);
-        a.release_if_dead(dead, stream);
-
-        // The slot must come back via the free list.
-        let next = a.alloc(2048, arena, stream, 1);
-        assert_eq!(next, dead, "dead-on-arrival chunk should be reused");
-        // The chunk grows to fit the larger request and stays at that size.
-        assert_eq!(a.all_chunks[next].size, 2048);
-    }
-
-    #[test]
-    fn release_if_dead_is_noop_when_post_transfer_added_uses() {
-        // Simulates the graph-output path: alloc(uses=0), then add_uses(1) for
-        // the post-transfer that copies the chunk to host. The chunk must NOT
-        // be returned to the free list because the post-transfer will read it.
-        let (mut a, arena, stream) = fresh_allocator();
-
-        let cid = a.alloc(1024, arena, stream, 0);
-        a.add_uses(cid, 1);
-        a.release_if_dead(cid, stream);
-
-        let cid2 = a.alloc(1024, arena, stream, 1);
-        assert_ne!(
-            cid, cid2,
-            "chunk pending a post-transfer must not be reused"
-        );
-    }
-
-    #[test]
-    fn unused_output_does_not_steal_chunks_intended_for_reuse() {
-        // Mirrors the planner bug surfaced by DynamicQuantizeLinear's unused
-        // zero-point output: a previously freed chunk on the free list is
-        // popped to back the dead-on-arrival output, then never returned, so
-        // the next legitimate alloc has to create a new chunk and the arena
-        // grows. With release_if_dead, the chunk goes straight back into the
-        // free list so the next legitimate alloc reuses it.
-        let (mut a, arena, stream) = fresh_allocator();
-
-        // 1. A real output is allocated and consumed, returning to free list.
-        let big = a.alloc(11_272_192, arena, stream, 1);
-        a.consume(big, stream);
-
-        // 2. Some later kernel's unused multi-output picks up the same slot...
-        let dead = a.alloc(512, arena, stream, 0);
-        assert_eq!(dead, big, "free-list pop should reuse the slot");
-        a.release_if_dead(dead, stream);
-
-        // 3. ...then the next legitimate alloc reuses the same slot again,
-        //    keeping the total chunk count at 1.
-        let next = a.alloc(11_272_192, arena, stream, 1);
-        assert_eq!(next, big, "slot must still be reusable after a dead claim");
-        assert_eq!(a.all_chunks.len(), 1, "only one chunk should exist");
-    }
 }

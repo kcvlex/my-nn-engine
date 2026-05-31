@@ -668,8 +668,7 @@ impl SessionHybrid {
                         };
                     let (src_ptr, src_tier) = resolve_with_tier(t.src.place)?;
                     let (dst_ptr, dst_tier) = resolve_with_tier(t.dst.place)?;
-                    let size =
-                        crate::schedule::scheduler::value_byte_size(&self.schedule, t.dst.value);
+                    let size = self.schedule.value_byte_size(t.dst.value);
                     let kind = match (src_tier, dst_tier) {
                         (MemoryTier::HostArena, MemoryTier::HostArena) => CUDA_MEMCPY_HOST_TO_HOST,
                         (MemoryTier::HostArena, MemoryTier::GpuArena) => CUDA_MEMCPY_HOST_TO_DEVICE,
