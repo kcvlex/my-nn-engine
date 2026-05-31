@@ -26,7 +26,7 @@ fn run(
 }
 
 #[test]
-fn conv_bias_streamed_weight_matches_resident() -> Result<(), SessionError> {
+fn conv_bias_host_resident_weight_matches_gpu_resident() -> Result<(), SessionError> {
     let dir = model_dir("conv_bias");
     let input = Tensor::load_from_path(dir.join("input_0.pb"))
         .map_err(|e| SessionError::OtherError(format!("load input: {e:?}")))?;
@@ -39,7 +39,7 @@ fn conv_bias_streamed_weight_matches_resident() -> Result<(), SessionError> {
     let resident_out = run(&resident, &dir, &inputs)?;
 
     // Prefetch: threshold between bias (20 B) and weight (540 B), so only
-    // `layer.weight` is HostStreamed; bias stays resident.
+    // `layer.weight` is HostResident; bias stays resident.
     let prefetch = Options::builder()
         .target(Target::CUDA)
         .prefetch_policy(Some(PrefetchPolicy::SizeThreshold { min_bytes: 100 }))
@@ -52,7 +52,7 @@ fn conv_bias_streamed_weight_matches_resident() -> Result<(), SessionError> {
     );
     assert!(
         prefetch_out[0].eq_with_epsilon(&resident_out[0], 1e-6, CompPolicy::Either),
-        "prefetch (streamed weight) output diverged from resident output"
+        "prefetch (host-resident weight) output diverged from resident output"
     );
     Ok(())
 }

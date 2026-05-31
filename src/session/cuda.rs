@@ -51,7 +51,7 @@ type InitType =
 type RunType = unsafe extern "C" fn(*mut std::ffi::c_void, *const *mut u8, *const *const u8);
 type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
-fn streamed_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
+fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
     // Only meaningful for the prefetch scheduler; otherwise initializers are resident in VRAM.
     if schedule.options.prefetch_policy.is_none() {
         return HashSet::new();
@@ -63,7 +63,7 @@ fn streamed_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
 
     // Only treat an initializer as streamed if the plan copies it into a GPU chunk.
     // This avoids misclassifying const outputs (Initializer -> Output transfers) as streamed.
-    let streamed_values: HashSet<_> = plan
+    let host_resident_values: HashSet<_> = plan
         .steps
         .iter()
         .filter_map(|s| match s {
@@ -84,7 +84,7 @@ fn streamed_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
         .initializers
         .iter()
         .enumerate()
-        .filter(|(_, v)| streamed_values.contains(v))
+        .filter(|(_, v)| host_resident_values.contains(v))
         .map(|(i, _)| i)
         .collect()
 }
@@ -94,9 +94,9 @@ pub struct SessionCUDA {
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
-    /// Host-resident weight data for `HostStreamed` initializers, kept alive for
+    /// Host-resident weight data for `HostResident` initializers, kept alive for
     /// the session and used as the H2D source. Keyed by initializer index.
-    streamed_host: HashMap<usize, StrictTensor>,
+    host_resident_weights: HashMap<usize, StrictTensor>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
@@ -232,11 +232,11 @@ impl SessionCUDA {
 
         let _lock = cuda_lock();
 
-        // HostStreamed initializers stay in host memory; everything else is
+        // HostResident initializers stay in host memory; everything else is
         // uploaded to VRAM as before. Derived from the plan (empty without a
         // prefetch policy, so the resident path is unchanged).
-        let streamed = streamed_initializer_indices(&schedule);
-        let mut streamed_host: HashMap<usize, StrictTensor> = HashMap::new();
+        let host_resident = host_resident_initializer_indices(&schedule);
+        let mut host_resident_weights: HashMap<usize, StrictTensor> = HashMap::new();
 
         let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
             .iter()
@@ -244,7 +244,7 @@ impl SessionCUDA {
             .enumerate()
             .map(
                 |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
-                    if streamed.contains(&i) {
+                    if host_resident.contains(&i) {
                         // Keep the weight in host RAM and stream it to a GPU staging
                         // chunk on demand. The device buffer is a 1-byte placeholder
                         // so model_init's pointer-array indexing stays valid; the
@@ -252,7 +252,7 @@ impl SessionCUDA {
                         let host = src
                             .load_into_strict()
                             .map_err(SessionError::ModelLoadError)?;
-                        streamed_host.insert(i, host);
+                        host_resident_weights.insert(i, host);
                         let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
                             SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
                         })?;
@@ -302,7 +302,7 @@ impl SessionCUDA {
             destroy_func,
             state: std::ptr::null_mut(),
             initializer_buffers,
-            streamed_host,
+            host_resident_weights,
             session_state_buffers,
         })
     }
@@ -312,7 +312,7 @@ impl SessionCUDA {
             .initializer_buffers
             .iter()
             .enumerate()
-            .map(|(i, b)| match self.streamed_host.get(&i) {
+            .map(|(i, b)| match self.host_resident_weights.get(&i) {
                 Some(h) => h.as_ptr(),
                 None => b.ptr() as *const u8,
             })

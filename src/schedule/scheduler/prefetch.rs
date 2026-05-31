@@ -9,9 +9,9 @@ use crate::schedule::*;
 use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 
-/// Policy for deciding which initializers are streamed from host (`HostStreamed`)
-/// vs kept resident in VRAM (`GpuResident`). P0 uses a crude size threshold; the
-/// budget-greedy policy is P2.
+/// Policy for deciding which initializers are brought in from host on demand
+/// (`HostResident`) vs kept resident in VRAM (`GpuResident`). P0 uses a crude
+/// size threshold; the budget-greedy policy is P2.
 #[derive(Debug, Clone, Copy)]
 pub enum PrefetchPolicy {
     /// Stream every initializer consumed by a GPU kernel whose byte size is at
@@ -36,19 +36,19 @@ impl SchedulePass for PrefetchSchedulePass {
             PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
             PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
         };
-        let streamed = select_streamed(schedule, &placement, self.policy);
-        let plan = build(schedule, self.num_streams, placement, streamed);
+        let host_resident = select_host_resident(schedule, &placement, self.policy);
+        let plan = build(schedule, self.num_streams, placement, host_resident);
         schedule.execution_plan = Some(plan);
     }
 }
 
-fn select_streamed(
+fn select_host_resident(
     schedule: &Schedule,
     placement: &Placement,
     policy: PrefetchPolicy,
 ) -> HashSet<ValueId> {
     let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
-    let mut streamed = HashSet::new();
+    let mut host_resident = HashSet::new();
     match policy {
         PrefetchPolicy::SizeThreshold { min_bytes } => {
             for (kid, kernel) in schedule.kernels.iter() {
@@ -58,13 +58,13 @@ fn select_streamed(
                 for input in kernel.inputs.iter().flatten().copied() {
                     if initializers.contains(&input) && schedule.value_byte_size(input) >= min_bytes
                     {
-                        streamed.insert(input);
+                        host_resident.insert(input);
                     }
                 }
             }
         }
     }
-    streamed
+    host_resident
 }
 
 struct PrefetchScheduler<'s> {
@@ -77,9 +77,9 @@ struct PrefetchScheduler<'s> {
     placement: Placement,
     session_state_tier: MemoryTier,
 
-    /// Initializers brought in from host on demand (`HostStreamed`); all others
+    /// Initializers brought in from host on demand (`HostResident`); all others
     /// are `GpuResident`.
-    streamed: HashSet<ValueId>,
+    host_resident: HashSet<ValueId>,
 
     num_streams: usize,
 
@@ -99,7 +99,7 @@ impl<'s> PrefetchScheduler<'s> {
         schedule: &'s Schedule,
         num_streams: usize,
         placement: Placement,
-        streamed: HashSet<ValueId>,
+        host_resident: HashSet<ValueId>,
     ) -> Self {
         let deps = Deps::new(schedule);
         let output_alias = schedule.output_aliases();
@@ -137,7 +137,7 @@ impl<'s> PrefetchScheduler<'s> {
             inputs_set,
             placement,
             session_state_tier,
-            streamed,
+            host_resident,
             num_streams,
             allocator: ChunkAllocator::default(),
             value_on_tier: HashMap::new(),
@@ -398,9 +398,9 @@ impl<'s> PrefetchScheduler<'s> {
             }));
         }
 
-        // Free streamed-weight staging chunks now that the kernel has read them.
+        // Free host-resident weight staging chunks now that the kernel has read them.
         // The freed slot is returned to the per-stream free list so the next
-        // streamed weight reuses it (P0 single-slot reuse).
+        // host-resident weight reuses it (P0 single-slot reuse).
         for cid in staging_chunks {
             self.allocator.consume(cid, stream);
         }
@@ -429,7 +429,7 @@ impl<'s> PrefetchScheduler<'s> {
     }
 
     /// Returns `(bindings, post_transfers, staging_chunks)`. `staging_chunks` are
-    /// GPU chunks holding streamed weights brought in for this kernel; the caller
+    /// GPU chunks holding host-resident weights brought in for this kernel; the caller
     /// frees them after the kernel step.
     fn bind_kernel(
         &mut self,
@@ -444,11 +444,11 @@ impl<'s> PrefetchScheduler<'s> {
         let tier = device.tier();
 
         for input in inputs.iter().flatten().copied() {
-            // Streamed weight: bring it from host into a bounded GPU staging
+            // Host-resident weight: bring it from host into a bounded GPU staging
             // chunk on this kernel's stream, bind the chunk, and queue the chunk
             // for release once the kernel has read it. Only on a GPU kernel;
             // a CPU kernel reading the weight would use the host pointer directly.
-            if self.streamed.contains(&input) && tier == MemoryTier::GpuArena {
+            if self.host_resident.contains(&input) && tier == MemoryTier::GpuArena {
                 let size = self.schedule.value_byte_size(input);
                 let dst_cid = self.alloc_chunk(tier, size, stream, 1);
                 let dst_place = AllocPlace::Chunk(dst_cid);
@@ -671,7 +671,7 @@ fn build(
     schedule: &Schedule,
     num_streams: usize,
     placement: Placement,
-    streamed: HashSet<ValueId>,
+    host_resident: HashSet<ValueId>,
 ) -> ExecutionPlan {
-    PrefetchScheduler::new(schedule, num_streams, placement, streamed).run()
+    PrefetchScheduler::new(schedule, num_streams, placement, host_resident).run()
 }
