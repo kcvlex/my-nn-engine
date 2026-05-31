@@ -1,7 +1,3 @@
-//! Shared planning infrastructure for the scheduler variants
-//! ([`super::memory_aware`], [`super::prefetch`]): dependency analysis, the
-//! chunk allocator, and small plan-building helpers.
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -14,14 +10,12 @@ pub(crate) fn align_up(size: usize) -> usize {
     size.next_multiple_of(ALIGNMENT)
 }
 
-/// How kernels are placed across devices.
 #[derive(Debug, Clone, Copy)]
 pub enum PlacementStrategy {
     Uniform(Device),
     StructuralKvTouch,
 }
 
-/// Producer / consumer / use-count relationships derived from the kernel graph.
 pub(crate) struct Deps {
     pub(crate) value2producer: HashMap<ValueId, KernelId>,
     pub(crate) value_uses_count: HashMap<ValueId, usize>,
