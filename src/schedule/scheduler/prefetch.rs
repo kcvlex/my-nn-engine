@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use itertools::Itertools;
+
 use super::common::*;
 use crate::graph::operator::Operator;
 use crate::graph::ValueId;
@@ -10,8 +12,7 @@ use crate::tensor::types::DataType;
 use crate::tensor::types::SIntType;
 
 /// Policy for deciding which initializers are brought in from host on demand
-/// (`HostResident`) vs kept resident in VRAM (`GpuResident`). P0 uses a crude
-/// size threshold; the budget-greedy policy is P2.
+/// (`HostResident`) vs kept resident in VRAM (`GpuResident`).
 #[derive(Debug, Clone, Copy)]
 pub enum PrefetchPolicy {
     /// Stream every initializer consumed by a GPU kernel whose byte size is at
@@ -47,24 +48,18 @@ fn select_host_resident(
     placement: &Placement,
     policy: PrefetchPolicy,
 ) -> HashSet<ValueId> {
-    let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
-    let mut host_resident = HashSet::new();
+    let initializers: HashSet<_> = schedule.initializers.iter().copied().collect();
     match policy {
-        PrefetchPolicy::SizeThreshold { min_bytes } => {
-            for (kid, kernel) in schedule.kernels.iter() {
-                if placement.device_of(kid) != Device::CUDA {
-                    continue;
-                }
-                for input in kernel.inputs.iter().flatten().copied() {
-                    if initializers.contains(&input) && schedule.value_byte_size(input) >= min_bytes
-                    {
-                        host_resident.insert(input);
-                    }
-                }
-            }
-        }
+        PrefetchPolicy::SizeThreshold { min_bytes } => schedule
+            .kernels
+            .iter()
+            .filter(|(kid, _)| placement.device_of(*kid) == Device::CUDA)
+            .flat_map(|(_, kernel)| kernel.inputs.iter().flatten().copied())
+            .filter(|input| {
+                initializers.contains(input) && min_bytes <= schedule.value_byte_size(*input)
+            })
+            .collect(),
     }
-    host_resident
 }
 
 struct PrefetchScheduler<'s> {
@@ -77,8 +72,6 @@ struct PrefetchScheduler<'s> {
     placement: Placement,
     session_state_tier: MemoryTier,
 
-    /// Initializers brought in from host on demand (`HostResident`); all others
-    /// are `GpuResident`.
     host_resident: HashSet<ValueId>,
 
     num_streams: usize,
@@ -115,7 +108,7 @@ impl<'s> PrefetchScheduler<'s> {
         let session_states: HashSet<ValueId> = schedule.session_states.iter().copied().collect();
         let inputs_set: HashSet<ValueId> = schedule.inputs.iter().copied().collect();
 
-        let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
+        let mut value2place = HashMap::new();
         for v in &initializers {
             value2place.insert(*v, AllocPlace::Initializer(*v));
         }
@@ -169,7 +162,12 @@ impl<'s> PrefetchScheduler<'s> {
     fn run(mut self) -> ExecutionPlan {
         // Kernels are built in topological order (KernelId order), so scheduling
         // them in that order already respects every dependency.
-        let order: Vec<KernelId> = self.schedule.kernels.iter().map(|(kid, _)| kid).collect();
+        let order = self
+            .schedule
+            .kernels
+            .iter()
+            .map(|(kid, _)| kid)
+            .collect_vec();
         for kid in order {
             self.schedule_kernel(kid);
         }
@@ -178,7 +176,7 @@ impl<'s> PrefetchScheduler<'s> {
     }
 
     fn finalize_outputs(&mut self) {
-        let already: HashSet<ValueId> = self
+        let already: HashSet<_> = self
             .steps
             .iter()
             .filter_map(|s| match s {
