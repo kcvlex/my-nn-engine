@@ -66,7 +66,6 @@ impl SchedulePass for PrefetchSchedulePass {
     }
 }
 
-/// Compute the `HostResident` initializer set from `policy`.
 fn select_host_resident(
     schedule: &Schedule,
     placement: &Placement,
