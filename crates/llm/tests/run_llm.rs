@@ -260,38 +260,7 @@ fn run_llama3_int8_with(opts: Options) -> String {
     )
     .unwrap();
 
-    // Time prefill (first step = prompt processing) and decode (subsequent
-    // per-token steps) separately. The test's wall-clock is dominated by nvcc
-    // compile + load, so only the generation loop is timed; a warmup pass pays
-    // the one-time init_state so it doesn't land in the prefill number.
-    use std::time::Instant;
-    let _ = llm.generate(PROMPT, N_GENERATE).unwrap();
-    llm.reset();
-
-    let opts = my_nn_engine_llm::GenerateOptions {
-        max_new_tokens: N_GENERATE,
-        ..Default::default()
-    };
-    let mut stamps: Vec<Instant> = Vec::new();
-    let start = Instant::now();
-    let ids = llm
-        .generate_ids_with_callback(PROMPT, &opts, &mut |_| stamps.push(Instant::now()))
-        .unwrap();
-    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
-    let prefill = ms(stamps[0] - start);
-    let decode: Vec<f64> = stamps.windows(2).map(|w| ms(w[1] - w[0])).collect();
-    let decode_avg = decode.iter().sum::<f64>() / decode.len().max(1) as f64;
-    eprintln!(
-        "llama3  prefill: {:.1} ms  |  decode: {:.1} ms/tok (n={})",
-        prefill,
-        decode_avg,
-        decode.len()
-    );
-
-    Tokenizer::from_file(dir.join("tokenizer.json"))
-        .unwrap()
-        .decode(&ids, false)
-        .unwrap()
+    llm.generate(PROMPT, N_GENERATE).unwrap()
 }
 
 // llama3-8b-int8 (~8 GB int8) does not fit resident on an 8 GB GPU -- the only
