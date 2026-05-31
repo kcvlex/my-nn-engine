@@ -15,6 +15,7 @@ use std::sync::Mutex;
 pub use cuda::cuda_lock;
 pub use device_buffer::CudaError;
 pub use device_buffer::DeviceBuffer;
+pub use device_buffer::PinnedHostBuffer;
 use log::info;
 use tempfile::TempDir;
 

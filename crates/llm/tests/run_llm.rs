@@ -6,6 +6,8 @@ use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 #[cfg(feature = "cuda")]
 use my_nn_engine::schedule::scheduler::PlacementStrategy;
+#[cfg(feature = "cuda")]
+use my_nn_engine::schedule::scheduler::PrefetchPolicy;
 use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::BuildOptions;
 use my_nn_engine_llm::HfConfig;
@@ -259,6 +261,23 @@ fn run_llama3_int8_with(opts: Options) -> String {
     .unwrap();
 
     llm.generate(PROMPT, N_GENERATE).unwrap()
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
+#[ignore = "experimental: llama3-8b-int8 weight prefetch (does not fit resident)"]
+fn llama3_int8_prefetch() {
+    const EXPECTED_TEXT: &str = " Paris.\nThe capital of the United States";
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .prefetch_policy(Some(PrefetchPolicy::AutoResidentBudget {
+            min_bytes: 1 << 20,
+            reserve_bytes: 3_500_000_000,
+        }))
+        .build();
+    let text = run_llama3_int8_with(opts);
+    assert_eq!(text, EXPECTED_TEXT);
 }
 
 #[cfg(feature = "cuda")]

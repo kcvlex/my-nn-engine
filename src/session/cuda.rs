@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::io::BufWriter;
 use std::io::ErrorKind;
 use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -24,6 +25,8 @@ use crate::session::send_initializer_to_device;
 use crate::session::DeviceBuffer;
 use crate::session::InitializerBuffers;
 use crate::session::InitializerSource;
+use crate::session::ModelLoadError;
+use crate::session::PinnedHostBuffer;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
@@ -61,8 +64,8 @@ fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
         return HashSet::new();
     };
 
-    // Only treat an initializer as streamed if the plan copies it into a GPU chunk.
-    // This avoids misclassifying const outputs (Initializer -> Output transfers) as streamed.
+    // Only treat an initializer as host-resident if the plan copies it into a GPU chunk.
+    // This avoids misclassifying const outputs (Initializer -> Output transfers).
     let host_resident_values: HashSet<_> = plan
         .steps
         .iter()
@@ -79,7 +82,6 @@ fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
             _ => None,
         })
         .collect();
-
     schedule
         .initializers
         .iter()
@@ -89,12 +91,30 @@ fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
         .collect()
 }
 
+/// Host source for a `HostResident` weight, kept alive for the session and used
+/// as the H2D source. External (file-backed) weights are read into a pinned host
+/// buffer so the copy stream's `cudaMemcpyAsync` is truly async and overlaps
+/// compute. Small inline weights stay owned (pageable; negligible).
+enum HostWeight {
+    Owned(StrictTensor),
+    Pinned(PinnedHostBuffer),
+}
+
+impl HostWeight {
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            HostWeight::Owned(t) => t.as_ptr(),
+            HostWeight::Pinned(b) => b.ptr(),
+        }
+    }
+}
+
 pub struct SessionCUDA {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
     output_ty: Vec<ResolvedTensorType>,
     initializer_buffers: Vec<Arc<DeviceBuffer>>,
-    host_resident_weights: HashMap<usize, StrictTensor>,
+    host_resident_weights: HashMap<usize, HostWeight>,
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
 
     #[allow(dead_code)]
@@ -234,7 +254,7 @@ impl SessionCUDA {
         // uploaded to VRAM as before. Derived from the plan (empty without a
         // prefetch policy, so the resident path is unchanged).
         let host_resident = host_resident_initializer_indices(&schedule);
-        let mut host_resident_weights: HashMap<usize, StrictTensor> = HashMap::new();
+        let mut host_resident_weights: HashMap<usize, HostWeight> = HashMap::new();
 
         let initializer_buffers: Vec<Arc<DeviceBuffer>> = initializer_sources
             .iter()
@@ -243,9 +263,34 @@ impl SessionCUDA {
             .map(
                 |(i, (src, name))| -> Result<Arc<DeviceBuffer>, SessionError> {
                     if host_resident.contains(&i) {
-                        let host = src
-                            .load_into_strict()
-                            .map_err(SessionError::ModelLoadError)?;
+                        // Keep the weight in host memory and stream it to a GPU
+                        // staging chunk on demand. External weights are read into
+                        // a pinned host buffer so the copy stream's H2D is truly
+                        // async (overlaps compute); small inline weights stay
+                        // owned (pageable; negligible). The device buffer is a
+                        // 1-byte placeholder so model_init's pointer array stays
+                        // valid; the host pointer is substituted in init_state.
+                        let host = match src {
+                            InitializerSource::External {
+                                file,
+                                offset,
+                                length,
+                                ..
+                            } => {
+                                let mut buf =
+                                    PinnedHostBuffer::alloc(*length as usize).map_err(|e| {
+                                        SessionError::OtherError(format!("cudaHostAlloc: {e}"))
+                                    })?;
+                                file.read_exact_at(unsafe { buf.as_mut_slice() }, *offset)
+                                    .map_err(ModelLoadError::FileRead)
+                                    .map_err(SessionError::ModelLoadError)?;
+                                HostWeight::Pinned(buf)
+                            }
+                            InitializerSource::Inline(_) => HostWeight::Owned(
+                                src.load_into_strict()
+                                    .map_err(SessionError::ModelLoadError)?,
+                            ),
+                        };
                         host_resident_weights.insert(i, host);
                         let buf = DeviceBuffer::alloc_zeroed(1).map_err(|e| {
                             SessionError::OtherError(format!("cudaMalloc placeholder: {:?}", e))
