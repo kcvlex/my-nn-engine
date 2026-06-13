@@ -1131,7 +1131,8 @@ impl<'ll> CodeGen<'ll, '_> {
                         "CPU QuantizedMatMul currently requires rhs_scale axis=0 (rhs must be [N, K])"
                     );
 
-                    translator.build_quantized_matmul(&ptrs[0], lhs, lhs_scale, rhs, rhs_scale, entry)
+                    translator
+                        .build_quantized_matmul(&ptrs[0], lhs, lhs_scale, rhs, rhs_scale, entry)
                 }
                 Operator::DynamicQuantizeLinear(ref dql) => {
                     // 3 outputs [y, scale, zero_point]; input x follows.
