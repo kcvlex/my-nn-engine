@@ -3,11 +3,9 @@
 mod common;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine::session::DeviceBuffer;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
 use my_nn_engine::session::SessionError;
@@ -66,11 +64,10 @@ fn kv_cache_state_persistence() -> TestResult {
     let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/test/single_op/kv_cache_update/model.onnx");
 
-    let cache_buf = Arc::new(DeviceBuffer::alloc_zeroed(B * H * S_MAX * D * 4).unwrap());
     let config = SessionConfig {
         session_states: vec![SessionStateSpec {
             name: "cache".to_string(),
-            buffer: cache_buf,
+            bytes: B * H * S_MAX * D * 4,
         }],
         ..SessionConfig::default()
     };
@@ -155,17 +152,15 @@ fn kv_cache_attention_decode_e2e() -> TestResult {
         .join("models/test/session_state/kv_cache_attention_decode/model.onnx");
 
     let cache_size = B * H * S_MAX * D * 4;
-    let k_buf = Arc::new(DeviceBuffer::alloc_zeroed(cache_size).unwrap());
-    let v_buf = Arc::new(DeviceBuffer::alloc_zeroed(cache_size).unwrap());
     let config = SessionConfig {
         session_states: vec![
             SessionStateSpec {
                 name: "K_cache".to_string(),
-                buffer: k_buf,
+                bytes: cache_size,
             },
             SessionStateSpec {
                 name: "V_cache".to_string(),
-                buffer: v_buf,
+                bytes: cache_size,
             },
         ],
         ..SessionConfig::default()

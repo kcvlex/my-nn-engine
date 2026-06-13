@@ -284,7 +284,7 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SessionStateSpec {
     pub name: String,
-    pub buffer: Arc<DeviceBuffer>,
+    pub bytes: usize,
 }
 
 /// A cache of device buffers shared across sessions, keyed by name. Used for
@@ -324,9 +324,73 @@ impl PersistentBuffers {
 pub struct SessionConfig {
     pub session_states: Vec<SessionStateSpec>,
     pub initializer_buffers: Option<Arc<PersistentBuffers>>,
-    /// Shared host buffers for CPU-placed session_states (hybrid runtime). Shared
-    /// across prefill/decode so their KV caches refer to the same memory.
-    pub host_kv_buffers: Option<Arc<PersistentBuffers>>,
+    /// Shared cache for the session_state (KV cache) buffers. Each is allocated on
+    /// the device its kernels run on (VRAM for GPU, host for CPU) and shared by
+    /// name across the prefill/decode sessions so they refer to the same memory.
+    pub kv_buffers: Option<Arc<PersistentBuffers>>,
+}
+
+/// Allocate each session_state (KV cache) buffer on the device its kernels run on
+/// (VRAM if any CUDA kernel touches it, else host), sized from its spec, sharing
+/// it by name across sessions via `config.kv_buffers` so prefill and decode use
+/// the same memory.
+fn build_session_state_buffers(
+    schedule: &Schedule,
+    config: &SessionConfig,
+) -> Result<Vec<Arc<DeviceBuffer>>, SessionError> {
+    use crate::schedule::ir::Device;
+    use crate::schedule::ir::KernelStep;
+    use crate::schedule::ir::Step;
+
+    let plan = schedule
+        .execution_plan
+        .as_ref()
+        .ok_or_else(|| SessionError::OtherError("execution_plan missing".to_string()))?;
+
+    schedule
+        .session_states
+        .iter()
+        .map(|&sv| -> Result<Arc<DeviceBuffer>, SessionError> {
+            let name = schedule.graph().values[sv].name.clone();
+            let bytes = config
+                .session_states
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.bytes)
+                .ok_or_else(|| {
+                    SessionError::OtherError(format!("no spec for session state {name:?}"))
+                })?;
+            let on_cuda = plan.steps.iter().any(|step| match step {
+                Step::Kernel(KernelStep {
+                    kernel, context, ..
+                }) => {
+                    context.device == Device::CUDA && {
+                        let kernel = &schedule.kernels[*kernel];
+                        kernel
+                            .inputs
+                            .iter()
+                            .flatten()
+                            .chain(kernel.outputs.iter())
+                            .any(|v| *v == sv)
+                    }
+                }
+                _ => false,
+            });
+            let alloc = || -> Result<Arc<DeviceBuffer>, SessionError> {
+                let buf = if on_cuda {
+                    DeviceBuffer::alloc_zeroed(bytes.max(1))
+                } else {
+                    DeviceBuffer::alloc_zeroed_host(bytes.max(1))
+                }
+                .map_err(|e| SessionError::OtherError(format!("alloc session_state: {e:?}")))?;
+                Ok(Arc::new(buf))
+            };
+            match &config.kv_buffers {
+                Some(cache) => cache.get_or_insert_with(&name, alloc),
+                None => alloc(),
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn send_initializer_to_device(
@@ -502,25 +566,7 @@ impl Session {
         schedule_passes.run(&mut schedule);
         info!("Scheduled");
 
-        let session_state_buffers: Vec<Arc<DeviceBuffer>> = {
-            schedule
-                .session_states
-                .iter()
-                .map(|&value_id| -> Result<Arc<DeviceBuffer>, SessionError> {
-                    let name = &schedule.graph().values[value_id].name;
-                    config
-                        .session_states
-                        .iter()
-                        .find(|s| &s.name == name)
-                        .map(|s| Arc::clone(&s.buffer))
-                        .ok_or_else(|| {
-                            SessionError::OtherError(format!(
-                                "no DeviceBuffer provided for session state {name:?}"
-                            ))
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let session_state_buffers = build_session_state_buffers(&schedule, config)?;
 
         if options.save_build_dir {
             let path = tmp_dir.keep();
@@ -536,7 +582,6 @@ impl Session {
                 initializer_names,
                 config.initializer_buffers.clone(),
                 session_state_buffers,
-                config.host_kv_buffers.clone(),
                 schedule,
                 options,
                 &build_dir,

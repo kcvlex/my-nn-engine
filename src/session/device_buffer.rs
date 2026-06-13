@@ -157,6 +157,10 @@ impl DeviceBuffer {
         self.size
     }
 
+    pub fn is_host(&self) -> bool {
+        matches!(self.kind, BufferKind::Host)
+    }
+
     /// # Safety
     /// The caller must ensure that `src` points to a valid memory region of at least `len` bytes,
     /// and that the data is properly initialized.

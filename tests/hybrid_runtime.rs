@@ -3,12 +3,10 @@
 mod common;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::schedule::scheduler::PlacementStrategy;
-use my_nn_engine::session::DeviceBuffer;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
 use my_nn_engine::session::SessionError;
@@ -58,11 +56,10 @@ fn kv_cache_update_then_sigmoid_hybrid() -> TestResult {
     let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("models/test/single_op/kv_cache_update/model.onnx");
 
-    let cache_buf = Arc::new(DeviceBuffer::alloc_zeroed(B * H * S_MAX * D * 4).unwrap());
     let config = SessionConfig {
         session_states: vec![SessionStateSpec {
             name: "cache".to_string(),
-            buffer: cache_buf,
+            bytes: B * H * S_MAX * D * 4,
         }],
         ..SessionConfig::default()
     };

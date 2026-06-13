@@ -7,7 +7,6 @@ use my_nn_engine::graph::Graph;
 use my_nn_engine::onnx::load::ModelLoadError;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
-use my_nn_engine::session::DeviceBuffer;
 use my_nn_engine::session::PersistentBuffers;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -154,7 +153,7 @@ impl LlmSession {
         let session_config = SessionConfig {
             session_states: kv_cache_names
                 .into_iter()
-                .flat_map(|kv| kv_cache_specs(opts.target, kv))
+                .flat_map(kv_cache_specs)
                 .collect(),
             ..SessionConfig::default()
         };
@@ -196,21 +195,21 @@ impl LlmSession {
 
         let specs: Vec<SessionStateSpec> = kv_cache_names
             .into_iter()
-            .flat_map(|kv| kv_cache_specs(opts.target, kv))
+            .flat_map(kv_cache_specs)
             .collect();
 
         let initializer_buffers = match opts.target {
             Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
             Target::CPU => None,
         };
-        let host_kv_buffers = Some(Arc::new(PersistentBuffers::new()));
+        let kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
-                host_kv_buffers: host_kv_buffers.as_ref().map(Arc::clone),
+                kv_buffers: kv_buffers.as_ref().map(Arc::clone),
             },
         )?;
         let prefill_session = match prefill {
@@ -221,7 +220,7 @@ impl LlmSession {
                     &SessionConfig {
                         session_states: specs,
                         initializer_buffers,
-                        host_kv_buffers,
+                        kv_buffers,
                     },
                 )?,
                 prefill_len,
@@ -255,7 +254,7 @@ impl LlmSession {
     ) -> Result<Self, LlmError> {
         let specs: Vec<SessionStateSpec> = kv_cache_names
             .into_iter()
-            .flat_map(|kv| kv_cache_specs(opts.target, kv))
+            .flat_map(kv_cache_specs)
             .collect();
 
         // CPU sessions allocate initializers per-graph (no shared device buffer pool yet),
@@ -264,14 +263,14 @@ impl LlmSession {
             Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
             Target::CPU => None,
         };
-        let host_kv_buffers = Some(Arc::new(PersistentBuffers::new()));
+        let kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
-                host_kv_buffers: host_kv_buffers.as_ref().map(Arc::clone),
+                kv_buffers: kv_buffers.as_ref().map(Arc::clone),
             },
         )?;
         let prefill_session = Session::from_graph(
@@ -280,7 +279,7 @@ impl LlmSession {
             &SessionConfig {
                 session_states: specs,
                 initializer_buffers,
-                host_kv_buffers,
+                kv_buffers,
             },
         )?;
 
@@ -635,30 +634,24 @@ fn streaming_kv_position(
     out
 }
 
-fn alloc_kv_buffer(target: Target, bytes: usize) -> DeviceBuffer {
-    match target {
-        Target::CPU => DeviceBuffer::alloc_zeroed_host(bytes).expect("alloc host KV cache"),
-        Target::CUDA => DeviceBuffer::alloc_zeroed(bytes).expect("alloc device KV cache"),
-    }
-}
-
-fn kv_cache_specs(target: Target, kv: KVCache) -> Vec<SessionStateSpec> {
+/// KV cache specs as (name, byte size). The actual buffers are allocated later
+/// by the session on the device each KV's kernels run on (the placement decides
+/// host vs VRAM), and shared across prefill/decode via `SessionConfig::kv_buffers`.
+fn kv_cache_specs(kv: KVCache) -> Vec<SessionStateSpec> {
     let KVCache {
         k_name,
         v_name,
         bytes_per_buffer,
         scale,
     } = kv;
-    let k_buf = Arc::new(alloc_kv_buffer(target, bytes_per_buffer));
-    let v_buf = Arc::new(alloc_kv_buffer(target, bytes_per_buffer));
     let mut specs = vec![
         SessionStateSpec {
             name: k_name,
-            buffer: k_buf,
+            bytes: bytes_per_buffer,
         },
         SessionStateSpec {
             name: v_name,
-            buffer: v_buf,
+            bytes: bytes_per_buffer,
         },
     ];
     if let Some(KVScale {
@@ -667,15 +660,13 @@ fn kv_cache_specs(target: Target, kv: KVCache) -> Vec<SessionStateSpec> {
         bytes_per_scale,
     }) = scale
     {
-        let k_s = Arc::new(alloc_kv_buffer(target, bytes_per_scale));
-        let v_s = Arc::new(alloc_kv_buffer(target, bytes_per_scale));
         specs.push(SessionStateSpec {
             name: k_scale_name,
-            buffer: k_s,
+            bytes: bytes_per_scale,
         });
         specs.push(SessionStateSpec {
             name: v_scale_name,
-            buffer: v_s,
+            bytes: bytes_per_scale,
         });
     }
     specs
