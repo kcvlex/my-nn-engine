@@ -1,4 +1,5 @@
 pub(crate) mod blas;
+pub(crate) mod kernels;
 mod llvm;
 mod omp;
 mod op;
@@ -1116,6 +1117,23 @@ impl<'ll> CodeGen<'ll, '_> {
                     translator.build_dequant_matmul(
                         &ptrs[0], act, wq, scale, workspace, axis, entry, use_omp,
                     )
+                }
+                Operator::QuantizedMatMul(_) => {
+                    // 1 output at ptrs[0]; inputs follow.
+                    let lhs = &ptrs[args::QUANTIZED_MATMUL_LHS + 1];
+                    let lhs_scale = &ptrs[args::QUANTIZED_MATMUL_LHS_SCALE + 1];
+                    let rhs = &ptrs[args::QUANTIZED_MATMUL_RHS + 1];
+                    let rhs_scale = &ptrs[args::QUANTIZED_MATMUL_RHS_SCALE + 1];
+                    translator
+                        .build_quantized_matmul(&ptrs[0], lhs, lhs_scale, rhs, rhs_scale, entry)
+                }
+                Operator::DynamicQuantizeLinear(_) => {
+                    // 3 outputs [y, scale, zero_point]; input x follows. The
+                    // symmetric zero_point output is unused and left unwritten.
+                    let y = &ptrs[0];
+                    let scale = &ptrs[1];
+                    let x = &ptrs[args::DYNAMIC_QUANTIZE_LINEAR_X + 3];
+                    translator.build_dynamic_quantize_linear(y, scale, x, entry)
                 }
                 _ => todo!("{:?}", op),
             },

@@ -2821,6 +2821,126 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(exit)
     }
 
+    /// W8A8 int8 x int8 matmul via the hand-written `mynn_qgemv_i8i8` kernel
+    /// (see `codegen::cpu::kernels`). `rhs` is the `[N, K]` int8 weight, `lhs`
+    /// the `[.., M, K]` int8 activation; the scales and `out` carry the model
+    /// float type. Memory-bound -- streams the weight once (no workspace).
+    pub fn build_quantized_matmul(
+        &self,
+        out: &TensorPtr<'ctx>,
+        lhs: &TensorPtr<'ctx>,
+        lhs_scale: &TensorPtr<'ctx>,
+        rhs: &TensorPtr<'ctx>,
+        rhs_scale: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        use crate::codegen::cpu::kernels::FType;
+        self.builder.position_at_end(entry);
+
+        assert_eq!(rhs.ty.dims.ndim(), 2, "QuantizedMatMul rhs must be [N, K]");
+        let n = rhs.ty.dims[0];
+        let k = rhs.ty.dims[1];
+        let m = lhs.ty.dims.size() / k;
+        // Activation, both scales, and output share the model float type.
+        let dtype = FType::from_data_type(out.ty.elem_type) as u64;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                i64_ty.into(),
+                i64_ty.into(),
+                i64_ty.into(),
+                i32_ty.into(),
+            ],
+            false,
+        );
+        let f = self
+            .module
+            .get_function("mynn_qgemv_i8i8")
+            .unwrap_or_else(|| {
+                self.module.add_function(
+                    "mynn_qgemv_i8i8",
+                    fn_ty,
+                    Some(inkwell::module::Linkage::External),
+                )
+            });
+
+        let args: &[BasicMetadataValueEnum<'ctx>] = &[
+            self.build_gep(out)?.into(),
+            self.build_gep(lhs)?.into(),
+            self.build_gep(lhs_scale)?.into(),
+            self.build_gep(rhs)?.into(),
+            self.build_gep(rhs_scale)?.into(),
+            i64_ty.const_int(m as u64, false).into(),
+            i64_ty.const_int(n as u64, false).into(),
+            i64_ty.const_int(k as u64, false).into(),
+            i32_ty.const_int(dtype, false).into(),
+        ];
+        self.builder.build_call(f, args, "qgemv")?;
+        Ok(self.builder.get_insert_block().unwrap())
+    }
+
+    /// Symmetric per-row dynamic int8 quantization via `mynn_dynquant_i8`:
+    /// `x` `[.., M, K]` float -> `y` int8 + per-row `scale` (same float type as
+    /// `x`). The op's zero-point output is unused (symmetric) and not written.
+    pub fn build_dynamic_quantize_linear(
+        &self,
+        y: &TensorPtr<'ctx>,
+        scale: &TensorPtr<'ctx>,
+        x: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        use crate::codegen::cpu::kernels::FType;
+        self.builder.position_at_end(entry);
+
+        let k = x.ty.dims.last().copied().unwrap();
+        let m = x.ty.dims.size() / k;
+        let dtype = FType::from_data_type(x.ty.elem_type) as u64;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                i64_ty.into(),
+                i64_ty.into(),
+                i32_ty.into(),
+            ],
+            false,
+        );
+        let f = self
+            .module
+            .get_function("mynn_dynquant_i8")
+            .unwrap_or_else(|| {
+                self.module.add_function(
+                    "mynn_dynquant_i8",
+                    fn_ty,
+                    Some(inkwell::module::Linkage::External),
+                )
+            });
+
+        let args: &[BasicMetadataValueEnum<'ctx>] = &[
+            self.build_gep(y)?.into(),
+            self.build_gep(scale)?.into(),
+            self.build_gep(x)?.into(),
+            i64_ty.const_int(m as u64, false).into(),
+            i64_ty.const_int(k as u64, false).into(),
+            i32_ty.const_int(dtype, false).into(),
+        ];
+        self.builder.build_call(f, args, "dynquant")?;
+        Ok(self.builder.get_insert_block().unwrap())
+    }
+
     // out[..., m, n] = scale[n] * sum_k (f32)act[..., m, k] * (f32)wq[n, k]
     //
     //   act:       [..., M, K] float

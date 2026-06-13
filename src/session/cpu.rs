@@ -34,6 +34,24 @@ pub(super) struct CpuJitState {
 unsafe impl Send for CpuJitState {}
 unsafe impl Sync for CpuJitState {}
 
+/// Hand-written CPU kernels (codegen::cpu::kernels) that lowered code calls by
+/// symbol. MCJIT can't resolve these in-process Rust fns through the process
+/// symbol table, so each JIT engine must `add_global_mapping` the declaring
+/// module's external decl to the fn address. Shared by SessionCPU and the
+/// hybrid CPU JIT.
+pub(super) fn cpu_kernel_symbols() -> [(&'static str, usize); 2] {
+    [
+        (
+            "mynn_qgemv_i8i8",
+            crate::codegen::cpu::kernels::mynn_qgemv_i8i8 as usize,
+        ),
+        (
+            "mynn_dynquant_i8",
+            crate::codegen::cpu::kernels::mynn_dynquant_i8 as usize,
+        ),
+    ]
+}
+
 pub struct SessionCPU {
     #[allow(dead_code)]
     input_ty: Vec<ResolvedTensorType>,
@@ -143,6 +161,15 @@ impl SessionCPU {
                 .map_err(|()| {
                     SessionError::OtherError("Failed to add module to JIT engine".to_string())
                 })?;
+        }
+
+        // Bind the hand-written CPU kernels before `main` (and its callees) compile.
+        for module in kernel_modules.iter() {
+            for (name, addr) in cpu_kernel_symbols() {
+                if let Some(f) = module.get_function(name) {
+                    engine.add_global_mapping(&f, addr);
+                }
+            }
         }
 
         // Get function pointer
