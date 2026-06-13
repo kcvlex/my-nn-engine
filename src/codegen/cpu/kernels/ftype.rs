@@ -29,7 +29,6 @@ pub unsafe fn load(ptr: *const u8, i: usize, dtype: FType) -> f32 {
             f32::from_bits(bits << 16)
         }
         FType::F32 => std::ptr::read_unaligned((ptr as *const f32).add(i)),
-        FType::F64 => std::ptr::read_unaligned((ptr as *const f64).add(i)) as f32,
     }
 }
 
@@ -47,6 +46,5 @@ pub unsafe fn store(ptr: *mut u8, i: usize, val: f32, dtype: FType) {
             std::ptr::write_unaligned((ptr as *mut u16).add(i), rounded as u16);
         }
         FType::F32 => std::ptr::write_unaligned((ptr as *mut f32).add(i), val),
-        FType::F64 => std::ptr::write_unaligned((ptr as *mut f64).add(i), val as f64),
     }
 }
