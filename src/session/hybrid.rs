@@ -30,8 +30,8 @@ use crate::session::cuda::cuda_lock;
 use crate::session::send_initializer_to_device;
 use crate::session::shared_lib::load_jit_runtime;
 use crate::session::DeviceBuffer;
-use crate::session::InitializerBuffers;
 use crate::session::InitializerSource;
+use crate::session::PersistentBuffers;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
 use crate::tensor::types::ResolvedTensorType;
@@ -126,7 +126,7 @@ fn build_cuda_state(
     schedule: &Schedule,
     initializer_sources: &[InitializerSource],
     initializer_names: &[String],
-    initializer_cache: Option<&Arc<InitializerBuffers>>,
+    initializer_cache: Option<&Arc<PersistentBuffers>>,
     session_state_buffers: &[Arc<DeviceBuffer>],
     opt: &Options,
     build_dir: &Path,
@@ -291,6 +291,10 @@ pub struct SessionHybrid {
     initializer: Vec<StrictTensor>,
     #[allow(dead_code)]
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
+    /// Per session_state (by index): `Some(host buffer)` when it is touched only
+    /// by CPU kernels and lives in host memory, `None` when it stays GPU-resident
+    /// (use `session_state_buffers`).
+    session_state_host: Vec<Option<Arc<DeviceBuffer>>>,
 
     cpu_kernel_fns: HashMap<KernelId, u64>,
     #[allow(dead_code)]
@@ -341,8 +345,9 @@ impl SessionHybrid {
         output_ty: Vec<ResolvedTensorType>,
         initializer_sources: Vec<InitializerSource>,
         initializer_names: Vec<String>,
-        initializer_cache: Option<Arc<InitializerBuffers>>,
+        initializer_cache: Option<Arc<PersistentBuffers>>,
         session_state_buffers: Vec<Arc<DeviceBuffer>>,
+        host_kv_cache: Option<Arc<PersistentBuffers>>,
         schedule: Schedule,
         opt: &Options,
         build_dir: &Path,
@@ -429,6 +434,76 @@ impl SessionHybrid {
             HostArenas::new(plan)
         };
 
+        // A session_state lives on host iff every kernel touching it runs on the
+        // CPU; if a CUDA kernel touches it, it stays GPU-resident. Mixed is not
+        // supported (would need cross-tier KV transfers).
+        let session_state_host: Vec<Option<Arc<DeviceBuffer>>> = {
+            let plan = schedule.execution_plan.as_ref().unwrap();
+            let kernel_dev: HashMap<KernelId, Device> = plan
+                .steps
+                .iter()
+                .filter_map(|s| match s {
+                    Step::Kernel(k) => Some((k.kernel, k.context.device)),
+                    _ => None,
+                })
+                .collect();
+            schedule
+                .session_states
+                .iter()
+                .map(|&sv| -> Result<Option<Arc<DeviceBuffer>>, SessionError> {
+                    let (mut on_cpu, mut on_gpu) = (false, false);
+                    for (kid, kernel) in schedule.kernels.iter() {
+                        let touches = kernel
+                            .inputs
+                            .iter()
+                            .flatten()
+                            .chain(kernel.outputs.iter())
+                            .any(|v| *v == sv);
+                        if touches {
+                            match kernel_dev.get(&kid) {
+                                Some(Device::CPU) => on_cpu = true,
+                                Some(Device::CUDA) => on_gpu = true,
+                                None => {}
+                            }
+                        }
+                    }
+                    if on_cpu && on_gpu {
+                        return Err(SessionError::OtherError(format!(
+                            "session_state {sv:?} touched by both CPU and GPU kernels; \
+                             mixed-device session state is not supported"
+                        )));
+                    }
+                    if on_cpu {
+                        let size = schedule.value_byte_size(sv).max(1);
+                        // Share the host KV across prefill/decode (keyed by name)
+                        // so one writes the cache the other reads.
+                        let name = schedule.get_value(sv).name.clone();
+                        let buf = match &host_kv_cache {
+                            Some(cache) => cache.get_or_insert_with(&name, || {
+                                DeviceBuffer::alloc_zeroed_host(size)
+                                    .map(Arc::new)
+                                    .map_err(|e| {
+                                        SessionError::OtherError(format!(
+                                            "alloc host session_state: {e:?}"
+                                        ))
+                                    })
+                            })?,
+                            None => {
+                                Arc::new(DeviceBuffer::alloc_zeroed_host(size).map_err(|e| {
+                                    SessionError::OtherError(format!(
+                                        "alloc host session_state: {e:?}"
+                                    ))
+                                })?)
+                            }
+                        };
+                        Ok(Some(buf))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
         let needs_cuda = schedule
             .execution_plan
             .as_ref()
@@ -461,6 +536,7 @@ impl SessionHybrid {
             schedule,
             initializer,
             session_state_buffers,
+            session_state_host,
             cpu_kernel_fns,
             cpu_jit: CpuJitState {
                 _engine: engine,
@@ -538,10 +614,23 @@ impl SessionHybrid {
                         })?;
                     self.initializer[idx].as_ptr() as *mut u8
                 }
-                AllocPlace::SessionState(_) => {
-                    return Err(SessionError::OtherError(
-                        "SessionState not yet supported in hybrid runtime".to_string(),
-                    ));
+                AllocPlace::SessionState(v) => {
+                    let idx = self
+                        .schedule
+                        .session_states
+                        .iter()
+                        .position(|x| *x == v)
+                        .ok_or_else(|| {
+                            SessionError::OtherError(format!("session_state {v:?} not found"))
+                        })?;
+                    match &self.session_state_host[idx] {
+                        Some(buf) => buf.ptr() as *mut u8,
+                        None => {
+                            return Err(SessionError::OtherError(format!(
+                                "CPU kernel touches GPU-resident session_state {v:?}"
+                            )))
+                        }
+                    }
                 }
             })
         };
@@ -652,10 +741,13 @@ impl SessionHybrid {
                                                 "session_state {v:?} not found"
                                             ))
                                         })?;
-                                    (
-                                        self.session_state_buffers[i].ptr() as *mut u8,
-                                        MemoryTier::GpuArena,
-                                    )
+                                    match &self.session_state_host[i] {
+                                        Some(buf) => (buf.ptr() as *mut u8, MemoryTier::HostArena),
+                                        None => (
+                                            self.session_state_buffers[i].ptr() as *mut u8,
+                                            MemoryTier::GpuArena,
+                                        ),
+                                    }
                                 }
                                 AllocPlace::Initializer(v) => {
                                     let i = self

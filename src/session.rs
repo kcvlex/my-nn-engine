@@ -287,12 +287,17 @@ pub struct SessionStateSpec {
     pub buffer: Arc<DeviceBuffer>,
 }
 
+/// A cache of device buffers shared across sessions, keyed by name. Used for
+/// both the model weights (initializers) and the host-resident KV cache of
+/// CPU-placed session_states. Sharing one buffer per name across the prefill and
+/// decode sessions means the memory one writes is the memory the other reads; a
+/// fresh buffer per session would corrupt a shared KV cache.
 #[derive(Debug, Default)]
-pub struct InitializerBuffers {
+pub struct PersistentBuffers {
     buffers: Mutex<HashMap<String, Arc<DeviceBuffer>>>,
 }
 
-impl InitializerBuffers {
+impl PersistentBuffers {
     pub fn new() -> Self {
         Self::default()
     }
@@ -318,7 +323,10 @@ impl InitializerBuffers {
 #[derive(Debug, Clone, Default)]
 pub struct SessionConfig {
     pub session_states: Vec<SessionStateSpec>,
-    pub initializer_buffers: Option<Arc<InitializerBuffers>>,
+    pub initializer_buffers: Option<Arc<PersistentBuffers>>,
+    /// Shared host buffers for CPU-placed session_states (hybrid runtime). Shared
+    /// across prefill/decode so their KV caches refer to the same memory.
+    pub host_kv_buffers: Option<Arc<PersistentBuffers>>,
 }
 
 pub(crate) fn send_initializer_to_device(
@@ -528,6 +536,7 @@ impl Session {
                 initializer_names,
                 config.initializer_buffers.clone(),
                 session_state_buffers,
+                config.host_kv_buffers.clone(),
                 schedule,
                 options,
                 &build_dir,
@@ -538,7 +547,7 @@ impl Session {
                 Target::CPU => {
                     if config.initializer_buffers.is_some() {
                         return Err(SessionError::OtherError(
-                            "InitializerBuffers is not supported on CPU target".to_string(),
+                            "PersistentBuffers is not supported on CPU target".to_string(),
                         ));
                     }
                     SessionCPU::new(

@@ -8,7 +8,7 @@ use my_nn_engine::onnx::load::ModelLoadError;
 use my_nn_engine::options::Options;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::DeviceBuffer;
-use my_nn_engine::session::InitializerBuffers;
+use my_nn_engine::session::PersistentBuffers;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
 use my_nn_engine::session::SessionError;
@@ -200,15 +200,17 @@ impl LlmSession {
             .collect();
 
         let initializer_buffers = match opts.target {
-            Target::CUDA => Some(Arc::new(InitializerBuffers::new())),
+            Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
             Target::CPU => None,
         };
+        let host_kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
+                host_kv_buffers: host_kv_buffers.as_ref().map(Arc::clone),
             },
         )?;
         let prefill_session = match prefill {
@@ -219,6 +221,7 @@ impl LlmSession {
                     &SessionConfig {
                         session_states: specs,
                         initializer_buffers,
+                        host_kv_buffers,
                     },
                 )?,
                 prefill_len,
@@ -258,15 +261,17 @@ impl LlmSession {
         // CPU sessions allocate initializers per-graph (no shared device buffer pool yet),
         // so the cache only applies on CUDA.
         let initializer_buffers = match opts.target {
-            Target::CUDA => Some(Arc::new(InitializerBuffers::new())),
+            Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
             Target::CPU => None,
         };
+        let host_kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(
             decode_graph,
             opts,
             &SessionConfig {
                 session_states: specs.clone(),
                 initializer_buffers: initializer_buffers.as_ref().map(Arc::clone),
+                host_kv_buffers: host_kv_buffers.as_ref().map(Arc::clone),
             },
         )?;
         let prefill_session = Session::from_graph(
@@ -275,6 +280,7 @@ impl LlmSession {
             &SessionConfig {
                 session_states: specs,
                 initializer_buffers,
+                host_kv_buffers,
             },
         )?;
 
