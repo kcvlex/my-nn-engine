@@ -23,6 +23,7 @@ use crate::schedule::ir::Step;
 use crate::schedule::ChunkId;
 use crate::schedule::KernelId;
 use crate::schedule::Schedule;
+use crate::session::cpu::cpu_kernel_symbols;
 use crate::session::cpu::CpuJitState;
 use crate::session::cuda::compile_cuda_shared_lib;
 use crate::session::cuda::cuda_lock;
@@ -395,6 +396,14 @@ impl SessionHybrid {
                     >(module)
                 })
                 .map_err(|()| SessionError::OtherError("add_module failed".to_string()))?;
+        }
+
+        for module in &kernel_modules {
+            for (name, addr) in cpu_kernel_symbols() {
+                if let Some(f) = module.get_function(name) {
+                    engine.add_global_mapping(&f, addr);
+                }
+            }
         }
 
         let mut cpu_kernel_fns: HashMap<KernelId, u64> = HashMap::new();

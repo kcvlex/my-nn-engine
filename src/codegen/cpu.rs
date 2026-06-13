@@ -1,4 +1,5 @@
 pub(crate) mod blas;
+pub(crate) mod kernels;
 mod llvm;
 mod omp;
 mod op;
@@ -1116,6 +1117,36 @@ impl<'ll> CodeGen<'ll, '_> {
                     translator.build_dequant_matmul(
                         &ptrs[0], act, wq, scale, workspace, axis, entry, use_omp,
                     )
+                }
+                Operator::QuantizedMatMul(ref qmm) => {
+                    // 1 output at ptrs[0]; inputs follow.
+                    let lhs = &ptrs[args::QUANTIZED_MATMUL_LHS + 1];
+                    let lhs_scale = &ptrs[args::QUANTIZED_MATMUL_LHS_SCALE + 1];
+                    let rhs = &ptrs[args::QUANTIZED_MATMUL_RHS + 1];
+                    let rhs_scale = &ptrs[args::QUANTIZED_MATMUL_RHS_SCALE + 1];
+
+                    let axis_idx = qmm.axis.index(rhs.ty.dims.ndim());
+                    assert_eq!(
+                        axis_idx, 0,
+                        "CPU QuantizedMatMul currently requires rhs_scale axis=0 (rhs must be [N, K])"
+                    );
+
+                    translator
+                        .build_quantized_matmul(&ptrs[0], lhs, lhs_scale, rhs, rhs_scale, entry)
+                }
+                Operator::DynamicQuantizeLinear(ref dql) => {
+                    // 3 outputs [y, scale, zero_point]; input x follows.
+                    let y = &ptrs[0];
+                    let scale = &ptrs[1];
+                    let x = &ptrs[args::DYNAMIC_QUANTIZE_LINEAR_X + 3];
+
+                    let axis_idx = dql.axis.map(|a| a.index(x.ty.dims.ndim()));
+                    assert!(
+                        dql.symmetric && axis_idx == Some(0),
+                        "CPU DynamicQuantizeLinear only supports symmetric per-row quantization (symmetric=true, axis=0)"
+                    );
+
+                    translator.build_dynamic_quantize_linear(y, scale, x, entry)
                 }
                 _ => todo!("{:?}", op),
             },

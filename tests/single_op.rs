@@ -1136,12 +1136,11 @@ fn dequantize_linear() -> TestResult {
     )
 }
 
-#[cfg(feature = "cuda")]
 macro_rules! dyn_quantize_linear_test {
-    ($name:ident, $fixture:literal) => {
+    ($name:ident, $fixture:literal, $run:path) => {
         #[test]
         fn $name() -> TestResult {
-            with_cuda_session_and_tensors($fixture, (1, 3), |session, (inputs, expected)| {
+            $run($fixture, (1, 3), |session, (inputs, expected)| {
                 let outputs = session.run(inputs)?;
                 assert_eq!(outputs.len(), 3);
                 assert_eq!(outputs[0], expected[0], "y mismatch");
@@ -1153,34 +1152,37 @@ macro_rules! dyn_quantize_linear_test {
     };
 }
 
-#[cfg(feature = "cuda")]
+// Symmetric per-row also runs on CPU (the mynn_dynquant_i8 kernel); per-tensor
+// and asymmetric variants are CUDA-only for now.
 dyn_quantize_linear_test!(
-    dyn_quantize_linear_sym_per_tensor,
-    "dyn_quantize_linear_sym_per_tensor"
+    dyn_quantize_linear_sym_per_row,
+    "dyn_quantize_linear_sym_per_row",
+    with_all_sessions_and_tensors
 );
 #[cfg(feature = "cuda")]
 dyn_quantize_linear_test!(
-    dyn_quantize_linear_sym_per_row,
-    "dyn_quantize_linear_sym_per_row"
+    dyn_quantize_linear_sym_per_tensor,
+    "dyn_quantize_linear_sym_per_tensor",
+    with_cuda_session_and_tensors
 );
 #[cfg(feature = "cuda")]
 dyn_quantize_linear_test!(
     dyn_quantize_linear_asym_per_tensor,
-    "dyn_quantize_linear_asym_per_tensor"
+    "dyn_quantize_linear_asym_per_tensor",
+    with_cuda_session_and_tensors
 );
 #[cfg(feature = "cuda")]
 dyn_quantize_linear_test!(
     dyn_quantize_linear_asym_per_row,
-    "dyn_quantize_linear_asym_per_row"
+    "dyn_quantize_linear_asym_per_row",
+    with_cuda_session_and_tensors
 );
 
-// QuantizedMatMul (int8 mma, CUDA only).
-#[cfg(feature = "cuda")]
 macro_rules! quantized_matmul_test {
     ($name:ident, $fixture:literal) => {
         #[test]
         fn $name() -> TestResult {
-            with_cuda_session_and_tensors($fixture, (4, 1), |session, (inputs, expected)| {
+            with_all_sessions_and_tensors($fixture, (4, 1), |session, (inputs, expected)| {
                 let outputs = session.run(inputs)?;
                 assert_eq_epsilon!(outputs[0], expected[0], 1e-1);
                 Ok(())
@@ -1189,15 +1191,10 @@ macro_rules! quantized_matmul_test {
     };
 }
 
-#[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_64x64x64, "quantized_matmul_64x64x64");
-#[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_128x128x128, "quantized_matmul_128x128x128");
-#[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_256x128x128, "quantized_matmul_256x128x128");
-#[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_128x256x64, "quantized_matmul_128x256x64");
-#[cfg(feature = "cuda")]
 quantized_matmul_test!(quantized_matmul_1x128x128, "quantized_matmul_1x128x128");
 
 #[test]
