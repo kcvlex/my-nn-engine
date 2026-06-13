@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::graph::ValueId;
 use crate::schedule::ir::Device;
 use crate::schedule::KernelId;
 use crate::schedule::Schedule;
@@ -46,6 +47,70 @@ impl Placement {
                     Device::CPU
                 };
                 (kid, device)
+            })
+            .collect();
+        Self { devices }
+    }
+
+    /// Partial-offload placement for decode on a model that does not fit in VRAM,
+    /// as a single contiguous cut over the kernels in schedule (= build/topo ~=
+    /// layer) order: the prefix stays on the GPU until its resident weight reaches
+    /// `resident_bytes`, the suffix runs on the CPU (reading its weights -- and KV
+    /// cache -- from host RAM). This mirrors llama.cpp's `--n-gpu-layers`.
+    ///
+    /// The cut never splits a KV cache across devices (the hybrid runtime can't
+    /// move a session_state mid-use), so a layer whose KV would straddle the cut
+    /// is pushed entirely to the CPU side. Weights < `min_bytes` don't count.
+    pub fn resident_budget(schedule: &Schedule, min_bytes: usize, resident_bytes: usize) -> Self {
+        let initializers: HashSet<_> = schedule.initializers.iter().copied().collect();
+        let session_states: HashSet<_> = schedule.session_states.iter().copied().collect();
+
+        let kernels: Vec<(KernelId, &crate::schedule::Kernel)> = schedule.kernels.iter().collect();
+
+        // First/last kernel index at which each KV (session_state) is touched, so
+        // the cut can be kept off any KV's live span.
+        let mut kv_span: HashMap<ValueId, (usize, usize)> = HashMap::new();
+        for (i, (_, kernel)) in kernels.iter().enumerate() {
+            for v in kernel.inputs.iter().flatten().chain(kernel.outputs.iter()) {
+                if session_states.contains(v) {
+                    kv_span.entry(*v).and_modify(|s| s.1 = i).or_insert((i, i));
+                }
+            }
+        }
+
+        // Largest prefix whose resident weight stays within the budget.
+        let weight_of = |kernel: &crate::schedule::Kernel| -> usize {
+            kernel
+                .inputs
+                .iter()
+                .flatten()
+                .filter(|v| initializers.contains(v))
+                .map(|&v| schedule.value_byte_size(v))
+                .filter(|&sz| min_bytes <= sz)
+                .sum()
+        };
+        let mut cut = kernels.len();
+        let mut resident = 0usize;
+        for (i, (_, kernel)) in kernels.iter().enumerate() {
+            let w = weight_of(kernel);
+            if resident + w > resident_bytes {
+                cut = i;
+                break;
+            }
+            resident += w;
+        }
+
+        // Snap the cut off any straddling KV span (its layer goes to the CPU side).
+        while 0 < cut && kv_span.values().any(|&(f, l)| f < cut && cut <= l) {
+            cut -= 1;
+        }
+
+        let devices = kernels
+            .iter()
+            .enumerate()
+            .map(|(i, (kid, _))| {
+                let device = if i < cut { Device::CUDA } else { Device::CPU };
+                (*kid, device)
             })
             .collect();
         Self { devices }

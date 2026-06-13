@@ -28,6 +28,10 @@ impl SchedulePass for MemoryAwareSchedulePass {
         let placement = match self.placement_strategy {
             PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
             PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
+            PlacementStrategy::ResidentBudget {
+                min_bytes,
+                resident_bytes,
+            } => Placement::resident_budget(schedule, min_bytes, resident_bytes),
         };
         let plan = build(schedule, self.num_streams, placement);
         schedule.execution_plan = Some(plan);
@@ -42,7 +46,7 @@ struct Scheduler<'s> {
     session_states: HashSet<ValueId>,
     inputs_set: HashSet<ValueId>,
     placement: Placement,
-    session_state_tier: MemoryTier,
+    session_state_tier: HashMap<ValueId, MemoryTier>,
 
     // TODO: Per arena
     num_streams: usize,
@@ -66,14 +70,34 @@ impl<'s> Scheduler<'s> {
         let output_alias = schedule.output_aliases();
         let needs_cuda = placement.iter().any(|(_, d)| d == Device::CUDA);
         let num_streams = if needs_cuda { num_streams.max(1) } else { 1 };
-        let session_state_tier = if needs_cuda {
-            MemoryTier::GpuArena
-        } else {
-            MemoryTier::HostArena
-        };
 
         let initializers: HashSet<ValueId> = schedule.initializers.iter().copied().collect();
         let session_states: HashSet<ValueId> = schedule.session_states.iter().copied().collect();
+
+        // Each session_state (e.g. KV cache) lives on the tier of the kernels that
+        // touch it: GPU if any CUDA kernel does, else host. A single global tier
+        // would force spurious VRAM<->host transfers for CPU-placed KV under a
+        // partial (cut) placement, corrupting it.
+        let session_state_tier: HashMap<ValueId, MemoryTier> = session_states
+            .iter()
+            .map(|&sv| {
+                let any_cuda = schedule.kernels.iter().any(|(kid, kernel)| {
+                    placement.device_of(kid) == Device::CUDA &&
+                        kernel
+                            .inputs
+                            .iter()
+                            .flatten()
+                            .chain(kernel.outputs.iter())
+                            .any(|v| *v == sv)
+                });
+                let tier = if any_cuda {
+                    MemoryTier::GpuArena
+                } else {
+                    MemoryTier::HostArena
+                };
+                (sv, tier)
+            })
+            .collect();
         let inputs_set: HashSet<ValueId> = schedule.inputs.iter().copied().collect();
 
         let mut value2place: HashMap<ValueId, AllocPlace> = HashMap::new();
@@ -269,7 +293,7 @@ impl<'s> Scheduler<'s> {
         let needs_transfer = match original {
             AllocPlace::Chunk(cid) => self.allocator.chunk_tier(cid) != dst_tier,
             AllocPlace::Input(_) | AllocPlace::Output(_) => dst_tier != MemoryTier::HostArena,
-            AllocPlace::SessionState(_) => self.session_state_tier != dst_tier,
+            AllocPlace::SessionState(v) => self.session_state_tier[&v] != dst_tier,
             AllocPlace::Initializer(_) => false,
         };
         if !needs_transfer {

@@ -14,6 +14,12 @@ pub(crate) fn align_up(size: usize) -> usize {
 pub enum PlacementStrategy {
     Uniform(Device),
     StructuralKvTouch,
+    /// Partial offload for decode: largest weights resident on GPU up to
+    /// `resident_bytes`, kernels consuming the overflow weights run on CPU.
+    ResidentBudget {
+        min_bytes: usize,
+        resident_bytes: usize,
+    },
 }
 
 pub(crate) struct Deps {
