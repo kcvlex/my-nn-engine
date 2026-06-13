@@ -1,7 +1,3 @@
-//! Symmetric per-row dynamic int8 quantization of activations -- produces the
-//! `lhs` (int8) and `lhs_scale` consumed by [`super::qgemv_i8i8`]. Cheap (touches
-//! the activation once); decode rows are short so this is not threaded.
-
 use super::ftype::FType;
 use super::ftype::{self};
 

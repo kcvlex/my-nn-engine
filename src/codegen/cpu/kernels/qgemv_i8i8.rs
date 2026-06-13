@@ -1,7 +1,3 @@
-//! Symmetric int8 x int8 matmul (W8A8): the fast CPU decode path. Memory-bound
-//! -- streams the int8 weight from DDR once, so a plain widening dot under AVX2
-//! already saturates DDR bandwidth (no tiling / VNNI needed).
-
 use rayon::prelude::*;
 
 use super::ftype::FType;

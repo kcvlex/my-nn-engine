@@ -1,8 +1,3 @@
-//! Shared float element-type handling for the W8A8 kernels. The activation,
-//! the per-row / per-channel scales, and the matmul output all carry the
-//! model's float type (f32 or bf16). It crosses the C ABI as a fieldless
-//! `#[repr(u32)]` enum (FFI-safe, unlike the graph's `DataType`).
-
 use crate::tensor::types::DataType;
 use crate::tensor::types::FloatType;
 
@@ -14,8 +9,6 @@ pub enum FType {
 }
 
 impl FType {
-    /// Map a graph float `DataType` to the kernel tag. Panics on unsupported
-    /// types -- the W8A8 path only produces f32 / bf16.
     pub fn from_data_type(dt: DataType) -> Self {
         match dt {
             DataType::Float(FloatType::F32) => FType::F32,
@@ -25,8 +18,6 @@ impl FType {
     }
 }
 
-/// Load element `i` of a float buffer as f32, decoding bf16 if needed.
-///
 /// # Safety
 /// `ptr` must be valid for `i + 1` elements of the type named by `dtype`.
 #[inline(always)]
