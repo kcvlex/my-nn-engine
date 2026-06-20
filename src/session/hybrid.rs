@@ -291,9 +291,6 @@ pub struct SessionHybrid {
     initializer: Vec<StrictTensor>,
     #[allow(dead_code)]
     session_state_buffers: Vec<Arc<DeviceBuffer>>,
-    /// Per session_state (by index): `Some(host buffer)` when it is touched only
-    /// by CPU kernels and lives in host memory, `None` when it stays GPU-resident
-    /// (use `session_state_buffers`).
     session_state_host: Vec<Option<Arc<DeviceBuffer>>>,
 
     cpu_kernel_fns: HashMap<KernelId, u64>,
@@ -434,9 +431,6 @@ impl SessionHybrid {
             HostArenas::new(plan)
         };
 
-        // A session_state lives on host iff every kernel touching it runs on the
-        // CPU; if a CUDA kernel touches it, it stays GPU-resident. Mixed is not
-        // supported (would need cross-tier KV transfers).
         let session_state_host: Vec<Option<Arc<DeviceBuffer>>> = {
             let plan = schedule.execution_plan.as_ref().unwrap();
             let kernel_dev: HashMap<KernelId, Device> = plan
