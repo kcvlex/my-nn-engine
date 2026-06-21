@@ -23,9 +23,9 @@ use crate::schedule::ir::Step;
 use crate::schedule::Schedule;
 use crate::session::send_initializer_to_device;
 use crate::session::DeviceBuffer;
-use crate::session::InitializerBuffers;
 use crate::session::InitializerSource;
 use crate::session::ModelLoadError;
+use crate::session::PersistentBuffers;
 use crate::session::PinnedHostBuffer;
 use crate::session::SessionError;
 use crate::session::StrictTensor;
@@ -240,7 +240,7 @@ impl SessionCUDA {
         output_ty: Vec<ResolvedTensorType>,
         initializer_sources: Vec<InitializerSource>,
         initializer_names: Vec<String>,
-        initializer_cache: Option<Arc<InitializerBuffers>>,
+        initializer_cache: Option<Arc<PersistentBuffers>>,
         session_state_buffers: Vec<Arc<DeviceBuffer>>,
         schedule: Schedule,
         opt: &Options,
