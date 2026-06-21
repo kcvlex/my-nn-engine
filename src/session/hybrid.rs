@@ -18,6 +18,7 @@ use crate::schedule::ir::AllocPlace;
 use crate::schedule::ir::ArenaId;
 use crate::schedule::ir::Device;
 use crate::schedule::ir::ExecutionPlan;
+use crate::schedule::ir::KernelStep;
 use crate::schedule::ir::MemoryTier;
 use crate::schedule::ir::Step;
 use crate::schedule::ChunkId;
@@ -432,33 +433,34 @@ impl SessionHybrid {
         };
 
         let session_state_host: Vec<Option<Arc<DeviceBuffer>>> = {
-            let plan = schedule.execution_plan.as_ref().unwrap();
-            let kernel_dev: HashMap<KernelId, Device> = plan
-                .steps
-                .iter()
-                .filter_map(|s| match s {
-                    Step::Kernel(k) => Some((k.kernel, k.context.device)),
-                    _ => None,
-                })
-                .collect();
             schedule
                 .session_states
                 .iter()
                 .map(|&sv| -> Result<Option<Arc<DeviceBuffer>>, SessionError> {
                     let (mut on_cpu, mut on_gpu) = (false, false);
-                    for (kid, kernel) in schedule.kernels.iter() {
-                        let touches = kernel
-                            .inputs
-                            .iter()
-                            .flatten()
-                            .chain(kernel.outputs.iter())
-                            .any(|v| *v == sv);
-                        if touches {
-                            match kernel_dev.get(&kid) {
-                                Some(Device::CPU) => on_cpu = true,
-                                Some(Device::CUDA) => on_gpu = true,
-                                None => {}
+                    for step in schedule.execution_plan.as_ref().unwrap().steps.iter() {
+                        match step {
+                            Step::Kernel(KernelStep {
+                                kernel, context, ..
+                            }) => {
+                                let kernel = &schedule.kernels[*kernel];
+                                let touches = kernel
+                                    .inputs
+                                    .iter()
+                                    .flatten()
+                                    .chain(kernel.outputs.iter())
+                                    .any(|v| *v == sv);
+                                if touches {
+                                    match context.device {
+                                        Device::CPU => on_cpu = true,
+                                        Device::CUDA => on_gpu = true,
+                                    }
+                                }
                             }
+                            Step::Transfer(_) => {
+                                // TODO: Any handling is necessary?
+                            }
+                            _ => {}
                         }
                     }
                     if on_cpu && on_gpu {
