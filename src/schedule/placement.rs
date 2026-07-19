@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use itertools::Itertools;
+
 use crate::graph::ValueId;
 use crate::schedule::ir::Device;
+use crate::schedule::Kernel;
 use crate::schedule::KernelId;
 use crate::schedule::Schedule;
 
@@ -65,7 +68,7 @@ impl Placement {
         let initializers: HashSet<_> = schedule.initializers.iter().copied().collect();
         let session_states: HashSet<_> = schedule.session_states.iter().copied().collect();
 
-        let kernels: Vec<(KernelId, &crate::schedule::Kernel)> = schedule.kernels.iter().collect();
+        let kernels = schedule.kernels.iter().collect_vec();
 
         // First/last kernel index at which each KV (session_state) is touched, so
         // the cut can be kept off any KV's live span.
@@ -79,7 +82,7 @@ impl Placement {
         }
 
         // Largest prefix whose resident weight stays within the budget.
-        let weight_of = |kernel: &crate::schedule::Kernel| -> usize {
+        let weight_of = |kernel: &Kernel| -> usize {
             kernel
                 .inputs
                 .iter()
