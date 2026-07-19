@@ -10,12 +10,13 @@ pub(crate) fn align_up(size: usize) -> usize {
     size.next_multiple_of(ALIGNMENT)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlacementStrategy {
     Uniform(Device),
     StructuralKvTouch,
-    /// Partial offload for decode: largest weights resident on GPU up to
-    /// `resident_bytes`, kernels consuming the overflow weights run on CPU.
+    /// Partial offload for decode: contiguous cut in kernel (topo) order. The
+    /// longest prefix whose weights fit in `resident_bytes` runs on the GPU,
+    /// the suffix runs on the CPU.
     ResidentBudget {
         min_bytes: usize,
         resident_bytes: usize,

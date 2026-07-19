@@ -573,9 +573,8 @@ impl Session {
             info!("Build directory saved at {:?}", path);
         }
 
-        let use_hybrid_runtime = options.placement_strategy.is_some();
-        let inner = if use_hybrid_runtime {
-            SessionHybrid::new(
+        let inner = match options.target {
+            Target::Hybrid(_) => SessionHybrid::new(
                 inputs_ty,
                 outputs_ty,
                 initializer,
@@ -586,39 +585,36 @@ impl Session {
                 options,
                 &build_dir,
             )
-            .map(SessionInner::Hybrid)?
-        } else {
-            match options.target {
-                Target::CPU => {
-                    if config.initializer_buffers.is_some() {
-                        return Err(SessionError::OtherError(
-                            "PersistentBuffers is not supported on CPU target".to_string(),
-                        ));
-                    }
-                    SessionCPU::new(
-                        inputs_ty,
-                        outputs_ty,
-                        initializer,
-                        session_state_buffers,
-                        schedule,
-                        options,
-                        &build_dir,
-                    )
-                    .map(SessionInner::CPU)?
+            .map(SessionInner::Hybrid)?,
+            Target::CPU => {
+                if config.initializer_buffers.is_some() {
+                    return Err(SessionError::OtherError(
+                        "PersistentBuffers is not supported on CPU target".to_string(),
+                    ));
                 }
-                Target::CUDA => SessionCUDA::new(
+                SessionCPU::new(
                     inputs_ty,
                     outputs_ty,
                     initializer,
-                    initializer_names,
-                    config.initializer_buffers.clone(),
                     session_state_buffers,
                     schedule,
                     options,
                     &build_dir,
                 )
-                .map(SessionInner::CUDA)?,
+                .map(SessionInner::CPU)?
             }
+            Target::CUDA(_) => SessionCUDA::new(
+                inputs_ty,
+                outputs_ty,
+                initializer,
+                initializer_names,
+                config.initializer_buffers.clone(),
+                session_state_buffers,
+                schedule,
+                options,
+                &build_dir,
+            )
+            .map(SessionInner::CUDA)?,
         };
         Ok(Session {
             inner,

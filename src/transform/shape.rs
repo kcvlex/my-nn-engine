@@ -821,13 +821,11 @@ pub fn infer_node_output(
     Ok(res)
 }
 
-pub fn create_infer_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_infer_passes(_opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Shape inference".to_string());
-    let target = opt.target;
     manager.add_pass(Box::new(OpsetAdaptation::default()));
-    manager.add_pass(Box::new(ShapeInference { target }));
+    manager.add_pass(Box::new(ShapeInference));
     manager.add_pass(Box::new(ShapeVerification {
-        target,
         check_strides: false,
     }));
     manager.add_pass(Box::new(EarlyBroadcast::default()));

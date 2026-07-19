@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -127,8 +128,8 @@ impl ModelRegistry {
         }
 
         let other = match target {
-            Target::CPU => Target::CUDA,
-            Target::CUDA => Target::CPU,
+            Target::CPU => Target::CUDA(PrefetchPolicy::Disabled),
+            _ => Target::CPU,
         };
         if self.models.remove(&(model_id, other)).is_some() {
             log::info!(

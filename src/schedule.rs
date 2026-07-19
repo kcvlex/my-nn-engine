@@ -77,31 +77,22 @@ impl SchedulePassManager {
 
 pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let mut manager = SchedulePassManager::new("Schedule".to_string());
-    let placement_strategy = match options.placement_strategy {
-        Some(s) => s,
-        None => PlacementStrategy::Uniform(match options.target {
-            Target::CUDA => ir::Device::CUDA,
-            Target::CPU => ir::Device::CPU,
-        }),
-    };
-    match options.prefetch_policy {
-        Some(policy) => manager.add_pass(Box::new(scheduler::prefetch::PrefetchSchedulePass {
+    match options.target {
+        Target::CUDA(policy) if !policy.is_disabled() => {
+            manager.add_pass(Box::new(scheduler::prefetch::PrefetchSchedulePass {
+                num_streams: options.num_cuda_streams,
+                policy,
+            }))
+        }
+        _ => manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
             num_streams: options.num_cuda_streams,
-            placement_strategy,
-            policy,
-        })),
-        None => manager.add_pass(Box::new(scheduler::MemoryAwareSchedulePass {
-            num_streams: options.num_cuda_streams,
-            placement_strategy,
+            placement_strategy: options.target.placement_strategy(),
         })),
     }
-    let needs_cpu_omp = options.target == Target::CPU ||
-        matches!(
-            placement_strategy,
-            PlacementStrategy::StructuralKvTouch |
-                PlacementStrategy::Uniform(ir::Device::CPU) |
-                PlacementStrategy::ResidentBudget { .. }
-        );
+    let needs_cpu_omp = !matches!(
+        options.target.placement_strategy(),
+        PlacementStrategy::Uniform(ir::Device::CUDA)
+    );
     if needs_cpu_omp {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
             elementwise_threshold: options.omp_elementwise_threshold,
@@ -232,8 +223,7 @@ impl Schedule {
             })
             .collect::<Vec<_>>();
         let initializers = graph.initializer_ids();
-        let include_cpu_workspaces =
-            options.target == Target::CPU || options.placement_strategy.is_some();
+        let include_cpu_workspaces = matches!(options.target, Target::CPU | Target::Hybrid(_));
         let kernels = kernel::build_kernels(&mut graph, &mut graph_op, include_cpu_workspaces);
         Self {
             inputs,

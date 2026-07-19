@@ -18,6 +18,7 @@ use rayon::prelude::*;
 use crate::codegen::cuda::*;
 use crate::codegen::*;
 use crate::options::Options;
+use crate::options::Target;
 use crate::schedule::ir::AllocPlace;
 use crate::schedule::ir::Step;
 use crate::schedule::Schedule;
@@ -56,7 +57,10 @@ type DestroyType = unsafe extern "C" fn(*mut std::ffi::c_void);
 
 fn host_resident_initializer_indices(schedule: &Schedule) -> HashSet<usize> {
     // Only meaningful for the prefetch scheduler; otherwise initializers are resident in VRAM.
-    if schedule.options.prefetch_policy.is_none() {
+    let Target::CUDA(policy) = schedule.options.target else {
+        return HashSet::new();
+    };
+    if policy.is_disabled() {
         return HashSet::new();
     }
 

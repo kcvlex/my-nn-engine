@@ -1,12 +1,41 @@
 use typed_builder::TypedBuilder;
 
-use crate::schedule::scheduler::PlacementStrategy;
-use crate::schedule::scheduler::PrefetchPolicy;
+use crate::schedule::ir::Device;
+pub use crate::schedule::scheduler::PlacementStrategy;
+pub use crate::schedule::scheduler::PrefetchPolicy;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     CPU,
-    CUDA,
+    /// All compute on the GPU. Weights not kept resident by the policy are
+    /// streamed from host on demand (`PrefetchPolicy::Disabled` = fully
+    /// VRAM-resident).
+    CUDA(PrefetchPolicy),
+    /// Kernels split across CPU and GPU by the placement; runs on the hybrid
+    /// runtime.
+    Hybrid(PlacementStrategy),
+}
+
+impl Target {
+    /// Device the graph is transformed/lowered for. A hybrid target follows
+    /// its placement; GPU-primary strategies lower as CUDA.
+    pub fn codegen_device(&self) -> Device {
+        match self {
+            Target::CPU => Device::CPU,
+            Target::CUDA(_) => Device::CUDA,
+            Target::Hybrid(PlacementStrategy::Uniform(d)) => *d,
+            Target::Hybrid(_) => Device::CUDA,
+        }
+    }
+
+    /// Placement used by the memory-aware scheduler.
+    pub fn placement_strategy(&self) -> PlacementStrategy {
+        match self {
+            Target::CPU => PlacementStrategy::Uniform(Device::CPU),
+            Target::CUDA(_) => PlacementStrategy::Uniform(Device::CUDA),
+            Target::Hybrid(s) => *s,
+        }
+    }
 }
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -37,15 +66,6 @@ pub struct Options {
 
     #[builder(default = std::env::var("MY_ONNX_SAVE_BUILD_DIR").is_ok())]
     pub save_transformed_model: bool,
-
-    #[builder(default)]
-    pub placement_strategy: Option<PlacementStrategy>,
-
-    /// If set, schedule with the weight-prefetch scheduler: the selected
-    /// initializers are streamed from host into bounded GPU staging chunks on
-    /// demand instead of staying resident in VRAM. Experimental; CUDA only.
-    #[builder(default)]
-    pub prefetch_policy: Option<PrefetchPolicy>,
 
     /// If true, rewrite every `DequantMatMul` so its activation input is first
     /// passed through a `DynamicQuantizeLinear` (symmetric per-row int8) and

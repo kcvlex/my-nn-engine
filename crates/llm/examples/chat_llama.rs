@@ -15,6 +15,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::apply_chat_template;
 use my_nn_engine_llm::build_decoder;
@@ -35,7 +36,7 @@ fn main() {
     });
     let target = match args.next().as_deref() {
         Some("cpu") => Target::CPU,
-        Some("cuda") | None => Target::CUDA,
+        Some("cuda") | None => Target::CUDA(PrefetchPolicy::Disabled),
         Some(other) => panic!("unknown target {other:?} (expected `cpu` or `cuda`)"),
     };
 

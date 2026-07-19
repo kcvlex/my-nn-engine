@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use my_nn_engine::graph::ValueId;
 use my_nn_engine::onnx::load::LoadProto;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -387,7 +388,7 @@ fn rope_fused_cpu() {
 #[cfg(feature = "cuda")]
 #[test]
 fn rope_fused_cuda() {
-    rope_fused_vs_decomposed(Target::CUDA);
+    rope_fused_vs_decomposed(Target::CUDA(PrefetchPolicy::Disabled));
 }
 
 #[test]

@@ -3,6 +3,7 @@ mod common;
 use itertools::izip;
 use my_nn_engine::onnx::load::*;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::schedule::ir::Device;
 use my_nn_engine::schedule::scheduler::PlacementStrategy;
@@ -30,16 +31,16 @@ impl SessionKind {
                 .omp_elementwise_threshold(10)
                 .build(),
             #[cfg(feature = "cuda")]
-            SessionKind::Cuda => Options::builder().target(Target::CUDA).build(),
+            SessionKind::Cuda => Options::builder()
+                .target(Target::CUDA(PrefetchPolicy::Disabled))
+                .build(),
             SessionKind::HybridCpu => Options::builder()
-                .target(Target::CPU)
+                .target(Target::Hybrid(PlacementStrategy::Uniform(Device::CPU)))
                 .omp_elementwise_threshold(10)
-                .placement_strategy(Some(PlacementStrategy::Uniform(Device::CPU)))
                 .build(),
             #[cfg(feature = "cuda")]
             SessionKind::HybridCuda => Options::builder()
-                .target(Target::CUDA)
-                .placement_strategy(Some(PlacementStrategy::Uniform(Device::CUDA)))
+                .target(Target::Hybrid(PlacementStrategy::Uniform(Device::CUDA)))
                 .build(),
         }
     }

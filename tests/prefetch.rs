@@ -35,14 +35,17 @@ fn conv_bias_host_resident_weight_matches_gpu_resident() -> Result<(), SessionEr
     let inputs = [input];
 
     // Baseline: all weights resident in VRAM.
-    let resident = Options::builder().target(Target::CUDA).build();
+    let resident = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
     let resident_out = run(&resident, &dir, &inputs)?;
 
     // Prefetch: threshold between bias (20 B) and weight (540 B), so only
     // `layer.weight` is HostResident; bias stays resident.
     let prefetch = Options::builder()
-        .target(Target::CUDA)
-        .prefetch_policy(Some(PrefetchPolicy::SizeThreshold { min_bytes: 100 }))
+        .target(Target::CUDA(PrefetchPolicy::SizeThreshold {
+            min_bytes: 100,
+        }))
         .build();
     let prefetch_out = run(&prefetch, &dir, &inputs)?;
 

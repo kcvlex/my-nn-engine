@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_core::Stream;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target as MyOnnxTarget;
 use my_nn_engine::tensor::Tensor;
 use prost::Message;
@@ -81,7 +82,7 @@ impl OnnxInferenceServiceImpl {
     fn proto_backend_to_target(proto_backend: i32) -> Result<MyOnnxTarget, Status> {
         match ProtoBackend::try_from(proto_backend) {
             Ok(ProtoBackend::Cpu) => Ok(MyOnnxTarget::CPU),
-            Ok(ProtoBackend::Cuda) => Ok(MyOnnxTarget::CUDA),
+            Ok(ProtoBackend::Cuda) => Ok(MyOnnxTarget::CUDA(PrefetchPolicy::Disabled)),
             Err(_) => Err(Status::invalid_argument(format!(
                 "Invalid backend: {}",
                 proto_backend

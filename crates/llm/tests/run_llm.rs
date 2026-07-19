@@ -75,7 +75,7 @@ fn run_llama2_int8(target: Target) -> String {
     let prefill_len = 16;
     // CPU codegen does not yet implement the rope+dequant fuse in attention,
     // so streaming-KV + INT8 only works on CUDA.
-    let streaming_kv = matches!(target, Target::CUDA);
+    let streaming_kv = matches!(target, Target::CUDA(_));
     let llama_opts = BuildOptions::builder()
         .quant_kv_cache(true)
         .streaming_kv(streaming_kv)
@@ -135,7 +135,7 @@ fn run_mistral_int8(target: Target) -> String {
     let prefill_len = 16;
     // CPU codegen does not yet implement the rope+dequant fuse in attention,
     // so streaming-KV + INT8 only works on CUDA.
-    let streaming_kv = matches!(target, Target::CUDA);
+    let streaming_kv = matches!(target, Target::CUDA(_));
     let llama_opts = BuildOptions::builder()
         .quant_kv_cache(true)
         .streaming_kv(streaming_kv)
@@ -188,7 +188,7 @@ fn run_mistral_int8(target: Target) -> String {
 #[serial(gpu)]
 fn tinyllama() {
     const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
-    let text = run_tinyllama(Target::CUDA);
+    let text = run_tinyllama(Target::CUDA(PrefetchPolicy::Disabled));
     assert_eq!(text, EXPECTED_TEXT);
 }
 
@@ -202,8 +202,7 @@ fn tinyllama_resident_budget() {
     // must match the GPU-only run.
     const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
     let opts = Options::builder()
-        .target(Target::CUDA)
-        .placement_strategy(Some(PlacementStrategy::ResidentBudget {
+        .target(Target::Hybrid(PlacementStrategy::ResidentBudget {
             min_bytes: 1 << 20,
             resident_bytes: 1_000_000_000,
         }))
@@ -217,7 +216,7 @@ fn tinyllama_resident_budget() {
 #[serial(gpu)]
 fn llama2_int8() {
     const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
-    let text = run_llama2_int8(Target::CUDA);
+    let text = run_llama2_int8(Target::CUDA(PrefetchPolicy::Disabled));
     assert_eq!(text, EXPECTED_TEXT);
 }
 
@@ -240,7 +239,7 @@ fn llama2_int8_cpu() {
 #[serial(gpu)]
 fn mistral_int8() {
     const EXPECTED_TEXT: &str = "Paris.\n\n## What is the capital of France in 2021?\n\nParis\n\n";
-    let text = run_mistral_int8(Target::CUDA);
+    let text = run_mistral_int8(Target::CUDA(PrefetchPolicy::Disabled));
     assert_eq!(text, EXPECTED_TEXT);
 }
 
@@ -290,8 +289,7 @@ fn run_llama3_int8_with(opts: Options) -> String {
 fn llama3_int8_prefetch() {
     const EXPECTED_TEXT: &str = " Paris.\nThe capital of the United States";
     let opts = Options::builder()
-        .target(Target::CUDA)
-        .prefetch_policy(Some(PrefetchPolicy::AutoResidentBudget {
+        .target(Target::CUDA(PrefetchPolicy::AutoResidentBudget {
             min_bytes: 1 << 20,
             reserve_bytes: 3_500_000_000,
         }))
@@ -306,8 +304,7 @@ fn llama3_int8_prefetch() {
 #[ignore = "experimental: llama3-8b-int8 hybrid (slow, CPU-bound)"]
 fn llama3_int8_hybrid() {
     let opts = Options::builder()
-        .target(Target::CUDA)
-        .placement_strategy(Some(PlacementStrategy::StructuralKvTouch))
+        .target(Target::Hybrid(PlacementStrategy::StructuralKvTouch))
         .build();
     let text = run_llama3_int8_with(opts);
     eprintln!("llama3_int8_hybrid output: {:?}", text);
@@ -319,8 +316,7 @@ fn llama3_int8_hybrid() {
 fn tinyllama_hybrid() {
     const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
     let opts = Options::builder()
-        .target(Target::CUDA)
-        .placement_strategy(Some(PlacementStrategy::StructuralKvTouch))
+        .target(Target::Hybrid(PlacementStrategy::StructuralKvTouch))
         .build();
     let text = run_tinyllama_with(opts);
     assert_eq!(text, EXPECTED_TEXT);

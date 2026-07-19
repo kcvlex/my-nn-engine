@@ -65,8 +65,7 @@ fn kv_cache_update_then_sigmoid_hybrid() -> TestResult {
     };
 
     let opts = Options::builder()
-        .target(Target::CUDA)
-        .placement_strategy(Some(PlacementStrategy::StructuralKvTouch))
+        .target(Target::Hybrid(PlacementStrategy::StructuralKvTouch))
         .build();
 
     let mut session = Session::new(&model_path, None, &opts, &config)?;

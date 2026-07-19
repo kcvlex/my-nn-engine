@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use my_nn_engine::onnx::load::LoadProto;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -40,5 +41,5 @@ fn conv_external_cpu() -> TestResult {
 #[cfg(feature = "cuda")]
 #[test]
 fn conv_external_cuda() -> TestResult {
-    run_external(Target::CUDA)
+    run_external(Target::CUDA(PrefetchPolicy::Disabled))
 }

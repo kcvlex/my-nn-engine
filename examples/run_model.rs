@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use my_nn_engine::onnx::load::*;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -22,7 +23,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let target = match args[1].as_str() {
-        "cuda" => Target::CUDA,
+        "cuda" => Target::CUDA(PrefetchPolicy::Disabled),
         "cpu" => Target::CPU,
         other => {
             eprintln!("unknown target {other:?} (expected `cpu` or `cuda`)");

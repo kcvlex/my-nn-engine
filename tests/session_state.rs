@@ -5,6 +5,7 @@ mod common;
 use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -72,7 +73,9 @@ fn kv_cache_state_persistence() -> TestResult {
         ..SessionConfig::default()
     };
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
 
     let mut session = Session::new(&model_path, None, &opts, &config)?;
 
@@ -166,7 +169,9 @@ fn kv_cache_attention_decode_e2e() -> TestResult {
         ..SessionConfig::default()
     };
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
 
     let mut session = Session::new(&model_path, None, &opts, &config)?;
 

@@ -15,7 +15,7 @@ pub fn create_epilog_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp> {
     let mut manager = SimplePassManager::new("Epilog".to_string());
     manager.add_pass(Box::new(NHWC2NCHWLowering::default()));
     manager.add_pass(Box::new(ReinterpretConversion::default()));
-    if matches!(opt.target, Target::CUDA) {
+    if opt.target.codegen_device() == crate::schedule::ir::Device::CUDA {
         manager.add_pass(Box::new(ContiguousElimination::default()));
     }
     manager.add_pass(Box::new(ContiguousFolding::default()));

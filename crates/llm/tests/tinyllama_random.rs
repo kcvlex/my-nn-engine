@@ -2,6 +2,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::quantize::cast_safetensors_bf16_dir;
@@ -148,7 +149,7 @@ fn cpu_bf16() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda() {
-    run(Target::CUDA);
+    run(Target::CUDA(PrefetchPolicy::Disabled));
 }
 
 #[cfg(feature = "cuda")]
@@ -168,7 +169,9 @@ fn cuda_streaming_runs_past_window() {
     let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_streaming(
         r.graph,
@@ -214,7 +217,9 @@ fn cuda_streaming_quant_runs_past_window() {
     let r = build_decoder(&config, &spec, max_seq_len, &llama_opts);
     assert!(r.streaming.is_some());
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_streaming(
         r.graph,
@@ -270,7 +275,9 @@ fn run_streaming_prefill_smoke(quant_kv_cache: bool) {
     assert!(r.streaming.is_some());
     assert!(p.streaming.is_some());
 
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama_streaming(
         r.graph,
@@ -311,5 +318,5 @@ fn cuda_streaming_quant_prefill_runs_past_window() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_bf16() {
-    run_bf16(Target::CUDA);
+    run_bf16(Target::CUDA(PrefetchPolicy::Disabled));
 }
