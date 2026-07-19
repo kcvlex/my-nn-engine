@@ -70,6 +70,11 @@ impl SchedulePass for PrefetchSchedulePass {
         let placement = match self.placement_strategy {
             PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
             PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
+            // ResidentBudget offloads compute to the CPU; the prefetch scheduler
+            // keeps all compute on the GPU and streams weights instead.
+            PlacementStrategy::ResidentBudget { .. } => {
+                panic!("PrefetchSchedulePass does not support ResidentBudget placement")
+            }
         };
         let host_resident = select_host_resident(schedule, &placement, self.policy);
         let plan = build(schedule, self.num_streams, placement, host_resident);
