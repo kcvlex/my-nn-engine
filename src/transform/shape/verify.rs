@@ -10,11 +10,9 @@ use crate::tensor::types::TypeError;
 use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
-use crate::transform::Target;
 
 pub struct ShapeVerification {
     pub check_strides: bool,
-    pub target: Target,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

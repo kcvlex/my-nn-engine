@@ -8,7 +8,6 @@ use crate::transform::optimize::const_folding::prop_constant;
 use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
-use crate::transform::Target;
 
 pub struct Config {
     pub unify_mode: UnifyMode,
@@ -22,9 +21,7 @@ impl Default for Config {
     }
 }
 
-pub struct ShapeInference {
-    pub target: Target,
-}
+pub struct ShapeInference;
 
 impl<T: GraphOp> Pass<T> for ShapeInference {
     fn summary(&self) -> &'static str {

@@ -14,11 +14,8 @@ use crate::tensor::types::ResolvedTensorType;
 use crate::transform::shape::infer_node_output;
 use crate::transform::GraphOp;
 use crate::transform::Pass;
-use crate::transform::Target;
 
-pub struct AssignStrides {
-    pub target: Target,
-}
+pub struct AssignStrides;
 
 impl<T: GraphOp> Pass<T> for AssignStrides {
     fn summary(&self) -> &'static str {

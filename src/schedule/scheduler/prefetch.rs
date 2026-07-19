@@ -20,8 +20,10 @@ const STAGING_RING_DEPTH: usize = 3;
 
 /// Policy for deciding which initializers are brought in from host on demand
 /// (`HostResident`) vs kept resident in VRAM (`GpuResident`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrefetchPolicy {
+    /// No streaming: every initializer stays resident in VRAM.
+    Disabled,
     /// Stream every initializer consumed by a GPU kernel whose byte size is at
     /// least `min_bytes`. A non-trivial threshold (e.g. 1 MiB) naturally
     /// excludes scalar / metadata initializers.
@@ -46,8 +48,13 @@ pub enum PrefetchPolicy {
 }
 
 impl PrefetchPolicy {
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, PrefetchPolicy::Disabled)
+    }
+
     fn min_bytes(&self) -> usize {
         match self {
+            PrefetchPolicy::Disabled => usize::MAX,
             PrefetchPolicy::SizeThreshold { min_bytes } => *min_bytes,
             PrefetchPolicy::ResidentBudget { min_bytes, .. } => *min_bytes,
             PrefetchPolicy::AutoResidentBudget { min_bytes, .. } => *min_bytes,
@@ -57,7 +64,6 @@ impl PrefetchPolicy {
 
 pub struct PrefetchSchedulePass {
     pub num_streams: usize,
-    pub placement_strategy: PlacementStrategy,
     pub policy: PrefetchPolicy,
 }
 
@@ -67,15 +73,9 @@ impl SchedulePass for PrefetchSchedulePass {
     }
 
     fn run(&self, schedule: &mut Schedule) {
-        let placement = match self.placement_strategy {
-            PlacementStrategy::Uniform(d) => Placement::uniform(schedule, d),
-            PlacementStrategy::StructuralKvTouch => Placement::structural_kv_touch(schedule),
-            // ResidentBudget offloads compute to the CPU; the prefetch scheduler
-            // keeps all compute on the GPU and streams weights instead.
-            PlacementStrategy::ResidentBudget { .. } => {
-                panic!("PrefetchSchedulePass does not support ResidentBudget placement")
-            }
-        };
+        // The prefetch scheduler keeps all compute on the GPU and streams
+        // weights instead.
+        let placement = Placement::uniform(schedule, Device::CUDA);
         let host_resident = select_host_resident(schedule, &placement, self.policy);
         let plan = build(schedule, self.num_streams, placement, host_resident);
         schedule.execution_plan = Some(plan);
@@ -100,6 +100,7 @@ fn select_host_resident(
         .collect();
 
     let resident_bytes = match policy {
+        PrefetchPolicy::Disabled => return HashSet::new(),
         PrefetchPolicy::SizeThreshold { .. } => return candidates.into_keys().collect(),
         PrefetchPolicy::ResidentBudget { resident_bytes, .. } => resident_bytes,
         PrefetchPolicy::AutoResidentBudget { reserve_bytes, .. } => {

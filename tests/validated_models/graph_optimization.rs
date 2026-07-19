@@ -27,7 +27,9 @@ fn load_and_transform(model_dir: &str, model_file: &str, num_inputs: usize) -> M
 
     transform_graph(
         &mut model.graph,
-        &Options::builder().target(Target::CUDA).build(),
+        &Options::builder()
+            .target(Target::CUDA(PrefetchPolicy::Disabled))
+            .build(),
         &SessionConfig::default(),
     );
     model
@@ -131,7 +133,9 @@ fn test_tinyllama_graph_optimization() {
     model.graph.resolve_input_types(&input_types).unwrap();
     transform_graph(
         &mut model.graph,
-        &Options::builder().target(Target::CUDA).build(),
+        &Options::builder()
+            .target(Target::CUDA(PrefetchPolicy::Disabled))
+            .build(),
         &SessionConfig::default(),
     );
 
@@ -151,8 +155,12 @@ fn test_tinyllama_graph_optimization() {
 
 #[test]
 fn test_resnet18_nhwc_sink_cuda() {
-    let model =
-        load_and_transform_with_target("resnet18-v2-7", "resnet18-v2-7.onnx", 1, Target::CUDA);
+    let model = load_and_transform_with_target(
+        "resnet18-v2-7",
+        "resnet18-v2-7.onnx",
+        1,
+        Target::CUDA(PrefetchPolicy::Disabled),
+    );
 
     let total_conv = count_op(&model, |op| matches!(op, Operator::Conv(_)));
     let nhwc_input_conv = model

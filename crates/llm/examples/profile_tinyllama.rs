@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::BuildOptions;
@@ -59,7 +60,9 @@ fn main() {
     let n_measure = 32;
 
     let r = build_decoder(&config, &spec, max_seq_len, &BuildOptions::default());
-    let opts = Options::builder().target(Target::CUDA).build();
+    let opts = Options::builder()
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
+        .build();
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
     let mut llm = LlmSession::for_llama(
         r.graph,

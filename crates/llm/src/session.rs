@@ -6,7 +6,7 @@ use log::info;
 use my_nn_engine::graph::Graph;
 use my_nn_engine::onnx::load::ModelLoadError;
 use my_nn_engine::options::Options;
-use my_nn_engine::options::Target;
+use my_nn_engine::schedule::ir::Device;
 use my_nn_engine::session::PersistentBuffers;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -198,9 +198,9 @@ impl LlmSession {
             .flat_map(kv_cache_specs)
             .collect();
 
-        let initializer_buffers = match opts.target {
-            Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
-            Target::CPU => None,
+        let initializer_buffers = match opts.target.codegen_device() {
+            Device::CUDA => Some(Arc::new(PersistentBuffers::new())),
+            Device::CPU => None,
         };
         let kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(
@@ -259,9 +259,9 @@ impl LlmSession {
 
         // CPU sessions allocate initializers per-graph (no shared device buffer pool yet),
         // so the cache only applies on CUDA.
-        let initializer_buffers = match opts.target {
-            Target::CUDA => Some(Arc::new(PersistentBuffers::new())),
-            Target::CPU => None,
+        let initializer_buffers = match opts.target.codegen_device() {
+            Device::CUDA => Some(Arc::new(PersistentBuffers::new())),
+            Device::CPU => None,
         };
         let kv_buffers = Some(Arc::new(PersistentBuffers::new()));
         let decode_session = Session::from_graph(

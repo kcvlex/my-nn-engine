@@ -21,7 +21,7 @@ use crate::transform::utils::ReinterpretConversion;
 use crate::transform::PassManager;
 use crate::transform::SimplePassManager;
 
-pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManager<SimpleGraphOp> {
+pub fn create_lower_passes(_opt: &Options, enable_nhwc: bool) -> SimplePassManager<SimpleGraphOp> {
     let mut passes = SimplePassManager::new("Lowering".to_string());
     passes.add_pass(Box::new(ReduceDecomposition::default()));
     passes.add_pass(Box::new(GlobalAvgPoolDecomposition::default()));
@@ -29,9 +29,8 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
     if enable_nhwc {
         passes.add_pass(Box::new(NHWC2NCHWInsertion::default()));
     }
-    passes.add_pass(Box::new(AssignStrides { target: opt.target }));
+    passes.add_pass(Box::new(AssignStrides));
     passes.add_pass(Box::new(ShapeVerification {
-        target: opt.target,
         check_strides: true,
     }));
 
@@ -41,17 +40,14 @@ pub fn create_lower_passes(opt: &Options, enable_nhwc: bool) -> SimplePassManage
         passes.add_pass(Box::new(ContiguousFolding::backward_only()));
         passes.add_pass(Box::new(ContiguousElimination::default()));
         passes.add_pass(Box::new(ShapeVerification {
-            target: opt.target,
             check_strides: true,
         }));
         passes.add_pass(Box::new(NHWC2NCHWDetection::default()));
         passes.add_pass(Box::new(ShapeVerification {
-            target: opt.target,
             check_strides: true,
         }));
         passes.add_pass(Box::new(NHWC2NCHWSinkAndFold::default()));
         passes.add_pass(Box::new(ShapeVerification {
-            target: opt.target,
             check_strides: true,
         }));
     }

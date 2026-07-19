@@ -2847,7 +2847,9 @@ mod test {
             .join("models/test/single_op")
             .join("conv.onnx");
         let model = Model::load_from_path(path).unwrap();
-        let options = Options::builder().target(Target::CUDA).build();
+        let options = Options::builder()
+            .target(Target::CUDA(PrefetchPolicy::Disabled))
+            .build();
         let mut schedule = Schedule::new(model.graph, options.clone());
         let schedule_passes = crate::schedule::create_schedule_passes(&options);
         schedule_passes.run(&mut schedule);
@@ -2873,7 +2875,9 @@ mod test {
 
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(model_path);
         let model = Model::load_from_path(path).unwrap();
-        let options = Options::builder().target(Target::CUDA).build();
+        let options = Options::builder()
+            .target(Target::CUDA(PrefetchPolicy::Disabled))
+            .build();
         let mut graph = model.graph;
         crate::transform::transform_graph(
             &mut graph,

@@ -8,6 +8,7 @@ use my_nn_engine::graph::Node;
 use my_nn_engine::graph::ValueId;
 use my_nn_engine::graph::ValueInfo;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -348,23 +349,23 @@ fn bf16_matmul_cpu() -> TestResult {
 #[test]
 #[cfg(feature = "cuda")]
 fn bf16_sigmoid_cuda() -> TestResult {
-    run_bf16_sigmoid(Target::CUDA)
+    run_bf16_sigmoid(Target::CUDA(PrefetchPolicy::Disabled))
 }
 
 #[test]
 #[cfg(feature = "cuda")]
 fn bf16_rms_norm_cuda() -> TestResult {
-    run_bf16_rms_norm(Target::CUDA)
+    run_bf16_rms_norm(Target::CUDA(PrefetchPolicy::Disabled))
 }
 
 #[test]
 #[cfg(feature = "cuda")]
 fn bf16_matmul_cuda() -> TestResult {
-    run_bf16_matmul(Target::CUDA)
+    run_bf16_matmul(Target::CUDA(PrefetchPolicy::Disabled))
 }
 
 #[test]
 #[cfg(feature = "cuda")]
 fn bf16_add_cuda() -> TestResult {
-    run_bf16_add(Target::CUDA)
+    run_bf16_add(Target::CUDA(PrefetchPolicy::Disabled))
 }

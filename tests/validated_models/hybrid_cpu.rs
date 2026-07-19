@@ -15,8 +15,7 @@ fn run_test(
     model_filename: Option<&str>,
 ) -> Result {
     let opts = Options::builder()
-        .target(Target::CPU)
-        .placement_strategy(Some(PlacementStrategy::Uniform(Device::CPU)))
+        .target(Target::Hybrid(PlacementStrategy::Uniform(Device::CPU)))
         .build();
     run_validated_model(model, epsilon, nums, model_filename, opts)
 }

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use my_nn_engine::onnx::load::LoadProto;
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine::session::Session;
 use my_nn_engine::session::SessionConfig;
@@ -68,5 +69,5 @@ fn tinyllama_cpu() -> TestResult {
 #[cfg(all(feature = "local", feature = "cuda"))]
 #[test]
 fn tinyllama_cuda() -> TestResult {
-    run_tinyllama(Target::CUDA)
+    run_tinyllama(Target::CUDA(PrefetchPolicy::Disabled))
 }

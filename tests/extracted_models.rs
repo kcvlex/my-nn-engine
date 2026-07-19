@@ -72,7 +72,7 @@ fn test_extracted_model() -> Result {
         .parse()
         .expect("invalid EPSILON value");
     let target = match std::env::var("TARGET").as_deref() {
-        Ok("cuda") => Target::CUDA,
+        Ok("cuda") => Target::CUDA(PrefetchPolicy::Disabled),
         _ => Target::CPU,
     };
     run_test(&dir, epsilon, target)

@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use my_nn_engine::options::Options;
+use my_nn_engine::options::PrefetchPolicy;
 use my_nn_engine::options::Target;
 use my_nn_engine_llm::build_decoder;
 use my_nn_engine_llm::quantize::quantize_safetensors_int8_dir;
@@ -114,7 +115,7 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(16);
     let opts = Options::builder()
-        .target(Target::CUDA)
+        .target(Target::CUDA(PrefetchPolicy::Disabled))
         .quantize_activations(quantize_activations)
         .num_cuda_streams(num_cuda_streams)
         .build();

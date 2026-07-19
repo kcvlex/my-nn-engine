@@ -43,7 +43,7 @@ fn main() {
     let enable_nhwc = !args.iter().any(|a| a == "--no-nhwc");
     let target = match args[1].as_str() {
         "cpu" => Target::CPU,
-        "cuda" => Target::CUDA,
+        "cuda" => Target::CUDA(PrefetchPolicy::Disabled),
         other => {
             eprintln!("Unknown target: {other}. Use 'cpu' or 'cuda'.");
             std::process::exit(1);
@@ -112,12 +112,13 @@ fn run(
             .profile(enable_profile)
             .enable_nhwc_optimization(Some(enable_nhwc))
             .build(),
-        Target::CUDA => Options::builder()
-            .target(Target::CUDA)
+        Target::CUDA(_) => Options::builder()
+            .target(target)
             .num_cuda_streams(num_streams)
             .profile(enable_profile)
             .enable_nhwc_optimization(Some(enable_nhwc))
             .build(),
+        Target::Hybrid(_) => unreachable!(),
     };
 
     let mut session = Session::new(
@@ -130,7 +131,7 @@ fn run(
 
     let _ = session.run(&inputs).unwrap();
 
-    if matches!(target, Target::CUDA) {
+    if matches!(target, Target::CUDA(_)) {
         cuda_profiler_start();
     }
 
@@ -141,7 +142,7 @@ fn run(
     }
     let elapsed = start.elapsed();
 
-    if matches!(target, Target::CUDA) {
+    if matches!(target, Target::CUDA(_)) {
         cuda_profiler_stop();
     }
     eprintln!(

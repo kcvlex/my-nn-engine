@@ -45,7 +45,7 @@ pub fn create_optimize_passes(opt: &Options) -> SimplePassManager<SimpleGraphOp>
         check_strides: false,
     }));
     pass_manager.add_pass(Box::new(ConvBNFusion::default()));
-    if matches!(opt.target, crate::options::Target::CUDA) {
+    if opt.target.codegen_device() == crate::schedule::ir::Device::CUDA {
         pass_manager.add_pass(Box::new(ConvActivationFusion::default()));
     }
     pass_manager.add_pass(Box::new(FastGeLUFusion::default()));

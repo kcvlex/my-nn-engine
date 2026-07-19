@@ -69,7 +69,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Create session
     let input_types: Vec<_> = inputs.iter().map(|t| t.tensor_type()).collect();
     let target = match std::env::var("TARGET").as_deref() {
-        Ok("CUDA") | Ok("cuda") => Target::CUDA,
+        Ok("CUDA") | Ok("cuda") => Target::CUDA(PrefetchPolicy::Disabled),
         _ => Target::CPU,
     };
     let mut session = Session::new(
