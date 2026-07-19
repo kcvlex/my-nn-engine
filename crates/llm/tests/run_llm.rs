@@ -195,6 +195,26 @@ fn tinyllama() {
 #[cfg(feature = "cuda")]
 #[test]
 #[serial(gpu)]
+fn tinyllama_resident_budget() {
+    // Force a GPU/CPU cut (budget well under the model size) so some layers --
+    // and their KV cache -- run on the CPU (host-resident KV). The split is only
+    // a device placement of a deterministic computation, so the generated text
+    // must match the GPU-only run.
+    const EXPECTED_TEXT: &str = "Paris, which is also the largest city in the country.\n\n2.";
+    let opts = Options::builder()
+        .target(Target::CUDA)
+        .placement_strategy(Some(PlacementStrategy::ResidentBudget {
+            min_bytes: 1 << 20,
+            resident_bytes: 1_000_000_000,
+        }))
+        .build();
+    let text = run_tinyllama_with(opts);
+    assert_eq!(text, EXPECTED_TEXT);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[serial(gpu)]
 fn llama2_int8() {
     const EXPECTED_TEXT: &str = "Paris.\nThe capital of Germany is Berlin.\nThe capital of Greece is Athens.\nThe capital of India";
     let text = run_llama2_int8(Target::CUDA);

@@ -98,7 +98,9 @@ pub fn create_schedule_passes(options: &Options) -> SchedulePassManager {
     let needs_cpu_omp = options.target == Target::CPU ||
         matches!(
             placement_strategy,
-            PlacementStrategy::StructuralKvTouch | PlacementStrategy::Uniform(ir::Device::CPU)
+            PlacementStrategy::StructuralKvTouch |
+                PlacementStrategy::Uniform(ir::Device::CPU) |
+                PlacementStrategy::ResidentBudget { .. }
         );
     if needs_cpu_omp {
         manager.add_pass(Box::new(omp::OmpAnnotatePass {
