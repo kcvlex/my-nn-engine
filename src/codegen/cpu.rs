@@ -1091,6 +1091,7 @@ impl<'ll> CodeGen<'ll, '_> {
                         .map(|i| &ptrs[i]);
                     translator.build_batched_gemm(&ptrs[0], a, b, workspace, entry, gemm)
                 }
+                Operator::AllReduce => translator.build_all_reduce(&ptrs[0], &ptrs[1], entry),
                 Operator::KVCacheUpdate => {
                     translator.build_kv_cache_update(&ptrs[1], &ptrs[2], &ptrs[3], entry)
                 }

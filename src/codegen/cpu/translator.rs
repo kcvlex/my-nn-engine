@@ -2887,6 +2887,53 @@ impl<'ctx> FunctionTranslator<'_, 'ctx> {
         Ok(self.builder.get_insert_block().unwrap())
     }
 
+    /// Sum-all-reduce across the process group via `mynn_all_reduce`. The
+    /// kernel copies `input` into `out` before reducing in place, so the two
+    /// buffers may be distinct or aliased.
+    pub fn build_all_reduce(
+        &self,
+        out: &TensorPtr<'ctx>,
+        input: &TensorPtr<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) -> Result<BasicBlock<'ctx>, BuilderError> {
+        use crate::codegen::cpu::kernels::FType;
+        self.builder.position_at_end(entry);
+
+        assert!(
+            out.ty.is_contiguous() && input.ty.is_contiguous(),
+            "AllReduce requires contiguous buffers"
+        );
+        let num_elements = input.ty.dims.size();
+        let dtype = FType::from_data_type(out.ty.elem_type) as u64;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let fn_ty = self.context.void_type().fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), i64_ty.into(), i32_ty.into()],
+            false,
+        );
+        let f = self
+            .module
+            .get_function("mynn_all_reduce")
+            .unwrap_or_else(|| {
+                self.module.add_function(
+                    "mynn_all_reduce",
+                    fn_ty,
+                    Some(inkwell::module::Linkage::External),
+                )
+            });
+
+        let args: &[BasicMetadataValueEnum<'ctx>] = &[
+            self.build_gep(out)?.into(),
+            self.build_gep(input)?.into(),
+            i64_ty.const_int(num_elements as u64, false).into(),
+            i32_ty.const_int(dtype, false).into(),
+        ];
+        self.builder.build_call(f, args, "all_reduce")?;
+        Ok(self.builder.get_insert_block().unwrap())
+    }
+
     /// Symmetric per-row dynamic int8 quantization via `mynn_dynquant_i8`:
     /// `x` `[.., M, K]` float -> `y` int8 + per-row `scale` (same float type as
     /// `x`). The op's zero-point output is unused (symmetric) and not written.

@@ -57,6 +57,7 @@ strum_macros = "0.26.4"
 tempfile = { workspace = true }
 typed-builder = "0.21.0"
 thiserror = "2.0.18"
+my-nn-engine-comm = { version = "0.1.0", path = "crates/comm" }
 
 [build-dependencies]
 prost-build = "0.13.1"

@@ -107,6 +107,11 @@ pub enum Operator {
     Where,
 
     // Custom
+    // Element-wise sum of the input across all ranks of the process group
+    // (tensor parallelism); every rank receives the full reduced tensor.
+    // Output has the input's shape. Lowered on CPU to a call into the
+    // process-global communicator (see `collective::set_communicator`).
+    AllReduce,
     Contiguous(Contiguous),
     // Write `new` into `cache` at sequence offset `offset`, in place.
     //
@@ -936,6 +941,7 @@ impl Operator {
             Operator::Transpose(_) |
             Operator::Unsqueeze(_) => OperatorType::Bijective,
 
+            Operator::AllReduce |
             Operator::Attention(_) |
             Operator::AveragePool(_) |
             Operator::BatchedGemm(_) |

@@ -39,7 +39,7 @@ unsafe impl Sync for CpuJitState {}
 /// symbol table, so each JIT engine must `add_global_mapping` the declaring
 /// module's external decl to the fn address. Shared by SessionCPU and the
 /// hybrid CPU JIT.
-pub(super) fn cpu_kernel_symbols() -> [(&'static str, usize); 2] {
+pub(super) fn cpu_kernel_symbols() -> [(&'static str, usize); 3] {
     [
         (
             "mynn_qgemv_i8i8",
@@ -48,6 +48,10 @@ pub(super) fn cpu_kernel_symbols() -> [(&'static str, usize); 2] {
         (
             "mynn_dynquant_i8",
             crate::codegen::cpu::kernels::mynn_dynquant_i8 as usize,
+        ),
+        (
+            "mynn_all_reduce",
+            crate::codegen::cpu::kernels::mynn_all_reduce as usize,
         ),
     ]
 }
