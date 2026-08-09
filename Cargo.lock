@@ -1540,6 +1540,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "my-nn-engine-comm"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "my-nn-engine-llm"
 version = "0.1.0"
 dependencies = [
