@@ -18,6 +18,16 @@ pub struct Builder {
     pub graph: Graph,
 }
 
+/// Handles produced by [`Builder::load_weight_parts`]: the raw weight (and
+/// scale) initializer values plus the value compute consumes (the dequantized
+/// output for int8 weights, the initializer itself otherwise).
+#[derive(Debug, Clone, Copy)]
+pub struct LoadedWeight {
+    pub weight: ValueId,
+    pub scale: Option<ValueId>,
+    pub value: ValueId,
+}
+
 impl Builder {
     pub fn new(name: &str) -> Self {
         Self {
@@ -80,9 +90,22 @@ impl Builder {
         weight: ExternalTensorRef,
         scale: Option<ExternalTensorRef>,
     ) -> ValueId {
+        self.load_weight_parts(name, weight, scale).value
+    }
+
+    pub fn load_weight_parts(
+        &mut self,
+        name: &str,
+        weight: ExternalTensorRef,
+        scale: Option<ExternalTensorRef>,
+    ) -> LoadedWeight {
         let weight_id = self.external_initializer(name, weight);
         let Some(scale) = scale else {
-            return weight_id;
+            return LoadedWeight {
+                weight: weight_id,
+                scale: None,
+                value: weight_id,
+            };
         };
         let scale_id = self.external_initializer(&format!("{name}.scale"), scale);
         let out = self.alloc_value(&format!("{name}_dequant"));
@@ -94,7 +117,11 @@ impl Builder {
             vec![weight_id, scale_id],
             out,
         );
-        out
+        LoadedWeight {
+            weight: weight_id,
+            scale: Some(scale_id),
+            value: out,
+        }
     }
 
     fn alloc_value(&mut self, name: &str) -> ValueId {

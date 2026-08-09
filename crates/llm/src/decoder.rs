@@ -25,6 +25,53 @@ pub struct Proj {
     pub bias: Option<WeightRef>,
 }
 
+/// Graph handles for one linear projection, recorded while it is emitted.
+/// `weight`/`scale` are the initializer values backing the on-disk tensors;
+/// `bias` is the loaded bias value; `output` is the value the projection
+/// produces (post-bias).
+#[derive(Debug, Clone, Copy)]
+pub struct ProjStructure {
+    pub weight: ValueId,
+    pub scale: Option<ValueId>,
+    pub bias: Option<ValueId>,
+    pub output: ValueId,
+}
+
+/// Per-layer graph handles recorded during build, so structure-aware rewrites
+/// (e.g. the tensor-parallel pass) don't have to rediscover the layer anatomy
+/// by pattern matching.
+#[derive(Debug, Clone, Copy)]
+pub struct LayerStructure {
+    pub attention: AttentionStructure,
+    pub mlp: MlpStructure,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AttentionStructure {
+    pub q: ProjStructure,
+    pub k: ProjStructure,
+    pub v: ProjStructure,
+    pub o: ProjStructure,
+    /// i64 shape constant `[1, seq, n_heads, head_dim]` fed to the Q reshape.
+    pub q_shape: ValueId,
+    /// i64 shape constant `[1, seq, n_kv_heads, head_dim]` fed to the K/V reshapes.
+    pub kv_shape: ValueId,
+    /// i64 shape constant `[1, seq, n_heads * head_dim]` fed to the post-attention reshape.
+    pub attn_out_shape: ValueId,
+    /// KV-cache graph inputs (`{prefix}.past_key` / `.past_value`).
+    pub k_cache: ValueId,
+    pub v_cache: ValueId,
+    pub k_cache_scale: Option<ValueId>,
+    pub v_cache_scale: Option<ValueId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MlpStructure {
+    pub gate: ProjStructure,
+    pub up: ProjStructure,
+    pub down: ProjStructure,
+}
+
 #[derive(Debug, Clone)]
 pub enum NormSpec {
     Rms {
@@ -92,25 +139,50 @@ struct DecoderBuilder {
     b: Builder,
 }
 
+struct AppliedKVCache {
+    k_updated: ValueId,
+    v_updated: ValueId,
+    scales: Option<(ValueId, ValueId)>,
+    k_cache: ValueId,
+    v_cache: ValueId,
+    cache: KVCache,
+}
+
 impl DecoderBuilder {
     fn load_weight_t(&mut self, name: &str, w: &WeightRef) -> ValueId {
         let id = self.b.load_weight(name, w.weight.clone(), w.scale.clone());
         self.b.transpose(&format!("{name}_t"), id, vec![1, 0])
     }
 
-    fn linear(&mut self, x: ValueId, proj: &Proj) -> ValueId {
-        let w = self.load_weight_t(&proj.weight_name, &proj.weight);
-        let out = self.b.matmul(&proj.node, x, w);
-        match &proj.bias {
+    fn linear(&mut self, x: ValueId, proj: &Proj) -> ProjStructure {
+        let w = self.b.load_weight_parts(
+            &proj.weight_name,
+            proj.weight.weight.clone(),
+            proj.weight.scale.clone(),
+        );
+        let w_t = self
+            .b
+            .transpose(&format!("{}_t", proj.weight_name), w.value, vec![1, 0]);
+        let out = self.b.matmul(&proj.node, x, w_t);
+        let (bias, output) = match &proj.bias {
             Some(bias) => {
                 let bias_id = self.b.load_weight(
                     &format!("{}.bias", proj.weight_name.trim_end_matches(".weight")),
                     bias.weight.clone(),
                     bias.scale.clone(),
                 );
-                self.b.add(&format!("{}_bias", proj.node), out, bias_id)
+                (
+                    Some(bias_id),
+                    self.b.add(&format!("{}_bias", proj.node), out, bias_id),
+                )
             }
-            None => out,
+            None => (None, out),
+        };
+        ProjStructure {
+            weight: w.weight,
+            scale: w.scale,
+            bias,
+            output,
         }
     }
 
@@ -133,17 +205,18 @@ impl DecoderBuilder {
         ctx: &LayerCtx,
         x_in: ValueId,
         layer: &LayerSpec,
-    ) -> (ValueId, KVCache) {
+    ) -> (ValueId, KVCache, LayerStructure) {
         let prefix = match &layer.attn {
             AttnSpec::Gqa { prefix, .. } => prefix.clone(),
         };
-        let (attn_out, kv_cache) = self.build_attention(ctx, x_in, &layer.norm1, &layer.attn);
+        let (attn_out, kv_cache, attention) =
+            self.build_attention(ctx, x_in, &layer.norm1, &layer.attn);
         let attn_residual = self.b.add(&format!("{prefix}_attn_resid"), x_in, attn_out);
-        let mlp_out = self.build_mlp(&prefix, attn_residual, &layer.norm2, &layer.mlp);
+        let (mlp_out, mlp) = self.build_mlp(&prefix, attn_residual, &layer.norm2, &layer.mlp);
         let final_out = self
             .b
             .add(&format!("{prefix}_mlp_resid"), attn_residual, mlp_out);
-        (final_out, kv_cache)
+        (final_out, kv_cache, LayerStructure { attention, mlp })
     }
 
     fn build_attention(
@@ -152,7 +225,7 @@ impl DecoderBuilder {
         x_in: ValueId,
         norm: &NormSpec,
         attn: &AttnSpec,
-    ) -> (ValueId, KVCache) {
+    ) -> (ValueId, KVCache, AttentionStructure) {
         let AttnSpec::Gqa {
             prefix,
             q,
@@ -172,9 +245,9 @@ impl DecoderBuilder {
         // Pre-attention RMSNorm
         let n1 = self.build_norm(x_in, norm);
 
-        let q = self.linear(n1, q);
-        let k = self.linear(n1, k);
-        let v = self.linear(n1, v);
+        let q_structure = self.linear(n1, q);
+        let k_structure = self.linear(n1, k);
+        let v_structure = self.linear(n1, v);
 
         // Reshape and transpose to [1, H, S, D] (S = 1 for decode, prefill_len for prefill)
         let q_shape = self.b.i64_initializer(
@@ -185,9 +258,15 @@ impl DecoderBuilder {
             &format!("{prefix}_kv_shape"),
             vec![1, ctx.seq_q as i64, num_kv_heads as i64, head_dim as i64],
         );
-        let q = self.b.reshape(&format!("{prefix}_q_rs"), q, q_shape);
-        let k = self.b.reshape(&format!("{prefix}_k_rs"), k, kv_shape);
-        let v = self.b.reshape(&format!("{prefix}_v_rs"), v, kv_shape);
+        let q = self
+            .b
+            .reshape(&format!("{prefix}_q_rs"), q_structure.output, q_shape);
+        let k = self
+            .b
+            .reshape(&format!("{prefix}_k_rs"), k_structure.output, kv_shape);
+        let v = self
+            .b
+            .reshape(&format!("{prefix}_v_rs"), v_structure.output, kv_shape);
         let q = self
             .b
             .transpose(&format!("{prefix}_q_tr"), q, vec![0, 2, 1, 3]);
@@ -221,8 +300,14 @@ impl DecoderBuilder {
             k
         };
 
-        let (k_updated, v_updated, kv_scales, kv_cache) =
-            self.apply_kv_cache(ctx, prefix, num_kv_heads, head_dim, k, v);
+        let AppliedKVCache {
+            k_updated,
+            v_updated,
+            scales: kv_scales,
+            k_cache,
+            v_cache,
+            cache: kv_cache,
+        } = self.apply_kv_cache(ctx, prefix, num_kv_heads, head_dim, k, v);
 
         let scale = (head_dim as f32).sqrt().recip();
         let attn_out = match (ctx.streaming, ctx.quant_kv_cache) {
@@ -287,9 +372,22 @@ impl DecoderBuilder {
             .b
             .reshape(&format!("{prefix}_attn_rs"), attn_out, attn_back_shape);
 
-        let o = self.linear(attn_out, o);
+        let o_structure = self.linear(attn_out, o);
 
-        (o, kv_cache)
+        let structure = AttentionStructure {
+            q: q_structure,
+            k: k_structure,
+            v: v_structure,
+            o: o_structure,
+            q_shape,
+            kv_shape,
+            attn_out_shape: attn_back_shape,
+            k_cache,
+            v_cache,
+            k_cache_scale: kv_scales.map(|(k, _)| k),
+            v_cache_scale: kv_scales.map(|(_, v)| v),
+        };
+        (o_structure.output, kv_cache, structure)
     }
 
     fn apply_kv_cache(
@@ -300,7 +398,7 @@ impl DecoderBuilder {
         head_dim: usize,
         k: ValueId,
         v: ValueId,
-    ) -> (ValueId, ValueId, Option<(ValueId, ValueId)>, KVCache) {
+    ) -> AppliedKVCache {
         let k_cache_name = format!("{prefix}.past_key");
         let v_cache_name = format!("{prefix}.past_value");
         let cache_dims = [1, num_kv_heads, ctx.max_seq_len, head_dim];
@@ -405,10 +503,23 @@ impl DecoderBuilder {
             scale: kv_cache_scale,
         };
 
-        (k_updated, v_updated, kv_scales, kv_cache)
+        AppliedKVCache {
+            k_updated,
+            v_updated,
+            scales: kv_scales,
+            k_cache,
+            v_cache,
+            cache: kv_cache,
+        }
     }
 
-    fn build_mlp(&mut self, prefix: &str, x: ValueId, norm: &NormSpec, mlp: &MlpSpec) -> ValueId {
+    fn build_mlp(
+        &mut self,
+        prefix: &str,
+        x: ValueId,
+        norm: &NormSpec,
+        mlp: &MlpSpec,
+    ) -> (ValueId, MlpStructure) {
         // Pre-MLP RMSNorm
         let n2 = self.build_norm(x, norm);
 
@@ -416,10 +527,11 @@ impl DecoderBuilder {
             MlpSpec::SwiGlu { gate, up, down } => {
                 // SwiGLU MLP: down(silu(gate(x)) * up(x))
                 let gate = self.linear(n2, gate);
-                let gate = self.b.silu(&format!("{prefix}_silu"), gate);
+                let gate_act = self.b.silu(&format!("{prefix}_silu"), gate.output);
                 let up = self.linear(n2, up);
-                let mlp_in = self.b.mul(&format!("{prefix}_swiglu"), gate, up);
-                self.linear(mlp_in, down)
+                let mlp_in = self.b.mul(&format!("{prefix}_swiglu"), gate_act, up.output);
+                let down = self.linear(mlp_in, down);
+                (down.output, MlpStructure { gate, up, down })
             }
         }
     }
@@ -570,6 +682,7 @@ pub struct DecoderGraph {
     pub logits: ValueId,
     pub kv_cache_names: Vec<KVCache>,
     pub streaming: Option<StreamingInputs>,
+    pub layers: Vec<LayerStructure>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -710,6 +823,7 @@ fn build_decoder_inner(
 
     let mut db = DecoderBuilder { b };
     let mut kv_cache_names = Vec::new();
+    let mut layers = Vec::new();
 
     let mut x = {
         let embed_w = db.b.load_weight(
@@ -721,9 +835,10 @@ fn build_decoder_inner(
     };
 
     for layer in spec.layers.iter() {
-        let (x_, kv_cache) = db.build_layer(&ctx, x, layer);
+        let (x_, kv_cache, structure) = db.build_layer(&ctx, x, layer);
         x = x_;
         kv_cache_names.push(kv_cache);
+        layers.push(structure);
     }
 
     let final_norm = db.build_norm(x, &spec.final_norm);
@@ -745,5 +860,6 @@ fn build_decoder_inner(
         logits,
         kv_cache_names,
         streaming,
+        layers,
     }
 }
