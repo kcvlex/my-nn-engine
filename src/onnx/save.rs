@@ -163,6 +163,7 @@ fn conv_pad_attrs(pad: &ConvPad) -> Vec<AttributeProto> {
 fn operator_attrs(op: &Operator) -> Vec<AttributeProto> {
     match op {
         Operator::Add |
+        Operator::AllReduce |
         Operator::And |
         Operator::Cos |
         Operator::Sub |

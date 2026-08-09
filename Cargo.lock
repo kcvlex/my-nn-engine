@@ -1522,6 +1522,7 @@ dependencies = [
  "libloading",
  "log",
  "memmap2",
+ "my-nn-engine-comm",
  "ndarray",
  "num",
  "num-integer",

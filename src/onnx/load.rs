@@ -1319,6 +1319,7 @@ fn load_op(op: &str, attributes: &Attributes) -> LoadResult<Operator> {
         "Where" => Ok(Operator::Where),
 
         // Custom
+        "AllReduce" => Ok(Operator::AllReduce),
         "KVCacheUpdate" => Ok(Operator::KVCacheUpdate),
         "QuantizingKVCacheUpdate" => Ok(Operator::QuantizingKVCacheUpdate),
         x => Err(ModelLoadError::UnsupportedOp(x.to_string())),

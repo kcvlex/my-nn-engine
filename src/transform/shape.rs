@@ -224,6 +224,7 @@ pub fn infer_node_output(
             let dims = broadcast_shape(&a.dims, &b.dims)?;
             res.push(ResolvedTensorType::new(a.elem_type, dims));
         }
+        Operator::AllReduce |
         Operator::BatchNormalization(_) |
         Operator::Clip(_) |
         Operator::Cos |
